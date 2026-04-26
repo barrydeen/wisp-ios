@@ -11,15 +11,19 @@ struct ComposeView: View {
     @State private var showCancelConfirm = false
     @State private var showGifPicker = false
 
+    /// Draft to load on first appear. Nil for `.new` and `.reply`/`.quote` composers.
+    /// Loaded from `.task` rather than `init` to defeat SwiftUI's State preservation
+    /// (which ignores `State(initialValue:)` when state already exists for this view identity).
+    private let initialDraft: Nip37.Draft?
+
     init(keypair: Keypair, mode: ComposeMode = .new) {
+        self.initialDraft = nil
         _viewModel = State(initialValue: ComposeViewModel(keypair: keypair, mode: mode))
     }
 
-    /// Construct a composer pre-loaded with a saved draft.
     init(keypair: Keypair, draft: Nip37.Draft) {
-        let vm = ComposeViewModel(keypair: keypair, mode: .new)
-        vm.loadDraft(draft)
-        _viewModel = State(initialValue: vm)
+        self.initialDraft = draft
+        _viewModel = State(initialValue: ComposeViewModel(keypair: keypair, mode: .new))
     }
 
     var body: some View {
@@ -124,6 +128,9 @@ struct ComposeView: View {
             .navigationBarTitleDisplayMode(.inline)
         }
         .task {
+            if let draft = initialDraft, viewModel.currentDraftId != draft.dTag {
+                viewModel.loadDraft(draft)
+            }
             await viewModel.start()
             contentFocused = true
         }

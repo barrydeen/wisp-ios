@@ -12,13 +12,15 @@ enum Nip37 {
 
     static let kindDraft: Int = 31234
 
-    struct Draft {
+    struct Draft: Identifiable {
         let dTag: String          // UUID (addressable identifier)
         let innerKind: Int        // typically 1
         let content: String       // plaintext (mentions already materialized)
         let tags: [[String]]      // inner tags (e/p/imeta/etc.)
         let createdAt: Int        // inner created_at (epoch seconds)
         let wrapperEventId: String
+
+        var id: String { dTag }
     }
 
     static func newDraftId() -> String {

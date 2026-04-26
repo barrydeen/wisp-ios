@@ -4,14 +4,13 @@ import SwiftUI
 /// scheduled posts (parked on `scheduler.nostrarchives.com`).
 struct DraftsScheduledView: View {
     let keypair: Keypair
-    let onOpenDraft: (Nip37.Draft) -> Void
 
     @State private var viewModel: DraftsViewModel
+    @State private var openedDraft: Nip37.Draft?
     @Environment(\.dismiss) private var dismiss
 
-    init(keypair: Keypair, onOpenDraft: @escaping (Nip37.Draft) -> Void) {
+    init(keypair: Keypair) {
         self.keypair = keypair
-        self.onOpenDraft = onOpenDraft
         _viewModel = State(initialValue: DraftsViewModel(keypair: keypair))
     }
 
@@ -52,6 +51,13 @@ struct DraftsScheduledView: View {
             await viewModel.loadDrafts()
             await viewModel.loadScheduledPosts()
         }
+        .sheet(item: $openedDraft) { draft in
+            ComposeView(keypair: keypair, draft: draft)
+                .id(draft.dTag)
+                .onDisappear {
+                    Task { await viewModel.loadDrafts() }
+                }
+        }
         .onChange(of: viewModel.selectedTab) { _, tab in
             switch tab {
             case .drafts where viewModel.drafts.isEmpty && !viewModel.isLoadingDrafts:
@@ -79,7 +85,7 @@ struct DraftsScheduledView: View {
                         DraftRow(
                             draft: draft,
                             authorPubkey: keypair.pubkey,
-                            onOpen: { onOpenDraft(draft) },
+                            onOpen: { openedDraft = draft },
                             onDelete: {
                                 Task { await viewModel.deleteDraft(dTag: draft.dTag) }
                             }
@@ -166,50 +172,50 @@ private struct DraftRow: View {
     }
 
     var body: some View {
-        Button(action: onOpen) {
-            HStack(alignment: .top, spacing: 10) {
-                CachedAvatarView(url: profile?.picture, size: 36)
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 6) {
-                        Text(profile?.displayString ?? String(authorPubkey.prefix(8)) + "\u{2026}")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-                        if isReply {
-                            Text("REPLY")
-                                .font(.caption2.weight(.bold))
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(Color.wispSurfaceVariant, in: Capsule())
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Text(formattedTimestamp)
-                            .font(.caption)
+        HStack(alignment: .top, spacing: 10) {
+            CachedAvatarView(url: profile?.picture, size: 36)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(profile?.displayString ?? String(authorPubkey.prefix(8)) + "\u{2026}")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    if isReply {
+                        Text("REPLY")
+                            .font(.caption2.weight(.bold))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.wispSurfaceVariant, in: Capsule())
                             .foregroundStyle(.secondary)
                     }
-                    RichContentView(
-                        content: draft.content,
-                        tags: draft.tags,
-                        profiles: ProfileRepository.shared.getAll(referencedPubkeys(in: draft)),
-                        showLinkPreviews: false
-                    )
-                    .lineLimit(6)
-                }
-                Button(action: onDelete) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 14, weight: .semibold))
+                    Spacer()
+                    Text(formattedTimestamp)
+                        .font(.caption)
                         .foregroundStyle(.secondary)
-                        .padding(8)
-                        .background(Color.wispSurfaceVariant.opacity(0.6), in: Circle())
                 }
-                .buttonStyle(.plain)
+                RichContentView(
+                    content: draft.content,
+                    tags: draft.tags,
+                    profiles: ProfileRepository.shared.getAll(referencedPubkeys(in: draft)),
+                    showLinkPreviews: false
+                )
+                .lineLimit(6)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            .contentShape(Rectangle())
+
+            Button(action: onDelete) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(8)
+                    .background(Color.wispSurfaceVariant.opacity(0.6), in: Circle())
+            }
+            .buttonStyle(.plain)
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .onTapGesture { onOpen() }
     }
 
     private func referencedPubkeys(in draft: Nip37.Draft) -> [String] {

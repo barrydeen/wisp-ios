@@ -30,7 +30,6 @@ struct MainView: View {
     @State private var showSafety = false
     @State private var showProofOfWork = false
     @State private var showMediaServers = false
-    @State private var pendingDraft: Nip37.Draft?
     @State private var hashtagSetRepo = HashtagSetRepository.shared
     @State private var showRelaySettings = false
     @State private var pendingAuthRequest: PendingAuthRequest?
@@ -292,12 +291,7 @@ struct MainView: View {
             }
         }
         .sheet(isPresented: $showCompose) {
-            if let draft = pendingDraft {
-                ComposeView(keypair: keypair, draft: draft)
-                    .onDisappear { pendingDraft = nil }
-            } else {
-                ComposeView(keypair: keypair, mode: .new)
-            }
+            ComposeView(keypair: keypair, mode: .new)
         }
         .sheet(isPresented: $showRelayPicker) {
             RelayPickerSheet(
@@ -325,16 +319,7 @@ struct MainView: View {
             }
         }
         .sheet(isPresented: $showDraftsScheduled) {
-            DraftsScheduledView(keypair: keypair) { draft in
-                pendingDraft = draft
-                showDraftsScheduled = false
-                // Brief delay so the dismiss animation completes before we present
-                // the composer sheet — SwiftUI rejects overlapping sheet transitions.
-                Task { @MainActor in
-                    try? await Task.sleep(for: .milliseconds(350))
-                    showCompose = true
-                }
-            }
+            DraftsScheduledView(keypair: keypair)
         }
         .sheet(isPresented: $showOnlineSheet) {
             OnlineNowSheet(
