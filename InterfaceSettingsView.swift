@@ -80,7 +80,7 @@ struct InterfaceSettingsView: View {
                 section(title: "Posting") {
                     Toggle("Wisp client tag", isOn: $settings.clientTagEnabled)
                         .toggleStyle(SwitchToggleStyle(tint: theme.primary))
-                    Text("Adds a [\"client\", \"Wisp\"] tag so others can see you're posting from Wisp.")
+                    Text("Adds a [\"client\", \"Wisp iOS\"] tag so others can see you're posting from Wisp.")
                         .font(.system(size: 12))
                         .foregroundStyle(theme.palette.onSurfaceVariant)
                 }

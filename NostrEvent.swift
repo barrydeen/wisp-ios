@@ -90,7 +90,7 @@ struct NostrEvent {
                           tags: tags, content: content, sig: Hex.encode(sigData))
     }
 
-    /// Returns `["client", "Wisp"]` when the user has the Wisp client tag enabled in
+    /// Returns `["client", "Wisp iOS"]` when the user has the Wisp client tag enabled in
     /// settings (default ON), or nil to signal "do not append". Callers append it to
     /// their tag list before signing kind-1 notes, kind-9734 zap requests, etc.
     /// Never used for sealed DMs (NIP-17) or infrastructure events (NIP-42 auth, NIP-47 NWC).
@@ -99,7 +99,7 @@ struct NostrEvent {
     static func clientTagIfEnabled() -> [String]? {
         let key = "wisp_settings_client_tag_enabled"
         let enabled = (UserDefaults.standard.object(forKey: key) as? Bool) ?? true
-        return enabled ? ["client", "Wisp"] : nil
+        return enabled ? ["client", "Wisp iOS"] : nil
     }
 
     /// Serialize this event as a single JSON object (e.g. for use as a NIP-44 plaintext payload).

@@ -125,6 +125,7 @@ struct PostCardView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
         }
+        .contentShape(Rectangle())
         .onAppear {
             let displayed = resolveRepost().event
             if displayed.kind == Nip88.kindPoll || displayed.kind == Nip69.kindZapPoll {
@@ -279,17 +280,26 @@ struct PostCardView: View {
     private func sendReaction(_ picked: PickedEmoji) {
         guard let keypair = NostrKey.load() else { return }
         let target = resolveRepost().event
+        NSLog("[Reaction] sendReaction picked=%@ targetId=%@", picked.frequencyKey, target.id.prefix(8) as CVarArg)
         Task {
-            try? await ReactionSender.shared.react(to: target, keypair: keypair, picked: picked)
+            do {
+                try await ReactionSender.shared.react(to: target, keypair: keypair, picked: picked)
+                NSLog("[Reaction] react succeeded")
+            } catch {
+                NSLog("[Reaction] react failed: %@", String(describing: error))
+            }
         }
     }
 
     private func combinedRelays(for eventId: String) -> [String] {
-        var set = engagement?.seenRelays ?? []
-        for relay in sourceTracker.relays(for: eventId) {
-            set.insert(relay)
+        var seenHosts = Set<String>()
+        var ordered: [String] = []
+        let raw = (engagement?.seenRelays ?? []).union(sourceTracker.relays(for: eventId))
+        for url in raw {
+            let host = (URL(string: url)?.host ?? url).lowercased()
+            if seenHosts.insert(host).inserted { ordered.append(url) }
         }
-        return Array(set).sorted()
+        return ordered.sorted { ($0.lowercased()) < ($1.lowercased()) }
     }
 
     private func actionItem(icon: String, count: Int? = nil, label: String? = nil, tint: Color? = nil) -> some View {

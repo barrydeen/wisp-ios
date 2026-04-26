@@ -22,7 +22,10 @@ struct RichInlineTextView: UIViewRepresentable {
         tv.backgroundColor = .clear
         tv.isEditable = false
         tv.isScrollEnabled = false
-        tv.isSelectable = true
+        // Selection blocks tap-through to the surrounding NavigationLink, which
+        // breaks "tap a post to open its thread". Links still resolve via the
+        // delegate's `shouldInteractWith` callback regardless of selectability.
+        tv.isSelectable = false
         tv.dataDetectorTypes = []
         tv.textContainerInset = .zero
         tv.textContainer.lineFragmentPadding = 0

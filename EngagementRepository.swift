@@ -63,7 +63,11 @@ final class EngagementRepository {
     /// `seenEngagementIds` so the inbound copy doesn't double-count.
     func applyOptimisticReaction(eventId: String, reactionEventId: String, pubkey: String, emoji: String) {
         let key = "\(eventId)|\(pubkey)|\(emoji)"
-        guard seenReactionKeys.insert(key).inserted else { return }
+        guard seenReactionKeys.insert(key).inserted else {
+            NSLog("[Reaction] applyOptimistic skipped (dedup) key=%@", key)
+            return
+        }
+        NSLog("[Reaction] applyOptimistic eventId=%@ emoji=%@", eventId.prefix(8) as CVarArg, emoji)
         // Reserve the eventual inbound id too, in case the same event streams back.
         seenEngagementIds.insert(reactionEventId)
 
