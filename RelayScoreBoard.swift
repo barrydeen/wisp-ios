@@ -11,7 +11,11 @@ final class RelayScoreBoard {
 
         for pubkey in follows {
             guard let relays = writeRelaysByAuthor[pubkey] else { continue }
-            let eligible = Array(relays.prefix(redundancy))
+            // Drop garbage URLs (.onion w/o tor support, localhost, IPs, host:port,
+            // http://) before consuming the redundancy budget — otherwise an author
+            // with 3 bad relays gets zero coverage instead of falling through to good ones.
+            let valid = relays.filter { RelayUrlValidator.isValid($0) }
+            let eligible = Array(valid.prefix(redundancy))
             for url in eligible {
                 newRA[url, default: []].insert(pubkey)
                 newAR[pubkey, default: []].insert(url)
@@ -44,6 +48,8 @@ final class RelayScoreBoard {
             let parts = entry.split(separator: "\t", maxSplits: 1)
             guard parts.count == 2 else { continue }
             let url = String(parts[0])
+            // Older builds persisted bad URLs; drop them on load so they never reach the pool.
+            guard RelayUrlValidator.isValid(url) else { continue }
             let authors = Set(parts[1].split(separator: ",").map(String.init))
             board.relayAuthors[url] = authors
             for author in authors { board.authorRelays[author, default: []].insert(url) }

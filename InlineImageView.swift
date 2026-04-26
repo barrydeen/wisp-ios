@@ -9,22 +9,40 @@ struct InlineImageView: View {
     var body: some View {
         let aspect = ContentParser.parseAspectRatio(meta.dimension)
         let height = aspect.map { width(for: $0) } ?? 200
+        let isAnimated = AnimatedImageHint.isLikelyAnimated(url: meta.url, mime: meta.mime)
 
         Group {
             if settings.autoLoadMedia || manualLoad {
-                AsyncImage(url: URL(string: meta.url)) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image.resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .frame(maxWidth: .infinity)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-                            .onTapGesture { showFullScreen = true }
-                    case .failure:
-                        placeholder(systemName: "photo", height: 200)
-                    default:
-                        placeholder(systemName: nil, height: height)
-                            .overlay { ProgressView() }
+                if isAnimated {
+                    AnimatedImageView(
+                        url: URL(string: meta.url),
+                        aspect: aspect,
+                        placeholder: {
+                            placeholder(systemName: nil, height: height)
+                                .overlay { ProgressView() }
+                        },
+                        failure: {
+                            placeholder(systemName: "photo", height: 200)
+                        }
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .contentShape(Rectangle())
+                    .onTapGesture { showFullScreen = true }
+                } else {
+                    AsyncImage(url: URL(string: meta.url)) { phase in
+                        switch phase {
+                        case .success(let image):
+                            image.resizable()
+                                .aspectRatio(contentMode: .fit)
+                                .frame(maxWidth: .infinity)
+                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                                .onTapGesture { showFullScreen = true }
+                        case .failure:
+                            placeholder(systemName: "photo", height: 200)
+                        default:
+                            placeholder(systemName: nil, height: height)
+                                .overlay { ProgressView() }
+                        }
                     }
                 }
             } else {
@@ -46,7 +64,7 @@ struct InlineImageView: View {
             }
         }
         .fullScreenCover(isPresented: $showFullScreen) {
-            FullScreenImageView(url: meta.url)
+            FullScreenImageView(url: meta.url, mime: meta.mime)
         }
     }
 
@@ -72,33 +90,45 @@ struct InlineImageView: View {
 
 struct FullScreenImageView: View {
     let url: String
+    let mime: String?
     @Environment(\.dismiss) private var dismiss
     @State private var scale: CGFloat = 1.0
     @State private var lastScale: CGFloat = 1.0
 
+    init(url: String, mime: String? = nil) {
+        self.url = url
+        self.mime = mime
+    }
+
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            AsyncImage(url: URL(string: url)) { phase in
-                switch phase {
-                case .success(let image):
-                    image.resizable()
-                        .scaledToFit()
-                        .scaleEffect(scale)
-                        .gesture(
-                            MagnificationGesture()
-                                .onChanged { value in
-                                    scale = lastScale * value
-                                }
-                                .onEnded { _ in
-                                    lastScale = scale
-                                }
-                        )
-                        .onTapGesture(count: 2) {
-                            withAnimation { scale = scale > 1 ? 1 : 2; lastScale = scale }
-                        }
-                default:
-                    ProgressView().tint(.white)
+            if AnimatedImageHint.isLikelyAnimated(url: url, mime: mime) {
+                AnimatedImageView(
+                    url: URL(string: url),
+                    aspect: nil,
+                    placeholder: { ProgressView().tint(.white) },
+                    failure: {
+                        Image(systemName: "photo")
+                            .font(.largeTitle)
+                            .foregroundStyle(.white)
+                    }
+                )
+                .scaleEffect(scale)
+                .gesture(zoomGesture)
+                .onTapGesture(count: 2) { toggleZoom() }
+            } else {
+                AsyncImage(url: URL(string: url)) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image.resizable()
+                            .scaledToFit()
+                            .scaleEffect(scale)
+                            .gesture(zoomGesture)
+                            .onTapGesture(count: 2) { toggleZoom() }
+                    default:
+                        ProgressView().tint(.white)
+                    }
                 }
             }
 
@@ -118,6 +148,19 @@ struct FullScreenImageView: View {
                 }
                 Spacer()
             }
+        }
+    }
+
+    private var zoomGesture: some Gesture {
+        MagnificationGesture()
+            .onChanged { value in scale = lastScale * value }
+            .onEnded { _ in lastScale = scale }
+    }
+
+    private func toggleZoom() {
+        withAnimation {
+            scale = scale > 1 ? 1 : 2
+            lastScale = scale
         }
     }
 }

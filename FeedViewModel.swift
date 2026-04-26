@@ -394,62 +394,81 @@ final class FeedViewModel {
         }
     }
 
+    /// Mirrors Android `RelayPool.MAX_PERSISTENT` — pool size cap.
+    private static let maxPoolRelays = 30
+    /// Mirrors Android `OutboxRouter.MAX_AUTHORS_PER_FILTER` — relays reject REQs with too-large filters.
+    private static let maxAuthorsPerFilter = 200
+
     private func loadFeed(follows: [String], scoreBoard: RelayScoreBoard?, since: Int?) async {
         guard let board = scoreBoard, !follows.isEmpty else { return }
 
-        let topRelays = Array(board.scoredRelays.prefix(20))
-        connectedRelayCount = topRelays.count
-        connectedRelays = topRelays.map { (url: $0.url, authorCount: $0.count) }
+        // 1. Pool: top-N connectable scored relays. Filter drops .onion/localhost/IPs/etc.
+        //    Cap matches Android's MAX_PERSISTENT — coverage past the top 30 is marginal
+        //    and the indexer safety net catches anyone the pool misses.
+        let pool = board.scoredRelays
+            .filter { RelayUrlValidator.isConnectable($0.url) }
+            .prefix(Self.maxPoolRelays)
+            .map(\.url)
+        let poolSet = Set(pool)
 
-        var relayGroups: [(url: String, authors: [String])] = []
-        for relay in topRelays {
-            let authors = Array(board.relayAuthors[relay.url] ?? [])
-            guard !authors.isEmpty else { continue }
-            for chunk in authors.chunked(into: 200) {
-                relayGroups.append((url: relay.url, authors: chunk))
+        // 2. Per-author routing: each author lands on the pool relays they write to.
+        var relayToAuthors: [String: Set<String>] = [:]
+        for author in follows {
+            let authorWriteRelays = board.authorRelays[author] ?? []
+            let eligible = authorWriteRelays.intersection(poolSet)
+            for url in eligible {
+                relayToAuthors[url, default: []].insert(author)
             }
         }
 
-        let safetyNetAuthors = Array(follows.prefix(200))
-        relayGroups.append((url: "wss://relay.damus.io", authors: safetyNetAuthors))
-
-        let groups = relayGroups
-        let sinceVal = since
-        var allEvents: [NostrEvent] = []
-
-        await withTaskGroup(of: [NostrEvent].self) { group in
-            for relayGroup in groups {
-                let url = relayGroup.url
-                let authors = relayGroup.authors
-                group.addTask {
-                    await RelayPool.query(
-                        relays: [url],
-                        filter: NostrFilter(kinds: [1, 6, 20, Nip88.kindPoll, Nip69.kindZapPoll], authors: authors, limit: 100, since: sinceVal),
-                        timeout: 10
-                    )
-                }
-            }
-            for await batch in group {
-                allEvents.append(contentsOf: batch)
-            }
+        // 3. Indexer safety net: each indexer relay receives the full follow list.
+        //    Catches authors whose write relays all fell outside the pool.
+        let allFollows = Set(follows)
+        for url in Self.indexerRelays where RelayUrlValidator.isConnectable(url) {
+            relayToAuthors[url] = allFollows
         }
 
-        var newEvents: [NostrEvent] = []
-        for event in allEvents {
+        // 4. Build one REQ per relay (multi-filter when authors > 200) — at most one socket per host.
+        let kinds = [1, 6, 20, Nip88.kindPoll, Nip69.kindZapPoll]
+        var queries: [RelayQuery] = []
+        for (relayUrl, authors) in relayToAuthors {
+            let chunks = Array(authors).chunked(into: Self.maxAuthorsPerFilter)
+            let filters = chunks.map { chunk in
+                NostrFilter(kinds: kinds, authors: chunk, limit: 100, since: since)
+            }
+            queries.append(RelayQuery(relayUrl: relayUrl, filters: filters))
+        }
+
+        connectedRelayCount = queries.count
+        connectedRelays = queries.map { q in
+            (url: q.relayUrl, authorCount: relayToAuthors[q.relayUrl]?.count ?? 0)
+        }
+
+        // 5. Stream events into the feed as relays return them. Batched persist (200ms windows).
+        var pendingPersist: [NostrEvent] = []
+        var lastFlush = Date()
+        let store = eventStore
+
+        for await (event, _) in RelayPool.stream(queries: queries, timeout: 15) {
             markActivityIfFollowed(event)
             guard Self.isFeedRenderable(event) else { continue }
-            if seenIds.insert(event.id).inserted {
-                events.append(event)
-                newEvents.append(event)
+            guard seenIds.insert(event.id).inserted else { continue }
+
+            let idx = events.firstIndex(where: { $0.createdAt < event.createdAt }) ?? events.count
+            events.insert(event, at: idx)
+
+            pendingPersist.append(event)
+            if pendingPersist.count >= 50 || Date().timeIntervalSince(lastFlush) > 0.2 {
+                let batch = pendingPersist
+                pendingPersist.removeAll(keepingCapacity: true)
+                lastFlush = Date()
+                Task { await store.persist(batch) }
             }
         }
 
-        events.sort { $0.createdAt > $1.createdAt }
-
-        // Persist new events to local storage in background
-        if !newEvents.isEmpty {
-            let store = eventStore
-            Task { await store.persist(newEvents) }
+        if !pendingPersist.isEmpty {
+            let batch = pendingPersist
+            Task { await store.persist(batch) }
         }
     }
 

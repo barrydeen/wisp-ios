@@ -60,6 +60,7 @@ struct InlineAudioView: View {
         if isPlaying {
             p.pause()
         } else {
+            MediaAudioSession.activatePlayback()
             p.play()
         }
         isPlaying.toggle()

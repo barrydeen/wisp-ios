@@ -68,6 +68,7 @@ final class RelayListRepository {
         for tag in event.tags {
             guard tag.count >= 2, tag[0] == "r" else { continue }
             let url = tag[1]
+            guard RelayUrlValidator.isValid(url) else { continue }
             if tag.count == 2 {
                 read.append(url); write.append(url)
             } else {

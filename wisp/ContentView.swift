@@ -4,6 +4,7 @@ enum AppScreen {
     case splash
     case loading
     case onboarding
+    case signUp
     case main
 }
 
@@ -19,7 +20,7 @@ struct ContentView: View {
             case .splash:
                 SplashView(
                     onSignUp: {
-                        // TODO: Navigate to account creation
+                        currentScreen = .signUp
                     },
                     onLogIn: {
                         showLogin = true
@@ -31,6 +32,12 @@ struct ContentView: View {
                         showLogin = false
                         currentScreen = .onboarding
                     }
+                }
+
+            case .signUp:
+                SignUpFlowView { kp in
+                    keypair = kp
+                    withAnimation { currentScreen = .main }
                 }
 
             case .loading:

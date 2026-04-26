@@ -70,22 +70,11 @@ struct MainView: View {
                     closeDrawer()
                 },
                 onLogout: {
-                    NostrKey.delete()
-                    EngagementRepository.shared.clear()
-                    PollTallyRepository.shared.clear()
-                    EmojiRepository.shared.clear()
-                    NoteSourceTracker.shared.clear()
-                    LiveStreamRepository.shared.clear()
-                    LivePlayerStore.shared.releaseAll()
-                    MuteRepository.shared.unbind()
-                    SafetyPreferences.shared.unbind()
-                    Task {
-                        await ExtendedNetworkRepository.shared.unbind()
-                        await SafetyFilter.shared.rebuildSnapshot()
-                        await SpamScorer.shared.clearCache()
-                    }
                     closeDrawer()
-                    onLogout()
+                    Task {
+                        await AppDataWipe.wipeEverything()
+                        onLogout()
+                    }
                 },
                 onOpenProfile: {
                     closeDrawer()

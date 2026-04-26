@@ -183,6 +183,13 @@ actor EventStore {
 
     // MARK: - Maintenance
 
+    /// Drop every cached event. Called from `AppDataWipe` on logout. Leaves
+    /// the box itself open so the next login can immediately persist again.
+    func removeAll() {
+        guard let box = ensureBox() else { return }
+        try? box.removeAll()
+    }
+
     func prune(maxAgeDays: Int = 90, maxEvents: Int = 50_000, protectedPubkey: String? = nil) {
         guard let box = ensureBox() else { return }
         do {

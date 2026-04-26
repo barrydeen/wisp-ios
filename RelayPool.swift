@@ -156,6 +156,175 @@ private actor EventCollector {
     func markEose() { eoseCount += 1 }
 }
 
+// MARK: - Streaming query (one-shot, per-relay filters)
+
+/// One (relay, filters) pair for `RelayPool.stream`. Multiple filters are sent as a
+/// single multi-filter `REQ` to that relay — matching Android's `OutboxRouter` and
+/// avoiding multiple sockets to the same host when an author chunk exceeds the limit.
+struct RelayQuery: Sendable {
+    let relayUrl: String
+    let filters: [NostrFilter]
+
+    init(relayUrl: String, filters: [NostrFilter]) {
+        self.relayUrl = relayUrl
+        self.filters = filters
+    }
+
+    /// Convenience for the common single-filter case.
+    init(relayUrl: String, filter: NostrFilter) {
+        self.relayUrl = relayUrl
+        self.filters = [filter]
+    }
+}
+
+private actor RelayCounter {
+    private var remaining: Int
+    init(_ n: Int) { remaining = n }
+    /// Returns true when this was the last relay to finish.
+    func decrement() -> Bool {
+        remaining -= 1
+        return remaining <= 0
+    }
+}
+
+extension RelayPool {
+
+    /// Streaming `query`: yields events as they arrive across all relays. Each socket runs to its own
+    /// EOSE (or per-relay timeout); the stream finishes when every socket has closed or the global
+    /// `timeout` fires. No global EOSE-quorum cutoff — a fast empty relay must not cancel a slow one.
+    static func stream(
+        queries: [RelayQuery],
+        timeout: TimeInterval = 15
+    ) -> AsyncStream<(event: NostrEvent, relayUrl: String)> {
+        AsyncStream { continuation in
+            guard !queries.isEmpty else {
+                continuation.finish()
+                return
+            }
+
+            let dedupe = DedupeBox()
+            let sockets = SocketBag()
+            let urls = queries.compactMap { q -> (URL, [NostrFilter])? in
+                guard !q.filters.isEmpty,
+                      let url = URL(string: q.relayUrl) else { return nil }
+                return (url, q.filters)
+            }
+            let counter = RelayCounter(urls.count)
+
+            let relayTasks: [Task<Void, Never>] = urls.map { (url, filters) in
+                Task {
+                    await streamYield(
+                        url: url,
+                        filters: filters,
+                        timeout: timeout,
+                        dedupe: dedupe,
+                        continuation: continuation,
+                        sockets: sockets
+                    )
+                    if await counter.decrement() {
+                        continuation.finish()
+                    }
+                }
+            }
+
+            let timeoutTask = Task {
+                try? await Task.sleep(for: .seconds(timeout))
+                await sockets.cancelAll()
+                continuation.finish()
+            }
+
+            continuation.onTermination = { _ in
+                timeoutTask.cancel()
+                for t in relayTasks { t.cancel() }
+                Task { await sockets.cancelAll() }
+            }
+        }
+    }
+
+    private static func streamYield(
+        url: URL,
+        filters: [NostrFilter],
+        timeout: TimeInterval,
+        dedupe: DedupeBox,
+        continuation: AsyncStream<(event: NostrEvent, relayUrl: String)>.Continuation,
+        sockets: SocketBag
+    ) async {
+        let session = URLSession(configuration: .default)
+        let ws = session.webSocketTask(with: url)
+        ws.resume()
+        await sockets.add(ws)
+
+        let subId = String(UUID().uuidString.prefix(8)).lowercased()
+        let filterJoined = filters.map { $0.toJSON() }.joined(separator: ",")
+        let req = "[\"REQ\",\"\(subId)\",\(filterJoined)]"
+
+        do { try await ws.send(.string(req)) } catch {
+            ws.cancel(with: .normalClosure, reason: nil)
+            return
+        }
+
+        let perRelayKiller = Task {
+            try? await Task.sleep(for: .seconds(timeout))
+            ws.cancel(with: .normalClosure, reason: nil)
+        }
+
+        var lastChallenge: String?
+        let urlString = url.absoluteString
+
+        while !Task.isCancelled {
+            do {
+                let msg = try await ws.receive()
+                guard case .string(let text) = msg else { continue }
+                guard let data = text.data(using: .utf8),
+                      let arr = try? JSONSerialization.jsonObject(with: data) as? [Any],
+                      let type = arr.first as? String else { continue }
+
+                if type == "EVENT", arr.count >= 3,
+                   let obj = arr[2] as? [String: Any],
+                   let event = NostrEvent(json: obj) {
+                    if await dedupe.insert(event.id) {
+                        let eid = event.id
+                        await MainActor.run {
+                            NoteSourceTracker.shared.record(eventId: eid, relayUrl: urlString)
+                        }
+                        continuation.yield((event, urlString))
+                    }
+                } else if type == "EOSE" {
+                    break
+                } else if type == "AUTH", arr.count >= 2, let challenge = arr[1] as? String {
+                    lastChallenge = challenge
+                    await respondToAuthChallenge(challenge: challenge, urlString: urlString, ws: ws)
+                } else if type == "CLOSED", arr.count >= 3,
+                          let reason = arr[2] as? String,
+                          reason.lowercased().contains("auth-required") {
+                    if let challenge = lastChallenge { emitPendingAuth(url: urlString, challenge: challenge) }
+                    break
+                }
+            } catch {
+                break
+            }
+        }
+
+        perRelayKiller.cancel()
+        try? await ws.send(.string("[\"CLOSE\",\"\(subId)\"]"))
+        ws.cancel(with: .normalClosure, reason: nil)
+    }
+}
+
+private actor SocketBag {
+    private var sockets: [URLSessionWebSocketTask] = []
+    private var cancelled = false
+    func add(_ ws: URLSessionWebSocketTask) {
+        if cancelled { ws.cancel(with: .normalClosure, reason: nil); return }
+        sockets.append(ws)
+    }
+    func cancelAll() {
+        cancelled = true
+        for ws in sockets { ws.cancel(with: .normalClosure, reason: nil) }
+        sockets.removeAll()
+    }
+}
+
 // MARK: - Live subscriptions (persistent)
 
 /// A long-lived multi-relay subscription. Events from any relay are deduplicated by id

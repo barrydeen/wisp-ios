@@ -32,6 +32,7 @@ struct InlineVideoView: View {
                 VideoPlayer(player: player)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .onAppear {
+                        MediaAudioSession.activatePlayback()
                         player.isMuted = muteState.isMuted
                         player.play()
                     }
@@ -121,7 +122,10 @@ struct FullScreenVideoView: View {
             if let player {
                 VideoPlayer(player: player)
                     .ignoresSafeArea()
-                    .onAppear { player.play() }
+                    .onAppear {
+                        MediaAudioSession.activatePlayback()
+                        player.play()
+                    }
                     .onDisappear { player.pause() }
             }
 

@@ -137,4 +137,15 @@ actor GroupStore {
             }
         } catch {}
     }
+
+    /// Drop every cached group + message across all owners. Called from
+    /// `AppDataWipe` on logout. Pending in-memory writes are abandoned.
+    func removeAll() {
+        flushTask?.cancel()
+        flushTask = nil
+        pendingMessages.removeAll()
+        guard let (metaBox, messageBox) = ensureBoxes() else { return }
+        try? metaBox.removeAll()
+        try? messageBox.removeAll()
+    }
 }

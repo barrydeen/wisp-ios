@@ -14,6 +14,7 @@
 		4CDA87E22F9C54970079A1BA /* NostrKey.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA87E12F9C54970079A1BA /* NostrKey.swift */; };
 		4CDA87E42F9C54980079A1BA /* RelayPool.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA87E32F9C54980079A1BA /* RelayPool.swift */; };
 		4CDA87E62F9C54990079A1BA /* RelayScoreBoard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA87E52F9C54990079A1BA /* RelayScoreBoard.swift */; };
+		4CDA87E72F9C549A0079A1BA /* RelayUrlValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA87E82F9C549A0079A1BA /* RelayUrlValidator.swift */; };
 		4CDA87E82F9C54B70079A1BA /* LoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA87E72F9C54B70079A1BA /* LoginView.swift */; };
 		4CDA87EA2F9C54B80079A1BA /* OnboardingViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA87E92F9C54B80079A1BA /* OnboardingViewModel.swift */; };
 		4CDA87EC2F9C54DE0079A1BA /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA87EB2F9C54DE0079A1BA /* OnboardingView.swift */; };
@@ -29,13 +30,19 @@
 		4CDA88042F9C6B770079A1BA /* ObjectBoxSetup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA88032F9C6B770079A1BA /* ObjectBoxSetup.swift */; };
 		4CDA88092F9C6CFB0079A1BA /* ObjectBox.xcframework in Frameworks */ = {isa = PBXBuildFile; productRef = 4CDA88082F9C6CFB0079A1BA /* ObjectBox.xcframework */; };
 		4CDA880C2F9C70D80079A1BA /* EntityInfo-wisp.generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA880B2F9C70D80079A1BA /* EntityInfo-wisp.generated.swift */; };
+		4CDA88FB2F9C540000000001 /* AppDataWipe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA88FA2F9C540000000001 /* AppDataWipe.swift */; };
+		4CDA88FB2F9C540000000002 /* AnimatedImageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA88FA2F9C540000000002 /* AnimatedImageView.swift */; };
+		4CDA88FB2F9C540000000003 /* MediaAudioSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA88FA2F9C540000000003 /* MediaAudioSession.swift */; };
+		4CDA88FB2F9C540000000004 /* RelayProber.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA88FA2F9C540000000004 /* RelayProber.swift */; };
+		4CDA88FB2F9C540000000005 /* SignUpFlowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA88FA2F9C540000000005 /* SignUpFlowView.swift */; };
+		4CDA88FB2F9C540000000006 /* SignUpViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA88FA2F9C540000000006 /* SignUpViewModel.swift */; };
 		4CDD000100000000000000B1 /* P256K in Frameworks */ = {isa = PBXBuildFile; productRef = 4CDD000000000000000000B1 /* P256K */; };
 		4CDFAB0000000000000DF101 /* Nip37.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDFAB0000000000000DF001 /* Nip37.swift */; };
-		4CDFAB0000000000000DF200 /* Nip38.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDFAB0000000000000DF201 /* Nip38.swift */; };
 		4CDFAB0000000000000DF102 /* Nip09.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDFAB0000000000000DF002 /* Nip09.swift */; };
 		4CDFAB0000000000000DF103 /* DraftsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDFAB0000000000000DF003 /* DraftsViewModel.swift */; };
 		4CDFAB0000000000000DF104 /* ScheduleSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDFAB0000000000000DF004 /* ScheduleSheet.swift */; };
 		4CDFAB0000000000000DF105 /* DraftsScheduledView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDFAB0000000000000DF005 /* DraftsScheduledView.swift */; };
+		4CDFAB0000000000000DF200 /* Nip38.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDFAB0000000000000DF201 /* Nip38.swift */; };
 		4CEE000100000000000000B1 /* BreezSdkSpark in Frameworks */ = {isa = PBXBuildFile; productRef = 4CEE000000000000000000B1 /* BreezSdkSpark */; };
 		4CFADE0100000000000F1001 /* SafetyFilter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFADE0000000000000F1001 /* SafetyFilter.swift */; };
 		4CFADE0100000000000F1002 /* SafetyPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFADE0000000000000F1002 /* SafetyPreferences.swift */; };
@@ -59,6 +66,8 @@
 		4CFF010F00000000000000A8 /* InlineVideoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF010E00000000000000A8 /* InlineVideoView.swift */; };
 		4CFF011100000000000000A9 /* InlineAudioView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF011000000000000000A9 /* InlineAudioView.swift */; };
 		4CFF011300000000000000AA /* InlineImageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF011200000000000000AA /* InlineImageView.swift */; };
+		4CFF011500000000000000AB /* AnimatedImageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF011400000000000000AB /* AnimatedImageView.swift */; };
+		4CFF011700000000000000AC /* MediaAudioSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF011600000000000000AC /* MediaAudioSession.swift */; };
 		4CFF020100000000000000B1 /* ProfileRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF020000000000000000B1 /* ProfileRoute.swift */; };
 		4CFF020300000000000000B2 /* ProfileViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF020200000000000000B2 /* ProfileViewModel.swift */; };
 		4CFF020500000000000000B3 /* ProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF020400000000000000B3 /* ProfileView.swift */; };
@@ -153,6 +162,10 @@
 		4CFFA00100000000000A0008 /* RelaySettingsRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFFA00000000000000A0008 /* RelaySettingsRepository.swift */; };
 		4CFFA00100000000000A0009 /* RelaySettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFFA00000000000000A0009 /* RelaySettingsView.swift */; };
 		4CFFA00100000000000A000A /* RelayAuthApprovalSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFFA00000000000000A000A /* RelayAuthApprovalSheet.swift */; };
+		4CFFA20100000000000A0001 /* RelayProber.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFFA20000000000000A0001 /* RelayProber.swift */; };
+		4CFFA20100000000000A0002 /* SignUpViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFFA20000000000000A0002 /* SignUpViewModel.swift */; };
+		4CFFA20100000000000A0003 /* SignUpFlowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFFA20000000000000A0003 /* SignUpFlowView.swift */; };
+		4CFFA20100000000000A0004 /* AppDataWipe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFFA20000000000000A0004 /* AppDataWipe.swift */; };
 		4CFFB10100000000000A0001 /* HashtagSet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFFB10000000000000A0001 /* HashtagSet.swift */; };
 		4CFFB10100000000000A0002 /* Nip51Hashtags.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFFB10000000000000A0002 /* Nip51Hashtags.swift */; };
 		4CFFB10100000000000A0003 /* HashtagSetRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFFB10000000000000A0003 /* HashtagSetRepository.swift */; };
@@ -245,6 +258,7 @@
 		4CDA87E32F9C54980079A1BA /* RelayPool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayPool.swift; sourceTree = "<group>"; };
 		4CDA87E52F9C54990079A1BA /* RelayScoreBoard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayScoreBoard.swift; sourceTree = "<group>"; };
 		4CDA87E72F9C54B70079A1BA /* LoginView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginView.swift; sourceTree = "<group>"; };
+		4CDA87E82F9C549A0079A1BA /* RelayUrlValidator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayUrlValidator.swift; sourceTree = "<group>"; };
 		4CDA87E92F9C54B80079A1BA /* OnboardingViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingViewModel.swift; sourceTree = "<group>"; };
 		4CDA87EB2F9C54DE0079A1BA /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
 		4CDA87ED2F9C5CC50079A1BA /* ProfileData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileData.swift; sourceTree = "<group>"; };
@@ -258,12 +272,18 @@
 		4CDA88012F9C6B720079A1BA /* EventEntity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventEntity.swift; sourceTree = "<group>"; };
 		4CDA88032F9C6B770079A1BA /* ObjectBoxSetup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObjectBoxSetup.swift; sourceTree = "<group>"; };
 		4CDA880B2F9C70D80079A1BA /* EntityInfo-wisp.generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EntityInfo-wisp.generated.swift"; sourceTree = "<group>"; };
+		4CDA88FA2F9C540000000001 /* AppDataWipe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDataWipe.swift; sourceTree = "<group>"; };
+		4CDA88FA2F9C540000000002 /* AnimatedImageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnimatedImageView.swift; sourceTree = "<group>"; };
+		4CDA88FA2F9C540000000003 /* MediaAudioSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaAudioSession.swift; sourceTree = "<group>"; };
+		4CDA88FA2F9C540000000004 /* RelayProber.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayProber.swift; sourceTree = "<group>"; };
+		4CDA88FA2F9C540000000005 /* SignUpFlowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignUpFlowView.swift; sourceTree = "<group>"; };
+		4CDA88FA2F9C540000000006 /* SignUpViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignUpViewModel.swift; sourceTree = "<group>"; };
 		4CDFAB0000000000000DF001 /* Nip37.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Nip37.swift; sourceTree = "<group>"; };
-		4CDFAB0000000000000DF201 /* Nip38.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Nip38.swift; sourceTree = "<group>"; };
 		4CDFAB0000000000000DF002 /* Nip09.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Nip09.swift; sourceTree = "<group>"; };
 		4CDFAB0000000000000DF003 /* DraftsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftsViewModel.swift; sourceTree = "<group>"; };
 		4CDFAB0000000000000DF004 /* ScheduleSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScheduleSheet.swift; sourceTree = "<group>"; };
 		4CDFAB0000000000000DF005 /* DraftsScheduledView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftsScheduledView.swift; sourceTree = "<group>"; };
+		4CDFAB0000000000000DF201 /* Nip38.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Nip38.swift; sourceTree = "<group>"; };
 		4CFADE0000000000000F1001 /* SafetyFilter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafetyFilter.swift; sourceTree = "<group>"; };
 		4CFADE0000000000000F1002 /* SafetyPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafetyPreferences.swift; sourceTree = "<group>"; };
 		4CFADE0000000000000F1003 /* MuteRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MuteRepository.swift; sourceTree = "<group>"; };
@@ -286,6 +306,8 @@
 		4CFF010E00000000000000A8 /* InlineVideoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InlineVideoView.swift; sourceTree = "<group>"; };
 		4CFF011000000000000000A9 /* InlineAudioView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InlineAudioView.swift; sourceTree = "<group>"; };
 		4CFF011200000000000000AA /* InlineImageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InlineImageView.swift; sourceTree = "<group>"; };
+		4CFF011400000000000000AB /* AnimatedImageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnimatedImageView.swift; sourceTree = "<group>"; };
+		4CFF011600000000000000AC /* MediaAudioSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaAudioSession.swift; sourceTree = "<group>"; };
 		4CFF020000000000000000B1 /* ProfileRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileRoute.swift; sourceTree = "<group>"; };
 		4CFF020200000000000000B2 /* ProfileViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileViewModel.swift; sourceTree = "<group>"; };
 		4CFF020400000000000000B3 /* ProfileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileView.swift; sourceTree = "<group>"; };
@@ -379,6 +401,10 @@
 		4CFFA00000000000000A0008 /* RelaySettingsRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelaySettingsRepository.swift; sourceTree = "<group>"; };
 		4CFFA00000000000000A0009 /* RelaySettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelaySettingsView.swift; sourceTree = "<group>"; };
 		4CFFA00000000000000A000A /* RelayAuthApprovalSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayAuthApprovalSheet.swift; sourceTree = "<group>"; };
+		4CFFA20000000000000A0001 /* RelayProber.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayProber.swift; sourceTree = "<group>"; };
+		4CFFA20000000000000A0002 /* SignUpViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignUpViewModel.swift; sourceTree = "<group>"; };
+		4CFFA20000000000000A0003 /* SignUpFlowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignUpFlowView.swift; sourceTree = "<group>"; };
+		4CFFA20000000000000A0004 /* AppDataWipe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDataWipe.swift; sourceTree = "<group>"; };
 		4CFFB10000000000000A0001 /* HashtagSet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HashtagSet.swift; sourceTree = "<group>"; };
 		4CFFB10000000000000A0002 /* Nip51Hashtags.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Nip51Hashtags.swift; sourceTree = "<group>"; };
 		4CFFB10000000000000A0003 /* HashtagSetRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HashtagSetRepository.swift; sourceTree = "<group>"; };
@@ -503,6 +529,13 @@
 				4CDA87E12F9C54970079A1BA /* NostrKey.swift */,
 				4CDA87E32F9C54980079A1BA /* RelayPool.swift */,
 				4CDA87E52F9C54990079A1BA /* RelayScoreBoard.swift */,
+				4CDA87E82F9C549A0079A1BA /* RelayUrlValidator.swift */,
+				4CDA88FA2F9C540000000001 /* AppDataWipe.swift */,
+				4CDA88FA2F9C540000000002 /* AnimatedImageView.swift */,
+				4CDA88FA2F9C540000000003 /* MediaAudioSession.swift */,
+				4CDA88FA2F9C540000000004 /* RelayProber.swift */,
+				4CDA88FA2F9C540000000005 /* SignUpFlowView.swift */,
+				4CDA88FA2F9C540000000006 /* SignUpViewModel.swift */,
 				4CDA87E72F9C54B70079A1BA /* LoginView.swift */,
 				4CDA87E92F9C54B80079A1BA /* OnboardingViewModel.swift */,
 				4CDA87EB2F9C54DE0079A1BA /* OnboardingView.swift */,
@@ -527,6 +560,8 @@
 				4CFF010E00000000000000A8 /* InlineVideoView.swift */,
 				4CFF011000000000000000A9 /* InlineAudioView.swift */,
 				4CFF011200000000000000AA /* InlineImageView.swift */,
+				4CFF011400000000000000AB /* AnimatedImageView.swift */,
+				4CFF011600000000000000AC /* MediaAudioSession.swift */,
 				4CFF020000000000000000B1 /* ProfileRoute.swift */,
 				4CFF020200000000000000B2 /* ProfileViewModel.swift */,
 				4CFF020400000000000000B3 /* ProfileView.swift */,
@@ -629,6 +664,10 @@
 				4CFFA00000000000000A0008 /* RelaySettingsRepository.swift */,
 				4CFFA00000000000000A0009 /* RelaySettingsView.swift */,
 				4CFFA00000000000000A000A /* RelayAuthApprovalSheet.swift */,
+				4CFFA20000000000000A0001 /* RelayProber.swift */,
+				4CFFA20000000000000A0002 /* SignUpViewModel.swift */,
+				4CFFA20000000000000A0003 /* SignUpFlowView.swift */,
+				4CFFA20000000000000A0004 /* AppDataWipe.swift */,
 				4CFFB10000000000000A0001 /* HashtagSet.swift */,
 				4CFFB10000000000000A0002 /* Nip51Hashtags.swift */,
 				4CFFB10000000000000A0003 /* HashtagSetRepository.swift */,
@@ -870,6 +909,13 @@
 				4CDA880C2F9C70D80079A1BA /* EntityInfo-wisp.generated.swift in Sources */,
 				4CDA87DE2F9C54700079A1BA /* Secp256k1.swift in Sources */,
 				4CDA87E62F9C54990079A1BA /* RelayScoreBoard.swift in Sources */,
+				4CDA87E72F9C549A0079A1BA /* RelayUrlValidator.swift in Sources */,
+				4CDA88FB2F9C540000000001 /* AppDataWipe.swift in Sources */,
+				4CDA88FB2F9C540000000002 /* AnimatedImageView.swift in Sources */,
+				4CDA88FB2F9C540000000003 /* MediaAudioSession.swift in Sources */,
+				4CDA88FB2F9C540000000004 /* RelayProber.swift in Sources */,
+				4CDA88FB2F9C540000000005 /* SignUpFlowView.swift in Sources */,
+				4CDA88FB2F9C540000000006 /* SignUpViewModel.swift in Sources */,
 				4CDA87DA2F9C546F0079A1BA /* Hex.swift in Sources */,
 				4CDA88022F9C6B720079A1BA /* EventEntity.swift in Sources */,
 				4CDA87F62F9C5CC70079A1BA /* MainView.swift in Sources */,
@@ -897,6 +943,8 @@
 				4CFF010F00000000000000A8 /* InlineVideoView.swift in Sources */,
 				4CFF011100000000000000A9 /* InlineAudioView.swift in Sources */,
 				4CFF011300000000000000AA /* InlineImageView.swift in Sources */,
+				4CFF011500000000000000AB /* AnimatedImageView.swift in Sources */,
+				4CFF011700000000000000AC /* MediaAudioSession.swift in Sources */,
 				4CFF020100000000000000B1 /* ProfileRoute.swift in Sources */,
 				4CFF020300000000000000B2 /* ProfileViewModel.swift in Sources */,
 				4CFF020500000000000000B3 /* ProfileView.swift in Sources */,
@@ -999,6 +1047,10 @@
 				4CFFA00100000000000A0008 /* RelaySettingsRepository.swift in Sources */,
 				4CFFA00100000000000A0009 /* RelaySettingsView.swift in Sources */,
 				4CFFA00100000000000A000A /* RelayAuthApprovalSheet.swift in Sources */,
+				4CFFA20100000000000A0001 /* RelayProber.swift in Sources */,
+				4CFFA20100000000000A0002 /* SignUpViewModel.swift in Sources */,
+				4CFFA20100000000000A0003 /* SignUpFlowView.swift in Sources */,
+				4CFFA20100000000000A0004 /* AppDataWipe.swift in Sources */,
 				4CFFB10100000000000A0001 /* HashtagSet.swift in Sources */,
 				4CFFB10100000000000A0002 /* Nip51Hashtags.swift in Sources */,
 				4CFFB10100000000000A0003 /* HashtagSetRepository.swift in Sources */,
