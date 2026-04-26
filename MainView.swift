@@ -63,7 +63,7 @@ struct MainView: View {
 
             SidebarDrawerView(
                 profile: viewModel.userProfile,
-                pubkey: keypair.pubkey,
+                keypair: keypair,
                 onClose: { closeDrawer() },
                 onSelectTab: { tab in
                     selectedTab = tab
@@ -86,6 +86,14 @@ struct MainView: View {
                     }
                     closeDrawer()
                     onLogout()
+                },
+                onOpenProfile: {
+                    closeDrawer()
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(280))
+                        selectedTab = .home
+                        feedPath.append(ProfileRoute(pubkey: keypair.pubkey))
+                    }
                 },
                 onOpenInterface: {
                     closeDrawer()

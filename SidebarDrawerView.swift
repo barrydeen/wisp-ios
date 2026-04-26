@@ -2,10 +2,12 @@ import SwiftUI
 
 struct SidebarDrawerView: View {
     let profile: ProfileData?
-    let pubkey: String
+    let keypair: Keypair
     let onClose: () -> Void
+    private var pubkey: String { keypair.pubkey }
     let onSelectTab: (BottomTab) -> Void
     let onLogout: () -> Void
+    var onOpenProfile: () -> Void = {}
     var onOpenInterface: () -> Void = {}
     var onOpenDraftsScheduled: () -> Void = {}
     var onOpenCustomEmojis: () -> Void = {}
@@ -50,6 +52,30 @@ struct SidebarDrawerView: View {
         return "wisp v\(v)"
     }
     private var accounts: [String] { NostrKey.accounts() }
+
+    private func loadStatus() async {
+        var relays = await RelayListRepository.shared.getWriteRelays(pubkey)
+        if relays.isEmpty { relays = await RelayListRepository.shared.getReadRelays(pubkey) }
+        if relays.isEmpty { return }
+        let filter = NostrFilter(
+            kinds: [Nip38.kindUserStatus],
+            authors: [pubkey],
+            dTags: [Nip38.dTagGeneral],
+            limit: 1
+        )
+        let events = await RelayPool.query(relays: relays, filter: filter, timeout: 6)
+        guard let latest = events.max(by: { $0.createdAt < $1.createdAt }) else { return }
+        let trimmed = latest.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        userStatus = trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func publishStatus(_ content: String) async {
+        guard let priv = Hex.decode(keypair.privkey) else { return }
+        guard let event = try? Nip38.buildStatus(privkey32: priv, pubkey: pubkey, content: content) else { return }
+        var relays = await RelayListRepository.shared.getWriteRelays(pubkey)
+        if relays.isEmpty { relays = ["wss://relay.damus.io", "wss://relay.primal.net"] }
+        _ = await RelayPool.publish(event: event, to: relays, timeout: 6)
+    }
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -103,13 +129,15 @@ struct SidebarDrawerView: View {
         .alert("Update Status", isPresented: $showStatusEditor) {
             TextField("What are you up to?", text: $statusDraft)
             Button("Cancel", role: .cancel) {}
-            if statusDraft.isEmpty {
-                Button("Clear") { userStatus = nil }
-            } else {
-                Button("Update") {
-                    userStatus = statusDraft
-                }
+            Button("Update") {
+                let trimmed = statusDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                let newStatus = trimmed.isEmpty ? nil : trimmed
+                userStatus = newStatus
+                Task { await publishStatus(newStatus ?? "") }
             }
+        }
+        .task(id: pubkey) {
+            await loadStatus()
         }
         .sheet(isPresented: $showQRSheet) {
             qrSheet
@@ -271,7 +299,7 @@ struct SidebarDrawerView: View {
     private var primaryItems: some View {
         VStack(spacing: 0) {
             DrawerRow(icon: "person", label: "My Profile") {
-                onClose()
+                onOpenProfile()
             }
             DrawerRow(icon: "house", label: "Feeds") {
                 onSelectTab(.home)

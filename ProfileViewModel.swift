@@ -136,7 +136,32 @@ final class ProfileViewModel {
            let updated = profileRepo.updateFromEvent(best) {
             profile = updated
             profiles[pubkey] = updated
+            await loadAboutMentionProfiles(from: updated.about ?? "")
         }
+    }
+
+    private func loadAboutMentionProfiles(from about: String) async {
+        let referenced = Self.extractProfilePubkeys(in: about)
+        let missing = referenced.filter { profiles[$0] == nil }
+        guard !missing.isEmpty else { return }
+        let fetched = await fetchProfilesFromIndexers(missing)
+        for (k, v) in fetched { profiles[k] = v }
+    }
+
+    private static func extractProfilePubkeys(in s: String) -> [String] {
+        let pattern = "nostr:(npub1[a-z0-9]+|nprofile1[a-z0-9]+)"
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return [] }
+        let range = NSRange(s.startIndex..<s.endIndex, in: s)
+        var seen = Set<String>()
+        var out: [String] = []
+        regex.enumerateMatches(in: s, range: range) { match, _, _ in
+            guard let m = match, let r = Range(m.range, in: s) else { return }
+            let token = String(s[r])
+            if case .profileRef(let pk, _)? = Nip19.decodeNostrUri(token), seen.insert(pk).inserted {
+                out.append(pk)
+            }
+        }
+        return out
     }
 
     private func loadContacts() async {

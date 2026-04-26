@@ -31,6 +31,7 @@
 		4CDA880C2F9C70D80079A1BA /* EntityInfo-wisp.generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA880B2F9C70D80079A1BA /* EntityInfo-wisp.generated.swift */; };
 		4CDD000100000000000000B1 /* P256K in Frameworks */ = {isa = PBXBuildFile; productRef = 4CDD000000000000000000B1 /* P256K */; };
 		4CDFAB0000000000000DF101 /* Nip37.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDFAB0000000000000DF001 /* Nip37.swift */; };
+		4CDFAB0000000000000DF200 /* Nip38.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDFAB0000000000000DF201 /* Nip38.swift */; };
 		4CDFAB0000000000000DF102 /* Nip09.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDFAB0000000000000DF002 /* Nip09.swift */; };
 		4CDFAB0000000000000DF103 /* DraftsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDFAB0000000000000DF003 /* DraftsViewModel.swift */; };
 		4CDFAB0000000000000DF104 /* ScheduleSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDFAB0000000000000DF004 /* ScheduleSheet.swift */; };
@@ -258,6 +259,7 @@
 		4CDA88032F9C6B770079A1BA /* ObjectBoxSetup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObjectBoxSetup.swift; sourceTree = "<group>"; };
 		4CDA880B2F9C70D80079A1BA /* EntityInfo-wisp.generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EntityInfo-wisp.generated.swift"; sourceTree = "<group>"; };
 		4CDFAB0000000000000DF001 /* Nip37.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Nip37.swift; sourceTree = "<group>"; };
+		4CDFAB0000000000000DF201 /* Nip38.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Nip38.swift; sourceTree = "<group>"; };
 		4CDFAB0000000000000DF002 /* Nip09.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Nip09.swift; sourceTree = "<group>"; };
 		4CDFAB0000000000000DF003 /* DraftsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftsViewModel.swift; sourceTree = "<group>"; };
 		4CDFAB0000000000000DF004 /* ScheduleSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScheduleSheet.swift; sourceTree = "<group>"; };
@@ -667,6 +669,7 @@
 				4CFFCC00000000000000040B /* ComposeViewModel.swift */,
 				4CFFCC00000000000000040C /* ComposeView.swift */,
 				4CDFAB0000000000000DF001 /* Nip37.swift */,
+				4CDFAB0000000000000DF201 /* Nip38.swift */,
 				4CDFAB0000000000000DF002 /* Nip09.swift */,
 				4CDFAB0000000000000DF003 /* DraftsViewModel.swift */,
 				4CDFAB0000000000000DF004 /* ScheduleSheet.swift */,
@@ -1036,6 +1039,7 @@
 				4CFFCC01000000000000040B /* ComposeViewModel.swift in Sources */,
 				4CFFCC01000000000000040C /* ComposeView.swift in Sources */,
 				4CDFAB0000000000000DF101 /* Nip37.swift in Sources */,
+				4CDFAB0000000000000DF200 /* Nip38.swift in Sources */,
 				4CDFAB0000000000000DF102 /* Nip09.swift in Sources */,
 				4CDFAB0000000000000DF103 /* DraftsViewModel.swift in Sources */,
 				4CDFAB0000000000000DF104 /* ScheduleSheet.swift in Sources */,

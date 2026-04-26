@@ -173,9 +173,8 @@ private struct ProfileHeaderView: View {
 
     private var banner: some View {
         Group {
-            if let banner = viewModel.profile?.picture, !banner.isEmpty,
+            if let banner = viewModel.profile?.banner, !banner.isEmpty,
                let url = URL(string: banner) {
-                // ProfileData currently exposes only `picture`, not banner. Fall back to picture as banner placeholder.
                 AsyncImage(url: url) { phase in
                     switch phase {
                     case .success(let img):
