@@ -864,6 +864,8 @@ final class ComposeViewModel {
             tags.append(["content-warning", ""])
         }
 
+        if let clientTag = NostrEvent.clientTagIfEnabled() { tags.append(clientTag) }
+
         return tags
     }
 
