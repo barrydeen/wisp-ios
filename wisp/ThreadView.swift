@@ -204,20 +204,42 @@ struct ThreadView: View {
                     .focused($composerFocused)
                     .disabled(viewModel.isSending)
 
-                Button {
-                    Task { await sendReply() }
-                } label: {
-                    if viewModel.isSending {
-                        ProgressView()
-                            .frame(width: 28, height: 28)
-                    } else {
-                        Image(systemName: "paperplane.fill")
-                            .font(.system(size: 18, weight: .semibold))
+                if let countdown = viewModel.replyCountdown {
+                    Button(role: .destructive) {
+                        viewModel.cancelReply()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 22, weight: .semibold))
                             .frame(width: 28, height: 28)
                     }
+                    .foregroundStyle(.secondary)
+
+                    Button {
+                        viewModel.publishReplyNow()
+                    } label: {
+                        Text("Send (\(countdown))")
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 10)
+                            .frame(height: 28)
+                            .background(Color.wispPrimary, in: Capsule())
+                            .foregroundStyle(.white)
+                    }
+                } else {
+                    Button {
+                        sendReply()
+                    } label: {
+                        if viewModel.isSending {
+                            ProgressView()
+                                .frame(width: 28, height: 28)
+                        } else {
+                            Image(systemName: "paperplane.fill")
+                                .font(.system(size: 18, weight: .semibold))
+                                .frame(width: 28, height: 28)
+                        }
+                    }
+                    .disabled(viewModel.isSending || replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || viewModel.rootEvent == nil)
+                    .foregroundStyle(Color.wispPrimary)
                 }
-                .disabled(viewModel.isSending || replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || viewModel.rootEvent == nil)
-                .foregroundStyle(Color.wispPrimary)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -249,10 +271,10 @@ struct ThreadView: View {
         replyText += "\n"
     }
 
-    private func sendReply() async {
+    private func sendReply() {
         let text = replyText
-        await viewModel.publishReply(content: text)
-        if viewModel.errorMessage == nil {
+        viewModel.publishReply(content: text)
+        if viewModel.errorMessage == nil && viewModel.replyCountdown != nil {
             replyText = ""
             composerFocused = false
         }

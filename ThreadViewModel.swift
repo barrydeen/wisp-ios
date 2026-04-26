@@ -17,6 +17,12 @@ final class ThreadViewModel {
     var isLoading = false
     var errorMessage: String?
     var isSending = false
+    /// Active undo countdown for an unsent reply, mirroring `ComposeViewModel`.
+    var replyCountdown: Int?
+    /// Buffered text + parent for a reply that's mid-countdown, so `publishNow` /
+    /// `cancelReply` know what to do.
+    @ObservationIgnored private var pendingReply: (text: String, parentId: String?)?
+    @ObservationIgnored private var replyCountdownTask: Task<Void, Never>?
 
     @ObservationIgnored private var events: [String: NostrEvent] = [:]
     @ObservationIgnored private var loadedOnce = false
@@ -116,14 +122,59 @@ final class ThreadViewModel {
     /// Sends a kind:1 reply to `parentId` (defaults to the current root). Publishes to the user's
     /// own write relays plus the inbox relays of the root author, parent author, and every pubkey
     /// already participating in the chain.
-    func publishReply(content: String, parentId: String? = nil) async {
+    /// Begin a 10-second undo countdown before actually publishing the reply.
+    /// While the countdown is running, callers can `publishReplyNow()` to skip
+    /// the timer or `cancelReply()` to drop the pending send.
+    func publishReply(content: String, parentId: String? = nil) {
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        guard rootEvent != nil else {
+            errorMessage = "Thread root unavailable"
+            return
+        }
+        guard replyCountdown == nil, !isSending else { return }
+
+        pendingReply = (trimmed, parentId)
+        replyCountdownTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            for n in stride(from: 10, through: 1, by: -1) {
+                self.replyCountdown = n
+                do {
+                    try await Task.sleep(for: .seconds(1))
+                } catch {
+                    return
+                }
+            }
+            self.replyCountdown = nil
+            await self.runReplyPublishPipeline()
+        }
+    }
+
+    /// Skip the remaining countdown and publish immediately.
+    func publishReplyNow() {
+        replyCountdownTask?.cancel()
+        replyCountdownTask = nil
+        replyCountdown = nil
+        Task { await runReplyPublishPipeline() }
+    }
+
+    /// Discard the pending reply without publishing.
+    func cancelReply() {
+        replyCountdownTask?.cancel()
+        replyCountdownTask = nil
+        replyCountdown = nil
+        pendingReply = nil
+    }
+
+    private func runReplyPublishPipeline() async {
+        guard let pending = pendingReply else { return }
+        pendingReply = nil
+        let trimmed = pending.text
         guard let root = rootEvent else {
             errorMessage = "Thread root unavailable"
             return
         }
-        let parent: NostrEvent = parentId.flatMap { events[$0] } ?? root
+        let parent: NostrEvent = pending.parentId.flatMap { events[$0] } ?? root
 
         isSending = true
         defer { isSending = false }
