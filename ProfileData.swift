@@ -5,6 +5,7 @@ struct ProfileData {
     var name: String?
     var displayName: String?
     var picture: String?
+    var banner: String?
     var about: String?
     var nip05: String?
     var lud16: String?
@@ -24,6 +25,7 @@ struct ProfileData {
         self.name = json["name"] as? String
         self.displayName = json["display_name"] as? String
         self.picture = json["picture"] as? String
+        self.banner = json["banner"] as? String
         self.about = json["about"] as? String
         self.nip05 = json["nip05"] as? String
         self.lud16 = json["lud16"] as? String

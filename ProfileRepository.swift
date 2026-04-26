@@ -23,7 +23,7 @@ final class ProfileRepository {
     @discardableResult
     func updateFromEvent(_ event: NostrEvent) -> ProfileData? {
         guard event.kind == 0 else { return nil }
-        if let existing = timestamps[event.pubkey], event.createdAt <= existing {
+        if let existing = timestamps[event.pubkey], event.createdAt < existing {
             return cache[event.pubkey]
         }
         guard let data = event.content.data(using: .utf8),
@@ -55,6 +55,7 @@ final class ProfileRepository {
             "name": profile.name,
             "display_name": profile.displayName,
             "picture": profile.picture,
+            "banner": profile.banner,
             "about": profile.about,
             "nip05": profile.nip05,
             "lud16": profile.lud16
