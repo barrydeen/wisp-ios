@@ -38,6 +38,8 @@ struct ComposeView: View {
 
                             textEditor
 
+                            actionsRow
+
                             if viewModel.pollEnabled {
                                 PollOptionsEditor(viewModel: viewModel)
                                     .padding(.horizontal, 12)
@@ -452,14 +454,14 @@ struct ComposeView: View {
         }
     }
 
-    // MARK: - Bottom bar
+    // MARK: - Actions row (under text editor)
 
-    private var bottomBar: some View {
-        HStack(spacing: 16) {
+    private var actionsRow: some View {
+        HStack(spacing: 22) {
             if !viewModel.galleryMode, !viewModel.pollEnabled {
                 PhotosPicker(selection: $pickerItems, maxSelectionCount: 4, matching: .any(of: [.images, .videos])) {
                     Image(systemName: "photo.on.rectangle")
-                        .font(.system(size: 20))
+                        .font(.system(size: 22))
                         .foregroundStyle(.secondary)
                 }
             }
@@ -481,24 +483,11 @@ struct ComposeView: View {
                 .accessibilityLabel("Add GIF")
             }
 
-            if viewModel.mode.allowsPollToggle {
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        viewModel.togglePoll()
-                    }
-                } label: {
-                    Image(systemName: "chart.bar")
-                        .font(.system(size: 20))
-                        .foregroundStyle(viewModel.pollEnabled ? Color.wispPrimary : .secondary)
-                }
-                .accessibilityLabel(viewModel.pollEnabled ? "Disable poll" : "Create poll")
-            }
-
             Button {
                 viewModel.toggleNsfw()
             } label: {
                 Image(systemName: "exclamationmark.triangle\(viewModel.explicit ? ".fill" : "")")
-                    .font(.system(size: 20))
+                    .font(.system(size: 22))
                     .foregroundStyle(viewModel.explicit ? Color.orange : .secondary)
             }
 
@@ -506,38 +495,50 @@ struct ComposeView: View {
                 viewModel.togglePow()
             } label: {
                 Image(systemName: "shield\(viewModel.powEnabled ? ".fill" : "")")
-                    .font(.system(size: 20))
+                    .font(.system(size: 22))
                     .foregroundStyle(viewModel.powEnabled ? Color.wispPrimary : .secondary)
+            }
+
+            if viewModel.mode.allowsPollToggle {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        viewModel.togglePoll()
+                    }
+                } label: {
+                    Image(systemName: "chart.bar")
+                        .font(.system(size: 22))
+                        .foregroundStyle(viewModel.pollEnabled ? Color.wispPrimary : .secondary)
+                }
+                .accessibilityLabel(viewModel.pollEnabled ? "Disable poll" : "Create poll")
             }
 
             Button {
                 showScheduleSheet = true
             } label: {
                 Image(systemName: "clock\(viewModel.scheduleEnabled ? ".fill" : "")")
-                    .font(.system(size: 20))
+                    .font(.system(size: 22))
                     .foregroundStyle(viewModel.scheduleEnabled ? Color.wispPrimary : .secondary)
             }
 
-            if viewModel.hasUnsavedContent, !viewModel.isPublishing, viewModel.countdownSeconds == nil {
-                Button {
-                    Task { await viewModel.saveDraft() }
-                } label: {
-                    Text("Save Draft")
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(.secondary)
-                }
-            }
-
             Spacer()
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 4)
+    }
 
+    // MARK: - Bottom publish bar
+
+    private var bottomBar: some View {
+        HStack(spacing: 12) {
             if viewModel.countdownSeconds != nil {
                 Button(role: .destructive) {
                     viewModel.cancelPublish()
                 } label: {
-                    Text("Undo").font(.subheadline.weight(.semibold))
+                    Text("Undo")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
                 .background(Color.wispSurfaceVariant, in: Capsule())
 
                 Button {
@@ -545,34 +546,37 @@ struct ComposeView: View {
                 } label: {
                     Text("Post Now (\(viewModel.countdownSeconds ?? 0)s)")
                         .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
                 .background(Color.wispPrimary, in: Capsule())
                 .foregroundStyle(.white)
             } else {
                 Button {
                     viewModel.publish()
                 } label: {
-                    if viewModel.isMining {
-                        HStack(spacing: 6) {
-                            ProgressView().controlSize(.small).tint(.white)
-                            Text("Mining \(viewModel.miningAttempts)")
+                    Group {
+                        if viewModel.isMining {
+                            HStack(spacing: 6) {
+                                ProgressView().controlSize(.small).tint(.white)
+                                Text("Mining \(viewModel.miningAttempts)")
+                                    .font(.subheadline.weight(.semibold))
+                            }
+                        } else if viewModel.isPublishing {
+                            HStack(spacing: 6) {
+                                ProgressView().controlSize(.small).tint(.white)
+                                Text(viewModel.scheduleEnabled ? "Scheduling" : "Publishing")
+                                    .font(.subheadline.weight(.semibold))
+                            }
+                        } else {
+                            Text(viewModel.scheduleEnabled ? "Schedule Post" : "Publish")
                                 .font(.subheadline.weight(.semibold))
                         }
-                    } else if viewModel.isPublishing {
-                        HStack(spacing: 6) {
-                            ProgressView().controlSize(.small).tint(.white)
-                            Text(viewModel.scheduleEnabled ? "Scheduling" : "Publishing")
-                                .font(.subheadline.weight(.semibold))
-                        }
-                    } else {
-                        Text(viewModel.scheduleEnabled ? "Schedule Post" : "Publish")
-                            .font(.subheadline.weight(.semibold))
                     }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
                 .background(Color.wispPrimary, in: Capsule())
                 .foregroundStyle(.white)
                 .disabled(viewModel.isPublishing || viewModel.isMining)
