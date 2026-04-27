@@ -119,8 +119,8 @@ enum ContentParser {
             }
 
             let token = nsContent.substring(with: range)
-            let bareDomain = capture(match: match, group: 3, in: nsContent)
-            let hashtag = capture(match: match, group: 4, in: nsContent)
+            let bareDomain = capture(match: match, group: 2, in: nsContent)
+            let hashtag = capture(match: match, group: 3, in: nsContent)
 
             if let hashtag, !hashtag.isEmpty, token.hasPrefix("#") {
                 segments.append(.hashtag(hashtag))
