@@ -5,6 +5,10 @@ struct PostCardView: View {
     let profile: ProfileData?
     let profiles: [String: ProfileData]
     var engagement: EngagementCounts? = nil
+    /// When true, tapping the card body toggles the expanded details panel
+    /// instead of navigating. Used by ThreadView reply rows so taps don't push
+    /// a redundant ThreadRoute that just resolves back to the same thread root.
+    var expandOnTap: Bool = false
     var onProfileTap: ((String) -> Void)? = nil
     var onNoteTap: ((String) -> Void)? = nil
     var onHashtagTap: ((String) -> Void)? = nil
@@ -150,6 +154,7 @@ struct PostCardView: View {
             .padding(.vertical, 12)
         }
         .contentShape(Rectangle())
+        .modifier(TapToExpand(enabled: expandOnTap, expanded: $expanded))
         .onAppear {
             let displayed = resolveRepost().event
             if displayed.kind == Nip88.kindPoll || displayed.kind == Nip69.kindZapPoll {
@@ -629,6 +634,23 @@ struct PostCardView: View {
     private func handleCastVote(_ pollEvent: NostrEvent, optionIds: [String]) {
         guard let keypair = NostrKey.load() else { return }
         Task { _ = await PollVoteSender.castVote(pollEvent: pollEvent, optionIds: optionIds, keypair: keypair) }
+    }
+}
+
+// MARK: - Tap-to-Expand Modifier
+
+private struct TapToExpand: ViewModifier {
+    let enabled: Bool
+    @Binding var expanded: Bool
+
+    func body(content: Content) -> some View {
+        if enabled {
+            content.onTapGesture {
+                withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
+            }
+        } else {
+            content
+        }
     }
 }
 
