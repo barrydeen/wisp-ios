@@ -90,7 +90,7 @@ struct SidebarDrawerView: View {
 
                     if accountsExpanded {
                         accountPickerSection
-                            .transition(.opacity.combined(with: .move(edge: .top)))
+                            .transition(.opacity)
                     }
 
                     Divider().overlay(Color.wispSurfaceVariant.opacity(0.5))
@@ -100,7 +100,7 @@ struct SidebarDrawerView: View {
 
                     if settingsExpanded {
                         settingsItems
-                            .transition(.opacity.combined(with: .move(edge: .top)))
+                            .transition(.opacity)
                     }
 
                     Spacer(minLength: 16)
