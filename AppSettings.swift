@@ -18,6 +18,7 @@ final class AppSettings {
         static let accentColorARGB = "wisp_settings_accent_color_argb"
         static let autoLoadMedia = "wisp_settings_auto_load_media"
         static let videoAutoplay = "wisp_settings_video_autoplay"
+        static let animateAvatars = "wisp_settings_animate_avatars"
         static let clientTagEnabled = "wisp_settings_client_tag_enabled"
         static let fiatModeEnabled = "wisp_settings_fiat_mode_enabled"
         static let fiatCurrency = "wisp_settings_fiat_currency"
@@ -44,6 +45,9 @@ final class AppSettings {
     var videoAutoplay: Bool {
         didSet { UserDefaults.standard.set(videoAutoplay, forKey: Keys.videoAutoplay) }
     }
+    var animateAvatars: Bool {
+        didSet { UserDefaults.standard.set(animateAvatars, forKey: Keys.animateAvatars) }
+    }
     var clientTagEnabled: Bool {
         didSet { UserDefaults.standard.set(clientTagEnabled, forKey: Keys.clientTagEnabled) }
     }
@@ -66,6 +70,7 @@ final class AppSettings {
         self.accentColorARGB = defaults.object(forKey: Keys.accentColorARGB) as? Int ?? Self.defaultAccentARGB
         self.autoLoadMedia = defaults.object(forKey: Keys.autoLoadMedia) as? Bool ?? true
         self.videoAutoplay = defaults.object(forKey: Keys.videoAutoplay) as? Bool ?? true
+        self.animateAvatars = defaults.object(forKey: Keys.animateAvatars) as? Bool ?? true
         self.clientTagEnabled = defaults.object(forKey: Keys.clientTagEnabled) as? Bool ?? true
         self.fiatModeEnabled = defaults.object(forKey: Keys.fiatModeEnabled) as? Bool ?? false
         self.fiatCurrency = defaults.string(forKey: Keys.fiatCurrency) ?? "USD"

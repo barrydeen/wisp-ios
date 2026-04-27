@@ -9,6 +9,7 @@ struct CachedAvatarView: View {
 
     @Environment(AppSettings.self) private var settings
     @State private var uiImage: UIImage?
+    @State private var animatedPayload: AnimatedImagePayload?
     @State private var loadFailed = false
     @State private var manualLoad = false
 
@@ -18,7 +19,10 @@ struct CachedAvatarView: View {
 
     var body: some View {
         Group {
-            if let uiImage {
+            if let animatedPayload {
+                AnimatedImageRenderer(payload: animatedPayload, contentMode: .scaleAspectFill)
+                    .allowsHitTesting(false)
+            } else if let uiImage {
                 Image(uiImage: uiImage)
                     .resizable()
                     .scaledToFill()
@@ -34,6 +38,10 @@ struct CachedAvatarView: View {
         }
         .frame(width: size, height: size)
         .clipShape(Circle())
+        // Establish an explicit hit shape so enclosing Button / NavigationLink taps
+        // (e.g. tap-pfp-to-open-sidebar) keep working when the inner renderer is a
+        // UIViewRepresentable with hit-testing disabled.
+        .contentShape(Circle())
     }
 
     private var placeholder: some View {
@@ -52,27 +60,38 @@ struct CachedAvatarView: View {
             return
         }
 
-        if let cached = ImageCache.shared.get(url),
-           let img = UIImage(data: cached) {
-            uiImage = img
-            return
-        }
-
-        guard let imageUrl = URL(string: url) else {
-            loadFailed = true
-            return
-        }
-
-        do {
-            let (data, _) = try await URLSession.shared.data(from: imageUrl)
-            guard let img = UIImage(data: data) else {
+        let data: Data
+        if let cached = ImageCache.shared.get(url) {
+            data = cached
+        } else if let imageUrl = URL(string: url) {
+            do {
+                let (fetched, _) = try await URLSession.shared.data(from: imageUrl)
+                ImageCache.shared.store(fetched, for: url)
+                data = fetched
+            } catch {
                 loadFailed = true
                 return
             }
-            ImageCache.shared.store(data, for: url)
-            uiImage = img
-        } catch {
+        } else {
             loadFailed = true
+            return
         }
+
+        // Animated avatar path: try the multi-frame decoder first when the URL
+        // looks animated and the user hasn't disabled it. Falls through to the
+        // static UIImage path on single-frame payloads or when the toggle is off.
+        if settings.animateAvatars,
+           AnimatedImageHint.isLikelyAnimated(url: url, mime: nil),
+           let payload = AnimatedImageDecoder.decode(data: data),
+           payload.frames.count > 1 {
+            animatedPayload = payload
+            return
+        }
+
+        guard let img = UIImage(data: data) else {
+            loadFailed = true
+            return
+        }
+        uiImage = img
     }
 }

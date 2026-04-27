@@ -75,6 +75,11 @@ struct InterfaceSettingsView: View {
                         .toggleStyle(SwitchToggleStyle(tint: theme.primary))
                         .disabled(!settings.autoLoadMedia)
                         .opacity(settings.autoLoadMedia ? 1.0 : 0.5)
+                    Toggle("Animate avatars", isOn: $settings.animateAvatars)
+                        .toggleStyle(SwitchToggleStyle(tint: theme.primary))
+                    Text("Plays animated GIF / WebP profile pictures inline.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(theme.palette.onSurfaceVariant)
                 }
 
                 section(title: "Posting") {

@@ -142,12 +142,16 @@ enum AnimatedImageHint {
     }
 }
 
-private struct AnimatedImageRenderer: UIViewRepresentable {
+struct AnimatedImageRenderer: UIViewRepresentable {
     let payload: AnimatedImagePayload
+    /// Defaults to `.scaleAspectFit` for inline / full-screen image use. Avatar
+    /// callers pass `.scaleAspectFill` so a circular clip frames the image
+    /// edge-to-edge.
+    var contentMode: UIView.ContentMode = .scaleAspectFit
 
     func makeUIView(context: Context) -> UIImageView {
         let v = UIImageView()
-        v.contentMode = .scaleAspectFit
+        v.contentMode = contentMode
         v.clipsToBounds = true
         v.setContentHuggingPriority(.defaultLow, for: .horizontal)
         v.setContentHuggingPriority(.defaultLow, for: .vertical)
