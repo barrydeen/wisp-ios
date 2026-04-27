@@ -919,6 +919,11 @@ private struct ChipFlowLayout: Layout {
         var lineWidth: CGFloat = 0
         var lineHeight: CGFloat = 0
 
+        // Mirror `placeSubviews` exactly: `lineWidth` always carries the trailing spacing
+        // after each chip, so the wrap check `lineWidth + size > maxWidth` matches the
+        // placement-time check `x + size > maxX`. Earlier this used a different formula
+        // here vs. in placement, so the reported height was one row short and any
+        // following sibling (e.g. the "Show less" button) overlapped the last chip.
         for view in subviews {
             let size = view.sizeThatFits(.unspecified)
             if lineWidth + size.width > maxWidth, lineWidth > 0 {
@@ -926,7 +931,7 @@ private struct ChipFlowLayout: Layout {
                 lineWidth = 0
                 lineHeight = 0
             }
-            lineWidth += size.width + (lineWidth > 0 ? spacing : 0)
+            lineWidth += size.width + spacing
             lineHeight = max(lineHeight, size.height)
         }
         totalHeight += lineHeight

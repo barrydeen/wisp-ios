@@ -12,6 +12,18 @@ struct PendingAuthRequest: Sendable, Identifiable {
 
 enum RelayPool {
 
+    /// `URLSession.webSocketTask(with:)` throws an uncatchable Objective-C exception when
+    /// given a URL whose scheme isn't `ws`/`wss`. `URL(string:)` happily parses something
+    /// like `"relay.example.com"` into a non-nil URL with no scheme, so we have to filter
+    /// them out ourselves before handing them to URLSession.
+    nonisolated static func wsURL(_ raw: String) -> URL? {
+        guard let url = URL(string: raw),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "ws" || scheme == "wss"
+        else { return nil }
+        return url
+    }
+
     // MARK: - NIP-42 hooks (set once at app start from MainView.task)
 
     /// Returns a signed kind-22242 AUTH event for the given (relay, challenge), or
@@ -56,7 +68,7 @@ enum RelayPool {
         filter: NostrFilter,
         timeout: TimeInterval = 8
     ) async -> [NostrEvent] {
-        let urls = relays.compactMap { URL(string: $0) }
+        let urls = relays.compactMap(Self.wsURL)
         guard !urls.isEmpty else { return [] }
 
         let collector = EventCollector()
@@ -219,7 +231,7 @@ extension RelayPool {
             let sockets = SocketBag()
             let urls = queries.compactMap { q -> (URL, [NostrFilter])? in
                 guard !q.filters.isEmpty,
-                      let url = URL(string: q.relayUrl) else { return nil }
+                      let url = Self.wsURL(q.relayUrl) else { return nil }
                 return (url, q.filters)
             }
             let counter = RelayCounter(urls.count)
@@ -397,7 +409,7 @@ extension RelayPool {
     /// frame is treated as terminal and stops reconnecting.
     static func subscribe(relays: [String], filter: NostrFilter, id: String) -> RelaySubscription {
         let sub = RelaySubscription(id: id)
-        let urls = relays.compactMap { URL(string: $0) }
+        let urls = relays.compactMap(Self.wsURL)
         let req = "[\"REQ\",\"\(id)\",\(filter.toJSON())]"
         let closeMsg = "[\"CLOSE\",\"\(id)\"]"
         for url in urls {
@@ -486,7 +498,7 @@ extension RelayPool {
         let closeMsg = "[\"CLOSE\",\"\(id)\"]"
         for query in queries {
             guard !query.filters.isEmpty,
-                  let url = URL(string: query.relayUrl) else { continue }
+                  let url = Self.wsURL(query.relayUrl) else { continue }
             let filterJoined = query.filters.map { $0.toJSON() }.joined(separator: ",")
             let req = "[\"REQ\",\"\(id)\",\(filterJoined)]"
             let task = Task {
@@ -570,7 +582,7 @@ extension RelayPool {
     /// on relays that accept the connection but never send `OK` (some implementations drop OKs).
     @discardableResult
     static func publish(event: NostrEvent, to relays: [String], timeout: TimeInterval = 4) async -> [String] {
-        let urls = relays.compactMap { URL(string: $0) }
+        let urls = relays.compactMap(Self.wsURL)
         guard !urls.isEmpty else { return [] }
         let payload = "[\"EVENT\",\(event.toJSON())]"
 
