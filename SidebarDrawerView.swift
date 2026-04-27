@@ -9,6 +9,7 @@ struct SidebarDrawerView: View {
     let onLogout: () -> Void
     var onOpenProfile: () -> Void = {}
     var onOpenInterface: () -> Void = {}
+    var onOpenKeys: () -> Void = {}
     var onOpenDraftsScheduled: () -> Void = {}
     var onOpenCustomEmojis: () -> Void = {}
     var onOpenLists: () -> Void = {}
@@ -140,7 +141,12 @@ struct SidebarDrawerView: View {
             await loadStatus()
         }
         .sheet(isPresented: $showQRSheet) {
-            qrSheet
+            ProfileQrSheet(
+                pubkey: pubkey,
+                displayName: displayName,
+                avatarUrl: profile?.picture,
+                lud16: profile?.lud16
+            )
         }
     }
 
@@ -343,7 +349,7 @@ struct SidebarDrawerView: View {
             }
             DrawerRow(icon: "server.rack", label: "Relays", indented: true) { onOpenRelays() }
             DrawerRow(icon: "cloud", label: "Media Servers", indented: true) { onOpenMediaServers() }
-            DrawerRow(icon: "key", label: "Keys", indented: true) { onClose() }
+            DrawerRow(icon: "key", label: "Keys", indented: true) { onOpenKeys() }
             DrawerRow(icon: "hand.raised", label: "Safety", indented: true) { onOpenSafety() }
             DrawerRow(icon: "shield", label: "Proof of Work", indented: true) { onOpenProofOfWork() }
             DrawerRow(icon: "point.3.connected.trianglepath.dotted", label: "Social Graph", indented: true) { onOpenSocialGraph() }
@@ -381,62 +387,4 @@ struct SidebarDrawerView: View {
         .frame(maxWidth: .infinity)
     }
 
-    // MARK: - QR sheet
-
-    @State private var qrTab: Int = 0
-
-    private var qrSheet: some View {
-        VStack(spacing: 16) {
-            HStack {
-                Text("Profile QR")
-                    .font(.headline)
-                Spacer()
-                Button("Done") { showQRSheet = false }
-            }
-            .padding(.horizontal, 20)
-            .padding(.top, 16)
-
-            if (profile?.lud16) != nil {
-                Picker("", selection: $qrTab) {
-                    Text("Nostr").tag(0)
-                    Text("Lightning").tag(1)
-                }
-                .pickerStyle(.segmented)
-                .padding(.horizontal, 20)
-            }
-
-            ZStack {
-                RoundedRectangle(cornerRadius: 16)
-                    .fill(Color.wispSurface)
-                    .frame(width: 240, height: 240)
-                Image(systemName: "qrcode")
-                    .font(.system(size: 200))
-                    .foregroundStyle(.secondary.opacity(0.6))
-            }
-            .padding(.vertical, 8)
-
-            Text(qrTab == 0 ? npub : (profile?.lud16 ?? ""))
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .padding(.horizontal, 24)
-
-            Button {
-                UIPasteboard.general.string = qrTab == 0 ? npub : (profile?.lud16 ?? "")
-            } label: {
-                Label("Copy", systemImage: "doc.on.doc")
-                    .font(.system(size: 14, weight: .medium))
-                    .padding(.horizontal, 24)
-                    .padding(.vertical, 10)
-                    .background(Color.wispSurfaceVariant, in: Capsule())
-            }
-            .buttonStyle(.plain)
-
-            Spacer()
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.wispBackground)
-        .presentationDetents([.medium, .large])
-    }
 }

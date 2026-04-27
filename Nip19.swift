@@ -73,6 +73,10 @@ enum Nip19 {
         return try? bech32Encode(hrp: "npub", data: pubkey)
     }
 
+    static func nsecEncode(privkey: [UInt8]) -> String? {
+        return try? bech32Encode(hrp: "nsec", data: privkey)
+    }
+
     static func noteEncode(eventId: [UInt8]) -> String? {
         return try? bech32Encode(hrp: "note", data: eventId)
     }

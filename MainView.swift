@@ -19,6 +19,7 @@ struct MainView: View {
     @State private var engagementRepo = EngagementRepository.shared
     @State private var liveStreamRepo = LiveStreamRepository.shared
     @State private var showInterfaceSettings = false
+    @State private var showKeys = false
     @State private var showCustomEmojis = false
     @State private var showHashtagSets = false
     @State private var showLists = false
@@ -87,6 +88,10 @@ struct MainView: View {
                 onOpenInterface: {
                     closeDrawer()
                     showInterfaceSettings = true
+                },
+                onOpenKeys: {
+                    closeDrawer()
+                    showKeys = true
                 },
                 onOpenDraftsScheduled: {
                     closeDrawer()
@@ -203,6 +208,11 @@ struct MainView: View {
         .sheet(isPresented: $showInterfaceSettings) {
             NavigationStack {
                 InterfaceSettingsView()
+            }
+        }
+        .sheet(isPresented: $showKeys) {
+            NavigationStack {
+                KeysSettingsView(keypair: keypair)
             }
         }
         .sheet(isPresented: $showRelaySettings) {

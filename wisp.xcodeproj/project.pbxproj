@@ -233,6 +233,8 @@
 		4CABCD0100000000000F2002 /* Nip10001.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD0000000000000F2002 /* Nip10001.swift */; };
 		4CABCD0100000000000F2003 /* PinNoteSender.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD0000000000000F2003 /* PinNoteSender.swift */; };
 		4CABCD0100000000000F2004 /* DeletionSender.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD0000000000000F2004 /* DeletionSender.swift */; };
+		4CABCD0100000000000F2005 /* ProfileQrSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD0000000000000F2005 /* ProfileQrSheet.swift */; };
+		4CABCD0100000000000F2006 /* KeysSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD0000000000000F2006 /* KeysSettingsView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -478,6 +480,8 @@
 		4CABCD0000000000000F2002 /* Nip10001.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Nip10001.swift; sourceTree = "<group>"; };
 		4CABCD0000000000000F2003 /* PinNoteSender.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PinNoteSender.swift; sourceTree = "<group>"; };
 		4CABCD0000000000000F2004 /* DeletionSender.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeletionSender.swift; sourceTree = "<group>"; };
+		4CABCD0000000000000F2005 /* ProfileQrSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileQrSheet.swift; sourceTree = "<group>"; };
+		4CABCD0000000000000F2006 /* KeysSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeysSettingsView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -756,6 +760,8 @@
 				4CABCD0000000000000F2002 /* Nip10001.swift */,
 				4CABCD0000000000000F2003 /* PinNoteSender.swift */,
 				4CABCD0000000000000F2004 /* DeletionSender.swift */,
+				4CABCD0000000000000F2005 /* ProfileQrSheet.swift */,
+				4CABCD0000000000000F2006 /* KeysSettingsView.swift */,
 			);
 			sourceTree = "<group>";
 		};
@@ -1145,6 +1151,8 @@
 				4CABCD0100000000000F2002 /* Nip10001.swift in Sources */,
 				4CABCD0100000000000F2003 /* PinNoteSender.swift in Sources */,
 				4CABCD0100000000000F2004 /* DeletionSender.swift in Sources */,
+				4CABCD0100000000000F2005 /* ProfileQrSheet.swift in Sources */,
+				4CABCD0100000000000F2006 /* KeysSettingsView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -7,11 +7,20 @@ struct ProfileView: View {
     @State private var viewModel: ProfileViewModel
     @State private var selectedTab: ProfileTab = .notes
     @State private var showAddToList = false
+    @State private var showQrSheet = false
+    @State private var muteRepo = MuteRepository.shared
 
     init(pubkey: String, activeUserPubkey: String) {
         self.pubkey = pubkey
         self.activeUserPubkey = activeUserPubkey
         _viewModel = State(initialValue: ProfileViewModel(pubkey: pubkey, activeUserPubkey: activeUserPubkey))
+    }
+
+    private var isMe: Bool { pubkey == activeUserPubkey }
+    private var shareURL: String { "https://wisp.talk/profile/\(pubkey)" }
+    private var npub: String? {
+        guard let bytes = Hex.decode(pubkey) else { return nil }
+        return Nip19.npubEncode(pubkey: Array(bytes))
     }
 
     var body: some View {
@@ -41,11 +50,48 @@ struct ProfileView: View {
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
-                    showAddToList = true
+                    showQrSheet = true
                 } label: {
-                    Image(systemName: "text.badge.plus")
+                    Image(systemName: "qrcode")
                         .font(.system(size: 17))
+                        .foregroundStyle(.primary)
                 }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    ShareLink(item: shareURL) {
+                        Label("Share Profile", systemImage: "square.and.arrow.up")
+                    }
+                    Button {
+                        if let npub { UIPasteboard.general.string = npub }
+                    } label: {
+                        Label("Copy npub", systemImage: "person.text.rectangle")
+                    }
+                    Button {
+                        showAddToList = true
+                    } label: {
+                        Label("Add to List", systemImage: "text.badge.plus")
+                    }
+                    if !isMe {
+                        let blocked = muteRepo.isBlocked(pubkey)
+                        Button(role: blocked ? nil : .destructive) {
+                            if blocked {
+                                muteRepo.unblockUser(pubkey)
+                            } else {
+                                muteRepo.blockUser(pubkey)
+                            }
+                        } label: {
+                            Label(blocked ? "Unblock User" : "Block User",
+                                  systemImage: blocked ? "person.crop.circle.badge.checkmark" : "person.crop.circle.badge.xmark")
+                        }
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 17))
+                        .foregroundStyle(.primary)
+                }
+                .menuStyle(.borderlessButton)
+                .tint(.primary)
             }
         }
         .sheet(isPresented: $showAddToList) {
@@ -54,6 +100,14 @@ struct ProfileView: View {
                     AddProfileToListSheet(keypair: keypair, targetPubkey: pubkey)
                 }
             }
+        }
+        .sheet(isPresented: $showQrSheet) {
+            ProfileQrSheet(
+                pubkey: pubkey,
+                displayName: viewModel.profile?.displayString ?? shortKey(pubkey),
+                avatarUrl: viewModel.profile?.picture,
+                lud16: viewModel.profile?.lud16
+            )
         }
         .task { await viewModel.start() }
         .task(id: selectedTab) {
