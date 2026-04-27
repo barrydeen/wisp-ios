@@ -615,11 +615,15 @@ struct PostCardView: View {
            let inner = NostrEvent(json: json) {
             return ResolvedPost(
                 event: inner,
-                profile: profiles[inner.pubkey],
+                profile: profiles[inner.pubkey] ?? ProfileRepository.shared.get(inner.pubkey),
                 isRepost: true
             )
         }
-        return ResolvedPost(event: event, profile: profile, isRepost: false)
+        return ResolvedPost(
+            event: event,
+            profile: profile ?? ProfileRepository.shared.get(event.pubkey),
+            isRepost: false
+        )
     }
 
     private func npubShort(_ pubkey: String) -> String {

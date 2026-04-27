@@ -274,7 +274,7 @@ final class FeedViewModel {
                         self.relayFeedStatus = .streaming
                     }
                     Task.detached { await EventStore.shared.persist([event]) }
-                    Task { await self.requestProfileIfNeeded(event.pubkey) }
+                    Task { await self.requestReferencedProfiles(in: event) }
                 }
             }
         }
@@ -477,19 +477,64 @@ final class FeedViewModel {
                 self.events.insert(event, at: idx)
 
                 Task.detached { await EventStore.shared.persist([event]) }
-                Task { await self.requestProfileIfNeeded(event.pubkey) }
+                Task { await self.requestReferencedProfiles(in: event) }
             }
         }
     }
 
+    private func requestReferencedProfiles(in event: NostrEvent) async {
+        for pk in Self.referencedAuthorPubkeys(in: event) {
+            await requestProfileIfNeeded(pk)
+        }
+    }
+
+    /// Inner author of a kind-6 repost (the original note's pubkey, embedded as JSON in `content`).
+    static func repostInnerPubkey(_ event: NostrEvent) -> String? {
+        guard event.kind == 6, !event.content.isEmpty,
+              let data = event.content.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return json["pubkey"] as? String
+    }
+
+    /// Every pubkey whose kind-0 profile is needed to render `event`: the outer author,
+    /// the inner-repost author (kind 6), and any `nostr:npub` / `nostr:nprofile` mentions
+    /// in the note body (or in the embedded inner note for reposts).
+    static func referencedAuthorPubkeys(in event: NostrEvent) -> [String] {
+        var result: Set<String> = [event.pubkey]
+        if let inner = repostInnerPubkey(event) {
+            result.insert(inner)
+        }
+        for pk in mentionPubkeys(content: event.content, tags: event.tags) {
+            result.insert(pk)
+        }
+        if event.kind == 6, !event.content.isEmpty,
+           let data = event.content.data(using: .utf8),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let innerContent = json["content"] as? String {
+            let innerTags = (json["tags"] as? [[String]]) ?? []
+            for pk in mentionPubkeys(content: innerContent, tags: innerTags) {
+                result.insert(pk)
+            }
+        }
+        return Array(result)
+    }
+
+    private static func mentionPubkeys(content: String, tags: [[String]]) -> [String] {
+        let segments = ContentParser.parse(content: content, tags: tags, trimBlankLines: false)
+        var out: [String] = []
+        for seg in segments {
+            if case .nostrProfile(let pubkey, _) = seg {
+                out.append(pubkey)
+            }
+        }
+        return out
+    }
+
     private func loadMissingProfiles() async {
-        var needed = Set(events.map(\.pubkey)).filter { profiles[$0] == nil }
-        for event in events where event.kind == 6 {
-            if let data = event.content.data(using: .utf8),
-               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let innerPubkey = json["pubkey"] as? String,
-               profiles[innerPubkey] == nil {
-                needed.insert(innerPubkey)
+        var needed = Set<String>()
+        for event in events {
+            for pk in Self.referencedAuthorPubkeys(in: event) where profiles[pk] == nil {
+                needed.insert(pk)
             }
         }
         guard !needed.isEmpty else { return }

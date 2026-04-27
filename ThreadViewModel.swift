@@ -80,10 +80,13 @@ final class ThreadViewModel {
             relays = await resolveRelays()
         }
 
-        // Make sure the root author's profile is on its way (it usually is, but cold loads miss).
-        if let pk = rootEvent?.pubkey, profiles[pk] == nil {
-            if let cached = profileRepo.get(pk) { profiles[pk] = cached }
-            else { queueProfileFetch(pk) }
+        // Hydrate every pubkey the root note references (author + repost inner + npub
+        // mentions) — cold loads otherwise leave mentions as truncated hex.
+        if let root = rootEvent {
+            for pk in FeedViewModel.referencedAuthorPubkeys(in: root) where profiles[pk] == nil {
+                if let cached = profileRepo.get(pk) { profiles[pk] = cached }
+                else { queueProfileFetch(pk) }
+            }
         }
 
         // 4. Open live subscriptions for replies + engagement and let the UI update as events
@@ -268,9 +271,18 @@ final class ThreadViewModel {
 
         if !events.isEmpty {
             rebuildTree()
-            let pubkeys = Set(events.values.map(\.pubkey))
-            for pk in pubkeys {
-                if let p = profileRepo.get(pk) { profiles[pk] = p }
+            var referenced = Set<String>()
+            for event in events.values {
+                for pk in FeedViewModel.referencedAuthorPubkeys(in: event) {
+                    referenced.insert(pk)
+                }
+            }
+            for pk in referenced {
+                if let p = profileRepo.get(pk) {
+                    profiles[pk] = p
+                } else {
+                    queueProfileFetch(pk)
+                }
             }
             if rootEvent != nil { isLoading = false }
         }
@@ -369,12 +381,13 @@ final class ThreadViewModel {
         events[event.id] = event
         Task { await eventStore.persist([event]) }
 
-        // Hydrate the author from cache; queue an indexer fetch only if we've never seen them.
-        if profiles[event.pubkey] == nil {
-            if let cached = profileRepo.get(event.pubkey) {
-                profiles[event.pubkey] = cached
+        // Hydrate every referenced author (note author + repost inner + npub mentions) from
+        // cache; queue an indexer fetch for any pubkey we've never seen.
+        for pk in FeedViewModel.referencedAuthorPubkeys(in: event) where profiles[pk] == nil {
+            if let cached = profileRepo.get(pk) {
+                profiles[pk] = cached
             } else {
-                queueProfileFetch(event.pubkey)
+                queueProfileFetch(pk)
             }
         }
 

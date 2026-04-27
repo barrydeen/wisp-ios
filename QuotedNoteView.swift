@@ -140,15 +140,19 @@ struct QuotedNoteView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                RichContentView(
-                    content: event.content,
-                    tags: event.tags,
-                    profiles: profiles,
-                    onProfileTap: onProfileTap,
-                    onNoteTap: onNoteTap,
-                    onHashtagTap: onHashtagTap,
-                    showLinkPreviews: false
-                )
+                if event.kind == 9735 {
+                    zapReceiptBody(event)
+                } else {
+                    RichContentView(
+                        content: event.content,
+                        tags: event.tags,
+                        profiles: profiles,
+                        onProfileTap: onProfileTap,
+                        onNoteTap: onNoteTap,
+                        onHashtagTap: onHashtagTap,
+                        showLinkPreviews: false
+                    )
+                }
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -160,6 +164,28 @@ struct QuotedNoteView: View {
             )
         }
         .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private func zapReceiptBody(_ event: NostrEvent) -> some View {
+        let sats = Nip57.zapAmountSats(receipt: event)
+        let message = Nip57.zapMessage(receipt: event)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "bolt.fill")
+                    .font(.system(size: 13))
+                Text(sats > 0 ? "\(CurrencyFormatter.short(sats: sats)) sats" : "Zap")
+                    .font(.subheadline.weight(.semibold))
+            }
+            .foregroundStyle(Color.wispZapColor)
+
+            if let message, !message.isEmpty {
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
     }
 
     private func load() async {
