@@ -486,6 +486,14 @@ final class ProfileViewModel {
                 current.reposts += 1
             case 7:
                 current.reactions += 1
+                let reactor = Reactor(
+                    pubkey: event.pubkey,
+                    emoji: event.content,
+                    customEmojiUrl: EngagementRepository.customEmojiUrl(for: event.content, in: event.tags)
+                )
+                if !current.reactors.contains(where: { $0.pubkey == reactor.pubkey && $0.emoji == reactor.emoji }) {
+                    current.reactors.append(reactor)
+                }
             case 9735:
                 if let bolt = event.tags.first(where: { $0.first == "bolt11" && $0.count >= 2 })?[1],
                    let decoded = Bolt11.decode(bolt),
@@ -646,7 +654,20 @@ struct EngagementCounts: Equatable {
 
 struct Reactor: Equatable, Hashable {
     let pubkey: String
+    /// Reaction content. Either a Unicode emoji like "🔥", the legacy NIP-25
+    /// `+`/`-`, or a NIP-30 `:shortcode:` reference resolved against
+    /// `customEmojiUrl`.
     let emoji: String
+    /// URL of the custom emoji image when `emoji` is a `:shortcode:` reference,
+    /// extracted from the kind-7 reaction event's NIP-30 `emoji` tag. Nil for
+    /// plain Unicode reactions.
+    let customEmojiUrl: String?
+
+    init(pubkey: String, emoji: String, customEmojiUrl: String? = nil) {
+        self.pubkey = pubkey
+        self.emoji = emoji
+        self.customEmojiUrl = customEmojiUrl
+    }
 }
 
 struct Zapper: Equatable, Hashable {

@@ -329,6 +329,14 @@ final class SearchViewModel {
                 current.reposts += 1
             case 7:
                 current.reactions += 1
+                let reactor = Reactor(
+                    pubkey: event.pubkey,
+                    emoji: event.content,
+                    customEmojiUrl: EngagementRepository.customEmojiUrl(for: event.content, in: event.tags)
+                )
+                if !current.reactors.contains(where: { $0.pubkey == reactor.pubkey && $0.emoji == reactor.emoji }) {
+                    current.reactors.append(reactor)
+                }
             case 9735:
                 if let bolt = event.tags.first(where: { $0.first == "bolt11" && $0.count >= 2 })?[1],
                    let decoded = Bolt11.decode(bolt),

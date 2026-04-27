@@ -30,23 +30,31 @@ struct PostCardView: View {
     }
 
     private var myPubkey: String? { NostrKey.load()?.pubkey }
-    private var iReactedEmoji: String? {
-        guard let me = myPubkey,
-              let counts = engagement else { return nil }
-        return counts.reactors.first(where: { $0.pubkey == me })?.emoji
+    private var myReactor: Reactor? {
+        guard let me = myPubkey, let counts = engagement else { return nil }
+        return counts.reactors.first(where: { $0.pubkey == me })
     }
+    private var iReactedEmoji: String? { myReactor?.emoji }
     private var iReposted: Bool {
         guard let me = myPubkey, let counts = engagement else { return false }
         return counts.reposters.contains(me)
     }
-    /// The user's reacted emoji as a displayable unicode character, or nil if they haven't
-    /// reacted or the reaction is a NIP-30 `:shortcode:` we can't render inline (we fall back
-    /// to a tinted heart in that case). Maps the legacy NIP-25 `+` / empty content to ❤️.
+    /// The user's reacted emoji as a displayable Unicode character, or nil for shortcode
+    /// reactions (which the heart action renders as an inline image instead) or no
+    /// reaction. Maps the legacy NIP-25 `+` / empty content to ❤️.
     private var displayReactedEmoji: String? {
         guard let raw = iReactedEmoji else { return nil }
         if raw == "+" || raw.isEmpty { return "\u{2764}\u{FE0F}" }
         if raw.hasPrefix(":") && raw.hasSuffix(":") && raw.count > 2 { return nil }
         return raw
+    }
+    /// `(shortcode, url)` for the user's reaction when it's a NIP-30 custom emoji and
+    /// the reactor included the matching `["emoji", shortcode, url]` tag.
+    private var displayReactedCustomEmoji: (shortcode: String, url: String)? {
+        guard let raw = iReactedEmoji,
+              raw.hasPrefix(":"), raw.hasSuffix(":"), raw.count > 2,
+              let url = myReactor?.customEmojiUrl else { return nil }
+        return (String(raw.dropFirst().dropLast()), url)
     }
 
     var body: some View {
@@ -404,6 +412,7 @@ struct PostCardView: View {
 
     private var heartAction: some View {
         let displayed = displayReactedEmoji
+        let custom = displayReactedCustomEmoji
         return Button {
             showReactionPicker = true
         } label: {
@@ -411,6 +420,22 @@ struct PostCardView: View {
                 HStack(spacing: 4) {
                     Text(emoji)
                         .font(.system(size: 16))
+                    if let count = engagement?.reactions, count > 0 {
+                        Text(formatCount(count))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(height: 28)
+            } else if let custom {
+                HStack(spacing: 4) {
+                    EmojiText(
+                        ":\(custom.shortcode):",
+                        emojiMap: [custom.shortcode: custom.url],
+                        textStyle: .body,
+                        lineLimit: 1
+                    )
+                    .frame(height: 18)
                     if let count = engagement?.reactions, count > 0 {
                         Text(formatCount(count))
                             .font(.caption)
@@ -733,15 +758,16 @@ private struct NoteDetailsPanel: View {
     private var zapsSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             ForEach(zappers.sorted(by: { $0.sats > $1.sats }), id: \.self) { zap in
+                let zapProfile = profiles[zap.pubkey] ?? ProfileRepository.shared.get(zap.pubkey)
                 Button {
                     onProfileTap?(zap.pubkey)
                 } label: {
                     HStack(spacing: 8) {
-                        CachedAvatarView(url: profiles[zap.pubkey]?.picture, size: 30)
+                        CachedAvatarView(url: zapProfile?.picture, size: 30)
                         VStack(alignment: .leading, spacing: 1) {
                             let label = !zap.message.isEmpty
                                 ? zap.message
-                                : (profiles[zap.pubkey]?.displayString ?? short(zap.pubkey))
+                                : (zapProfile?.displayString ?? short(zap.pubkey))
                             Text(label)
                                 .font(.caption)
                                 .foregroundStyle(.primary)
@@ -781,14 +807,18 @@ private struct NoteDetailsPanel: View {
     private var reactionsSection: some View {
         let grouped = Dictionary(grouping: reactors, by: { $0.emoji })
         let sortedKeys = grouped.keys.sorted { (grouped[$0]?.count ?? 0) > (grouped[$1]?.count ?? 0) }
-        let emojiMap = EmojiRepository.shared.resolvedCustomMap
+        // Build a per-reaction emoji map so each row resolves its own shortcode against the
+        // URL the reactor included in their kind-7 NIP-30 `emoji` tag. Falls back to the
+        // local user's emoji set for shortcodes the reactor didn't tag (rare).
+        let localMap = EmojiRepository.shared.resolvedCustomMap
         return VStack(alignment: .leading, spacing: 6) {
             ForEach(sortedKeys, id: \.self) { emoji in
                 let group = grouped[emoji] ?? []
+                let reactionMap = perReactionEmojiMap(for: group, fallback: localMap)
                 HStack(alignment: .center, spacing: 8) {
                     EmojiText(
                         displayEmoji(emoji),
-                        emojiMap: emojiMap,
+                        emojiMap: reactionMap,
                         textStyle: .body,
                         lineLimit: 1
                     )
@@ -802,6 +832,18 @@ private struct NoteDetailsPanel: View {
                 }
             }
         }
+    }
+
+    private func perReactionEmojiMap(for group: [Reactor], fallback: [String: String]) -> [String: String] {
+        var map = fallback
+        for reactor in group {
+            guard let url = reactor.customEmojiUrl,
+                  reactor.emoji.hasPrefix(":"), reactor.emoji.hasSuffix(":"), reactor.emoji.count > 2
+            else { continue }
+            let shortcode = String(reactor.emoji.dropFirst().dropLast())
+            map[shortcode] = url
+        }
+        return map
     }
 
     private var seenOnSection: some View {
@@ -871,10 +913,11 @@ private struct StackedAvatarRow: View {
         let extra = pubkeys.count - visible.count
         HStack(spacing: -overlap) {
             ForEach(Array(visible.enumerated()), id: \.offset) { _, pk in
+                let picture = profiles[pk]?.picture ?? ProfileRepository.shared.get(pk)?.picture
                 Button {
                     onProfileTap?(pk)
                 } label: {
-                    CachedAvatarView(url: profiles[pk]?.picture, size: size)
+                    CachedAvatarView(url: picture, size: size)
                         .overlay(
                             Circle().stroke(Color.wispBackground, lineWidth: 2)
                         )
