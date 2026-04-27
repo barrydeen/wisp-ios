@@ -9,6 +9,7 @@ struct SidebarDrawerView: View {
     let onLogout: () -> Void
     var onOpenProfile: () -> Void = {}
     var onOpenInterface: () -> Void = {}
+    var onOpenKeys: () -> Void = {}
     var onOpenDraftsScheduled: () -> Void = {}
     var onOpenCustomEmojis: () -> Void = {}
     var onOpenLists: () -> Void = {}
@@ -348,7 +349,7 @@ struct SidebarDrawerView: View {
             }
             DrawerRow(icon: "server.rack", label: "Relays", indented: true) { onOpenRelays() }
             DrawerRow(icon: "cloud", label: "Media Servers", indented: true) { onOpenMediaServers() }
-            DrawerRow(icon: "key", label: "Keys", indented: true) { onClose() }
+            DrawerRow(icon: "key", label: "Keys", indented: true) { onOpenKeys() }
             DrawerRow(icon: "hand.raised", label: "Safety", indented: true) { onOpenSafety() }
             DrawerRow(icon: "shield", label: "Proof of Work", indented: true) { onOpenProofOfWork() }
             DrawerRow(icon: "point.3.connected.trianglepath.dotted", label: "Social Graph", indented: true) { onOpenSocialGraph() }
