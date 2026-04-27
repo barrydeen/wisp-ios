@@ -16,7 +16,7 @@ struct ProfileView: View {
 
     var body: some View {
         ScrollView {
-            LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
+            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
                 ProfileHeaderView(viewModel: viewModel)
                 Section {
                     tabBody
