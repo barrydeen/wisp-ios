@@ -384,11 +384,6 @@ final class ComposeViewModel {
                         localBytes: nil
                     )
                 }
-                if !galleryMode {
-                    // Append URL to text content (regular note flow).
-                    if !content.isEmpty, !content.hasSuffix("\n") { content += "\n" }
-                    content += result.url
-                }
                 uploaded += 1
             } catch {
                 attachments.removeAll { $0.id == pendingId }
@@ -404,6 +399,104 @@ final class ComposeViewModel {
 
     func removeMedia(id: UUID) {
         attachments.removeAll { $0.id == id }
+    }
+
+    /// Handle images from a SwiftUI `.onPasteCommand([UTType.image])` callback.
+    /// Each provider is loaded to bytes, compressed, and uploaded to Blossom — same
+    /// pipeline as the photo picker. In non-gallery mode the resulting URL is also
+    /// appended to the post body so it shows up in the live preview alongside the
+    /// attachment thumbnail.
+    func addPastedImages(_ providers: [NSItemProvider]) async {
+        guard !providers.isEmpty else { return }
+        uploadProgress = providers.count > 1 ? "Loading \(providers.count) images…" : "Loading…"
+        defer { if uploadProgress != nil { uploadProgress = nil } }
+
+        var loaded: [(data: Data, mime: String)] = []
+        for provider in providers {
+            if let result = await loadPastedImageData(from: provider) {
+                loaded.append(result)
+            }
+        }
+        guard !loaded.isEmpty else { return }
+
+        let total = loaded.count
+        for (i, item) in loaded.enumerated() {
+            await uploadImageBytes(data: item.data, mime: item.mime, progressIndex: i, total: total)
+        }
+        uploadProgress = nil
+    }
+
+    private static let pasteImageTypes: [(typeId: String, mime: String)] = [
+        ("public.png", "image/png"),
+        ("public.jpeg", "image/jpeg"),
+        ("public.heic", "image/heic"),
+        ("com.compuserve.gif", "image/gif"),
+        ("org.webmproject.webp", "image/webp")
+    ]
+
+    private func loadPastedImageData(from provider: NSItemProvider) async -> (data: Data, mime: String)? {
+        for entry in Self.pasteImageTypes where provider.hasItemConformingToTypeIdentifier(entry.typeId) {
+            if let data = await loadDataRepresentation(from: provider, typeIdentifier: entry.typeId) {
+                return (data, entry.mime)
+            }
+        }
+        // Fallback for type-id-less providers (rare): re-encode anything decodable as JPEG.
+        if let data = await loadDataRepresentation(from: provider, typeIdentifier: "public.image"),
+           let img = UIImage(data: data),
+           let jpeg = img.jpegData(compressionQuality: 0.92) {
+            return (jpeg, "image/jpeg")
+        }
+        return nil
+    }
+
+    private func loadDataRepresentation(from provider: NSItemProvider, typeIdentifier: String) async -> Data? {
+        await withCheckedContinuation { cont in
+            provider.loadDataRepresentation(forTypeIdentifier: typeIdentifier) { data, _ in
+                cont.resume(returning: data)
+            }
+        }
+    }
+
+    private func uploadImageBytes(data: Data, mime: String, progressIndex: Int, total: Int) async {
+        let pendingId = UUID()
+        let compressed = MediaCompressor.compressImage(data: data, mime: mime)
+        let pending = ComposeAttachment(
+            id: pendingId,
+            url: nil,
+            mime: compressed.mime,
+            dim: compressed.dim,
+            durationSec: nil,
+            sha256Hex: nil,
+            localBytes: data
+        )
+        attachments.append(pending)
+        uploadProgress = total > 1 ? "Uploading \(progressIndex + 1)/\(total)…" : "Uploading…"
+        do {
+            guard let privkeyBytes = Hex.decode(keypair.privkey) else {
+                throw BlossomError.authFailed
+            }
+            let result = try await BlossomClient.upload(
+                bytes: compressed.data,
+                mime: compressed.mime,
+                servers: blossomServers,
+                privkey32: privkeyBytes,
+                pubkey: keypair.pubkey
+            )
+            if let idx = attachments.firstIndex(where: { $0.id == pendingId }) {
+                attachments[idx] = ComposeAttachment(
+                    id: pendingId,
+                    url: result.url,
+                    mime: compressed.mime,
+                    dim: compressed.dim,
+                    durationSec: nil,
+                    sha256Hex: result.sha256Hex,
+                    localBytes: nil
+                )
+            }
+        } catch {
+            attachments.removeAll { $0.id == pendingId }
+            lastError = "Upload failed: \(error)"
+        }
     }
 
     /// Re-host a GIF picked from Giphy on the user's Blossom servers, then
@@ -736,15 +829,34 @@ final class ComposeViewModel {
         return Nip68.kindPicture
     }
 
-    /// For regular notes the body is the materialized content. For gallery events the
-    /// content is the caption (the upload URLs go in `imeta` tags instead).
+    /// For regular notes the body is the materialized content with attachment URLs
+    /// spliced onto the end (in `attachments` order). For gallery events the body
+    /// is just the caption — upload URLs ride in `imeta` tags instead.
     private func bodyForPublish(kind: Int, materialized: String) -> String {
         switch kind {
         case Nip68.kindPicture, Nip71.kindVideoHorizontal, Nip71.kindVideoVertical:
             return materialized
         default:
-            return materialized
+            return appendAttachmentUrls(to: materialized)
         }
+    }
+
+    private func appendAttachmentUrls(to body: String) -> String {
+        let urls = attachments.compactMap { $0.url }
+        guard !urls.isEmpty else { return body }
+        var out = body
+        for url in urls {
+            if !out.isEmpty, !out.hasSuffix("\n") { out += "\n" }
+            out += url
+        }
+        return out
+    }
+
+    /// Content as it would appear in the published note, including any spliced
+    /// attachment URLs. Used by the live preview card so pasted/uploaded images
+    /// render inline even though the URLs no longer live in `content`.
+    var previewContent: String {
+        bodyForPublish(kind: determineKind(), materialized: content)
     }
 
     /// Replace each `@displayName` token with `nostr:nprofile1...` (per stored mentions).
