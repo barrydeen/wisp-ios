@@ -64,7 +64,8 @@ extension AppSettings {
         let palette = useDark ? preset.dark : preset.light
         let primary: Color
         if preset.id == "custom" {
-            primary = Color(argb: accentColorARGB)
+            let raw = Color(argb: accentColorARGB)
+            primary = useDark ? raw : Self.dimmedForLight(raw)
         } else {
             primary = palette.primary
         }
@@ -74,5 +75,16 @@ extension AppSettings {
             palette: palette,
             primary: primary
         )
+    }
+
+    /// Bright accent colors picked under dark mode (e.g. `#FF9800`) fail contrast against the
+    /// light theme's grey background, so cap brightness/saturation when rendering on light.
+    private static func dimmedForLight(_ color: Color) -> Color {
+        let ui = UIColor(color)
+        var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        guard ui.getHue(&h, saturation: &s, brightness: &b, alpha: &a) else { return color }
+        let cappedB = min(b, 0.55)
+        let cappedS = min(s, 0.95)
+        return Color(UIColor(hue: h, saturation: cappedS, brightness: cappedB, alpha: a))
     }
 }
