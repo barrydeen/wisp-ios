@@ -862,7 +862,11 @@ struct MainView: View {
         HStack {
             ForEach(BottomTab.allCases, id: \.self) { tab in
                 Button {
-                    selectedTab = tab
+                    if selectedTab == tab {
+                        popToRoot(tab)
+                    } else {
+                        selectedTab = tab
+                    }
                 } label: {
                     Image(systemName: tab == selectedTab ? tab.selectedIcon : tab.icon)
                         .font(.system(size: 22))
@@ -885,6 +889,18 @@ struct MainView: View {
     }
 
     // MARK: - Helpers
+
+    /// Tapping the already-selected tab pops its navigation stack back to the
+    /// tab's root view. Mirrors the standard iOS tab-bar gesture.
+    private func popToRoot(_ tab: BottomTab) {
+        switch tab {
+        case .home: feedPath = NavigationPath()
+        case .wallet: placeholderPath = NavigationPath()
+        case .search: searchPath = NavigationPath()
+        case .notifications: notificationsPath = NavigationPath()
+        case .messages: break  // MessagesView owns its own NavigationStack
+        }
+    }
 
     private func formatCount(_ n: Int) -> String {
         switch n {
