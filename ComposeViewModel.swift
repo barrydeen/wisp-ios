@@ -89,12 +89,11 @@ final class ComposeViewModel {
         self.keypair = keypair
         self.mode = mode
         switch mode {
-        case .quote(let event):
-            // Auto-append the quote URI on open.
-            content = Nip18.appendNoteUri(content: "", eventIdHex: event.id, relayHints: [], authorHex: event.pubkey)
         case .new:
             loadLocalAutosave()
         default:
+            // .quote: the quote URI is spliced at publish time so it stays out of the editor.
+            // .reply: parent context lives in tags, not body content.
             break
         }
     }
@@ -609,6 +608,14 @@ final class ComposeViewModel {
                 )
             }()
             mode = .reply(parent: parentStub, root: rootStub)
+        } else if let quoteTag = draft.tags.first(where: { $0.count >= 2 && $0[0] == "q" }) {
+            let quotedId = quoteTag[1]
+            let quotedAuthor = draft.tags.first(where: { $0.count >= 2 && $0[0] == "p" })?[1] ?? ""
+            let stub = NostrEvent(
+                id: quotedId, pubkey: quotedAuthor, kind: 1,
+                createdAt: 0, tags: [], content: "", sig: ""
+            )
+            mode = .quote(stub)
         }
     }
 
@@ -837,7 +844,7 @@ final class ComposeViewModel {
         case Nip68.kindPicture, Nip71.kindVideoHorizontal, Nip71.kindVideoVertical:
             return materialized
         default:
-            return appendAttachmentUrls(to: materialized)
+            return appendQuoteUri(to: appendAttachmentUrls(to: materialized))
         }
     }
 
@@ -850,6 +857,19 @@ final class ComposeViewModel {
             out += url
         }
         return out
+    }
+
+    /// In `.quote` mode the embedded `nostr:nevent…` reference is hidden from the
+    /// editor and spliced onto the end of the body at publish time, so the user
+    /// types their commentary in an empty composer instead of around a 60-char URI.
+    private func appendQuoteUri(to body: String) -> String {
+        guard case .quote(let event) = mode else { return body }
+        return Nip18.appendNoteUri(
+            content: body,
+            eventIdHex: event.id,
+            relayHints: [],
+            authorHex: event.pubkey
+        )
     }
 
     /// Content as it would appear in the published note, including any spliced

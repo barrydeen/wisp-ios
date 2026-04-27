@@ -648,7 +648,11 @@ struct ComposeView: View {
         if viewModel.galleryMode { return false }
         let hasText = !viewModel.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let hasAttachments = !viewModel.attachments.isEmpty
-        return hasText || hasAttachments
+        let isQuote: Bool = {
+            if case .quote = viewModel.mode { return true }
+            return false
+        }()
+        return hasText || hasAttachments || isQuote
     }
 
     /// Hand off a Giphy CDN URL to the view model, which re-hosts the bytes on
