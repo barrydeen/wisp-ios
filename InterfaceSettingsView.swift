@@ -8,6 +8,7 @@ struct InterfaceSettingsView: View {
     @State private var showAccentPicker = false
     @State private var showCurrencyPicker = false
     @State private var rateUpdatedAt: Date? = nil
+    @State private var themesExpanded = false
 
     var body: some View {
         @Bindable var settings = settings
@@ -38,10 +39,28 @@ struct InterfaceSettingsView: View {
                 }
 
                 section(title: "Themes") {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 130), spacing: 12)], spacing: 12) {
-                        ForEach(Themes.all) { preset in
-                            themeCard(preset)
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) { themesExpanded.toggle() }
+                    } label: {
+                        HStack(spacing: 8) {
+                            Text(currentThemeDisplayName)
+                                .foregroundStyle(theme.palette.onSurface)
+                            Spacer()
+                            Image(systemName: themesExpanded ? "chevron.up" : "chevron.down")
+                                .foregroundStyle(theme.palette.onSurfaceVariant)
                         }
+                        .padding(.vertical, 8)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+
+                    if themesExpanded {
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 130), spacing: 12)], spacing: 12) {
+                            ForEach(Themes.all) { preset in
+                                themeCard(preset)
+                            }
+                        }
+                        .transition(.opacity.combined(with: .move(edge: .top)))
                     }
                 }
 
@@ -78,6 +97,22 @@ struct InterfaceSettingsView: View {
                     Toggle("Animate avatars", isOn: $settings.animateAvatars)
                         .toggleStyle(SwitchToggleStyle(tint: theme.primary))
                     Text("Plays animated GIF / WebP profile pictures inline.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(theme.palette.onSurfaceVariant)
+
+                    HStack {
+                        Text("Multi-image layout")
+                            .foregroundStyle(theme.palette.onSurface)
+                        Spacer()
+                        Picker("", selection: $settings.mediaLayoutStyle) {
+                            Text("Gallery").tag(AppSettings.MediaLayoutStyle.grid)
+                            Text("Stack").tag(AppSettings.MediaLayoutStyle.stack)
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(width: 180)
+                    }
+                    .padding(.top, 4)
+                    Text("Gallery: horizontal swipe through every photo and video. Stack: each item full-width below the next.")
                         .font(.system(size: 12))
                         .foregroundStyle(theme.palette.onSurfaceVariant)
                 }
@@ -174,6 +209,10 @@ struct InterfaceSettingsView: View {
         }
     }
 
+    private var currentThemeDisplayName: String {
+        Themes.all.first(where: { $0.id == settings.themeName })?.displayName ?? "Custom"
+    }
+
     @ViewBuilder
     private func themeCard(_ preset: ThemePreset) -> some View {
         let palette = theme.isDark ? preset.dark : preset.light
@@ -181,6 +220,7 @@ struct InterfaceSettingsView: View {
         let isSelected = settings.themeName == preset.id
         Button {
             settings.themeName = preset.id
+            withAnimation(.easeInOut(duration: 0.2)) { themesExpanded = false }
         } label: {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 4) {

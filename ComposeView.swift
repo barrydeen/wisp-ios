@@ -1,5 +1,6 @@
 import SwiftUI
 import PhotosUI
+import UniformTypeIdentifiers
 
 struct ComposeView: View {
     @State var viewModel: ComposeViewModel
@@ -70,9 +71,9 @@ struct ComposeView: View {
                                 emojiPopup
                             }
 
-                            if !contentFocused, shouldShowPreview {
+                            if shouldShowPreview {
                                 ComposerPreviewCard(
-                                    content: viewModel.content,
+                                    content: viewModel.previewContent,
                                     tags: previewTags,
                                     userProfile: ProfileRepository.shared.get(viewModel.keypair.pubkey)
                                 )
@@ -488,6 +489,19 @@ struct ComposeView: View {
 
             if !viewModel.pollEnabled {
                 Button {
+                    pasteImageFromClipboard()
+                } label: {
+                    Image(systemName: "doc.on.clipboard")
+                        .font(.system(size: 22))
+                        .foregroundStyle(UIPasteboard.general.hasImages ? Color.wispPrimary : .secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Paste image from clipboard")
+                .disabled(!UIPasteboard.general.hasImages)
+            }
+
+            if !viewModel.pollEnabled {
+                Button {
                     showGifPicker = true
                 } label: {
                     Text("GIF")
@@ -632,7 +646,9 @@ struct ComposeView: View {
 
     private var shouldShowPreview: Bool {
         if viewModel.galleryMode { return false }
-        return !viewModel.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasText = !viewModel.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasAttachments = !viewModel.attachments.isEmpty
+        return hasText || hasAttachments
     }
 
     /// Hand off a Giphy CDN URL to the view model, which re-hosts the bytes on
@@ -641,6 +657,16 @@ struct ComposeView: View {
     /// the post body.
     private func appendGifUrl(_ url: String) {
         Task { await viewModel.attachGifFromGiphy(url) }
+    }
+
+    /// Hand the system pasteboard's image item providers to the view model,
+    /// which uploads each one to Blossom and appends as an attachment.
+    /// `.onPasteCommand` is unavailable on iOS, so this routes through a
+    /// visible button that reads `UIPasteboard.general` on tap.
+    private func pasteImageFromClipboard() {
+        let providers = UIPasteboard.general.itemProviders.filter { $0.canLoadObject(ofClass: UIImage.self) }
+        guard !providers.isEmpty else { return }
+        Task { await viewModel.addPastedImages(providers) }
     }
 
     private var previewTags: [[String]] {
@@ -655,11 +681,13 @@ struct ComposeView: View {
     /// caret position — works for the typical "type at end" flow that the SwiftUI
     /// `TextEditor` defaults to.
     private func recomputeTriggers(for text: String) {
-        // Find the start of the last token.
+        // Find the start of the last token. NBSPs inside a sanitised display
+        // name are not token breaks (`isMentionTokenBreak`), so a multi-word
+        // mention stays a single `@displayName` trigger token.
         var idx = text.endIndex
         while idx > text.startIndex {
             let prev = text.index(before: idx)
-            if text[prev].isWhitespace { break }
+            if text[prev].isMentionTokenBreak { break }
             idx = prev
         }
         let token = String(text[idx..<text.endIndex])

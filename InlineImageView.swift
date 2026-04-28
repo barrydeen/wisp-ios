@@ -91,13 +91,15 @@ struct InlineImageView: View {
 struct FullScreenImageView: View {
     let url: String
     let mime: String?
+    let showsCloseButton: Bool
     @Environment(\.dismiss) private var dismiss
     @State private var scale: CGFloat = 1.0
     @State private var lastScale: CGFloat = 1.0
 
-    init(url: String, mime: String? = nil) {
+    init(url: String, mime: String? = nil, showsCloseButton: Bool = true) {
         self.url = url
         self.mime = mime
+        self.showsCloseButton = showsCloseButton
     }
 
     var body: some View {
@@ -132,21 +134,23 @@ struct FullScreenImageView: View {
                 }
             }
 
-            VStack {
-                HStack {
-                    Spacer()
-                    Button {
-                        dismiss()
-                    } label: {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 18, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .padding(12)
-                            .background(Color.black.opacity(0.6), in: Circle())
+            if showsCloseButton {
+                VStack {
+                    HStack {
+                        Spacer()
+                        Button {
+                            dismiss()
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 18, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .padding(12)
+                                .background(Color.black.opacity(0.6), in: Circle())
+                        }
+                        .padding()
                     }
-                    .padding()
+                    Spacer()
                 }
-                Spacer()
             }
         }
     }

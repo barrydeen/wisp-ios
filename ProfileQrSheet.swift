@@ -24,6 +24,13 @@ struct ProfileQrSheet: View {
         return !lud16.isEmpty
     }
 
+    private var subtitle: String {
+        switch tab {
+        case .nostr: return "Scan to follow on Nostr"
+        case .lightning: return "Scan to send money"
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -59,7 +66,7 @@ struct ProfileQrSheet: View {
                 Text(displayName)
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
-                Text("Scan to follow on Nostr")
+                Text(subtitle)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -80,11 +87,31 @@ struct ProfileQrSheet: View {
     // MARK: - Tab bar
 
     private var tabBar: some View {
-        Picker("", selection: $tab) {
-            Text("Nostr").tag(Tab.nostr)
-            Text("Lightning").tag(Tab.lightning)
+        HStack(spacing: 4) {
+            tabButton(.nostr, label: "Nostr")
+            tabButton(.lightning, label: "Lightning")
         }
-        .pickerStyle(.segmented)
+        .padding(4)
+        .background(Color.wispSurfaceVariant.opacity(0.4), in: Capsule())
+    }
+
+    private func tabButton(_ target: Tab, label: String) -> some View {
+        Button {
+            tab = target
+        } label: {
+            Text(label)
+                .font(.subheadline.weight(.semibold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+                .foregroundStyle(tab == target ? Color.primary : .secondary)
+                .background {
+                    if tab == target {
+                        Capsule().fill(Color.wispSurfaceVariant)
+                    }
+                }
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - Panes
