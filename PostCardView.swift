@@ -13,16 +13,35 @@ struct PostCardView: View {
     var onNoteTap: ((String) -> Void)? = nil
     var onHashtagTap: ((String) -> Void)? = nil
     @Environment(WalletStore.self) private var walletStore: WalletStore?
-    @State private var showZap = false
     @State private var expanded = false
     @State private var contentExpanded = false
     @State private var showReactionPicker = false
     @State private var showEmojiLibrary = false
-    @State private var showAddToList = false
-    @State private var showQuoteCompose = false
-    @State private var showReplyCompose = false
     @State private var showDeleteConfirm = false
     @State private var actionAlert: ActionAlert?
+    /// Single source of truth for every body-level sheet on the card. Stacking
+    /// multiple `.sheet(isPresented:)` modifiers on the same view is a known
+    /// SwiftUI antipattern that loops on real devices — a sheet's `dismiss()`
+    /// races with sibling presentations and the binding flips back, repeatedly
+    /// reopening the just-published reply / zap. One `.sheet(item:)` keyed on
+    /// this enum sidesteps the conflict.
+    @State private var activeSheet: ActiveSheet?
+
+    private enum ActiveSheet: Identifiable {
+        case zap
+        case addToList
+        case quoteCompose
+        case replyCompose
+
+        var id: Int {
+            switch self {
+            case .zap: return 0
+            case .addToList: return 1
+            case .quoteCompose: return 2
+            case .replyCompose: return 3
+            }
+        }
+    }
     @State private var zapPollOptionIndex: Int? = nil
     @State private var noteListRepo = NoteListRepository.shared
     @State private var sourceTracker = NoteSourceTracker.shared
@@ -198,7 +217,7 @@ struct PostCardView: View {
                         onCastVote: { optionIds in handleCastVote(displayEvent, optionIds: optionIds) },
                         onZapVote: { idx in
                             zapPollOptionIndex = idx
-                            showZap = true
+                            activeSheet = .zap
                         }
                     )
                 }
@@ -239,54 +258,54 @@ struct PostCardView: View {
                 PollTallyRepository.shared.markVisible(pollEvent: displayed)
             }
         }
-        .sheet(isPresented: $showZap) {
-            if let store = walletStore {
-                let target = resolveRepost().event
-                let targetProfile = resolveRepost().profile
-                let extraTags: [[String]] = zapPollOptionIndex.map { [["poll_option", String($0)]] } ?? []
-                let pollOptionIdx = zapPollOptionIndex
-                ZapSheet(
-                    store: store,
-                    recipientPubkey: target.pubkey,
-                    recipientLud16: targetProfile?.lud16,
-                    recipientName: targetProfile?.displayString,
-                    eventId: target.id,
-                    extraTags: extraTags,
-                    onSuccess: { sats in
-                        if target.kind == Nip69.kindZapPoll, let idx = pollOptionIdx,
-                           let me = NostrKey.load() {
-                            PollTallyRepository.shared.applyOptimisticZapVote(
-                                pollEvent: target,
-                                optionIndex: idx,
-                                voterPubkey: me.pubkey,
-                                sats: sats,
-                                ts: Int(Date().timeIntervalSince1970)
-                            )
+        .sheet(item: $activeSheet) { sheet in
+            switch sheet {
+            case .zap:
+                if let store = walletStore {
+                    let target = resolveRepost().event
+                    let targetProfile = resolveRepost().profile
+                    let extraTags: [[String]] = zapPollOptionIndex.map { [["poll_option", String($0)]] } ?? []
+                    let pollOptionIdx = zapPollOptionIndex
+                    ZapSheet(
+                        store: store,
+                        recipientPubkey: target.pubkey,
+                        recipientLud16: targetProfile?.lud16,
+                        recipientName: targetProfile?.displayString,
+                        eventId: target.id,
+                        extraTags: extraTags,
+                        onSuccess: { sats in
+                            if target.kind == Nip69.kindZapPoll, let idx = pollOptionIdx,
+                               let me = NostrKey.load() {
+                                PollTallyRepository.shared.applyOptimisticZapVote(
+                                    pollEvent: target,
+                                    optionIndex: idx,
+                                    voterPubkey: me.pubkey,
+                                    sats: sats,
+                                    ts: Int(Date().timeIntervalSince1970)
+                                )
+                            }
+                        },
+                        dismiss: {
+                            activeSheet = nil
+                            zapPollOptionIndex = nil
                         }
-                    },
-                    dismiss: {
-                        showZap = false
-                        zapPollOptionIndex = nil
-                    }
-                )
-            }
-        }
-        .sheet(isPresented: $showAddToList) {
-            if let keypair = NostrKey.load() {
-                NavigationStack {
-                    AddToNoteListSheet(keypair: keypair, event: resolveRepost().event)
+                    )
                 }
-            }
-        }
-        .sheet(isPresented: $showQuoteCompose) {
-            if let keypair = NostrKey.load() {
-                ComposeView(keypair: keypair, mode: .quote(resolveRepost().event))
-            }
-        }
-        .sheet(isPresented: $showReplyCompose) {
-            if let keypair = NostrKey.load() {
-                let target = resolveRepost().event
-                ComposeView(keypair: keypair, mode: .reply(parent: target, root: replyRootStub(for: target)))
+            case .addToList:
+                if let keypair = NostrKey.load() {
+                    NavigationStack {
+                        AddToNoteListSheet(keypair: keypair, event: resolveRepost().event)
+                    }
+                }
+            case .quoteCompose:
+                if let keypair = NostrKey.load() {
+                    ComposeView(keypair: keypair, mode: .quote(resolveRepost().event))
+                }
+            case .replyCompose:
+                if let keypair = NostrKey.load() {
+                    let target = resolveRepost().event
+                    ComposeView(keypair: keypair, mode: .reply(parent: target, root: replyRootStub(for: target)))
+                }
             }
         }
         .confirmationDialog(
@@ -331,7 +350,7 @@ struct PostCardView: View {
     private var actionBar: some View {
         HStack(spacing: 0) {
             Button {
-                showReplyCompose = true
+                activeSheet = .replyCompose
             } label: {
                 actionItem(icon: "bubble.right", count: engagement?.replies)
             }
@@ -342,7 +361,7 @@ struct PostCardView: View {
             repostAction
             Spacer()
             Button {
-                showZap = true
+                activeSheet = .zap
             } label: {
                 actionItem(
                     icon: "bolt.fill",
@@ -353,7 +372,7 @@ struct PostCardView: View {
             .buttonStyle(.plain)
             Spacer()
             Button {
-                showAddToList = true
+                activeSheet = .addToList
             } label: {
                 let target = resolveRepost().event
                 let isBookmarked = !noteListRepo.listsContaining(noteId: target.id).isEmpty
@@ -392,7 +411,7 @@ struct PostCardView: View {
             .disabled(iReposted)
 
             Button {
-                showQuoteCompose = true
+                activeSheet = .quoteCompose
             } label: {
                 Label("Quote", systemImage: "quote.bubble")
             }
@@ -413,7 +432,7 @@ struct PostCardView: View {
 
         return Menu {
             Button {
-                showAddToList = true
+                activeSheet = .addToList
             } label: {
                 Label("Add to List", systemImage: "bookmark")
             }
