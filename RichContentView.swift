@@ -9,6 +9,11 @@ struct RichContentView: View {
     var onNoteTap: ((String) -> Void)? = nil
     var onHashtagTap: ((String) -> Void)? = nil
     var showLinkPreviews: Bool = true
+    /// When true, inline links / mentions / hashtags inside the rendered text
+    /// fire on tap. Default false because feed cards wrap the whole content in a
+    /// NavigationLink and need the tap to fall through; surfaces with no
+    /// enclosing tap target (profile bio, composer preview) opt in.
+    var linksEnabled: Bool = false
 
     var body: some View {
         let segments = ContentParser.parse(
@@ -163,6 +168,7 @@ struct RichContentView: View {
         RichInlineTextView(
             segments: segs,
             profiles: profiles,
+            linksEnabled: linksEnabled,
             onProfileTap: onProfileTap,
             onNoteTap: onNoteTap,
             onHashtagTap: onHashtagTap

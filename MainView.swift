@@ -350,15 +350,6 @@ struct MainView: View {
 
     private var mainShell: some View {
         VStack(spacing: 0) {
-            // The custom home `topBar` lives outside the NavigationStack so its FAB +
-            // drawer button stay sticky on the feed root. Once the user navigates
-            // deeper (profile / thread / hashtag feed / etc.), the pushed view owns
-            // the toolbar — keep `topBar` only at depth 0 so two headers don't stack.
-            if selectedTab == .home, feedPath.isEmpty {
-                topBar
-                Divider().overlay(Color.wispSurfaceVariant.opacity(0.5))
-            }
-
             ZStack {
                 switch selectedTab {
                 case .home:
@@ -373,8 +364,21 @@ struct MainView: View {
                                     .animation(.easeInOut(duration: 0.2), value: feedFabOpacity)
                             }
                         }
+                            // Frosted unified top header — same `.regularMaterial` look as
+                            // ProfileView. Inside the NavigationStack so it auto-disappears
+                            // when the user pushes a destination, and content scrolls under
+                            // it instead of starting below an opaque bar.
+                            .safeAreaInset(edge: .top, spacing: 0) {
+                                topBar.background(Color.wispBackground.opacity(0.92))
+                            }
                             .navigationDestination(for: ProfileRoute.self) { route in
-                                ProfileView(pubkey: route.pubkey, activeUserPubkey: keypair.pubkey)
+                                ProfileView(
+                                    pubkey: route.pubkey,
+                                    activeUserPubkey: keypair.pubkey,
+                                    onProfileTap: { pk in feedPath.append(ProfileRoute(pubkey: pk)) },
+                                    onNoteTap: { eid in feedPath.append(ThreadRoute(eventId: eid, authorPubkey: route.pubkey)) },
+                                    onHashtagTap: { tag in feedPath.append(HashtagFeedRoute(tag: tag)) }
+                                )
                             }
                             .navigationDestination(for: ThreadRoute.self) { route in
                                 ThreadView(
@@ -442,7 +446,13 @@ struct MainView: View {
                     NavigationStack(path: $searchPath) {
                         SearchView(keypair: keypair, viewModel: searchVM, path: $searchPath)
                             .navigationDestination(for: ProfileRoute.self) { route in
-                                ProfileView(pubkey: route.pubkey, activeUserPubkey: keypair.pubkey)
+                                ProfileView(
+                                    pubkey: route.pubkey,
+                                    activeUserPubkey: keypair.pubkey,
+                                    onProfileTap: { pk in searchPath.append(ProfileRoute(pubkey: pk)) },
+                                    onNoteTap: { eid in searchPath.append(ThreadRoute(eventId: eid, authorPubkey: route.pubkey)) },
+                                    onHashtagTap: { _ in }
+                                )
                             }
                             .navigationDestination(for: ThreadRoute.self) { route in
                                 ThreadView(
@@ -468,7 +478,13 @@ struct MainView: View {
                             }
                         )
                         .navigationDestination(for: ProfileRoute.self) { route in
-                            ProfileView(pubkey: route.pubkey, activeUserPubkey: keypair.pubkey)
+                            ProfileView(
+                                pubkey: route.pubkey,
+                                activeUserPubkey: keypair.pubkey,
+                                onProfileTap: { pk in notificationsPath.append(ProfileRoute(pubkey: pk)) },
+                                onNoteTap: { eid in notificationsPath.append(ThreadRoute(eventId: eid, authorPubkey: route.pubkey)) },
+                                onHashtagTap: { _ in }
+                            )
                         }
                         .navigationDestination(for: ThreadRoute.self) { route in
                             ThreadView(
@@ -545,8 +561,6 @@ struct MainView: View {
     private var topBar: some View {
         HStack(spacing: 12) {
             profileAvatar
-
-            Spacer()
 
             feedPicker
 
@@ -657,7 +671,7 @@ struct MainView: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 6)
-            .background(Color.wispSurfaceVariant, in: RoundedRectangle(cornerRadius: 20))
+            .background(Color.wispSurfaceVariant.opacity(0.5), in: RoundedRectangle(cornerRadius: 20))
             .foregroundStyle(Color.primary)
         }
     }
@@ -672,7 +686,7 @@ struct MainView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .background(Color.wispSurfaceVariant, in: RoundedRectangle(cornerRadius: 16))
+        .background(Color.wispSurfaceVariant.opacity(0.5), in: RoundedRectangle(cornerRadius: 16))
     }
 
     // MARK: - Feed Content

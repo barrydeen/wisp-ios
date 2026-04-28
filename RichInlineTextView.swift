@@ -7,6 +7,11 @@ import UIKit
 struct RichInlineTextView: UIViewRepresentable {
     let segments: [ContentSegment]
     let profiles: [String: ProfileData]
+    /// When true, the underlying UITextView is `isSelectable = true`, which is
+    /// what UIKit requires for link / mention / hashtag taps to fire. Default
+    /// is false because feed cards wrap the whole content in a NavigationLink
+    /// and need taps to fall through. Profile bios (no enclosing link) opt in.
+    var linksEnabled: Bool = false
     var onProfileTap: ((String) -> Void)? = nil
     var onNoteTap: ((String) -> Void)? = nil
     var onHashtagTap: ((String) -> Void)? = nil
@@ -22,10 +27,7 @@ struct RichInlineTextView: UIViewRepresentable {
         tv.backgroundColor = .clear
         tv.isEditable = false
         tv.isScrollEnabled = false
-        // Selection blocks tap-through to the surrounding NavigationLink, which
-        // breaks "tap a post to open its thread". Links still resolve via the
-        // delegate's `shouldInteractWith` callback regardless of selectability.
-        tv.isSelectable = false
+        tv.isSelectable = linksEnabled
         tv.dataDetectorTypes = []
         tv.textContainerInset = .zero
         tv.textContainer.lineFragmentPadding = 0

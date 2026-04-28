@@ -3,6 +3,12 @@ import SwiftUI
 struct ProfileView: View {
     let pubkey: String
     let activeUserPubkey: String
+    /// Optional closures the owning NavigationStack supplies so taps inside the
+    /// bio (npub mentions, nostr:nevent quotes, #hashtags) push the right
+    /// destination onto the local path. Nil = no navigation on tap.
+    var onProfileTap: ((String) -> Void)? = nil
+    var onNoteTap: ((String) -> Void)? = nil
+    var onHashtagTap: ((String) -> Void)? = nil
 
     @State private var viewModel: ProfileViewModel
     @State private var selectedTab: ProfileTab = .notes
@@ -11,9 +17,18 @@ struct ProfileView: View {
     @State private var muteRepo = MuteRepository.shared
     @Environment(\.dismiss) private var dismiss
 
-    init(pubkey: String, activeUserPubkey: String) {
+    init(
+        pubkey: String,
+        activeUserPubkey: String,
+        onProfileTap: ((String) -> Void)? = nil,
+        onNoteTap: ((String) -> Void)? = nil,
+        onHashtagTap: ((String) -> Void)? = nil
+    ) {
         self.pubkey = pubkey
         self.activeUserPubkey = activeUserPubkey
+        self.onProfileTap = onProfileTap
+        self.onNoteTap = onNoteTap
+        self.onHashtagTap = onHashtagTap
         _viewModel = State(initialValue: ProfileViewModel(pubkey: pubkey, activeUserPubkey: activeUserPubkey))
     }
 
@@ -27,7 +42,12 @@ struct ProfileView: View {
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                ProfileHeaderView(viewModel: viewModel)
+                ProfileHeaderView(
+                    viewModel: viewModel,
+                    onProfileTap: onProfileTap,
+                    onNoteTap: onNoteTap,
+                    onHashtagTap: onHashtagTap
+                )
                 tabBody
             }
         }
@@ -139,7 +159,7 @@ struct ProfileView: View {
 
             ProfileTabBar(selected: $selectedTab)
         }
-        .background(.regularMaterial)
+        .background(Color.wispBackground.opacity(0.92))
     }
 
     @ViewBuilder
@@ -173,6 +193,9 @@ struct ProfileView: View {
 
 private struct ProfileHeaderView: View {
     @Bindable var viewModel: ProfileViewModel
+    var onProfileTap: ((String) -> Void)? = nil
+    var onNoteTap: ((String) -> Void)? = nil
+    var onHashtagTap: ((String) -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -224,7 +247,11 @@ private struct ProfileHeaderView: View {
                         content: about,
                         tags: [],
                         profiles: viewModel.profiles,
-                        showLinkPreviews: false
+                        onProfileTap: onProfileTap,
+                        onNoteTap: onNoteTap,
+                        onHashtagTap: onHashtagTap,
+                        showLinkPreviews: false,
+                        linksEnabled: true
                     )
                     .padding(.top, 2)
                 }
