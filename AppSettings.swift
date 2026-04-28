@@ -11,6 +11,13 @@ final class AppSettings {
         case system, light, dark
     }
 
+    enum MediaLayoutStyle: String, CaseIterable {
+        /// 2+ media items in a post render as a horizontal gallery (default).
+        case grid
+        /// 2+ media items render as a vertical stack — the original behaviour.
+        case stack
+    }
+
     private struct Keys {
         static let largeText = "wisp_settings_large_text"
         static let themeName = "wisp_settings_theme_name"
@@ -18,6 +25,7 @@ final class AppSettings {
         static let accentColorARGB = "wisp_settings_accent_color_argb"
         static let autoLoadMedia = "wisp_settings_auto_load_media"
         static let videoAutoplay = "wisp_settings_video_autoplay"
+        static let mediaLayoutStyle = "wisp_settings_media_layout_style"
         static let clientTagEnabled = "wisp_settings_client_tag_enabled"
         static let fiatModeEnabled = "wisp_settings_fiat_mode_enabled"
         static let fiatCurrency = "wisp_settings_fiat_currency"
@@ -44,6 +52,9 @@ final class AppSettings {
     var videoAutoplay: Bool {
         didSet { UserDefaults.standard.set(videoAutoplay, forKey: Keys.videoAutoplay) }
     }
+    var mediaLayoutStyle: MediaLayoutStyle {
+        didSet { UserDefaults.standard.set(mediaLayoutStyle.rawValue, forKey: Keys.mediaLayoutStyle) }
+    }
     var clientTagEnabled: Bool {
         didSet { UserDefaults.standard.set(clientTagEnabled, forKey: Keys.clientTagEnabled) }
     }
@@ -66,6 +77,8 @@ final class AppSettings {
         self.accentColorARGB = defaults.object(forKey: Keys.accentColorARGB) as? Int ?? Self.defaultAccentARGB
         self.autoLoadMedia = defaults.object(forKey: Keys.autoLoadMedia) as? Bool ?? true
         self.videoAutoplay = defaults.object(forKey: Keys.videoAutoplay) as? Bool ?? true
+        let layoutRaw = defaults.string(forKey: Keys.mediaLayoutStyle) ?? MediaLayoutStyle.grid.rawValue
+        self.mediaLayoutStyle = MediaLayoutStyle(rawValue: layoutRaw) ?? .grid
         self.clientTagEnabled = defaults.object(forKey: Keys.clientTagEnabled) as? Bool ?? true
         self.fiatModeEnabled = defaults.object(forKey: Keys.fiatModeEnabled) as? Bool ?? false
         self.fiatCurrency = defaults.string(forKey: Keys.fiatCurrency) ?? "USD"

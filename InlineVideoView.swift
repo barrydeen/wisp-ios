@@ -18,9 +18,37 @@ struct InlineVideoView: View {
     @State private var player: AVPlayer?
     @State private var showFullScreen = false
     @State private var muteState = GlobalVideoMute.shared
+    /// Aspect ratio (W / H) detected from `AVPlayerItem.presentationSize` after
+    /// the asset's tracks load. `nil` until known — many notes ship with no
+    /// imeta `dim` tag, so we can't trust the static fallback.
+    @State private var detectedAspect: CGFloat?
 
-    private var aspectRatio: CGFloat {
-        ContentParser.parseAspectRatio(meta.dimension) ?? (16.0 / 9.0)
+    /// Aspect we'd use without the runtime detection — imeta `dim` if present,
+    /// otherwise the squarish default. Avoids assuming 16:9 (which silently
+    /// turns every dim-less portrait video into a letterboxed flat box).
+    private var staticAspect: CGFloat? {
+        ContentParser.parseAspectRatio(meta.dimension)
+    }
+
+    /// Floor on the rendered box's aspect ratio (W / H). Sources taller than
+    /// this — typical 9:16 phone video — get clamped so the player fills full
+    /// card width instead of rendering near-double-tall. Content is cropped
+    /// (resizeAspectFill) so there are no black bars on the sides.
+    private let minDisplayAspect: CGFloat = 4.0 / 5.0
+
+    /// Best-known aspect right now: detected presentation size > imeta dim >
+    /// 4:5 default. The default matches the squarish gallery tile so a
+    /// dim-less video starts in a sensible frame and adjusts once known.
+    private var resolvedAspect: CGFloat {
+        detectedAspect ?? staticAspect ?? minDisplayAspect
+    }
+
+    private var displayAspect: CGFloat {
+        max(resolvedAspect, minDisplayAspect)
+    }
+
+    private var videoGravity: AVLayerVideoGravity {
+        resolvedAspect < minDisplayAspect ? .resizeAspectFill : .resizeAspect
     }
 
     var body: some View {
@@ -29,7 +57,7 @@ struct InlineVideoView: View {
                 .fill(Color.black)
 
             if loaded, let player {
-                VideoPlayer(player: player)
+                CroppingVideoPlayer(player: player, gravity: videoGravity)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .onAppear {
                         MediaAudioSession.activatePlayback()
@@ -95,7 +123,7 @@ struct InlineVideoView: View {
                 }
             }
         }
-        .aspectRatio(aspectRatio, contentMode: .fit)
+        .aspectRatio(displayAspect, contentMode: .fit)
         .frame(maxWidth: .infinity)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .fullScreenCover(isPresented: $showFullScreen) {
@@ -108,6 +136,54 @@ struct InlineVideoView: View {
         let p = AVPlayer(url: url)
         p.isMuted = muteState.isMuted
         player = p
+        Task { await detectAspect(for: p.currentItem) }
+    }
+
+    /// Reads the asset's natural video size via the modern `load(.tracks)`
+    /// API and updates `detectedAspect` so the layout snaps to the real
+    /// aspect even when no imeta `dim` tag was supplied.
+    private func detectAspect(for item: AVPlayerItem?) async {
+        guard let asset = item?.asset else { return }
+        do {
+            let tracks = try await asset.loadTracks(withMediaType: .video)
+            guard let track = tracks.first else { return }
+            let size = try await track.load(.naturalSize)
+            let transform = try await track.load(.preferredTransform)
+            let resolved = size.applying(transform)
+            let w = abs(resolved.width)
+            let h = abs(resolved.height)
+            guard w > 0, h > 0 else { return }
+            await MainActor.run { detectedAspect = w / h }
+        } catch {
+            // Fall through — keep the static / default aspect.
+        }
+    }
+}
+
+/// `AVPlayerLayer` wrapper that exposes `videoGravity` (which `VideoPlayer`
+/// does not). Used by `InlineVideoView` so portrait sources can fill the
+/// rendered box via `.resizeAspectFill` instead of letterboxing.
+struct CroppingVideoPlayer: UIViewRepresentable {
+    let player: AVPlayer
+    let gravity: AVLayerVideoGravity
+
+    func makeUIView(context: Context) -> PlayerView {
+        let view = PlayerView()
+        view.playerLayer.player = player
+        view.playerLayer.videoGravity = gravity
+        return view
+    }
+
+    func updateUIView(_ uiView: PlayerView, context: Context) {
+        if uiView.playerLayer.player !== player {
+            uiView.playerLayer.player = player
+        }
+        uiView.playerLayer.videoGravity = gravity
+    }
+
+    final class PlayerView: UIView {
+        override class var layerClass: AnyClass { AVPlayerLayer.self }
+        var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
     }
 }
 

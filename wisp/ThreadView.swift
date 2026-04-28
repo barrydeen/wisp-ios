@@ -141,18 +141,16 @@ struct ThreadView: View {
     private func replyRow(_ row: ThreadRow) -> some View {
         HStack(alignment: .top, spacing: 0) {
             depthGuides(row.depth)
-            NavigationLink(value: ThreadRoute(eventId: row.event.id, authorPubkey: row.event.pubkey)) {
-                PostCardView(
-                    event: row.event,
-                    profile: viewModel.profiles[row.event.pubkey],
-                    profiles: viewModel.profiles,
-                    engagement: viewModel.engagement[row.event.id],
-                    onProfileTap: { _ in },
-                    onNoteTap: { _ in },
-                    onHashtagTap: { _ in }
-                )
-            }
-            .buttonStyle(.plain)
+            PostCardView(
+                event: row.event,
+                profile: viewModel.profiles[row.event.pubkey],
+                profiles: viewModel.profiles,
+                engagement: viewModel.engagement[row.event.id],
+                expandOnTap: true,
+                onProfileTap: { _ in },
+                onNoteTap: { _ in },
+                onHashtagTap: { _ in }
+            )
         }
     }
 

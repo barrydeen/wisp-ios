@@ -5,6 +5,10 @@ struct PostCardView: View {
     let profile: ProfileData?
     let profiles: [String: ProfileData]
     var engagement: EngagementCounts? = nil
+    /// When true, tapping the card body toggles the expanded details panel
+    /// instead of navigating. Used by ThreadView reply rows so taps don't push
+    /// a redundant ThreadRoute that just resolves back to the same thread root.
+    var expandOnTap: Bool = false
     var onProfileTap: ((String) -> Void)? = nil
     var onNoteTap: ((String) -> Void)? = nil
     var onHashtagTap: ((String) -> Void)? = nil
@@ -36,7 +40,7 @@ struct PostCardView: View {
     /// write optimistic state to `EngagementRepository.shared.counts[<this>]`.
     private var displayEventId: String { resolveRepost().event.id }
 
-    private var iReactedEmoji: String? {
+    private var myReactor: Reactor? {
         guard let me = myPubkey else { return nil }
         // Thread / profile / search views maintain their own engagement dicts
         // separate from `EngagementRepository`. ReactionSender writes only to
@@ -44,10 +48,11 @@ struct PostCardView: View {
         // user's just-sent reaction in those views. Read the shared repo first
         // so the heart updates immediately everywhere.
         if let mine = engagementRepo.counts[displayEventId]?.reactors.first(where: { $0.pubkey == me }) {
-            return mine.emoji
+            return mine
         }
-        return engagement?.reactors.first(where: { $0.pubkey == me })?.emoji
+        return engagement?.reactors.first(where: { $0.pubkey == me })
     }
+    private var iReactedEmoji: String? { myReactor?.emoji }
     private var iReposted: Bool {
         guard let me = myPubkey else { return false }
         if engagementRepo.counts[displayEventId]?.reposters.contains(me) == true { return true }
@@ -64,14 +69,22 @@ struct PostCardView: View {
     private var resolvedRepostCount: Int {
         max(engagement?.reposts ?? 0, engagementRepo.counts[displayEventId]?.reposts ?? 0)
     }
-    /// The user's reacted emoji as a displayable unicode character, or nil if they haven't
-    /// reacted or the reaction is a NIP-30 `:shortcode:` we can't render inline (we fall back
-    /// to a tinted heart in that case). Maps the legacy NIP-25 `+` / empty content to ❤️.
+    /// The user's reacted emoji as a displayable Unicode character, or nil for shortcode
+    /// reactions (which the heart action renders as an inline image instead) or no
+    /// reaction. Maps the legacy NIP-25 `+` / empty content to ❤️.
     private var displayReactedEmoji: String? {
         guard let raw = iReactedEmoji else { return nil }
         if raw == "+" || raw.isEmpty { return "\u{2764}\u{FE0F}" }
         if raw.hasPrefix(":") && raw.hasSuffix(":") && raw.count > 2 { return nil }
         return raw
+    }
+    /// `(shortcode, url)` for the user's reaction when it's a NIP-30 custom emoji and
+    /// the reactor included the matching `["emoji", shortcode, url]` tag.
+    private var displayReactedCustomEmoji: (shortcode: String, url: String)? {
+        guard let raw = iReactedEmoji,
+              raw.hasPrefix(":"), raw.hasSuffix(":"), raw.count > 2,
+              let url = myReactor?.customEmojiUrl else { return nil }
+        return (String(raw.dropFirst().dropLast()), url)
     }
 
     var body: some View {
@@ -84,13 +97,15 @@ struct PostCardView: View {
                 repostBanner
             }
 
+            // Header row — avatar + name + nip05 + badges/time. Indented to
+            // align with the avatar.
             HStack(alignment: .top, spacing: 12) {
                 NavigationLink(value: ProfileRoute(pubkey: displayEvent.pubkey)) {
                     avatar(picture: displayProfile?.picture)
                 }
                 .buttonStyle(.plain)
 
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 2) {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
                         NavigationLink(value: ProfileRoute(pubkey: displayEvent.pubkey)) {
                             EmojiText(
@@ -119,62 +134,67 @@ struct PostCardView: View {
                     if let nip05 = displayProfile?.nip05, !nip05.isEmpty {
                         Nip05Badge(nip05: nip05, pubkey: displayEvent.pubkey)
                     }
-
-                    if !displayEvent.content.isEmpty || !displayEvent.tags.isEmpty {
-                        RichContentView(
-                            content: displayEvent.content,
-                            tags: displayEvent.tags,
-                            profiles: profiles,
-                            onProfileTap: onProfileTap,
-                            onNoteTap: onNoteTap,
-                            onHashtagTap: onHashtagTap
-                        )
-                        .padding(.top, 2)
-                    }
-
-                    if displayEvent.kind == Nip88.kindPoll || displayEvent.kind == Nip69.kindZapPoll {
-                        PollSection(
-                            pollEvent: displayEvent,
-                            onCastVote: { optionIds in handleCastVote(displayEvent, optionIds: optionIds) },
-                            onZapVote: { idx in
-                                zapPollOptionIndex = idx
-                                showZap = true
-                            }
-                        )
-                    }
-
-                    if let topZapper = engagement?.zappers.max(by: { $0.sats < $1.sats }) {
-                        TopZapperPill(
-                            zapper: topZapper,
-                            profile: profiles[topZapper.pubkey]
-                        ) {
-                            onProfileTap?(topZapper.pubkey)
-                        }
-                        .padding(.top, 8)
-                    }
-
-                    actionBar
-                        .padding(.top, 8)
-
-                    if expanded {
-                        NoteDetailsPanel(
-                            zappers: engagement?.zappers ?? [],
-                            reactors: engagement?.reactors ?? [],
-                            reposters: engagement?.reposters ?? [],
-                            relays: combinedRelays(for: displayEvent.id),
-                            tags: displayEvent.tags,
-                            profiles: profiles,
-                            onProfileTap: onProfileTap
-                        )
-                        .padding(.top, 8)
-                        .transition(.opacity.combined(with: .move(edge: .top)))
-                    }
                 }
             }
             .padding(.horizontal, 16)
-            .padding(.vertical, 12)
+            .padding(.top, 12)
+
+            // Post body — full card width, not indented under the avatar. Lets
+            // long text breathe and gives the media gallery room to bleed off
+            // the screen's right edge. Matches the Android client's layout.
+            VStack(alignment: .leading, spacing: 8) {
+                if !displayEvent.content.isEmpty || !displayEvent.tags.isEmpty {
+                    RichContentView(
+                        content: displayEvent.content,
+                        tags: displayEvent.tags,
+                        profiles: profiles,
+                        onProfileTap: onProfileTap,
+                        onNoteTap: onNoteTap,
+                        onHashtagTap: onHashtagTap
+                    )
+                }
+
+                if displayEvent.kind == Nip88.kindPoll || displayEvent.kind == Nip69.kindZapPoll {
+                    PollSection(
+                        pollEvent: displayEvent,
+                        onCastVote: { optionIds in handleCastVote(displayEvent, optionIds: optionIds) },
+                        onZapVote: { idx in
+                            zapPollOptionIndex = idx
+                            showZap = true
+                        }
+                    )
+                }
+
+                if let topZapper = engagement?.zappers.max(by: { $0.sats < $1.sats }) {
+                    TopZapperPill(
+                        zapper: topZapper,
+                        profile: profiles[topZapper.pubkey]
+                    ) {
+                        onProfileTap?(topZapper.pubkey)
+                    }
+                }
+
+                actionBar
+
+                if expanded {
+                    NoteDetailsPanel(
+                        zappers: engagement?.zappers ?? [],
+                        reactors: engagement?.reactors ?? [],
+                        reposters: engagement?.reposters ?? [],
+                        relays: combinedRelays(for: displayEvent.id),
+                        tags: displayEvent.tags,
+                        profiles: profiles,
+                        onProfileTap: onProfileTap
+                    )
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .padding(.bottom, 12)
         }
         .contentShape(Rectangle())
+        .modifier(TapToExpand(enabled: expandOnTap, expanded: $expanded))
         .onAppear {
             let displayed = resolveRepost().event
             if displayed.kind == Nip88.kindPoll || displayed.kind == Nip69.kindZapPoll {
@@ -429,6 +449,7 @@ struct PostCardView: View {
 
     private var heartAction: some View {
         let displayed = displayReactedEmoji
+        let custom = displayReactedCustomEmoji
         return Button {
             showReactionPicker = true
         } label: {
@@ -438,6 +459,22 @@ struct PostCardView: View {
                         .font(.system(size: 16))
                     if resolvedReactionCount > 0 {
                         Text(formatCount(resolvedReactionCount))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(height: 28)
+            } else if let custom {
+                HStack(spacing: 4) {
+                    EmojiText(
+                        ":\(custom.shortcode):",
+                        emojiMap: [custom.shortcode: custom.url],
+                        textStyle: .body,
+                        lineLimit: 1
+                    )
+                    .frame(height: 18)
+                    if let count = engagement?.reactions, count > 0 {
+                        Text(formatCount(count))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -661,6 +698,23 @@ struct PostCardView: View {
     }
 }
 
+// MARK: - Tap-to-Expand Modifier
+
+private struct TapToExpand: ViewModifier {
+    let enabled: Bool
+    @Binding var expanded: Bool
+
+    func body(content: Content) -> some View {
+        if enabled {
+            content.onTapGesture {
+                withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
+            }
+        } else {
+            content
+        }
+    }
+}
+
 // MARK: - Top Zapper Pill
 
 private struct TopZapperPill: View {
@@ -758,15 +812,16 @@ private struct NoteDetailsPanel: View {
     private var zapsSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             ForEach(zappers.sorted(by: { $0.sats > $1.sats }), id: \.self) { zap in
+                let zapProfile = profiles[zap.pubkey] ?? ProfileRepository.shared.get(zap.pubkey)
                 Button {
                     onProfileTap?(zap.pubkey)
                 } label: {
                     HStack(spacing: 8) {
-                        CachedAvatarView(url: profiles[zap.pubkey]?.picture, size: 30)
+                        CachedAvatarView(url: zapProfile?.picture, size: 30)
                         VStack(alignment: .leading, spacing: 1) {
                             let label = !zap.message.isEmpty
                                 ? zap.message
-                                : (profiles[zap.pubkey]?.displayString ?? short(zap.pubkey))
+                                : (zapProfile?.displayString ?? short(zap.pubkey))
                             Text(label)
                                 .font(.caption)
                                 .foregroundStyle(.primary)
@@ -806,14 +861,18 @@ private struct NoteDetailsPanel: View {
     private var reactionsSection: some View {
         let grouped = Dictionary(grouping: reactors, by: { $0.emoji })
         let sortedKeys = grouped.keys.sorted { (grouped[$0]?.count ?? 0) > (grouped[$1]?.count ?? 0) }
-        let emojiMap = EmojiRepository.shared.resolvedCustomMap
+        // Build a per-reaction emoji map so each row resolves its own shortcode against the
+        // URL the reactor included in their kind-7 NIP-30 `emoji` tag. Falls back to the
+        // local user's emoji set for shortcodes the reactor didn't tag (rare).
+        let localMap = EmojiRepository.shared.resolvedCustomMap
         return VStack(alignment: .leading, spacing: 6) {
             ForEach(sortedKeys, id: \.self) { emoji in
                 let group = grouped[emoji] ?? []
+                let reactionMap = perReactionEmojiMap(for: group, fallback: localMap)
                 HStack(alignment: .center, spacing: 8) {
                     EmojiText(
                         displayEmoji(emoji),
-                        emojiMap: emojiMap,
+                        emojiMap: reactionMap,
                         textStyle: .body,
                         lineLimit: 1
                     )
@@ -827,6 +886,18 @@ private struct NoteDetailsPanel: View {
                 }
             }
         }
+    }
+
+    private func perReactionEmojiMap(for group: [Reactor], fallback: [String: String]) -> [String: String] {
+        var map = fallback
+        for reactor in group {
+            guard let url = reactor.customEmojiUrl,
+                  reactor.emoji.hasPrefix(":"), reactor.emoji.hasSuffix(":"), reactor.emoji.count > 2
+            else { continue }
+            let shortcode = String(reactor.emoji.dropFirst().dropLast())
+            map[shortcode] = url
+        }
+        return map
     }
 
     private var seenOnSection: some View {
@@ -896,10 +967,11 @@ private struct StackedAvatarRow: View {
         let extra = pubkeys.count - visible.count
         HStack(spacing: -overlap) {
             ForEach(Array(visible.enumerated()), id: \.offset) { _, pk in
+                let picture = profiles[pk]?.picture ?? ProfileRepository.shared.get(pk)?.picture
                 Button {
                     onProfileTap?(pk)
                 } label: {
-                    CachedAvatarView(url: profiles[pk]?.picture, size: size)
+                    CachedAvatarView(url: picture, size: size)
                         .overlay(
                             Circle().stroke(Color.wispBackground, lineWidth: 2)
                         )

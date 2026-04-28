@@ -62,7 +62,7 @@ final class EngagementRepository {
     /// been published. The reactor `pubkey` and `emoji` are stamped into `reactors` so the
     /// detail panel reflects the pending state. The synthetic event id is reserved against
     /// `seenEngagementIds` so the inbound copy doesn't double-count.
-    func applyOptimisticReaction(eventId: String, reactionEventId: String, pubkey: String, emoji: String) {
+    func applyOptimisticReaction(eventId: String, reactionEventId: String, pubkey: String, emoji: String, customEmojiUrl: String? = nil) {
         let key = "\(eventId)|\(pubkey)|\(emoji)"
         guard seenReactionKeys.insert(key).inserted else {
             NSLog("[Reaction] applyOptimistic skipped (dedup) key=%@", key)
@@ -77,8 +77,8 @@ final class EngagementRepository {
 
         var current = counts[eventId] ?? EngagementCounts()
         current.reactions += 1
-        let reactor = Reactor(pubkey: pubkey, emoji: emoji)
-        if !current.reactors.contains(reactor) {
+        let reactor = Reactor(pubkey: pubkey, emoji: emoji, customEmojiUrl: customEmojiUrl)
+        if !current.reactors.contains(where: { $0.pubkey == pubkey && $0.emoji == emoji }) {
             current.reactors.append(reactor)
         }
         counts[eventId] = current
@@ -233,8 +233,12 @@ final class EngagementRepository {
             let reactionKey = "\(primary)|\(event.pubkey)|\(event.content)"
             guard seenReactionKeys.insert(reactionKey).inserted else { return }
             current.reactions += 1
-            let reactor = Reactor(pubkey: event.pubkey, emoji: event.content)
-            if !current.reactors.contains(reactor) {
+            let reactor = Reactor(
+                pubkey: event.pubkey,
+                emoji: event.content,
+                customEmojiUrl: Self.customEmojiUrl(for: event.content, in: event.tags)
+            )
+            if !current.reactors.contains(where: { $0.pubkey == reactor.pubkey && $0.emoji == reactor.emoji }) {
                 current.reactors.append(reactor)
             }
         case 9735:
@@ -262,5 +266,17 @@ final class EngagementRepository {
             return
         }
         counts[primary] = current
+    }
+
+    /// If `content` is a NIP-30 `:shortcode:` reaction, find the matching `["emoji", shortcode, url]`
+    /// tag the reactor included on their kind-7 event and return the image URL. Returns nil for
+    /// Unicode reactions or when the tag is missing (some senders forget it).
+    static func customEmojiUrl(for content: String, in tags: [[String]]) -> String? {
+        guard content.hasPrefix(":"), content.hasSuffix(":"), content.count > 2 else { return nil }
+        let shortcode = String(content.dropFirst().dropLast())
+        for tag in tags where tag.count >= 3 && tag[0] == "emoji" && tag[1] == shortcode {
+            return tag[2]
+        }
+        return nil
     }
 }

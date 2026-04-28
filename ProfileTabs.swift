@@ -41,12 +41,15 @@ struct NotesTabView: View {
                 } else {
                     LazyVStack(spacing: 0) {
                         ForEach(viewModel.rootNotes, id: \.id) { event in
-                            PostCardView(
-                                event: event,
-                                profile: viewModel.profiles[event.pubkey],
-                                profiles: viewModel.profiles,
-                                engagement: viewModel.engagement[event.id]
-                            )
+                            NavigationLink(value: ThreadRoute(eventId: event.id, authorPubkey: event.pubkey)) {
+                                PostCardView(
+                                    event: event,
+                                    profile: viewModel.profiles[event.pubkey],
+                                    profiles: viewModel.profiles,
+                                    engagement: viewModel.engagement[event.id]
+                                )
+                            }
+                            .buttonStyle(.plain)
                             Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
                         }
                         loadMoreFooter {
@@ -62,12 +65,15 @@ struct NotesTabView: View {
                 } else {
                     LazyVStack(spacing: 0) {
                         ForEach(viewModel.sortedNotes, id: \.id) { event in
-                            PostCardView(
-                                event: event,
-                                profile: viewModel.profiles[event.pubkey],
-                                profiles: viewModel.profiles,
-                                engagement: viewModel.engagement[event.id]
-                            )
+                            NavigationLink(value: ThreadRoute(eventId: event.id, authorPubkey: event.pubkey)) {
+                                PostCardView(
+                                    event: event,
+                                    profile: viewModel.profiles[event.pubkey],
+                                    profiles: viewModel.profiles,
+                                    engagement: viewModel.engagement[event.id]
+                                )
+                            }
+                            .buttonStyle(.plain)
                             Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
                         }
                     }
@@ -110,12 +116,15 @@ struct RepliesTabView: View {
                 } else {
                     LazyVStack(spacing: 0) {
                         ForEach(viewModel.replies, id: \.id) { event in
-                            PostCardView(
-                                event: event,
-                                profile: viewModel.profiles[event.pubkey],
-                                profiles: viewModel.profiles,
-                                engagement: viewModel.engagement[event.id]
-                            )
+                            NavigationLink(value: ThreadRoute(eventId: event.id, authorPubkey: event.pubkey)) {
+                                PostCardView(
+                                    event: event,
+                                    profile: viewModel.profiles[event.pubkey],
+                                    profiles: viewModel.profiles,
+                                    engagement: viewModel.engagement[event.id]
+                                )
+                            }
+                            .buttonStyle(.plain)
                             Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
                         }
                         loadMoreFooter {
@@ -131,12 +140,15 @@ struct RepliesTabView: View {
                 } else {
                     LazyVStack(spacing: 0) {
                         ForEach(viewModel.sortedReplies, id: \.id) { event in
-                            PostCardView(
-                                event: event,
-                                profile: viewModel.profiles[event.pubkey],
-                                profiles: viewModel.profiles,
-                                engagement: viewModel.engagement[event.id]
-                            )
+                            NavigationLink(value: ThreadRoute(eventId: event.id, authorPubkey: event.pubkey)) {
+                                PostCardView(
+                                    event: event,
+                                    profile: viewModel.profiles[event.pubkey],
+                                    profiles: viewModel.profiles,
+                                    engagement: viewModel.engagement[event.id]
+                                )
+                            }
+                            .buttonStyle(.plain)
                             Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
                         }
                     }
