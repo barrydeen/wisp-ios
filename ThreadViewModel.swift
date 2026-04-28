@@ -37,6 +37,7 @@ final class ThreadViewModel {
     @ObservationIgnored private let eventStore = EventStore.shared
     @ObservationIgnored private let profileRepo = ProfileRepository.shared
     @ObservationIgnored private let relayListRepo = RelayListRepository.shared
+    @ObservationIgnored private var publishObserver: NSObjectProtocol?
 
     private static let indexerRelays = [
         "wss://indexer.nostrarchives.com",
@@ -57,6 +58,39 @@ final class ThreadViewModel {
         self.seedEventId = seedEventId
         self.authorHint = authorHint
         self.rootId = seedEventId
+        // Catch the user's own freshly-published replies the moment ComposeViewModel
+        // broadcasts them — the live relay subscription often doesn't reflect outbound
+        // events back, so without this the new reply only shows after a manual refresh.
+        publishObserver = NotificationCenter.default.addObserver(
+            forName: .nostrEventPublished,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let event = note.userInfo?["event"] as? NostrEvent else { return }
+            Task { @MainActor [weak self] in
+                self?.handleExternalPublish(event)
+            }
+        }
+    }
+
+    deinit {
+        if let publishObserver { NotificationCenter.default.removeObserver(publishObserver) }
+    }
+
+    /// Ingest a kind-1 the user just published from outside this thread (typically the
+    /// shared compose sheet) when it references something we already track. Reposts
+    /// (kind-6) of the root or a known reply also count.
+    private func handleExternalPublish(_ event: NostrEvent) {
+        guard event.kind == 1 || event.kind == 6 else { return }
+        let etags = event.tags.compactMap { tag -> String? in
+            guard tag.count >= 2, tag[0] == "e" else { return nil }
+            return tag[1]
+        }
+        let known = etags.contains(where: { events.keys.contains($0) || $0 == rootId })
+        guard known else { return }
+        if event.kind == 1 {
+            ingestReply(event)
+        }
     }
 
     // MARK: - Lifecycle

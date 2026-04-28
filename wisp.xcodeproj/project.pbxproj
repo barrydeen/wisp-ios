@@ -235,6 +235,7 @@
 		4CABCD0100000000000F2004 /* DeletionSender.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD0000000000000F2004 /* DeletionSender.swift */; };
 		4CABCD0100000000000F2005 /* ProfileQrSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD0000000000000F2005 /* ProfileQrSheet.swift */; };
 		4CABCD0100000000000F2006 /* KeysSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD0000000000000F2006 /* KeysSettingsView.swift */; };
+		4CABCD010000000000010000 /* EventPublishNotification.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000010000 /* EventPublishNotification.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -482,6 +483,7 @@
 		4CABCD0000000000000F2004 /* DeletionSender.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeletionSender.swift; sourceTree = "<group>"; };
 		4CABCD0000000000000F2005 /* ProfileQrSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileQrSheet.swift; sourceTree = "<group>"; };
 		4CABCD0000000000000F2006 /* KeysSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeysSettingsView.swift; sourceTree = "<group>"; };
+		4CABCD000000000000010000 /* EventPublishNotification.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventPublishNotification.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -762,6 +764,7 @@
 				4CABCD0000000000000F2004 /* DeletionSender.swift */,
 				4CABCD0000000000000F2005 /* ProfileQrSheet.swift */,
 				4CABCD0000000000000F2006 /* KeysSettingsView.swift */,
+				4CABCD000000000000010000 /* EventPublishNotification.swift */,
 			);
 			sourceTree = "<group>";
 		};
@@ -1153,6 +1156,7 @@
 				4CABCD0100000000000F2004 /* DeletionSender.swift in Sources */,
 				4CABCD0100000000000F2005 /* ProfileQrSheet.swift in Sources */,
 				4CABCD0100000000000F2006 /* KeysSettingsView.swift in Sources */,
+				4CABCD010000000000010000 /* EventPublishNotification.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -713,10 +713,20 @@ final class ComposeViewModel {
         if succeeded.isEmpty {
             lastError = "No relays accepted the post."
         } else {
-            publishedEventId = event.id
             clearLocalAutosave()
+            // Persist + broadcast before flipping `publishedEventId`. The view's dismiss
+            // observer fires off the latter; persisting first means whatever the user
+            // navigates to next (e.g. a thread that seeds from cache on open) sees the
+            // new event, and the broadcast lets any already-open thread observer ingest
+            // it without a manual refresh.
             await EventStore.shared.persist([event])
             await clearDraftOnPublish()
+            NotificationCenter.default.post(
+                name: .nostrEventPublished,
+                object: nil,
+                userInfo: ["event": event]
+            )
+            publishedEventId = event.id
             Haptics.shared.pulse()
         }
     }
