@@ -15,6 +15,7 @@ struct PostCardView: View {
     @Environment(WalletStore.self) private var walletStore: WalletStore?
     @State private var showZap = false
     @State private var expanded = false
+    @State private var contentExpanded = false
     @State private var showReactionPicker = false
     @State private var showEmojiLibrary = false
     @State private var showAddToList = false
@@ -26,6 +27,11 @@ struct PostCardView: View {
     @State private var noteListRepo = NoteListRepository.shared
     @State private var sourceTracker = NoteSourceTracker.shared
     @State private var engagementRepo = EngagementRepository.shared
+
+    /// Threshold above which a kind-1 body gets a "Show more" toggle. Tuned for
+    /// roughly the height of a 12-line post — anything longer dominates the feed.
+    private static let longPostCharThreshold = 600
+    private static let longPostCollapsedHeight: CGFloat = 280
 
     private struct ActionAlert: Identifiable {
         let id = UUID()
@@ -118,14 +124,46 @@ struct PostCardView: View {
             // the screen's right edge. Matches the Android client's layout.
             VStack(alignment: .leading, spacing: 8) {
                 if !displayEvent.content.isEmpty || !displayEvent.tags.isEmpty {
-                    RichContentView(
-                        content: displayEvent.content,
-                        tags: displayEvent.tags,
-                        profiles: profiles,
-                        onProfileTap: onProfileTap,
-                        onNoteTap: onNoteTap,
-                        onHashtagTap: onHashtagTap
-                    )
+                    let isLong = displayEvent.content.count > Self.longPostCharThreshold
+                    let collapsed = isLong && !contentExpanded
+                    VStack(alignment: .leading, spacing: 6) {
+                        RichContentView(
+                            content: displayEvent.content,
+                            tags: displayEvent.tags,
+                            profiles: profiles,
+                            onProfileTap: onProfileTap,
+                            onNoteTap: onNoteTap,
+                            onHashtagTap: onHashtagTap
+                        )
+                        .frame(
+                            maxHeight: collapsed ? Self.longPostCollapsedHeight : .infinity,
+                            alignment: .top
+                        )
+                        .clipped()
+                        .overlay(alignment: .bottom) {
+                            if collapsed {
+                                LinearGradient(
+                                    colors: [Color.wispBackground.opacity(0), Color.wispBackground],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                                .frame(height: 48)
+                                .allowsHitTesting(false)
+                            }
+                        }
+                        if isLong {
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    contentExpanded.toggle()
+                                }
+                            } label: {
+                                Text(contentExpanded ? "Show less" : "Show more")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(Color.wispPrimary)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
                 }
 
                 if displayEvent.kind == Nip88.kindPoll || displayEvent.kind == Nip69.kindZapPoll {
