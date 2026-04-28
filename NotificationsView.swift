@@ -7,21 +7,25 @@ struct NotificationsView: View {
     var onNoteTap: ((String) -> Void)? = nil
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            Divider().overlay(Color.wispSurfaceVariant.opacity(0.5))
-            filterChipBar
-            Divider().overlay(Color.wispSurfaceVariant.opacity(0.5))
-            list
-        }
-        .background(Color.wispBackground)
-        .onAppear {
-            // Debounced mark-as-read so a quick tab swipe doesn't immediately clear the dot.
-            Task {
-                try? await Task.sleep(for: .milliseconds(1500))
-                viewModel.markAllRead()
+        list
+            .background(Color.wispBackground)
+            // Frosted unified top header — same `.bar` material as the home feed
+            // and ProfileView. Title + summary pills + filter chips share one
+            // backdrop, content scrolls under them.
+            .safeAreaInset(edge: .top, spacing: 0) {
+                VStack(spacing: 0) {
+                    header
+                    filterChipBar
+                }
+                .background(Color.wispBackground.opacity(0.92))
             }
-        }
+            .onAppear {
+                // Debounced mark-as-read so a quick tab swipe doesn't immediately clear the dot.
+                Task {
+                    try? await Task.sleep(for: .milliseconds(1500))
+                    viewModel.markAllRead()
+                }
+            }
     }
 
     // MARK: - Header

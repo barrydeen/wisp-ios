@@ -193,12 +193,17 @@ struct NotificationRowView: View {
                 QuotedNoteView(eventId: refEventId, relayHints: [], profiles: profiles, onProfileTap: onPeerTap, onNoteTap: onNoteTap)
             }
             if let actorEvent = repo.event(forId: replyEventId) {
-                PostCardView(
-                    event: actorEvent,
-                    profile: profiles[actorEvent.pubkey],
-                    profiles: profiles
-                )
-                .padding(.horizontal, -12)
+                Button {
+                    onNoteTap?(actorEvent.id)
+                } label: {
+                    PostCardView(
+                        event: actorEvent,
+                        profile: profiles[actorEvent.pubkey],
+                        profiles: profiles
+                    )
+                    .padding(.horizontal, -12)
+                }
+                .buttonStyle(.plain)
             }
             inlineReplyList(groupId: groupId)
             if let actorEvent = repo.event(forId: replyEventId) {
@@ -220,12 +225,17 @@ struct NotificationRowView: View {
     ) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             if let actor = repo.event(forId: actorEventId) {
-                PostCardView(
-                    event: actor,
-                    profile: profiles[actor.pubkey],
-                    profiles: profiles
-                )
-                .padding(.horizontal, -12)
+                Button {
+                    onNoteTap?(actor.id)
+                } label: {
+                    PostCardView(
+                        event: actor,
+                        profile: profiles[actor.pubkey],
+                        profiles: profiles
+                    )
+                    .padding(.horizontal, -12)
+                }
+                .buttonStyle(.plain)
             }
             if !quoteEventId.isEmpty {
                 Text("quoted your note")
@@ -248,12 +258,17 @@ struct NotificationRowView: View {
     private func mentionExpansion(groupId: String, eventId: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             if let actor = repo.event(forId: eventId) {
-                PostCardView(
-                    event: actor,
-                    profile: profiles[actor.pubkey],
-                    profiles: profiles
-                )
-                .padding(.horizontal, -12)
+                Button {
+                    onNoteTap?(actor.id)
+                } label: {
+                    PostCardView(
+                        event: actor,
+                        profile: profiles[actor.pubkey],
+                        profiles: profiles
+                    )
+                    .padding(.horizontal, -12)
+                }
+                .buttonStyle(.plain)
                 inlineReplyList(groupId: groupId)
                 NotificationComposer(
                     targetEvent: actor,
@@ -271,12 +286,17 @@ struct NotificationRowView: View {
         if !optimistic.isEmpty {
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(optimistic, id: \.id) { e in
-                    PostCardView(
-                        event: e,
-                        profile: profiles[e.pubkey] ?? ProfileRepository.shared.get(e.pubkey),
-                        profiles: profiles
-                    )
-                    .padding(.horizontal, -12)
+                    Button {
+                        onNoteTap?(e.id)
+                    } label: {
+                        PostCardView(
+                            event: e,
+                            profile: profiles[e.pubkey] ?? ProfileRepository.shared.get(e.pubkey),
+                            profiles: profiles
+                        )
+                        .padding(.horizontal, -12)
+                    }
+                    .buttonStyle(.plain)
                 }
             }
         }

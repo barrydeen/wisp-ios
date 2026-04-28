@@ -112,7 +112,8 @@ final class ReactionSender {
             eventId: targetEvent.id,
             reactionEventId: event.id,
             pubkey: keypair.pubkey,
-            emoji: picked.content
+            emoji: picked.content,
+            customEmojiUrl: custom?.url
         )
 
         let succeeded = await RelayPool.publish(event: event, to: relays, timeout: 8)

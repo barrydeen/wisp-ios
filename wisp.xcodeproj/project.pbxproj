@@ -235,6 +235,7 @@
 		4CABCD0100000000000F2004 /* DeletionSender.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD0000000000000F2004 /* DeletionSender.swift */; };
 		4CABCD0100000000000F2005 /* ProfileQrSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD0000000000000F2005 /* ProfileQrSheet.swift */; };
 		4CABCD0100000000000F2006 /* KeysSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD0000000000000F2006 /* KeysSettingsView.swift */; };
+		4CABCD0100000000000F2007 /* MediaGridView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD0000000000000F2007 /* MediaGridView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -482,6 +483,7 @@
 		4CABCD0000000000000F2004 /* DeletionSender.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeletionSender.swift; sourceTree = "<group>"; };
 		4CABCD0000000000000F2005 /* ProfileQrSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileQrSheet.swift; sourceTree = "<group>"; };
 		4CABCD0000000000000F2006 /* KeysSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeysSettingsView.swift; sourceTree = "<group>"; };
+		4CABCD0000000000000F2007 /* MediaGridView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaGridView.swift; sourceTree = "<group>"; };
 		4CABCD0000000000000F2008 /* build.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = build.xcconfig; sourceTree = "<group>"; };
 		4CABCD0000000000000F2009 /* local.xcconfig.example */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = local.xcconfig.example; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -764,6 +766,7 @@
 				4CABCD0000000000000F2004 /* DeletionSender.swift */,
 				4CABCD0000000000000F2005 /* ProfileQrSheet.swift */,
 				4CABCD0000000000000F2006 /* KeysSettingsView.swift */,
+				4CABCD0000000000000F2007 /* MediaGridView.swift */,
 				4CABCD0000000000000F2008 /* build.xcconfig */,
 				4CABCD0000000000000F2009 /* local.xcconfig.example */,
 			);
@@ -1157,6 +1160,7 @@
 				4CABCD0100000000000F2004 /* DeletionSender.swift in Sources */,
 				4CABCD0100000000000F2005 /* ProfileQrSheet.swift in Sources */,
 				4CABCD0100000000000F2006 /* KeysSettingsView.swift in Sources */,
+				4CABCD0100000000000F2007 /* MediaGridView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
