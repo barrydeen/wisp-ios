@@ -233,7 +233,7 @@ struct FullScreenMediaPager: View {
             ))
             .padding(.horizontal, 4)
         } else {
-            FullScreenImageView(url: item.url, mime: item.mime)
+            FullScreenImageView(url: item.url, mime: item.mime, showsCloseButton: false)
         }
     }
 }
