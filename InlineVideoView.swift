@@ -18,26 +18,37 @@ struct InlineVideoView: View {
     @State private var player: AVPlayer?
     @State private var showFullScreen = false
     @State private var muteState = GlobalVideoMute.shared
+    /// Aspect ratio (W / H) detected from `AVPlayerItem.presentationSize` after
+    /// the asset's tracks load. `nil` until known — many notes ship with no
+    /// imeta `dim` tag, so we can't trust the static fallback.
+    @State private var detectedAspect: CGFloat?
 
-    /// Source aspect ratio (W / H) parsed from the imeta `dim` tag, with a
-    /// 16:9 fallback. Tall portraits report something like 9/16 ≈ 0.56.
-    private var nativeAspect: CGFloat {
-        ContentParser.parseAspectRatio(meta.dimension) ?? (16.0 / 9.0)
+    /// Aspect we'd use without the runtime detection — imeta `dim` if present,
+    /// otherwise the squarish default. Avoids assuming 16:9 (which silently
+    /// turns every dim-less portrait video into a letterboxed flat box).
+    private var staticAspect: CGFloat? {
+        ContentParser.parseAspectRatio(meta.dimension)
     }
 
     /// Floor on the rendered box's aspect ratio (W / H). Sources taller than
     /// this — typical 9:16 phone video — get clamped so the player fills full
-    /// card width without rendering at near-double width tall. Content is
-    /// cropped (resizeAspectFill) so there are no black bars on the sides.
-    /// Landscape and squarish sources render at their native aspect.
+    /// card width instead of rendering near-double-tall. Content is cropped
+    /// (resizeAspectFill) so there are no black bars on the sides.
     private let minDisplayAspect: CGFloat = 4.0 / 5.0
 
+    /// Best-known aspect right now: detected presentation size > imeta dim >
+    /// 4:5 default. The default matches the squarish gallery tile so a
+    /// dim-less video starts in a sensible frame and adjusts once known.
+    private var resolvedAspect: CGFloat {
+        detectedAspect ?? staticAspect ?? minDisplayAspect
+    }
+
     private var displayAspect: CGFloat {
-        max(nativeAspect, minDisplayAspect)
+        max(resolvedAspect, minDisplayAspect)
     }
 
     private var videoGravity: AVLayerVideoGravity {
-        nativeAspect < minDisplayAspect ? .resizeAspectFill : .resizeAspect
+        resolvedAspect < minDisplayAspect ? .resizeAspectFill : .resizeAspect
     }
 
     var body: some View {
@@ -125,6 +136,27 @@ struct InlineVideoView: View {
         let p = AVPlayer(url: url)
         p.isMuted = muteState.isMuted
         player = p
+        Task { await detectAspect(for: p.currentItem) }
+    }
+
+    /// Reads the asset's natural video size via the modern `load(.tracks)`
+    /// API and updates `detectedAspect` so the layout snaps to the real
+    /// aspect even when no imeta `dim` tag was supplied.
+    private func detectAspect(for item: AVPlayerItem?) async {
+        guard let asset = item?.asset else { return }
+        do {
+            let tracks = try await asset.loadTracks(withMediaType: .video)
+            guard let track = tracks.first else { return }
+            let size = try await track.load(.naturalSize)
+            let transform = try await track.load(.preferredTransform)
+            let resolved = size.applying(transform)
+            let w = abs(resolved.width)
+            let h = abs(resolved.height)
+            guard w > 0, h > 0 else { return }
+            await MainActor.run { detectedAspect = w / h }
+        } catch {
+            // Fall through — keep the static / default aspect.
+        }
     }
 }
 
