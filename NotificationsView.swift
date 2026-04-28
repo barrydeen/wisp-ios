@@ -17,7 +17,16 @@ struct NotificationsView: View {
                     header
                     filterChipBar
                 }
-                .background(Color.wispBackground.opacity(0.92))
+                .background(
+                    LinearGradient(
+                        colors: [
+                            Color.wispBackground.opacity(0.92),
+                            Color.wispBackground.opacity(0.65)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
             }
             .onAppear {
                 // Debounced mark-as-read so a quick tab swipe doesn't immediately clear the dot.

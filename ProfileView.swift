@@ -97,7 +97,7 @@ struct ProfileView: View {
     }
 
     private var unifiedHeader: some View {
-        VStack(spacing: 0) {
+        VStack(spacing: 8) {
             HStack(spacing: 8) {
                 BackChevronButton { dismiss() }
 
@@ -164,7 +164,16 @@ struct ProfileView: View {
 
             ProfileTabBar(selected: $selectedTab)
         }
-        .background(Color.wispBackground.opacity(0.92))
+        .background(
+            LinearGradient(
+                colors: [
+                    Color.wispBackground.opacity(0.92),
+                    Color.wispBackground.opacity(0.65)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        )
     }
 
     @ViewBuilder
