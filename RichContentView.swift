@@ -10,13 +10,15 @@ struct RichContentView: View {
     var onHashtagTap: ((String) -> Void)? = nil
     var showLinkPreviews: Bool = true
 
+    @Environment(AppSettings.self) private var settings
+
     var body: some View {
         let segments = ContentParser.parse(
             content: content,
             tags: tags,
             emojiMap: ContentParser.parseEmojiTags(tags)
         )
-        let groups = groupSegments(segments)
+        let groups = groupSegments(segments, gridLayout: settings.mediaLayoutStyle == .grid)
 
         VStack(alignment: .leading, spacing: 8) {
             ForEach(Array(groups.enumerated()), id: \.offset) { _, group in
@@ -30,30 +32,73 @@ struct RichContentView: View {
     private enum SegmentGroup {
         case inline([ContentSegment])
         case block(ContentSegment)
+        /// Run of 2+ consecutive media segments rendered as a tile grid. Only
+        /// produced when the user's `mediaLayoutStyle` is `.grid`; otherwise
+        /// each media item stays a separate `.block` and stacks vertically.
+        case mediaGroup([ContentSegment])
     }
 
-    private func groupSegments(_ segments: [ContentSegment]) -> [SegmentGroup] {
+    private func groupSegments(_ segments: [ContentSegment], gridLayout: Bool) -> [SegmentGroup] {
         var groups: [SegmentGroup] = []
-        var inlineBuffer: [ContentSegment] = []
-
-        func flush() {
-            if !inlineBuffer.isEmpty {
-                groups.append(.inline(inlineBuffer))
-                inlineBuffer.removeAll()
-            }
-        }
-
-        for seg in segments {
-            switch seg {
-            case .text, .hashtag, .nostrProfile, .inlineLink, .customEmoji:
-                inlineBuffer.append(seg)
-            default:
-                flush()
+        var i = 0
+        while i < segments.count {
+            let seg = segments[i]
+            if Self.isMedia(seg) {
+                // Walk forward collecting consecutive media. Whitespace-only text
+                // segments between media items are treated as joiners (e.g. ` `
+                // between two URLs on the same line, or `\n\n` between two URLs
+                // on separate lines), so an upload that splits its image URLs
+                // across whitespace still gets grouped into one grid.
+                var run = [seg]
+                var j = i + 1
+                while j < segments.count {
+                    if Self.isMedia(segments[j]) {
+                        run.append(segments[j])
+                        j += 1
+                    } else if case .text(let text) = segments[j],
+                              text.allSatisfy(\.isWhitespace),
+                              j + 1 < segments.count,
+                              Self.isMedia(segments[j + 1]) {
+                        j += 1  // skip the whitespace joiner
+                    } else {
+                        break
+                    }
+                }
+                if gridLayout && run.count >= 2 {
+                    groups.append(.mediaGroup(run))
+                } else {
+                    for m in run { groups.append(.block(m)) }
+                }
+                i = j
+            } else if Self.isInline(seg) {
+                var run = [seg]
+                var j = i + 1
+                while j < segments.count, Self.isInline(segments[j]) {
+                    run.append(segments[j])
+                    j += 1
+                }
+                groups.append(.inline(run))
+                i = j
+            } else {
                 groups.append(.block(seg))
+                i += 1
             }
         }
-        flush()
         return groups
+    }
+
+    private static func isMedia(_ seg: ContentSegment) -> Bool {
+        switch seg {
+        case .image, .video, .unknownMedia: return true
+        default: return false
+        }
+    }
+
+    private static func isInline(_ seg: ContentSegment) -> Bool {
+        switch seg {
+        case .text, .hashtag, .nostrProfile, .inlineLink, .customEmoji: return true
+        default: return false
+        }
     }
 
     // MARK: - Group Rendering
@@ -65,6 +110,19 @@ struct RichContentView: View {
             inlineText(segs)
         case .block(let seg):
             renderBlock(seg)
+        case .mediaGroup(let segs):
+            MediaGridView(items: segs.compactMap(mediaItem(from:)))
+        }
+    }
+
+    private func mediaItem(from segment: ContentSegment) -> MediaGridView.MediaItem? {
+        switch segment {
+        case .image(let meta), .unknownMedia(let meta):
+            return MediaGridView.MediaItem(url: meta.url, mime: meta.mime, dimension: meta.dimension, isVideo: false)
+        case .video(let meta):
+            return MediaGridView.MediaItem(url: meta.url, mime: meta.mime, dimension: meta.dimension, isVideo: true)
+        default:
+            return nil
         }
     }
 

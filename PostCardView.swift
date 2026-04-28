@@ -59,13 +59,15 @@ struct PostCardView: View {
                 repostBanner
             }
 
+            // Header row — avatar + name + nip05 + badges/time. Indented to
+            // align with the avatar.
             HStack(alignment: .top, spacing: 12) {
                 NavigationLink(value: ProfileRoute(pubkey: displayEvent.pubkey)) {
                     avatar(picture: displayProfile?.picture)
                 }
                 .buttonStyle(.plain)
 
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 2) {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
                         NavigationLink(value: ProfileRoute(pubkey: displayEvent.pubkey)) {
                             EmojiText(
@@ -94,60 +96,64 @@ struct PostCardView: View {
                     if let nip05 = displayProfile?.nip05, !nip05.isEmpty {
                         Nip05Badge(nip05: nip05, pubkey: displayEvent.pubkey)
                     }
-
-                    if !displayEvent.content.isEmpty || !displayEvent.tags.isEmpty {
-                        RichContentView(
-                            content: displayEvent.content,
-                            tags: displayEvent.tags,
-                            profiles: profiles,
-                            onProfileTap: onProfileTap,
-                            onNoteTap: onNoteTap,
-                            onHashtagTap: onHashtagTap
-                        )
-                        .padding(.top, 2)
-                    }
-
-                    if displayEvent.kind == Nip88.kindPoll || displayEvent.kind == Nip69.kindZapPoll {
-                        PollSection(
-                            pollEvent: displayEvent,
-                            onCastVote: { optionIds in handleCastVote(displayEvent, optionIds: optionIds) },
-                            onZapVote: { idx in
-                                zapPollOptionIndex = idx
-                                showZap = true
-                            }
-                        )
-                    }
-
-                    if let topZapper = engagement?.zappers.max(by: { $0.sats < $1.sats }) {
-                        TopZapperPill(
-                            zapper: topZapper,
-                            profile: profiles[topZapper.pubkey]
-                        ) {
-                            onProfileTap?(topZapper.pubkey)
-                        }
-                        .padding(.top, 8)
-                    }
-
-                    actionBar
-                        .padding(.top, 8)
-
-                    if expanded {
-                        NoteDetailsPanel(
-                            zappers: engagement?.zappers ?? [],
-                            reactors: engagement?.reactors ?? [],
-                            reposters: engagement?.reposters ?? [],
-                            relays: combinedRelays(for: displayEvent.id),
-                            tags: displayEvent.tags,
-                            profiles: profiles,
-                            onProfileTap: onProfileTap
-                        )
-                        .padding(.top, 8)
-                        .transition(.opacity.combined(with: .move(edge: .top)))
-                    }
                 }
             }
             .padding(.horizontal, 16)
-            .padding(.vertical, 12)
+            .padding(.top, 12)
+
+            // Post body — full card width, not indented under the avatar. Lets
+            // long text breathe and gives the media gallery room to bleed off
+            // the screen's right edge. Matches the Android client's layout.
+            VStack(alignment: .leading, spacing: 8) {
+                if !displayEvent.content.isEmpty || !displayEvent.tags.isEmpty {
+                    RichContentView(
+                        content: displayEvent.content,
+                        tags: displayEvent.tags,
+                        profiles: profiles,
+                        onProfileTap: onProfileTap,
+                        onNoteTap: onNoteTap,
+                        onHashtagTap: onHashtagTap
+                    )
+                }
+
+                if displayEvent.kind == Nip88.kindPoll || displayEvent.kind == Nip69.kindZapPoll {
+                    PollSection(
+                        pollEvent: displayEvent,
+                        onCastVote: { optionIds in handleCastVote(displayEvent, optionIds: optionIds) },
+                        onZapVote: { idx in
+                            zapPollOptionIndex = idx
+                            showZap = true
+                        }
+                    )
+                }
+
+                if let topZapper = engagement?.zappers.max(by: { $0.sats < $1.sats }) {
+                    TopZapperPill(
+                        zapper: topZapper,
+                        profile: profiles[topZapper.pubkey]
+                    ) {
+                        onProfileTap?(topZapper.pubkey)
+                    }
+                }
+
+                actionBar
+
+                if expanded {
+                    NoteDetailsPanel(
+                        zappers: engagement?.zappers ?? [],
+                        reactors: engagement?.reactors ?? [],
+                        reposters: engagement?.reposters ?? [],
+                        relays: combinedRelays(for: displayEvent.id),
+                        tags: displayEvent.tags,
+                        profiles: profiles,
+                        onProfileTap: onProfileTap
+                    )
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .padding(.bottom, 12)
         }
         .contentShape(Rectangle())
         .onAppear {

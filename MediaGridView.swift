@@ -1,0 +1,239 @@
+import SwiftUI
+
+/// Horizontally-scrolling media gallery for posts with 2+ images or videos.
+/// Single-item posts render through `RichContentView`'s existing
+/// `InlineImageView` / `InlineVideoView` block path; this view kicks in only
+/// when there are 2+ items and the user's `mediaLayoutStyle` is `.grid`.
+///
+/// Behaviour
+///  - Each tile preserves its source aspect ratio and shares a uniform height,
+///    so vertical photos stay vertical and horizontal stay horizontal.
+///  - First tile renders flush left; the next tile peeks in from the right
+///    edge so it's visually obvious there's more.
+///  - Tap any tile → `FullScreenMediaPager` opens at that index, swipe to
+///    navigate every item in the post.
+struct MediaGridView: View {
+    let items: [MediaItem]
+    @State private var openIndex: Int?
+    @State private var currentItemId: String?
+
+    struct MediaItem: Hashable, Identifiable {
+        let url: String
+        let mime: String?
+        let dimension: String?
+        let isVideo: Bool
+
+        var id: String { url }
+
+        /// Source aspect ratio (width / height) parsed from the imeta `dim` tag,
+        /// or a sensible default. Videos default to 16:9, images default to 1:1.
+        var aspect: CGFloat {
+            ContentParser.parseAspectRatio(dimension) ?? (isVideo ? 16.0 / 9.0 : 1.0)
+        }
+    }
+
+    /// Aspect ratio every tile snaps to (width / height). 4:5 reads as a
+    /// gallery-style "tall card" — taller than square, which gives portrait
+    /// photos room without cropping much, while horizontal photos crop to a
+    /// pleasing centred slice. Common gallery aspect across modern social apps.
+    private let tileAspect: CGFloat = 4.0 / 5.0
+    /// Fraction of the gallery viewport one tile occupies. The remaining
+    /// ~30% is the peek of the next tile bleeding in from the right edge.
+    private let tileWidthFraction: CGFloat = 0.7
+    private let tileSpacing: CGFloat = 6
+    private let cornerRadius: CGFloat = 14
+
+    /// PostCardView's body content sits at full card width with this much
+    /// horizontal padding. The gallery uses a frame that's wider than the
+    /// content column and bleeds past the right padding to the screen edge.
+    private let cardLeadingPadding: CGFloat = 16
+
+    private var currentIndex: Int {
+        guard let id = currentItemId,
+              let idx = items.firstIndex(where: { $0.id == id }) else { return 0 }
+        return idx
+    }
+
+    var body: some View {
+        let screenWidth = UIScreen.main.bounds.width
+        // Gallery rect: from card's left padding (`cardLeadingPadding` from screen left)
+        // all the way to the screen's right edge.
+        let galleryWidth = screenWidth - cardLeadingPadding
+        // Every tile renders at the same uniform size so the gallery reads as
+        // one consistent strip regardless of source orientations. Width is
+        // ~70% of the viewport, height derived from `tileAspect`.
+        let tileWidth = galleryWidth * tileWidthFraction
+        let tileHeight = tileWidth / tileAspect
+
+        ZStack(alignment: .bottom) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(spacing: tileSpacing) {
+                    ForEach(items) { item in
+                        tile(item, width: tileWidth, height: tileHeight)
+                    }
+                }
+                .scrollTargetLayout()
+            }
+            .scrollTargetBehavior(.viewAligned)
+            .scrollPosition(id: $currentItemId)
+            .frame(width: galleryWidth, height: tileHeight)
+
+            if items.count > 1 {
+                indexBadge
+                    .padding(.bottom, 12)
+            }
+        }
+        .frame(width: galleryWidth, height: tileHeight, alignment: .leading)
+        // Bleed past the body's trailing padding so tiles extend to the
+        // screen's right edge. Leading already sits at the card's standard
+        // 16pt padding because PostCardView's body content uses full card width
+        // (no avatar indent).
+        .padding(.trailing, -cardLeadingPadding)
+        .fullScreenCover(item: Binding(
+            get: { openIndex.map { GallerySelection(index: $0) } },
+            set: { openIndex = $0?.index }
+        )) { selection in
+            FullScreenMediaPager(items: items, initialIndex: selection.index)
+        }
+        .onAppear {
+            if currentItemId == nil { currentItemId = items.first?.id }
+        }
+    }
+
+    @ViewBuilder
+    private func tile(_ item: MediaItem, width: CGFloat, height: CGFloat) -> some View {
+        Button {
+            openIndex = items.firstIndex(of: item) ?? 0
+        } label: {
+            ZStack {
+                MediaTileImage(item: item)
+                    .frame(width: width, height: height)
+                    .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+                if item.isVideo {
+                    Image(systemName: "play.circle.fill")
+                        .font(.system(size: 36))
+                        .foregroundStyle(.white.opacity(0.9))
+                        .shadow(radius: 4)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var indexBadge: some View {
+        Text("\(currentIndex + 1) / \(items.count)")
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.white.opacity(0.85))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(Color.black.opacity(0.3), in: Capsule())
+            .animation(.easeInOut(duration: 0.15), value: currentIndex)
+    }
+
+    private struct GallerySelection: Identifiable, Hashable {
+        let index: Int
+        var id: Int { index }
+    }
+}
+
+/// Aspect-preserving image render for one gallery tile. GIF / animated WebP go
+/// through the project's `AnimatedImageView`; everything else is `AsyncImage`
+/// with `.scaledToFill` + `.clipped()` so the source completely covers the
+/// tile rect even when the explicit width is rounded.
+private struct MediaTileImage: View {
+    let item: MediaGridView.MediaItem
+    @Environment(AppSettings.self) private var settings
+
+    var body: some View {
+        Group {
+            if !settings.autoLoadMedia {
+                placeholder
+            } else if item.isVideo {
+                placeholder // poster preview deferred — tap opens the player
+            } else if AnimatedImageHint.isLikelyAnimated(url: item.url, mime: item.mime) {
+                AnimatedImageView(
+                    url: URL(string: item.url),
+                    aspect: item.aspect,
+                    placeholder: { placeholder },
+                    failure: { placeholder }
+                )
+            } else {
+                AsyncImage(url: URL(string: item.url)) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image.resizable().scaledToFill()
+                    default:
+                        placeholder
+                    }
+                }
+            }
+        }
+        .clipped()
+    }
+
+    private var placeholder: some View {
+        Rectangle()
+            .fill(Color.wispSurfaceVariant)
+            .overlay {
+                Image(systemName: item.isVideo ? "video" : "photo")
+                    .font(.title2)
+                    .foregroundStyle(.secondary)
+            }
+    }
+}
+
+/// Fullscreen pager that opens at `initialIndex` and lets the user swipe
+/// horizontally between every media item in the post. Reuses
+/// `FullScreenImageView` for image pages and `InlineVideoView` for videos.
+struct FullScreenMediaPager: View {
+    let items: [MediaGridView.MediaItem]
+    let initialIndex: Int
+    @Environment(\.dismiss) private var dismiss
+    @State private var index: Int
+
+    init(items: [MediaGridView.MediaItem], initialIndex: Int) {
+        self.items = items
+        self.initialIndex = initialIndex
+        _index = State(initialValue: initialIndex)
+    }
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Color.black.ignoresSafeArea()
+
+            TabView(selection: $index) {
+                ForEach(Array(items.enumerated()), id: \.offset) { i, item in
+                    pageContent(for: item)
+                        .tag(i)
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: .always))
+            .indexViewStyle(.page(backgroundDisplayMode: .always))
+
+            Button {
+                dismiss()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(12)
+                    .background(Color.black.opacity(0.6), in: Circle())
+            }
+            .padding()
+        }
+    }
+
+    @ViewBuilder
+    private func pageContent(for item: MediaGridView.MediaItem) -> some View {
+        if item.isVideo {
+            InlineVideoView(meta: MediaMeta(
+                url: item.url,
+                mime: item.mime,
+                dimension: item.dimension
+            ))
+            .padding(.horizontal, 4)
+        } else {
+            FullScreenImageView(url: item.url, mime: item.mime, showsCloseButton: false)
+        }
+    }
+}

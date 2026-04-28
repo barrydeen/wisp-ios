@@ -75,6 +75,22 @@ struct InterfaceSettingsView: View {
                         .toggleStyle(SwitchToggleStyle(tint: theme.primary))
                         .disabled(!settings.autoLoadMedia)
                         .opacity(settings.autoLoadMedia ? 1.0 : 0.5)
+
+                    HStack {
+                        Text("Multi-image layout")
+                            .foregroundStyle(theme.palette.onSurface)
+                        Spacer()
+                        Picker("", selection: $settings.mediaLayoutStyle) {
+                            Text("Gallery").tag(AppSettings.MediaLayoutStyle.grid)
+                            Text("Stack").tag(AppSettings.MediaLayoutStyle.stack)
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(width: 180)
+                    }
+                    .padding(.top, 4)
+                    Text("Gallery: horizontal swipe through every photo and video. Stack: each item full-width below the next.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(theme.palette.onSurfaceVariant)
                 }
 
                 section(title: "Posting") {
