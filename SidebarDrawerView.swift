@@ -54,23 +54,58 @@ struct SidebarDrawerView: View {
     }
     private var accounts: [String] { NostrKey.accounts() }
 
+    private static func cachedStatusKey(_ pubkey: String) -> String {
+        "user_status_general_\(pubkey)"
+    }
+
+    /// Restore the last-seen status from UserDefaults so the drawer never
+    /// flashes the empty placeholder when a relay query is in flight or
+    /// fails. Refreshed in the background by `loadStatus()`.
+    private func loadCachedStatus() {
+        let cached = UserDefaults.standard.string(forKey: Self.cachedStatusKey(pubkey))
+        if let cached, !cached.isEmpty { userStatus = cached }
+    }
+
     private func loadStatus() async {
-        var relays = await RelayListRepository.shared.getWriteRelays(pubkey)
-        if relays.isEmpty { relays = await RelayListRepository.shared.getReadRelays(pubkey) }
-        if relays.isEmpty { return }
+        // Query write ∪ read ∪ top-scored relays in one shot. The previous
+        // write-then-read fallback missed statuses published from a different
+        // client whose relay set didn't intersect the current cache.
+        var relays = Set<String>()
+        for r in await RelayListRepository.shared.getWriteRelays(pubkey) { relays.insert(r) }
+        for r in await RelayListRepository.shared.getReadRelays(pubkey) { relays.insert(r) }
+        if let board = RelayScoreBoard.load(pubkey: pubkey) {
+            for r in board.scoredRelays.prefix(5) { relays.insert(r.url) }
+        }
+        if relays.isEmpty {
+            relays = ["wss://relay.damus.io", "wss://relay.primal.net", "wss://nos.lol"]
+        }
         let filter = NostrFilter(
             kinds: [Nip38.kindUserStatus],
             authors: [pubkey],
             dTags: [Nip38.dTagGeneral],
             limit: 1
         )
-        let events = await RelayPool.query(relays: relays, filter: filter, timeout: 6)
+        let events = await RelayPool.query(relays: Array(relays), filter: filter, timeout: 10)
         guard let latest = events.max(by: { $0.createdAt < $1.createdAt }) else { return }
         let trimmed = latest.content.trimmingCharacters(in: .whitespacesAndNewlines)
-        userStatus = trimmed.isEmpty ? nil : trimmed
+        let resolved: String? = trimmed.isEmpty ? nil : trimmed
+        userStatus = resolved
+        let defaults = UserDefaults.standard
+        if let resolved {
+            defaults.set(resolved, forKey: Self.cachedStatusKey(pubkey))
+        } else {
+            defaults.removeObject(forKey: Self.cachedStatusKey(pubkey))
+        }
     }
 
     private func publishStatus(_ content: String) async {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        let defaults = UserDefaults.standard
+        if trimmed.isEmpty {
+            defaults.removeObject(forKey: Self.cachedStatusKey(pubkey))
+        } else {
+            defaults.set(trimmed, forKey: Self.cachedStatusKey(pubkey))
+        }
         guard let priv = Hex.decode(keypair.privkey) else { return }
         guard let event = try? Nip38.buildStatus(privkey32: priv, pubkey: pubkey, content: content) else { return }
         var relays = await RelayListRepository.shared.getWriteRelays(pubkey)
@@ -138,6 +173,10 @@ struct SidebarDrawerView: View {
             }
         }
         .task(id: pubkey) {
+            // Show the last-seen status immediately from cache, then refresh
+            // from relays in the background. Avoids "Set status..." flashing
+            // when relay reads are slow or transiently empty.
+            loadCachedStatus()
             await loadStatus()
         }
         .sheet(isPresented: $showQRSheet) {
