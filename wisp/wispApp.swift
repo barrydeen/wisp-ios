@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 @main
 struct wispApp: App {
@@ -18,6 +19,17 @@ struct wispApp: App {
         Task.detached(priority: .utility) {
             await AvatarPrefetcher.shared.sweepPersistedProfiles()
         }
+
+        // Drop UIKit's 1pt hairline shadow under every UINavigationBar so views
+        // that paint a custom toolbar background (e.g. ProfileView with a pinned
+        // tab strip directly under the nav bar) read as one continuous header.
+        // SwiftUI's `.toolbarBackground` doesn't expose shadow control.
+        let appearance = UINavigationBarAppearance()
+        appearance.configureWithDefaultBackground()
+        appearance.shadowColor = .clear
+        UINavigationBar.appearance().standardAppearance = appearance
+        UINavigationBar.appearance().scrollEdgeAppearance = appearance
+        UINavigationBar.appearance().compactAppearance = appearance
     }
 
     var body: some Scene {

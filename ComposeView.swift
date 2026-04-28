@@ -655,11 +655,13 @@ struct ComposeView: View {
     /// caret position — works for the typical "type at end" flow that the SwiftUI
     /// `TextEditor` defaults to.
     private func recomputeTriggers(for text: String) {
-        // Find the start of the last token.
+        // Find the start of the last token. NBSPs inside a sanitised display
+        // name are not token breaks (`isMentionTokenBreak`), so a multi-word
+        // mention stays a single `@displayName` trigger token.
         var idx = text.endIndex
         while idx > text.startIndex {
             let prev = text.index(before: idx)
-            if text[prev].isWhitespace { break }
+            if text[prev].isMentionTokenBreak { break }
             idx = prev
         }
         let token = String(text[idx..<text.endIndex])

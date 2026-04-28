@@ -260,9 +260,10 @@ final class ComposeViewModel {
         let s = content
         guard let stringStart = s.utf16.index(s.utf16.startIndex, offsetBy: startOffset, limitedBy: s.utf16.endIndex),
               let stringStartIdx = String.Index(stringStart, within: s) else { return }
-        // Find end of current token (whitespace or end of string).
+        // Find end of current token (whitespace or end of string). NBSPs inside
+        // a sanitised display name are not token breaks.
         var end = stringStartIdx
-        while end < s.endIndex, !s[end].isWhitespace { end = s.index(after: end) }
+        while end < s.endIndex, !s[end].isMentionTokenBreak { end = s.index(after: end) }
         var newContent = s
         newContent.replaceSubrange(stringStartIdx..<end, with: "@\(displayName) ")
         content = newContent
@@ -291,7 +292,7 @@ final class ComposeViewModel {
         guard let stringStart = s.utf16.index(s.utf16.startIndex, offsetBy: startOffset, limitedBy: s.utf16.endIndex),
               let stringStartIdx = String.Index(stringStart, within: s) else { return }
         var end = stringStartIdx
-        while end < s.endIndex, !s[end].isWhitespace { end = s.index(after: end) }
+        while end < s.endIndex, !s[end].isMentionTokenBreak { end = s.index(after: end) }
         var newContent = s
         newContent.replaceSubrange(stringStartIdx..<end, with: ":\(emoji.shortcode): ")
         content = newContent
@@ -919,12 +920,27 @@ final class ComposeViewModel {
     }
 
     private func sanitizeDisplayName(_ name: String) -> String {
-        let cleaned = name.replacingOccurrences(of: " ", with: "_")
+        // Replace plain spaces with non-breaking spaces so a multi-word display
+        // name reads visually as a space in the editor while staying a single
+        // contiguous token for the @-trigger parser. Mention-aware whitespace
+        // checks (`isMentionTokenBreak`) ignore U+00A0.
+        let cleaned = name.replacingOccurrences(of: " ", with: "\u{00A0}")
             .replacingOccurrences(of: "@", with: "")
         return cleaned.isEmpty ? "user" : cleaned
     }
 
     private func topWriteRelays() -> [String] {
         RelayRouting.topWriteRelays(for: keypair.pubkey)
+    }
+}
+
+extension Character {
+    /// Whitespace check used by the mention / emoji trigger parser. Identical to
+    /// `isWhitespace` except non-breaking space (U+00A0) is treated as part of
+    /// the token, so multi-word display names that `sanitizeDisplayName` joined
+    /// with NBSP stay a single `@displayName` token.
+    var isMentionTokenBreak: Bool {
+        if self == "\u{00A0}" { return false }
+        return isWhitespace
     }
 }
