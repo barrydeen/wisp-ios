@@ -14,6 +14,7 @@ struct ProfileView: View {
     @State private var selectedTab: ProfileTab = .notes
     @State private var showAddToList = false
     @State private var showQrSheet = false
+    @State private var showEditProfile = false
     @State private var muteRepo = MuteRepository.shared
     @Environment(\.dismiss) private var dismiss
 
@@ -44,6 +45,8 @@ struct ProfileView: View {
             LazyVStack(alignment: .leading, spacing: 0) {
                 ProfileHeaderView(
                     viewModel: viewModel,
+                    isMe: isMe,
+                    onEditProfile: { showEditProfile = true },
                     onProfileTap: onProfileTap,
                     onNoteTap: onNoteTap,
                     onHashtagTap: onHashtagTap
@@ -76,6 +79,16 @@ struct ProfileView: View {
                 avatarUrl: viewModel.profile?.picture,
                 lud16: viewModel.profile?.lud16
             )
+        }
+        .sheet(isPresented: $showEditProfile) {
+            if let keypair = NostrKey.load() {
+                NavigationStack {
+                    ProfileEditView(keypair: keypair) { updated in
+                        viewModel.profile = updated
+                        viewModel.profiles[updated.pubkey] = updated
+                    }
+                }
+            }
         }
         .task { await viewModel.start() }
         .task(id: selectedTab) {
@@ -193,6 +206,8 @@ struct ProfileView: View {
 
 private struct ProfileHeaderView: View {
     @Bindable var viewModel: ProfileViewModel
+    var isMe: Bool = false
+    var onEditProfile: () -> Void = {}
     var onProfileTap: ((String) -> Void)? = nil
     var onNoteTap: ((String) -> Void)? = nil
     var onHashtagTap: ((String) -> Void)? = nil
@@ -208,7 +223,20 @@ private struct ProfileHeaderView: View {
 
                 Spacer()
 
-                if viewModel.followsYou {
+                if isMe {
+                    Button(action: onEditProfile) {
+                        Text("Edit Profile")
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 7)
+                            .background(Color.wispSurfaceVariant, in: Capsule())
+                            .foregroundStyle(.primary)
+                    }
+                    .buttonStyle(.plain)
+                    // Match the avatar's `offset(y: -28)` so the pill's bottom
+                    // edge sits on the same shelf as the avatar's bottom edge.
+                    .offset(y: -28)
+                } else if viewModel.followsYou {
                     Text("Follows you")
                         .font(.caption.weight(.medium))
                         .padding(.horizontal, 10)
