@@ -124,14 +124,31 @@ struct InlineVideoView: View {
                     loaded = true
                 } label: {
                     ZStack {
-                        Color.black.opacity(0.001)
+                        // Poster behind the play button: imeta `image` URL when
+                        // present, AVFoundation-decoded first frame otherwise.
+                        // The black RoundedRectangle below this ZStack still
+                        // shows during the brief gap before the poster lands.
+                        if let posterUrl = meta.posterUrl, let url = URL(string: posterUrl) {
+                            AsyncImage(url: url) { phase in
+                                switch phase {
+                                case .success(let image):
+                                    image.resizable().scaledToFill()
+                                default:
+                                    GeneratedVideoPoster(videoUrl: meta.url) { Color.black.opacity(0.001) }
+                                }
+                            }
+                        } else {
+                            GeneratedVideoPoster(videoUrl: meta.url) { Color.black.opacity(0.001) }
+                        }
                         VStack(spacing: 8) {
                             Image(systemName: "play.circle.fill")
                                 .font(.system(size: 56))
                                 .foregroundStyle(.white)
+                                .shadow(radius: 4)
                             Text("Tap to play")
                                 .font(.caption)
-                                .foregroundStyle(.white.opacity(0.85))
+                                .foregroundStyle(.white.opacity(0.95))
+                                .shadow(radius: 4)
                         }
                     }
                 }

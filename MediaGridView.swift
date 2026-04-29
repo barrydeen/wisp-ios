@@ -22,6 +22,10 @@ struct MediaGridView: View {
         let mime: String?
         let dimension: String?
         let isVideo: Bool
+        /// Optional poster image URL for video items — typically the NIP-92
+        /// imeta `image` field. When nil and `isVideo` is true, the tile falls
+        /// back to a frame decoded by `VideoPosterCache`.
+        let posterUrl: String?
 
         var id: String { url }
 
@@ -149,7 +153,7 @@ private struct MediaTileImage: View {
             if !settings.autoLoadMedia {
                 placeholder
             } else if item.isVideo {
-                placeholder // poster preview deferred — tap opens the player
+                videoPoster
             } else if AnimatedImageHint.isLikelyAnimated(url: item.url, mime: item.mime) {
                 AnimatedImageView(
                     url: URL(string: item.url),
@@ -171,6 +175,25 @@ private struct MediaTileImage: View {
         .clipped()
     }
 
+    @ViewBuilder
+    private var videoPoster: some View {
+        // Prefer the imeta-supplied poster URL — instant and free of any video
+        // bandwidth. Fall back to a frame decoded from the video itself so
+        // dim-less / poster-less posts still get something visible.
+        if let posterUrl = item.posterUrl, let url = URL(string: posterUrl) {
+            AsyncImage(url: url) { phase in
+                switch phase {
+                case .success(let image):
+                    image.resizable().scaledToFill()
+                default:
+                    GeneratedVideoPoster(videoUrl: item.url) { placeholder }
+                }
+            }
+        } else {
+            GeneratedVideoPoster(videoUrl: item.url) { placeholder }
+        }
+    }
+
     private var placeholder: some View {
         Rectangle()
             .fill(Color.wispSurfaceVariant)
@@ -179,6 +202,29 @@ private struct MediaTileImage: View {
                     .font(.title2)
                     .foregroundStyle(.secondary)
             }
+    }
+}
+
+/// Renders a frame decoded from the video itself via `VideoPosterCache`, falling
+/// back to the supplied `fallback` view while the cache is populating (or if
+/// generation fails). Used by the gallery and by `InlineVideoView` for the
+/// pre-tap state.
+struct GeneratedVideoPoster<Fallback: View>: View {
+    let videoUrl: String
+    @ViewBuilder let fallback: () -> Fallback
+    @State private var cache = VideoPosterCache.shared
+
+    var body: some View {
+        Group {
+            if let img = cache.images[videoUrl] {
+                Image(uiImage: img)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                fallback()
+            }
+        }
+        .onAppear { cache.ensureGenerated(url: videoUrl) }
     }
 }
 

@@ -5,12 +5,18 @@ struct MediaMeta: Hashable {
     let mime: String?
     let dimension: String?
     let blurhash: String?
+    /// Optional poster image URL — typically supplied alongside a video via the
+    /// NIP-92 imeta `image <url>` field. Lets the gallery / inline player show a
+    /// frame preview before the user taps to play, without having to pre-decode
+    /// the video itself.
+    let posterUrl: String?
 
-    init(url: String, mime: String? = nil, dimension: String? = nil, blurhash: String? = nil) {
+    init(url: String, mime: String? = nil, dimension: String? = nil, blurhash: String? = nil, posterUrl: String? = nil) {
         self.url = url
         self.mime = mime
         self.dimension = dimension
         self.blurhash = blurhash
+        self.posterUrl = posterUrl
     }
 }
 
@@ -74,14 +80,16 @@ enum ContentParser {
             var mime: String?
             var dim: String?
             var blur: String?
+            var image: String?
             for entry in tag.dropFirst() {
                 if entry.hasPrefix("url ") { url = String(entry.dropFirst(4)) }
                 else if entry.hasPrefix("m ") { mime = String(entry.dropFirst(2)) }
                 else if entry.hasPrefix("dim ") { dim = String(entry.dropFirst(4)) }
                 else if entry.hasPrefix("blurhash ") { blur = String(entry.dropFirst(9)) }
+                else if entry.hasPrefix("image ") { image = String(entry.dropFirst(6)) }
             }
             if let url {
-                map[url] = MediaMeta(url: url, mime: mime, dimension: dim, blurhash: blur)
+                map[url] = MediaMeta(url: url, mime: mime, dimension: dim, blurhash: blur, posterUrl: image)
             }
         }
         return map

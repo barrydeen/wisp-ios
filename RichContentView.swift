@@ -123,9 +123,9 @@ struct RichContentView: View {
     private func mediaItem(from segment: ContentSegment) -> MediaGridView.MediaItem? {
         switch segment {
         case .image(let meta), .unknownMedia(let meta):
-            return MediaGridView.MediaItem(url: meta.url, mime: meta.mime, dimension: meta.dimension, isVideo: false)
+            return MediaGridView.MediaItem(url: meta.url, mime: meta.mime, dimension: meta.dimension, isVideo: false, posterUrl: meta.posterUrl)
         case .video(let meta):
-            return MediaGridView.MediaItem(url: meta.url, mime: meta.mime, dimension: meta.dimension, isVideo: true)
+            return MediaGridView.MediaItem(url: meta.url, mime: meta.mime, dimension: meta.dimension, isVideo: true, posterUrl: meta.posterUrl)
         default:
             return nil
         }
