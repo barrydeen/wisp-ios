@@ -243,7 +243,12 @@ struct PostCardView: View {
                         profiles: profiles,
                         onProfileTap: onProfileTap
                     )
-                    .transition(.opacity.combined(with: .move(edge: .top)))
+                    // Pure fade — the prior `.move(edge: .top)` made the
+                    // top-of-panel content (the reactor avatar row) settle
+                    // into place before the rows below caught up, so the
+                    // expansion read as two staggered animations instead of
+                    // one card revealing.
+                    .transition(.opacity)
                 }
             }
             .padding(.horizontal, 16)
@@ -828,42 +833,30 @@ private struct NoteDetailsPanel: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: 12) {
             if !zappers.isEmpty {
                 zapsSection
             }
-
             if !reposters.isEmpty {
-                if !zappers.isEmpty { sectionDivider }
                 repostsSection
             }
-
             if !reactors.isEmpty {
-                if !zappers.isEmpty || !reposters.isEmpty { sectionDivider }
                 reactionsSection
             }
-
             if !relays.isEmpty {
-                if !zappers.isEmpty || !reposters.isEmpty || !reactors.isEmpty { sectionDivider }
                 seenOnSection
             }
-
             if let name = clientName {
-                if !zappers.isEmpty || !reposters.isEmpty || !reactors.isEmpty || !relays.isEmpty { sectionDivider }
                 postedViaSection(name: name)
             }
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 10)
                 .fill(Color.secondary.opacity(0.08))
         )
-    }
-
-    private var sectionDivider: some View {
-        Divider()
-            .padding(.vertical, 6)
     }
 
     private var zapsSection: some View {
