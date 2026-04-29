@@ -17,6 +17,12 @@ struct PostCardView: View {
     @State private var contentExpanded = false
     @State private var showReactionPicker = false
     @State private var showEmojiLibrary = false
+    /// Cached global frame of the heart button, used to flip the popover
+    /// arrow edge so the picker never opens off-screen. When the heart sits
+    /// in the lower half of the screen the popover anchors above it
+    /// (`arrowEdge: .bottom`); otherwise it anchors below (`.top`).
+    @State private var heartButtonFrame: CGRect = .zero
+    @State private var reactionArrowEdge: Edge = .top
     @State private var showDeleteConfirm = false
     @State private var actionAlert: ActionAlert?
     /// Single source of truth for every body-level sheet on the card. Stacking
@@ -513,6 +519,12 @@ struct PostCardView: View {
         let displayed = displayReactedEmoji
         let custom = displayReactedCustomEmoji
         return Button {
+            // Flip the popover above the heart when it sits below the
+            // vertical midpoint of the screen — keeps the picker on-screen
+            // for posts near the bottom of the feed (or in modal sheets where
+            // the action bar is closer to the bottom edge).
+            let screenHeight = UIScreen.main.bounds.height
+            reactionArrowEdge = heartButtonFrame.midY > screenHeight * 0.5 ? .bottom : .top
             showReactionPicker = true
         } label: {
             if let emoji = displayed {
@@ -551,7 +563,21 @@ struct PostCardView: View {
             }
         }
         .buttonStyle(.plain)
-        .popover(isPresented: $showReactionPicker, arrowEdge: .top) {
+        // Capture the heart button's global frame on first appearance only.
+        // Reading it on every scroll-frame `onChange` writes to `@State` and
+        // triggers a re-render of every visible PostCardView — devastating
+        // for scroll smoothness. The cached frame is good enough for the
+        // popover's binary above-or-below decision.
+        .background(
+            GeometryReader { geo in
+                Color.clear.onAppear {
+                    if heartButtonFrame == .zero {
+                        heartButtonFrame = geo.frame(in: .global)
+                    }
+                }
+            }
+        )
+        .popover(isPresented: $showReactionPicker, arrowEdge: reactionArrowEdge) {
             EmojiReactionPicker(
                 onSelect: { picked in
                     showReactionPicker = false

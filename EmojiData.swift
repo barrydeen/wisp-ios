@@ -26,7 +26,7 @@ enum EmojiData {
                 "🤑", "🤗", "🤭", "🤫", "🤔",
                 "🤐", "🤨", "😐", "😑", "😶",
                 "😏", "😒", "🙄", "😬", "🤥",
-                "😌", "😔", "😪", "🤤", "😴",
+                "😔", "😪", "🤤", "😴",
                 "😷", "🤒", "🤕", "🤢", "🤮",
                 "🤧", "🥵", "🥶", "🥴", "😵",
                 "🤯", "🤠", "🥳", "🥸", "😎",
@@ -80,7 +80,7 @@ enum EmojiData {
                 "🙈", "🙉", "🙊", "🐒", "🐔",
                 "🐧", "🐦", "🐤", "🐣", "🐥",
                 "🦆", "🦅", "🦉", "🦤", "🦩",
-                "🦚", "🦜", "🐸", "🐊", "🐢",
+                "🦚", "🦜", "🐊", "🐢",
                 "🦎", "🐍", "🐲", "🐉", "🦕",
                 "🦖", "🐳", "🐋", "🐬", "🦭",
                 "🐟", "🐠", "🐡", "🦈", "🐙",
@@ -89,7 +89,7 @@ enum EmojiData {
                 "🕷️", "🕸️", "🦞", "🦀", "🐺",
                 "🐪", "🐫", "🦙", "🦒", "🐘",
                 "🦣", "🦏", "🐃", "🐂", "🐄",
-                "🐎", "🐖", "🐏", "🦙", "🦬",
+                "🐎", "🐖", "🐏", "🦬",
                 "🦃", "🐓", "🐐", "🐕", "🦮",
                 "🐈", "🐈‍⬛", "🐁", "🐀", "🐿️",
                 "🦫", "🐇", "🐻‍❄️", "🦥", "🦦",
@@ -113,7 +113,7 @@ enum EmojiData {
                 "🥚", "🍳", "🥘", "🍲", "🫕",
                 "🥣", "🥗", "🍿", "🧈", "🧂",
                 "🥫", "🍱", "🍘", "🍙", "🍚",
-                "🍛", "🍜", "🍝", "🍞", "🥯",
+                "🍛", "🍜", "🍝", "🥯",
                 "🍣", "🍤", "🍥", "🥟", "🥠",
                 "🥡", "🥢", "🍦", "🍧", "🍨",
                 "🍩", "🍪", "🎂", "🍰", "🧁",
@@ -133,7 +133,7 @@ enum EmojiData {
                 "🏓", "🏸", "🏒", "🥍", "🏑",
                 "⛳", "🏹", "🎣", "🤿", "🤼",
                 "🎽", "🛹", "🤸", "🤺", "🤾",
-                "⛷️", "🏂", "🏋️", "🤼", "🤹",
+                "⛷️", "🏂", "🏋️", "🤹",
                 "🎪", "🎨", "🎭", "🎤", "🎧",
                 "🎼", "🎵", "🎶", "🎹", "🥁",
                 "🎷", "🎺", "🎸", "🪕", "🎻",
@@ -186,12 +186,12 @@ enum EmojiData {
                 "📏", "📐", "✂️", "📝", "✏️",
                 "🖊️", "🖋️", "🖌️", "🖍️", "📚",
                 "📖", "📓", "📔", "📕", "📗",
-                "📘", "📙", "📰", "📰", "🔍",
+                "📘", "📙", "📰", "🔍",
                 "🔎", "🔏", "🔐", "🔑", "🗝️",
                 "🔨", "🪓", "⛏️", "⚒️", "🔫",
                 "🛡️", "🔧", "🔩", "⚙️", "🧲",
                 "⚖️", "🔗", "⛓️", "🧰", "🧪",
-                "🧫", "🧬", "🔬", "🔭", "📡",
+                "🧫", "🧬", "🔬", "🔭",
                 "💊", "🩹", "🧴", "🧹", "🧷",
                 "🪡", "🚽", "🚰", "🚿", "🛁",
                 "🧳", "🎁", "🎈", "🎉", "🎊",
@@ -226,4 +226,35 @@ enum EmojiData {
             ]
         )
     ]
+
+    /// Flat list of every unicode emoji across categories, in display order.
+    static let allEmojis: [String] = categories.flatMap { $0.emojis }
+
+    /// Lazy lowercased Unicode-name lookup keyed by emoji character. Built on
+    /// first access using `String.applyingTransform(.toUnicodeName, ...)` so we
+    /// don't ship a hardcoded keyword table — the OS already has the data.
+    /// Used by `searchEmojis(_:)` for the library's search field.
+    static let nameByEmoji: [String: String] = {
+        var map: [String: String] = [:]
+        for emoji in allEmojis {
+            // `applyingTransform(.toUnicodeName)` returns sequences like
+            // `\N{FACE WITH TEARS OF JOY}` — keep the words, drop the wrapper.
+            guard let raw = emoji.applyingTransform(.toUnicodeName, reverse: false) else { continue }
+            let cleaned = raw
+                .replacingOccurrences(of: "\\N{", with: "")
+                .replacingOccurrences(of: "}", with: " ")
+                .lowercased()
+            map[emoji] = cleaned
+        }
+        return map
+    }()
+
+    /// Returns every emoji whose Unicode name contains `query` (case-insensitive
+    /// substring match). Empty query returns an empty list — callers should
+    /// short-circuit and show the categorized view instead.
+    static func searchEmojis(_ query: String) -> [String] {
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !q.isEmpty else { return [] }
+        return allEmojis.filter { (nameByEmoji[$0] ?? "").contains(q) }
+    }
 }

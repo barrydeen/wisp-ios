@@ -1,11 +1,13 @@
 import SwiftUI
 
-/// Compact reaction picker shown when the user taps the heart on a post card.
+/// Compact reaction picker shown as a popover when the user taps the heart on a
+/// post card.
 ///
-/// Renders the user's frequency-sorted **quick-reactions** list as a 4-column grid
-/// of size-32 cells, followed by a trailing "+" tile that opens the full
-/// `EmojiLibrarySheet`. Long-press a cell to remove that emoji from the quick list.
-/// Tapping a cell invokes `onSelect(_:)` and dismisses (the parent owns dismissal).
+/// Renders the user's frequency-sorted **quick-reactions** list as a 6-column
+/// grid of size-32 cells, followed by a trailing "+" tile that opens the full
+/// `EmojiLibrarySheet`. Long-press a cell to remove that emoji from the quick
+/// list. Tapping a cell invokes `onSelect(_:)`; the `+` tile fires `onPlus()`.
+/// The parent owns dismissal in both cases.
 struct EmojiReactionPicker: View {
     @State private var emojiRepo = EmojiRepository.shared
     @ObservedObject private var emojiCache = EmojiImageCache.shared
@@ -35,7 +37,6 @@ struct EmojiReactionPicker: View {
         )
         .frame(width: CGFloat(columns) * cellSize + CGFloat(columns - 1) * 8 + 24)
         .onAppear {
-            // Prime the image cache for any custom emojis in the quick list.
             for key in entries {
                 if key.hasPrefix(":") && key.hasSuffix(":") {
                     let sc = String(key.dropFirst().dropLast())
