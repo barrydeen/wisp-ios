@@ -59,6 +59,42 @@ actor EventStore {
         }
     }
 
+    /// Returns cached kind:6/7/9735 engagement events whose tags include any of
+    /// `targetIds` as an `e` tag. Used to seed the engagement counts for a
+    /// thread or feed view from disk so the user sees their last-known state
+    /// instantly and the relay subscription only has to deliver deltas.
+    func loadEngagement(forTargetIds targetIds: Set<String>) -> [NostrEvent] {
+        guard let box = ensureBox(), !targetIds.isEmpty else { return [] }
+        // Tag JSON is opaque to ObjectBox queries — the cheapest pre-filter is
+        // a substring `contains` on any one target id, then per-event tag walk
+        // in Swift. For a thread of N replies that's ~N substring scans of the
+        // candidate set, which beats reading the entire engagement table.
+        var out: [NostrEvent] = []
+        var seenIds = Set<String>()
+        for target in targetIds {
+            do {
+                let query = try box.query {
+                    (EventEntity.kind == 6 || EventEntity.kind == 7 || EventEntity.kind == 9735)
+                    && EventEntity.tags.contains(target)
+                }.build()
+                let candidates = try query.find(offset: 0, limit: 5000)
+                for entity in candidates {
+                    guard let event = entity.toNostrEvent(), !seenIds.contains(event.id) else { continue }
+                    let matchesTarget = event.tags.contains { tag in
+                        tag.count >= 2 && tag[0] == "e" && targetIds.contains(tag[1])
+                    }
+                    if matchesTarget {
+                        seenIds.insert(event.id)
+                        out.append(event)
+                    }
+                }
+            } catch {
+                continue
+            }
+        }
+        return out
+    }
+
     /// Returns cached kind:1 events that are part of the thread anchored at `rootId`:
     /// the root itself plus any event whose tags contain `["e", rootId, ...]`.
     /// Falls back to scanning all kind:1 events client-side because tags are stored as JSON.

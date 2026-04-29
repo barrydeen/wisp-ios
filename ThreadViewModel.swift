@@ -31,6 +31,14 @@ final class ThreadViewModel {
     @ObservationIgnored private var engagedIds = Set<String>()
     @ObservationIgnored private var pendingEngagementIds = Set<String>()
     @ObservationIgnored private var engagementBatcher: Task<Void, Never>?
+    /// Event ids whose engagement contribution has already been applied
+    /// (replayed from cache or delivered live). Prevents double-counting
+    /// when a relay re-sends a kind-6/7/9735 we've already ingested.
+    @ObservationIgnored private var seenEngagementIds = Set<String>()
+    /// Latest createdAt across cache-replayed engagement events. Live
+    /// engagement queries scope `since:` to one second past this so the
+    /// relay subscription only delivers truly new events.
+    @ObservationIgnored private var engagementSinceFloor: Int = 0
     @ObservationIgnored private var hiddenSpamPubkeys: Set<String> = []
     @ObservationIgnored private var spamScoringInflight: Set<String> = []
 
@@ -320,6 +328,19 @@ final class ThreadViewModel {
             }
             if rootEvent != nil { isLoading = false }
         }
+
+        // Replay any cached engagement events (kind 6/7/9735) for the tree so
+        // the UI shows last-known counts immediately. The matching dedup sets
+        // get primed by `ingestEngagement`, so when the live subscription
+        // re-delivers these events they're skipped instead of double-counted.
+        let trackedIds = Set(events.keys).union([rootId])
+        let cachedEngagement = await eventStore.loadEngagement(forTargetIds: trackedIds)
+        if !cachedEngagement.isEmpty {
+            ingestEngagement(cachedEngagement)
+            // Track the latest createdAt so the live query can ask for events
+            // strictly newer than what we've already replayed.
+            engagementSinceFloor = cachedEngagement.map(\.createdAt).max() ?? engagementSinceFloor
+        }
     }
 
     // MARK: - Network fetch
@@ -501,9 +522,13 @@ final class ThreadViewModel {
     private func openEngagementSub(ids: [String], relays: [String]) async {
         guard !ids.isEmpty, !relays.isEmpty else { return }
         let rootIdLocal = rootId
+        // Only fetch events strictly newer than what cache replay already
+        // covered. `engagementSinceFloor` is the latest `createdAt` we've
+        // ingested locally; +1 keeps the boundary exclusive.
+        let since: Int? = engagementSinceFloor > 0 ? engagementSinceFloor + 1 : nil
         for chunk in ids.chunked(into: 50) {
             let subId = "thread-engagement-\(UUID().uuidString.prefix(6))"
-            let filter = NostrFilter(kinds: [1, 6, 7, 9735], eTags: chunk, limit: 500)
+            let filter = NostrFilter(kinds: [1, 6, 7, 9735], eTags: chunk, limit: 500, since: since)
             let sub = RelayPool.subscribe(relays: relays, filter: filter, id: subId)
             let consumer = Task { [weak self] in
                 for await (event, _) in sub.events {
@@ -523,6 +548,10 @@ final class ThreadViewModel {
 
     private func ingestEngagement(_ events: [NostrEvent]) {
         for event in events {
+            // Skip events we've already counted (cache replay + live delivery
+            // can otherwise double-count the same id). `seenEngagementIds`
+            // is shared across both pathways.
+            guard seenEngagementIds.insert(event.id).inserted else { continue }
             // Aggregate against every e-tag the engagement event references so the count attaches to
             // both the direct parent and (where applicable) the root.
             let targets = event.tags.compactMap { tag -> String? in
