@@ -26,7 +26,7 @@ struct NotificationRowView: View {
         .padding(.vertical, 10)
         .padding(.horizontal, 12)
         .background(rowBackground)
-        .task(id: group.id) { hydrateProfiles() }
+        .task(id: group.id) { await hydrateProfiles() }
     }
 
     // MARK: - Collapsed row
@@ -427,28 +427,69 @@ struct NotificationRowView: View {
             ?? (String(pubkey.prefix(8)) + "…")
     }
 
-    private func hydrateProfiles() {
-        var dict: [String: ProfileData] = [:]
-        for pk in primaryActors() {
-            if let p = profileRepo.get(pk) { dict[pk] = p }
-        }
-        // Also pull profiles referenced in the actor's event tags so RichContentView has them.
+    private func hydrateProfiles() async {
+        var needed = Set<String>(primaryActors())
+
+        // Walk the actor event's tags + content for any referenced pubkeys.
+        // The actor's reply / mention event contains `p` tags for everyone in
+        // the thread, and the body may inline `nostr:nprofile1...` URIs that
+        // aren't tagged. Both should resolve to a real handle in the rendered
+        // row, not a truncated pubkey fallback.
+        let actorEventId: String?
         switch group {
-        case .reply(_, _, let replyEventId, _, _, _):
-            if let e = repo.event(forId: replyEventId) {
-                for tag in e.tags where tag.first == "p" && tag.count >= 2 {
-                    if let p = profileRepo.get(tag[1]) { dict[tag[1]] = p }
-                }
-            }
-        case .mention(_, _, let eventId, _, _):
-            if let e = repo.event(forId: eventId) {
-                for tag in e.tags where tag.first == "p" && tag.count >= 2 {
-                    if let p = profileRepo.get(tag[1]) { dict[tag[1]] = p }
-                }
-            }
-        default: break
+        case .reply(_, _, let id, _, _, _): actorEventId = id
+        case .mention(_, _, let id, _, _): actorEventId = id
+        default: actorEventId = nil
         }
-        profiles = dict
+        if let id = actorEventId, let e = repo.event(forId: id) {
+            for tag in e.tags where tag.first == "p" && tag.count >= 2 {
+                needed.insert(tag[1])
+            }
+            for pk in extractPubkeysFromContent(e.content) {
+                needed.insert(pk)
+            }
+            // Also pull pubkeys referenced in the parent note this reply quotes —
+            // that's the surface the user reported renders as `@<8-hex>...`.
+            for tag in e.tags where tag.first == "e" && tag.count >= 2 {
+                if let parent = repo.event(forId: tag[1]) {
+                    for ptag in parent.tags where ptag.first == "p" && ptag.count >= 2 {
+                        needed.insert(ptag[1])
+                    }
+                    for pk in extractPubkeysFromContent(parent.content) {
+                        needed.insert(pk)
+                    }
+                }
+            }
+        }
+
+        // Hand the seed dict whatever's already cached so the first paint
+        // doesn't flash truncated keys for the ones we have.
+        let pubkeys = Array(needed)
+        profiles = profileRepo.getAll(pubkeys)
+
+        // Lazy-fetch any missing ones; reassigning `profiles` triggers a re-render.
+        let resolved = await profileRepo.ensure(pubkeys)
+        profiles = resolved
+    }
+
+    /// Pull `nostr:npub1.../nprofile1...` and bare bech32 pubkey references out
+    /// of an event's body. Mirrors what `ContentParser` recognizes.
+    private func extractPubkeysFromContent(_ content: String) -> [String] {
+        let pattern = #"nostr:(?:npub1|nprofile1)[a-z0-9]+|(?<!\w)(?:npub1|nprofile1)[a-z0-9]{50,}(?!\w)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return [] }
+        let ns = content as NSString
+        let range = NSRange(location: 0, length: ns.length)
+        var seen = Set<String>()
+        var out: [String] = []
+        regex.enumerateMatches(in: content, range: range) { m, _, _ in
+            guard let m else { return }
+            let token = ns.substring(with: m.range)
+            let uri = token.lowercased().hasPrefix("nostr:") ? token : "nostr:\(token)"
+            if case .profileRef(let pk, _)? = Nip19.decodeNostrUri(uri), seen.insert(pk).inserted {
+                out.append(pk)
+            }
+        }
+        return out
     }
 }
 

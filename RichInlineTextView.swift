@@ -100,7 +100,11 @@ struct RichInlineTextView: UIViewRepresentable {
 
             case .nostrProfile(let pubkey, _):
                 let resolvedProfile = profiles[pubkey] ?? ProfileRepository.shared.get(pubkey)
-                let name = resolvedProfile?.displayString ?? (String(pubkey.prefix(8)) + "\u{2026}")
+                // Unresolved mentions render as `@…` rather than `@<8-hex>…`.
+                // The hex prefix was hard to read and visibly mutated to a real
+                // handle a second later when the lazy profile fetch landed; an
+                // ellipsis is calmer and reads as a clear "loading" state.
+                let name = resolvedProfile?.displayString ?? "\u{2026}"
                 var attrs = baseAttrs
                 attrs[.foregroundColor] = primaryColor
                 if let url = URL(string: "wisp-profile://\(pubkey)") {
