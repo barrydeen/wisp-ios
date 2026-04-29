@@ -167,7 +167,11 @@ final class ThreadViewModel {
     /// Sends a kind:1 reply to `parentId` (defaults to the current root). Publishes to the user's
     /// own write relays plus the inbox relays of the root author, parent author, and every pubkey
     /// already participating in the chain.
-    /// Begin a 10-second undo countdown before actually publishing the reply.
+    /// Begin an undo countdown before actually publishing the reply (length
+    /// from `AppSettings.postUndoTimerSeconds`). Replies skip the countdown
+    /// entirely when `postUndoTimerEnabled` is off OR when the user opted to
+    /// keep the timer for top-level posts only (`postUndoTimerForReplies`
+    /// false — the default).
     /// While the countdown is running, callers can `publishReplyNow()` to skip
     /// the timer or `cancelReply()` to drop the pending send.
     func publishReply(content: String, parentId: String? = nil) {
@@ -180,15 +184,36 @@ final class ThreadViewModel {
         guard replyCountdown == nil, !isSending else { return }
 
         pendingReply = (trimmed, parentId)
+
+        let settings = AppSettings.shared
+        let useTimer = settings.postUndoTimerEnabled && settings.postUndoTimerForReplies
+        guard useTimer, settings.postUndoTimerSeconds > 0 else {
+            // Flip `isSending` synchronously so the reply input shows the
+            // spinner the moment the user taps Send. The pipeline sets the
+            // same flag again, harmlessly, and resets via `defer`.
+            isSending = true
+            Task { @MainActor [weak self] in await self?.runReplyPublishPipeline() }
+            return
+        }
+        let totalSeconds = settings.postUndoTimerSeconds
+        // Surface the countdown UI synchronously. Without this the inline
+        // reply button stays in its idle state until the countdown Task
+        // first runs, which feels like a no-op on the user's tap.
+        replyCountdown = totalSeconds
         replyCountdownTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            for n in stride(from: 10, through: 1, by: -1) {
-                self.replyCountdown = n
+            for n in stride(from: totalSeconds - 1, through: 1, by: -1) {
                 do {
                     try await Task.sleep(for: .seconds(1))
                 } catch {
                     return
                 }
+                self.replyCountdown = n
+            }
+            do {
+                try await Task.sleep(for: .seconds(1))
+            } catch {
+                return
             }
             self.replyCountdown = nil
             await self.runReplyPublishPipeline()

@@ -89,12 +89,11 @@ final class ComposeViewModel {
         self.keypair = keypair
         self.mode = mode
         switch mode {
-        case .quote(let event):
-            // Auto-append the quote URI on open.
-            content = Nip18.appendNoteUri(content: "", eventIdHex: event.id, relayHints: [], authorHex: event.pubkey)
         case .new:
             loadLocalAutosave()
         default:
+            // .quote: the quote URI is spliced at publish time so it stays out of the editor.
+            // .reply: parent context lives in tags, not body content.
             break
         }
     }
@@ -533,18 +532,44 @@ final class ComposeViewModel {
         }
         lastError = nil
         if scheduleEnabled {
+            // Flip `isPublishing` synchronously so the button shows the
+            // spinner the moment the user taps. The pipeline's own
+            // `isPublishing = true` becomes a no-op; the `defer` still
+            // resets it on completion.
+            isPublishing = true
             Task { await runPublishPipeline() }
             return
         }
+        // Resolve the user's undo-timer preference. Replies opt out by
+        // default — the default user wants confirmation on top-level posts
+        // but expects replies to send immediately like a chat.
+        let settings = AppSettings.shared
+        let isReply: Bool = { if case .reply = mode { return true } else { return false } }()
+        let useTimer = settings.postUndoTimerEnabled && (!isReply || settings.postUndoTimerForReplies)
+        guard useTimer, settings.postUndoTimerSeconds > 0 else {
+            isPublishing = true
+            Task { await runPublishPipeline() }
+            return
+        }
+        let totalSeconds = settings.postUndoTimerSeconds
+        // Show the countdown UI synchronously — without this the button
+        // stays on "Publish" until the Task scheduled below first runs,
+        // which on a busy main actor reads as a 1–2 s no-op.
+        countdownSeconds = totalSeconds
         countdownTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            for n in stride(from: 10, through: 1, by: -1) {
-                self.countdownSeconds = n
+            for n in stride(from: totalSeconds - 1, through: 1, by: -1) {
                 do {
                     try await Task.sleep(for: .seconds(1))
                 } catch {
                     return
                 }
+                self.countdownSeconds = n
+            }
+            do {
+                try await Task.sleep(for: .seconds(1))
+            } catch {
+                return
             }
             self.countdownSeconds = nil
             await self.runPublishPipeline()
@@ -610,6 +635,14 @@ final class ComposeViewModel {
                 )
             }()
             mode = .reply(parent: parentStub, root: rootStub)
+        } else if let quoteTag = draft.tags.first(where: { $0.count >= 2 && $0[0] == "q" }) {
+            let quotedId = quoteTag[1]
+            let quotedAuthor = draft.tags.first(where: { $0.count >= 2 && $0[0] == "p" })?[1] ?? ""
+            let stub = NostrEvent(
+                id: quotedId, pubkey: quotedAuthor, kind: 1,
+                createdAt: 0, tags: [], content: "", sig: ""
+            )
+            mode = .quote(stub)
         }
     }
 
@@ -848,7 +881,7 @@ final class ComposeViewModel {
         case Nip68.kindPicture, Nip71.kindVideoHorizontal, Nip71.kindVideoVertical:
             return materialized
         default:
-            return appendAttachmentUrls(to: materialized)
+            return appendQuoteUri(to: appendAttachmentUrls(to: materialized))
         }
     }
 
@@ -861,6 +894,19 @@ final class ComposeViewModel {
             out += url
         }
         return out
+    }
+
+    /// In `.quote` mode the embedded `nostr:nevent…` reference is hidden from the
+    /// editor and spliced onto the end of the body at publish time, so the user
+    /// types their commentary in an empty composer instead of around a 60-char URI.
+    private func appendQuoteUri(to body: String) -> String {
+        guard case .quote(let event) = mode else { return body }
+        return Nip18.appendNoteUri(
+            content: body,
+            eventIdHex: event.id,
+            relayHints: [],
+            authorHex: event.pubkey
+        )
     }
 
     /// Content as it would appear in the published note, including any spliced

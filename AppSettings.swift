@@ -31,7 +31,14 @@ final class AppSettings {
         static let fiatModeEnabled = "wisp_settings_fiat_mode_enabled"
         static let fiatCurrency = "wisp_settings_fiat_currency"
         static let notificationSoundsEnabled = "wisp_settings_notification_sounds_enabled"
+        static let postUndoTimerEnabled = "wisp_settings_post_undo_timer_enabled"
+        static let postUndoTimerSeconds = "wisp_settings_post_undo_timer_seconds"
+        static let postUndoTimerForReplies = "wisp_settings_post_undo_timer_for_replies"
     }
+
+    /// Allowed durations for the post-undo countdown. Picker shows these as
+    /// the granularity for the slider/segmented control in InterfaceSettings.
+    static let postUndoTimerOptions: [Int] = [5, 10, 15, 20, 30]
 
     private static let defaultAccentARGB: Int = 0xFFFF9800
 
@@ -71,6 +78,20 @@ final class AppSettings {
     var notificationSoundsEnabled: Bool {
         didSet { UserDefaults.standard.set(notificationSoundsEnabled, forKey: Keys.notificationSoundsEnabled) }
     }
+    /// When true, publishing a top-level post (and optionally replies — see
+    /// `postUndoTimerForReplies`) waits `postUndoTimerSeconds` before sending,
+    /// giving the user a chance to cancel.
+    var postUndoTimerEnabled: Bool {
+        didSet { UserDefaults.standard.set(postUndoTimerEnabled, forKey: Keys.postUndoTimerEnabled) }
+    }
+    var postUndoTimerSeconds: Int {
+        didSet { UserDefaults.standard.set(postUndoTimerSeconds, forKey: Keys.postUndoTimerSeconds) }
+    }
+    /// When false, replies skip the undo countdown and publish immediately —
+    /// the default. Top-level posts still respect `postUndoTimerEnabled`.
+    var postUndoTimerForReplies: Bool {
+        didSet { UserDefaults.standard.set(postUndoTimerForReplies, forKey: Keys.postUndoTimerForReplies) }
+    }
 
     private init() {
         let defaults = UserDefaults.standard
@@ -88,6 +109,10 @@ final class AppSettings {
         self.fiatModeEnabled = defaults.object(forKey: Keys.fiatModeEnabled) as? Bool ?? false
         self.fiatCurrency = defaults.string(forKey: Keys.fiatCurrency) ?? "USD"
         self.notificationSoundsEnabled = defaults.object(forKey: Keys.notificationSoundsEnabled) as? Bool ?? true
+        self.postUndoTimerEnabled = defaults.object(forKey: Keys.postUndoTimerEnabled) as? Bool ?? true
+        let storedSeconds = defaults.object(forKey: Keys.postUndoTimerSeconds) as? Int ?? 10
+        self.postUndoTimerSeconds = Self.postUndoTimerOptions.contains(storedSeconds) ? storedSeconds : 10
+        self.postUndoTimerForReplies = defaults.object(forKey: Keys.postUndoTimerForReplies) as? Bool ?? false
     }
 
     var preferredColorScheme: ColorScheme? {

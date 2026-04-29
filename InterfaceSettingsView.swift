@@ -123,6 +123,36 @@ struct InterfaceSettingsView: View {
                     Text("Adds a [\"client\", \"Wisp iOS\"] tag so others can see you're posting from Wisp.")
                         .font(.system(size: 12))
                         .foregroundStyle(theme.palette.onSurfaceVariant)
+                        .padding(.bottom, 4)
+
+                    Toggle("Undo countdown", isOn: $settings.postUndoTimerEnabled)
+                        .toggleStyle(SwitchToggleStyle(tint: theme.primary))
+                    Text("Holds new posts for a few seconds before publishing so you can cancel.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(theme.palette.onSurfaceVariant)
+
+                    if settings.postUndoTimerEnabled {
+                        HStack {
+                            Text("Duration")
+                                .foregroundStyle(theme.palette.onSurface)
+                            Spacer()
+                            Picker("", selection: $settings.postUndoTimerSeconds) {
+                                ForEach(AppSettings.postUndoTimerOptions, id: \.self) { secs in
+                                    Text("\(secs)s").tag(secs)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                            .frame(width: 240)
+                        }
+                        .padding(.top, 4)
+
+                        Toggle("Include replies", isOn: $settings.postUndoTimerForReplies)
+                            .toggleStyle(SwitchToggleStyle(tint: theme.primary))
+                            .padding(.top, 4)
+                        Text("Off by default — replies send immediately. Turn on to apply the same countdown to replies.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(theme.palette.onSurfaceVariant)
+                    }
                 }
 
                 section(title: "Currency") {
