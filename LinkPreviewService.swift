@@ -141,7 +141,7 @@ actor LinkPreviewService {
         let result = OpenGraphData(
             title: title.map(unescapeHtml),
             description: props["description"].map(unescapeHtml),
-            image: props["image"],
+            image: props["image"].map(unescapeHtml),
             siteName: props["site_name"].map(unescapeHtml)
         )
         if result.title != nil || result.image != nil {

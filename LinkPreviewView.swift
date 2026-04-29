@@ -82,6 +82,8 @@ struct LinkPreviewView: View {
                                 .frame(maxWidth: .infinity)
                                 .frame(maxHeight: 180)
                                 .clipped()
+                        case .failure:
+                            EmptyView()
                         default:
                             Color.wispSurfaceVariant.opacity(0.4)
                                 .frame(height: 120)
