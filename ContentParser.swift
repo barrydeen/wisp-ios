@@ -169,7 +169,12 @@ enum ContentParser {
                 let next = segments[i + 1]
                 let isBlock: Bool
                 switch next {
-                case .text, .inlineLink, .customEmoji, .hashtag: isBlock = false
+                // .nostrProfile (npub @mention) is rendered inline by
+                // RichInlineTextView, not as a card — leave preceding blank
+                // lines alone so a bio that puts a mention on its own line,
+                // or after a paragraph break, keeps the line break the user
+                // typed.
+                case .text, .inlineLink, .customEmoji, .hashtag, .nostrProfile: isBlock = false
                 default: isBlock = true
                 }
                 if isBlock, case .text(let text) = segments[i] {
