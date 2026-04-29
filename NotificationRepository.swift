@@ -427,6 +427,74 @@ final class NotificationRepository {
         summary = computeSummary24h()
     }
 
+    /// Drop every trace of `pubkey` from the in-memory notification state.
+    /// Called when the user blocks someone — without this, single-actor
+    /// notifications they triggered (`user quoted`, `user replied`) plus their
+    /// contributions to multi-actor reaction / zap / repost groups linger in
+    /// `groups` and `eventCache` until the next cold-launch.
+    func purgeAuthor(_ pubkey: String) {
+        eventCache = eventCache.filter { $0.value.pubkey != pubkey }
+        flatItems.removeAll { $0.actorPubkey == pubkey }
+        for (groupId, replies) in inlineReplies {
+            let filtered = replies.filter { $0.pubkey != pubkey }
+            if filtered.isEmpty {
+                inlineReplies.removeValue(forKey: groupId)
+            } else {
+                inlineReplies[groupId] = filtered
+            }
+        }
+
+        // Walk byKey: drop single-actor groups whose sender is the blocked
+        // pubkey; rewrite multi-actor reaction groups to remove their entries.
+        var rewritten: [String: NotificationGroup] = [:]
+        for (key, group) in byKey {
+            switch group {
+            case .reply(_, let sender, _, _, _, _),
+                 .quote(_, let sender, _, _, _, _),
+                 .mention(_, let sender, _, _, _):
+                if sender == pubkey { continue }
+                rewritten[key] = group
+            case .reactions(let id, let refEventId, var emojiByActor, var emojiUrlByActor, var zaps, var reposters, let latestTs):
+                emojiByActor.removeValue(forKey: pubkey)
+                emojiUrlByActor.removeValue(forKey: pubkey)
+                zaps.removeAll { $0.pubkey == pubkey }
+                reposters.removeAll { $0 == pubkey }
+                if emojiByActor.isEmpty && zaps.isEmpty && reposters.isEmpty { continue }
+                rewritten[key] = .reactions(
+                    id: id,
+                    refEventId: refEventId,
+                    emojiByActor: emojiByActor,
+                    emojiUrlByActor: emojiUrlByActor,
+                    zaps: zaps,
+                    reposters: reposters,
+                    latestTs: latestTs
+                )
+            case .pollVotes(let id, let refEventId, var votersByOptionId, let latestTs):
+                for (optionId, voters) in votersByOptionId {
+                    let filtered = voters.filter { $0 != pubkey }
+                    if filtered.isEmpty {
+                        votersByOptionId.removeValue(forKey: optionId)
+                    } else {
+                        votersByOptionId[optionId] = filtered
+                    }
+                }
+                if votersByOptionId.isEmpty { continue }
+                rewritten[key] = .pollVotes(
+                    id: id,
+                    refEventId: refEventId,
+                    votersByOptionId: votersByOptionId,
+                    latestTs: latestTs
+                )
+            case .dm:
+                // DMs preserve their own block UX (the user can leave the conversation);
+                // don't auto-drop placeholder rows here.
+                rewritten[key] = group
+            }
+        }
+        byKey = rewritten
+        rebuild()
+    }
+
     // MARK: - Summary (last 24h)
 
     private func computeSummary24h() -> NotificationSummary {

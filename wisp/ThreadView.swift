@@ -154,17 +154,36 @@ struct ThreadView: View {
     private func replyRow(_ row: ThreadRow) -> some View {
         HStack(alignment: .top, spacing: 0) {
             depthGuides(row.depth)
-            PostCardView(
-                event: row.event,
-                profile: viewModel.profiles[row.event.pubkey],
-                profiles: viewModel.profiles,
-                engagement: viewModel.engagement[row.event.id],
-                expandOnTap: true,
-                onProfileTap: { _ in },
-                onNoteTap: { _ in },
-                onHashtagTap: { _ in }
-            )
+            if row.isBlocked {
+                blockedPlaceholder
+            } else {
+                PostCardView(
+                    event: row.event,
+                    profile: viewModel.profiles[row.event.pubkey],
+                    profiles: viewModel.profiles,
+                    engagement: viewModel.engagement[row.event.id],
+                    expandOnTap: true,
+                    onProfileTap: { _ in },
+                    onNoteTap: { _ in },
+                    onHashtagTap: { _ in }
+                )
+            }
         }
+    }
+
+    private var blockedPlaceholder: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "nosign")
+                .font(.system(size: 13))
+                .foregroundStyle(.tertiary)
+            Text("Post from blocked user")
+                .font(.subheadline)
+                .foregroundStyle(.tertiary)
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func depthGuides(_ depth: Int) -> some View {

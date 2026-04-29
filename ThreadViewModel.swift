@@ -41,11 +41,13 @@ final class ThreadViewModel {
     @ObservationIgnored private var engagementSinceFloor: Int = 0
     @ObservationIgnored private var hiddenSpamPubkeys: Set<String> = []
     @ObservationIgnored private var spamScoringInflight: Set<String> = []
+    @ObservationIgnored private var blockedEventIds: Set<String> = []
 
     @ObservationIgnored private let eventStore = EventStore.shared
     @ObservationIgnored private let profileRepo = ProfileRepository.shared
     @ObservationIgnored private let relayListRepo = RelayListRepository.shared
     @ObservationIgnored private var publishObserver: NSObjectProtocol?
+    @ObservationIgnored private var blockObserver: NSObjectProtocol?
 
     private static let indexerRelays = [
         "wss://indexer.nostrarchives.com",
@@ -79,10 +81,34 @@ final class ThreadViewModel {
                 self?.handleExternalPublish(event)
             }
         }
+        // Drop any cached/loaded reply from a freshly-blocked author so the
+        // thread updates without waiting for a manual refresh.
+        blockObserver = NotificationCenter.default.addObserver(
+            forName: .userBlocked,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let blocked = note.object as? String else { return }
+            Task { @MainActor [weak self] in
+                self?.purgeAuthor(blocked)
+            }
+        }
     }
 
     deinit {
         if let publishObserver { NotificationCenter.default.removeObserver(publishObserver) }
+        if let blockObserver { NotificationCenter.default.removeObserver(blockObserver) }
+    }
+
+    @MainActor
+    private func purgeAuthor(_ pubkey: String) {
+        let dropped = events.values.filter { $0.pubkey == pubkey }.map(\.id)
+        guard !dropped.isEmpty else { return }
+        for id in dropped {
+            events.removeValue(forKey: id)
+            blockedEventIds.remove(id)
+        }
+        rebuildTree()
     }
 
     /// Ingest a kind-1 the user just published from outside this thread (typically the
@@ -331,7 +357,21 @@ final class ThreadViewModel {
 
         // Now load the full thread cache anchored at the resolved root.
         let cached = await eventStore.loadThreadCache(rootId: rootId)
+        let blockedPubkeys = SafetyFilter.shared.snapshot.blockedPubkeys
         for event in cached where event.kind == 1 {
+            if event.id != rootId {
+                // Blocked-author events are kept as placeholders so the thread
+                // depth and the user's own replies to them remain coherent.
+                // Other safety drops (WoT, word filter) fully exclude the event.
+                if blockedPubkeys.contains(event.pubkey) {
+                    events[event.id] = event
+                    blockedEventIds.insert(event.id)
+                    continue
+                }
+                if SafetyFilter.shared.shouldDrop(event: event, context: .thread(rootId: rootId)) {
+                    continue
+                }
+            }
             events[event.id] = event
             if event.id == rootId { rootEvent = event }
         }
@@ -439,6 +479,12 @@ final class ThreadViewModel {
                 guard let self else { break }
                 guard event.kind == 1 else { continue }
                 guard event.tags.contains(where: { $0.count >= 2 && $0[0] == "e" && $0[1] == rootId }) else { continue }
+                let snap = SafetyFilter.shared.snapshot
+                if snap.blockedPubkeys.contains(event.pubkey) {
+                    // Keep as a placeholder; do not score for spam.
+                    self.ingestReply(event, blocked: true)
+                    continue
+                }
                 if SafetyFilter.shared.shouldDrop(event: event, context: .thread(rootId: rootId)) { continue }
                 self.ingestReply(event)
                 self.maybeScoreReplyForSpam(event)
@@ -456,9 +502,10 @@ final class ThreadViewModel {
         streamTasks.append(watchdog)
     }
 
-    private func ingestReply(_ event: NostrEvent) {
+    private func ingestReply(_ event: NostrEvent, blocked: Bool = false) {
         guard events[event.id] == nil else { return }
         events[event.id] = event
+        if blocked { blockedEventIds.insert(event.id) }
         Task { await eventStore.persist([event]) }
 
         // Hydrate every referenced author (note author + repost inner + npub mentions) from
@@ -643,7 +690,9 @@ final class ThreadViewModel {
             var visible: [ThreadRow] = []
             var hidden: [ThreadRow] = []
             for row in rows {
-                if hiddenSpamPubkeys.contains(row.event.pubkey) {
+                // Blocked placeholder rows are never spam-hidden — they already
+                // have no visible content, so burying them again adds no value.
+                if !row.isBlocked, hiddenSpamPubkeys.contains(row.event.pubkey) {
                     hidden.append(row)
                 } else {
                     visible.append(row)
@@ -701,7 +750,7 @@ final class ThreadViewModel {
         guard let children = parentToChildren[parentId] else { return }
         for child in children {
             if !visited.insert(child.id).inserted { continue }
-            out.append(ThreadRow(event: child, depth: depth))
+            out.append(ThreadRow(event: child, depth: depth, isBlocked: blockedEventIds.contains(child.id)))
             dfs(parentId: child.id, depth: depth + 1, parentToChildren: parentToChildren, visited: &visited, into: &out)
         }
     }
@@ -710,6 +759,7 @@ final class ThreadViewModel {
 struct ThreadRow: Identifiable {
     let event: NostrEvent
     let depth: Int
+    var isBlocked: Bool = false
     var id: String { event.id }
 }
 

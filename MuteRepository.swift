@@ -35,9 +35,27 @@ final class MuteRepository {
         activePrivkey32 = privkey32
         let d = UserDefaults.standard
         mutedWords = Set(d.stringArray(forKey: Self.wordsKey(pk)) ?? [])
-        blockedPubkeys = Set(d.stringArray(forKey: Self.pubkeysKey(pk)) ?? [])
+        // Lowercase on load so historical entries written before
+        // `blockUser` normalized the input (and any uppercase hex pubkeys
+        // received via `merge(event:)`) still match the lowercase pubkeys
+        // that come off the wire from relays.
+        blockedPubkeys = Set((d.stringArray(forKey: Self.pubkeysKey(pk)) ?? []).map { $0.lowercased() })
         mutedThreads = Set(d.stringArray(forKey: Self.threadsKey(pk)) ?? [])
         lastUpdatedAt = d.integer(forKey: Self.updatedAtKey(pk))
+
+        // Install a synchronous SafetyFilter snapshot from the local mute
+        // state so any view model that opens before `MainView`'s async
+        // `rebuildSnapshot()` finishes (NotificationsViewModel races MainView's
+        // .task on cold launch) still sees the blocked-pubkey set. WoT data
+        // arrives via the async rebuild that runs right after.
+        SafetyFilter.shared.install(SafetyFilterSnapshot(
+            mutedWords: mutedWords,
+            blockedPubkeys: blockedPubkeys,
+            mutedThreads: mutedThreads,
+            wotEnabled: false,
+            qualifiedNetwork: [],
+            userPubkey: pk
+        ))
     }
 
     func unbind() {
@@ -75,16 +93,26 @@ final class MuteRepository {
     }
 
     func blockUser(_ pubkey: String) {
-        guard !pubkey.isEmpty, !blockedPubkeys.contains(pubkey) else { return }
-        blockedPubkeys.insert(pubkey)
+        let normalized = pubkey.lowercased()
+        guard !normalized.isEmpty, !blockedPubkeys.contains(normalized) else { return }
+        blockedPubkeys.insert(normalized)
         commitChange()
-        // Eagerly purge their cached events so feed reseeds and notification hydration can't
-        // resurface them.
-        Task.detached { await EventStore.shared.removeByAuthor(pubkey) }
+        // Drop their entries from the in-memory notification state immediately
+        // — without this, single-actor groups (`user replied`) and multi-actor
+        // reaction groups linger in the UI until the next cold launch even
+        // though SafetyFilter would now drop them.
+        NotificationRepository.shared.purgeAuthor(normalized)
+        // Broadcast so any open feed / thread view models can drop their
+        // in-memory events for this author too.
+        NotificationCenter.default.post(name: .userBlocked, object: normalized)
+        // Eagerly purge their cached events so feed reseeds and notification
+        // hydration can't resurface them.
+        Task.detached { await EventStore.shared.removeByAuthor(normalized) }
     }
 
     func unblockUser(_ pubkey: String) {
-        guard blockedPubkeys.remove(pubkey) != nil else { return }
+        let normalized = pubkey.lowercased()
+        guard blockedPubkeys.remove(normalized) != nil else { return }
         commitChange()
     }
 
@@ -150,8 +178,18 @@ final class MuteRepository {
         let pubkey = pk
 
         Task { [weak self] in
+            // Union write relays + fallback relays so the mute list still
+            // resolves when the user's NIP-65 write set is exotic (paid /
+            // filter / private relays that don't carry the kind-10000) and
+            // their actual mute event lives on a public big-relay set
+            // (damus / primal / nos.lol). Without this union, a user whose
+            // 12 write relays don't include any of those big-relay hosts
+            // would never sync their existing mute list.
             let writeRelays = await RelayListRepository.shared.getWriteRelays(pubkey)
-            let relays = writeRelays.isEmpty ? Self.fallbackRelays : writeRelays
+            var seen = Set<String>()
+            var relays: [String] = []
+            for r in writeRelays where seen.insert(r).inserted { relays.append(r) }
+            for r in Self.fallbackRelays where seen.insert(r).inserted { relays.append(r) }
             let filter = NostrFilter(kinds: [Nip51Mute.kindMuteList], authors: [pubkey], limit: 5)
             // Quick hydration first.
             let initial = await RelayPool.query(relays: relays, filter: filter, timeout: 6)
@@ -181,10 +219,39 @@ final class MuteRepository {
         let parsed = (try? Nip51Mute.decryptAndParse(event: event, privkey32: privkey32))
             ?? Nip51Mute.parsePublicTags(event: event)
 
+        let previousBlocked = blockedPubkeys
         mutedWords = parsed.words
-        blockedPubkeys = parsed.pubkeys
+        // Lowercase here too — NIP-51 mute entries from other clients can be
+        // mixed-case hex; they'd otherwise miss the lowercase pubkey from a
+        // relay event in `SafetyFilter.shouldDrop`.
+        blockedPubkeys = Set(parsed.pubkeys.map { $0.lowercased() })
         mutedThreads = parsed.threads
         lastUpdatedAt = event.createdAt
+
+        // Newly-arrived block entries that we didn't have before need their
+        // in-memory traces purged from open view state — without this, a fresh
+        // mute list arriving from relay sync after the first paint leaves
+        // already-rendered cards / notification rows from those authors
+        // visible until the next cold launch.
+        let newlyBlocked = blockedPubkeys.subtracting(previousBlocked)
+        if !newlyBlocked.isEmpty {
+            for pk in newlyBlocked {
+                NotificationRepository.shared.purgeAuthor(pk)
+                NotificationCenter.default.post(name: .userBlocked, object: pk)
+                Task.detached { await EventStore.shared.removeByAuthor(pk) }
+            }
+            // Also rebuild SafetyFilter snapshot synchronously so subsequent
+            // event ingestions see the new block set without waiting for
+            // commitChange's async rebuild.
+            SafetyFilter.shared.install(SafetyFilterSnapshot(
+                mutedWords: mutedWords,
+                blockedPubkeys: blockedPubkeys,
+                mutedThreads: mutedThreads,
+                wotEnabled: SafetyFilter.shared.snapshot.wotEnabled,
+                qualifiedNetwork: SafetyFilter.shared.snapshot.qualifiedNetwork,
+                userPubkey: SafetyFilter.shared.snapshot.userPubkey
+            ))
+        }
 
         guard let pk = activePubkey else { return }
         let d = UserDefaults.standard
@@ -223,4 +290,12 @@ final class MuteRepository {
             Task { [priv] in await self.republish(privkey32: priv) }
         }
     }
+}
+
+extension Notification.Name {
+    /// Posted when the user blocks someone via `MuteRepository.blockUser`.
+    /// `object` is the normalized (lowercased) blocked pubkey. Open feed /
+    /// thread view models listen and drop matching in-memory events so the
+    /// UI updates without waiting for a cold-launch reseed.
+    static let userBlocked = Notification.Name("WispUserBlocked")
 }

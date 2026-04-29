@@ -177,24 +177,57 @@ struct ProfileView: View {
 
     @ViewBuilder
     private var tabBody: some View {
-        switch selectedTab {
-        case .notes:
-            NotesTabView(viewModel: viewModel)
-        case .replies:
-            RepliesTabView(viewModel: viewModel)
-        case .gallery:
-            GalleryTabView(viewModel: viewModel)
-        case .media:
-            MediaTabView(viewModel: viewModel)
-        case .following:
-            FollowingTabView(viewModel: viewModel)
-        case .followers:
-            FollowersTabView(viewModel: viewModel)
-        case .groups:
-            GroupsTabView(viewModel: viewModel)
-        case .relays:
-            RelaysTabView(viewModel: viewModel)
+        if !isMe && muteRepo.isBlocked(pubkey) {
+            blockedBanner
+        } else {
+            switch selectedTab {
+            case .notes:
+                NotesTabView(viewModel: viewModel)
+            case .replies:
+                RepliesTabView(viewModel: viewModel)
+            case .gallery:
+                GalleryTabView(viewModel: viewModel)
+            case .media:
+                MediaTabView(viewModel: viewModel)
+            case .following:
+                FollowingTabView(viewModel: viewModel)
+            case .followers:
+                FollowersTabView(viewModel: viewModel)
+            case .groups:
+                GroupsTabView(viewModel: viewModel)
+            case .relays:
+                RelaysTabView(viewModel: viewModel)
+            }
         }
+    }
+
+    private var blockedBanner: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "nosign")
+                .font(.system(size: 36))
+                .foregroundStyle(.tertiary)
+            Text("You've blocked this user")
+                .font(.headline)
+                .foregroundStyle(.secondary)
+            Text("Their posts are hidden. Unblock to see their content.")
+                .font(.subheadline)
+                .foregroundStyle(.tertiary)
+                .multilineTextAlignment(.center)
+            Button {
+                muteRepo.unblockUser(pubkey)
+            } label: {
+                Text("Unblock")
+                    .font(.subheadline.weight(.semibold))
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 10)
+                    .background(Color.wispSurfaceVariant, in: Capsule())
+                    .foregroundStyle(.primary)
+            }
+            .buttonStyle(.plain)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 48)
+        .padding(.horizontal, 24)
     }
 
     private func shortKey(_ pk: String) -> String {
@@ -211,6 +244,11 @@ private struct ProfileHeaderView: View {
     var onProfileTap: ((String) -> Void)? = nil
     var onNoteTap: ((String) -> Void)? = nil
     var onHashtagTap: ((String) -> Void)? = nil
+
+    @State private var muteRepo = MuteRepository.shared
+    @State private var followBusy = false
+
+    private var isMe: Bool { viewModel.pubkey == viewModel.activeUserPubkey }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -233,17 +271,17 @@ private struct ProfileHeaderView: View {
                             .foregroundStyle(.primary)
                     }
                     .buttonStyle(.plain)
-                    // Match the avatar's `offset(y: -28)` so the pill's bottom
-                    // edge sits on the same shelf as the avatar's bottom edge.
                     .offset(y: -28)
-                } else if viewModel.followsYou {
-                    Text("Follows you")
-                        .font(.caption.weight(.medium))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
-                        .background(Color.wispSurfaceVariant, in: Capsule())
-                        .foregroundStyle(.secondary)
-                        .offset(y: -2)
+                } else {
+                    VStack(alignment: .trailing, spacing: 4) {
+                        actionButtons
+                        if viewModel.followsYou {
+                            Text("Follows you")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .offset(y: -28)
                 }
             }
             .padding(.horizontal, 16)
@@ -360,6 +398,95 @@ private struct ProfileHeaderView: View {
         case 1_000_000...: String(format: "%.1fM", Double(n) / 1_000_000)
         case 1_000...: String(format: "%.1fk", Double(n) / 1_000)
         default: "\(n)"
+        }
+    }
+
+    // MARK: - Action buttons (other-user profile)
+
+    /// Follow / Mute icon row that sits to the right of the avatar on a
+    /// non-self profile. Mirrors the affordances in
+    /// `/Users/daniel/GitHub/resolvr/deadcat-web` —
+    /// circular icon-only buttons with a tinted active state. No text labels;
+    /// the icons flip and recolor to communicate the toggled state.
+    private var actionButtons: some View {
+        let blocked = muteRepo.isBlocked(viewModel.pubkey)
+        let following = viewModel.youFollow
+        return HStack(spacing: 8) {
+            iconButton(
+                systemName: following ? "person.fill.checkmark" : "person.badge.plus",
+                active: following,
+                activeTint: Color.wispPrimary,
+                disabled: followBusy,
+                accessibilityLabel: following ? "Unfollow" : "Follow",
+                action: { Task { await toggleFollow() } }
+            )
+            iconButton(
+                systemName: blocked ? "speaker.slash.fill" : "speaker.slash",
+                active: blocked,
+                activeTint: .red,
+                disabled: false,
+                accessibilityLabel: blocked ? "Unblock" : "Block",
+                action: { toggleBlock(currentlyBlocked: blocked) }
+            )
+        }
+    }
+
+    private func iconButton(
+        systemName: String,
+        active: Bool,
+        activeTint: Color,
+        disabled: Bool,
+        accessibilityLabel: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(active ? activeTint : Color.primary)
+                .frame(width: 36, height: 36)
+                .background(
+                    active ? activeTint.opacity(0.15) : Color.wispSurfaceVariant,
+                    in: Circle()
+                )
+                .overlay(
+                    Circle().stroke(
+                        active ? activeTint.opacity(0.4) : Color.primary.opacity(0.06),
+                        lineWidth: 0.5
+                    )
+                )
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .accessibilityLabel(accessibilityLabel)
+    }
+
+    private func toggleFollow() async {
+        guard !followBusy, let kp = NostrKey.load() else { return }
+        followBusy = true
+        defer { followBusy = false }
+        let target = viewModel.pubkey
+        let wasFollowing = viewModel.youFollow
+        // Optimistic flip — `FollowSender` writes UserDefaults eagerly so the
+        // feed-side read agrees, but `youFollow` is the row's binding for the
+        // pill state and needs to update right away too.
+        viewModel.youFollow.toggle()
+        do {
+            if wasFollowing {
+                try await FollowSender.shared.unfollow(target, keypair: kp)
+            } else {
+                try await FollowSender.shared.follow(target, keypair: kp)
+            }
+        } catch {
+            // Revert the optimistic flip on any failure.
+            viewModel.youFollow = wasFollowing
+        }
+    }
+
+    private func toggleBlock(currentlyBlocked: Bool) {
+        if currentlyBlocked {
+            muteRepo.unblockUser(viewModel.pubkey)
+        } else {
+            muteRepo.blockUser(viewModel.pubkey)
         }
     }
 }

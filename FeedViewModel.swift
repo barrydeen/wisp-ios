@@ -76,6 +76,22 @@ final class FeedViewModel {
 
     init(keypair: Keypair) {
         self.keypair = keypair
+        observeBlocks()
+    }
+
+    /// Listen for `userBlocked` and drop matching in-memory events. Without
+    /// this, blocking someone in-session leaves their already-rendered feed
+    /// cards visible until the user pulls-to-refresh or relaunches.
+    private func observeBlocks() {
+        NotificationCenter.default.addObserver(
+            forName: .userBlocked, object: nil, queue: .main
+        ) { [weak self] note in
+            guard let self, let blocked = note.object as? String else { return }
+            self.events.removeAll {
+                $0.pubkey == blocked
+                || (FeedViewModel.repostInnerPubkey($0) == blocked)
+            }
+        }
     }
 
     func start() async {
@@ -94,6 +110,13 @@ final class FeedViewModel {
         if !cached.isEmpty {
             for event in cached {
                 markActivityIfFollowed(event)
+                // Apply the same SafetyFilter the live ingestion path uses
+                // (`onIncomingEvent`). Without this, on cold launch the user
+                // sees cached posts from authors they've muted / blocked /
+                // word-filtered until live filtering catches up; the bypass
+                // also let WoT-blocked authors leak through on the first
+                // paint when WoT was enabled.
+                if SafetyFilter.shared.shouldDrop(event: event, context: .feed) { continue }
                 if Self.isFeedRenderable(event) && passesFollowsFilter(event) {
                     if seenIds.insert(event.id).inserted {
                         events.append(event)

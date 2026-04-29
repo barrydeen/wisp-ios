@@ -64,6 +64,16 @@ final class SafetyFilter: @unchecked Sendable {
             return true
         }
 
+        // Kind-6 reposts wrap an inner kind-1 from another author. If the
+        // reposter isn't muted but the *original* author is, the wrap would
+        // otherwise let the muted author's content leak through. Parse the
+        // inner pubkey out of the JSON content and apply the same block check.
+        if event.kind == 6, !s.blockedPubkeys.isEmpty,
+           let innerPubkey = Self.repostInnerPubkey(event),
+           s.blockedPubkeys.contains(innerPubkey) {
+            return true
+        }
+
         let allowsWordCheck: Bool = {
             switch context {
             case .feed, .notifications: return true
@@ -136,5 +146,16 @@ final class SafetyFilter: @unchecked Sendable {
         let lower = content.lowercased()
         for w in words where lower.contains(w) { return true }
         return false
+    }
+
+    /// Pull the original author's pubkey out of a kind-6 repost's JSON body.
+    /// Returns nil if the content isn't a valid embedded event JSON. Static so
+    /// the lockfree hot path can call it without an actor hop.
+    private static func repostInnerPubkey(_ event: NostrEvent) -> String? {
+        guard !event.content.isEmpty,
+              let data = event.content.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        return json["pubkey"] as? String
     }
 }

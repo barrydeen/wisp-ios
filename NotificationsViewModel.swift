@@ -97,6 +97,10 @@ final class NotificationsViewModel {
             limit: 500
         )
         for e in cached {
+            // Match the live ingestion's safety filtering — without this, cached
+            // notifications from blocked / muted authors render on cold launch
+            // until the live subscription catches up.
+            if SafetyFilter.shared.shouldDrop(event: e, context: .notifications) { continue }
             _ = repo.ingest(e, relayUrl: "", isFromDmRelay: false, persist: false)
         }
     }
