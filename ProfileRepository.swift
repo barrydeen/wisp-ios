@@ -154,6 +154,13 @@ final class ProfileRepository {
         }
     }
 
+    /// Reads the persisted profile for `pubkey` directly from UserDefaults,
+    /// bypassing the in-memory cache. Use this when you need the stored profile
+    /// for an account that isn't the active session (e.g. account switcher rows).
+    func persistedProfile(for pubkey: String) -> ProfileData? {
+        loadFromDefaults(pubkey)
+    }
+
     private func loadFromDefaults(_ pubkey: String) -> ProfileData? {
         guard let dict = UserDefaults.standard.dictionary(forKey: "profile_\(pubkey)") as? [String: Any],
               !dict.isEmpty else { return nil }
