@@ -72,18 +72,6 @@ struct SidebarDrawerView: View {
         if let cached, !cached.isEmpty { userStatus = cached }
     }
 
-    private static func cachedStatusKey(_ pubkey: String) -> String {
-        "user_status_general_\(pubkey)"
-    }
-
-    /// Restore the last-seen status from UserDefaults so the drawer never
-    /// flashes the empty placeholder when a relay query is in flight or
-    /// fails. Refreshed in the background by `loadStatus()`.
-    private func loadCachedStatus() {
-        let cached = UserDefaults.standard.string(forKey: Self.cachedStatusKey(pubkey))
-        if let cached, !cached.isEmpty { userStatus = cached }
-    }
-
     private func loadStatus() async {
         // Query write ∪ read ∪ top-scored relays in one shot. The previous
         // write-then-read fallback missed statuses published from a different

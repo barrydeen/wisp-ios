@@ -366,28 +366,49 @@ struct NotificationRowView: View {
     }
 
     private var referencedSnippet: String? {
+        let raw: String?
         switch group {
         case .reply(_, _, let replyEventId, _, _, _):
-            return repo.event(forId: replyEventId)?.content
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-                .replacingOccurrences(of: "\n", with: " ")
+            raw = repo.event(forId: replyEventId)?.content
         case .mention(_, _, let eventId, _, _):
-            return repo.event(forId: eventId)?.content
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-                .replacingOccurrences(of: "\n", with: " ")
+            raw = repo.event(forId: eventId)?.content
         case .quote(_, _, let actorEventId, _, _, _):
-            return repo.event(forId: actorEventId)?.content
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-                .replacingOccurrences(of: "\n", with: " ")
-        case .dm:
-            return nil
-        case .reactions(_, _, _, _, _, _, _):
-            return nil
+            raw = repo.event(forId: actorEventId)?.content
         case .pollVotes(_, let refId, _, _):
-            return repo.event(forId: refId)?.content
+            raw = repo.event(forId: refId)?.content
+        case .dm, .reactions:
+            return nil
+        }
+        return raw.map {
+            resolveNostrMentions($0)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .replacingOccurrences(of: "\n", with: " ")
         }
+    }
+
+    /// Replaces `nostr:npub1…`, `nostr:nprofile1…`, and bare `npub1…` / `nprofile1…`
+    /// tokens in `content` with `@displayname` using the already-resolved `profiles` dict.
+    private func resolveNostrMentions(_ content: String) -> String {
+        let pattern = #"nostr:(?:npub1|nprofile1)[a-z0-9]+|(?<!\w)(?:npub1|nprofile1)[a-z0-9]{50,}(?!\w)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return content }
+        let ns = content as NSString
+        let matches = regex.matches(in: content, range: NSRange(location: 0, length: ns.length))
+        guard !matches.isEmpty else { return content }
+        var out = ""
+        var lastEnd = 0
+        for match in matches {
+            out += ns.substring(with: NSRange(location: lastEnd, length: match.range.location - lastEnd))
+            let token = ns.substring(with: match.range)
+            let uri = token.lowercased().hasPrefix("nostr:") ? token : "nostr:\(token)"
+            if case .profileRef(let pk, _)? = Nip19.decodeNostrUri(uri) {
+                out += "@\(displayName(pk))"
+            } else {
+                out += token
+            }
+            lastEnd = match.range.upperBound
+        }
+        out += ns.substring(from: lastEnd)
+        return out
     }
 
     private func primaryActors() -> [String] {

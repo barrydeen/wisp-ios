@@ -248,8 +248,6 @@ private struct ProfileHeaderView: View {
     @State private var muteRepo = MuteRepository.shared
     @State private var followBusy = false
 
-    private var isMe: Bool { viewModel.pubkey == viewModel.activeUserPubkey }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             banner

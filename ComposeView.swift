@@ -229,7 +229,7 @@ struct ComposeView: View {
                 Text("Replying to \(profile?.displayString ?? String(parent.pubkey.prefix(8)) + "\u{2026}")")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
-                Text(parent.content.prefix(140))
+                Text(resolveNostrMentions(String(parent.content.prefix(140))))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
@@ -249,7 +249,7 @@ struct ComposeView: View {
                 Text("Quoting \(profile?.displayString ?? String(quoted.pubkey.prefix(8)) + "\u{2026}")")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
-                Text(quoted.content.prefix(200))
+                Text(resolveNostrMentions(String(quoted.content.prefix(200))))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(3)
@@ -259,6 +259,30 @@ struct ComposeView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.wispSurfaceVariant.opacity(0.4),
                     in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func resolveNostrMentions(_ content: String) -> String {
+        let pattern = #"nostr:(?:npub1|nprofile1)[a-z0-9]+|(?<!\w)(?:npub1|nprofile1)[a-z0-9]{50,}(?!\w)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return content }
+        let ns = content as NSString
+        let matches = regex.matches(in: content, range: NSRange(location: 0, length: ns.length))
+        guard !matches.isEmpty else { return content }
+        var out = ""
+        var lastEnd = 0
+        for match in matches {
+            out += ns.substring(with: NSRange(location: lastEnd, length: match.range.location - lastEnd))
+            let token = ns.substring(with: match.range)
+            let uri = token.lowercased().hasPrefix("nostr:") ? token : "nostr:\(token)"
+            if case .profileRef(let pk, _)? = Nip19.decodeNostrUri(uri) {
+                let name = ProfileRepository.shared.get(pk)?.displayString ?? String(pk.prefix(8)) + "\u{2026}"
+                out += "@\(name)"
+            } else {
+                out += token
+            }
+            lastEnd = match.range.upperBound
+        }
+        out += ns.substring(from: lastEnd)
+        return out
     }
 
     private var textEditor: some View {
