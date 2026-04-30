@@ -7,6 +7,8 @@ struct SidebarDrawerView: View {
     private var pubkey: String { keypair.pubkey }
     let onSelectTab: (BottomTab) -> Void
     let onLogout: () -> Void
+    var onSwitchAccount: (Keypair) -> Void = { _ in }
+    var onAddAccount: () -> Void = {}
     var onOpenProfile: () -> Void = {}
     var onOpenInterface: () -> Void = {}
     var onOpenKeys: () -> Void = {}
@@ -52,7 +54,23 @@ struct SidebarDrawerView: View {
         let v = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "0.0"
         return "wisp v\(v)"
     }
-    private var accounts: [String] { NostrKey.accounts() }
+    private var accounts: [String] {
+        var list = NostrKey.accounts()
+        if !list.contains(pubkey) { list.insert(pubkey, at: 0) }
+        return list
+    }
+
+    private static func cachedStatusKey(_ pubkey: String) -> String {
+        "user_status_general_\(pubkey)"
+    }
+
+    /// Restore the last-seen status from UserDefaults so the drawer never
+    /// flashes the empty placeholder when a relay query is in flight or
+    /// fails. Refreshed in the background by `loadStatus()`.
+    private func loadCachedStatus() {
+        let cached = UserDefaults.standard.string(forKey: Self.cachedStatusKey(pubkey))
+        if let cached, !cached.isEmpty { userStatus = cached }
+    }
 
     private static func cachedStatusKey(_ pubkey: String) -> String {
         "user_status_general_\(pubkey)"
@@ -173,6 +191,9 @@ struct SidebarDrawerView: View {
             }
         }
         .task(id: pubkey) {
+            // Ensure the active account is always in the persisted list so the
+            // account switcher shows it even on installs that predate this list.
+            NostrKey.registerInAccountList(pubkey)
             // Show the last-seen status immediately from cache, then refresh
             // from relays in the background. Avoids "Set status..." flashing
             // when relay reads are slow or transiently empty.
@@ -295,14 +316,40 @@ struct SidebarDrawerView: View {
     private var accountPickerSection: some View {
         VStack(spacing: 0) {
             ForEach(accounts, id: \.self) { acctPubkey in
+                // Active account: use the already-loaded profile prop (guaranteed correct).
+                // Inactive accounts: read directly from UserDefaults to avoid in-memory cache
+                // contamination where another pubkey's profile could bleed through.
+                let acctProfile = acctPubkey == pubkey
+                    ? profile
+                    : ProfileRepository.shared.persistedProfile(for: acctPubkey)
+                let acctName: String = {
+                    if let name = acctProfile?.displayString, !name.isEmpty { return name }
+                    return String(acctPubkey.prefix(8)) + "\u{2026}"
+                }()
+                let acctSubtitle: String = {
+                    if let nip05 = acctProfile?.nip05, !nip05.isEmpty { return nip05 }
+                    return String(acctPubkey.prefix(8)) + "\u{2026}"
+                }()
                 Button {
+                    guard acctPubkey != pubkey,
+                          let newKeypair = NostrKey.switchAccount(pubkey: acctPubkey) else {
+                        accountsExpanded = false
+                        return
+                    }
                     accountsExpanded = false
+                    onSwitchAccount(newKeypair)
                 } label: {
                     HStack(spacing: 12) {
-                        CachedAvatarView(url: nil, size: 32)
-                        Text(String(acctPubkey.prefix(12)) + "\u{2026}")
-                            .font(.system(size: 14))
-                            .foregroundStyle(.primary)
+                        CachedAvatarView(url: acctProfile?.picture, size: 32)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(acctName)
+                                .font(.system(size: 14))
+                                .foregroundStyle(.primary)
+                            Text(acctSubtitle)
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
                         Spacer()
                         if acctPubkey == pubkey {
                             Image(systemName: "checkmark")
@@ -316,9 +363,9 @@ struct SidebarDrawerView: View {
                 }
                 .buttonStyle(.plain)
             }
-
             Button {
                 accountsExpanded = false
+                onAddAccount()
             } label: {
                 HStack(spacing: 12) {
                     Image(systemName: "plus.circle")

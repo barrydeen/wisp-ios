@@ -3,6 +3,7 @@ import SwiftUI
 struct MainView: View {
     let keypair: Keypair
     let onLogout: () -> Void
+    var onSwitchAccount: (Keypair) -> Void = { _ in }
     @State private var viewModel: FeedViewModel
     @State private var messagesVM: MessagesViewModel
     @State private var notificationsVM: NotificationsViewModel
@@ -38,9 +39,13 @@ struct MainView: View {
 
     private let drawerWidth: CGFloat = 320
 
-    init(keypair: Keypair, onLogout: @escaping () -> Void = {}) {
+    var onAddAccount: () -> Void = {}
+
+    init(keypair: Keypair, onLogout: @escaping () -> Void = {}, onSwitchAccount: @escaping (Keypair) -> Void = { _ in }, onAddAccount: @escaping () -> Void = {}) {
         self.keypair = keypair
         self.onLogout = onLogout
+        self.onSwitchAccount = onSwitchAccount
+        self.onAddAccount = onAddAccount
         _viewModel = State(initialValue: FeedViewModel(keypair: keypair))
         _messagesVM = State(initialValue: MessagesViewModel(keypair: keypair))
         _notificationsVM = State(initialValue: NotificationsViewModel(keypair: keypair))
@@ -76,6 +81,14 @@ struct MainView: View {
                         await AppDataWipe.wipeEverything()
                         onLogout()
                     }
+                },
+                onSwitchAccount: { newKeypair in
+                    closeDrawer()
+                    onSwitchAccount(newKeypair)
+                },
+                onAddAccount: {
+                    closeDrawer()
+                    onAddAccount()
                 },
                 onOpenProfile: {
                     closeDrawer()

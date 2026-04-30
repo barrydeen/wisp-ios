@@ -2,6 +2,7 @@ import SwiftUI
 
 struct LoadingView: View {
     var onReady: () -> Void
+    var delay: Int = 800
 
     @State private var rotation: Double = 0
     @State private var appeared = false
@@ -34,7 +35,7 @@ struct LoadingView: View {
             }
         }
         .task {
-            try? await Task.sleep(for: .milliseconds(800))
+            try? await Task.sleep(for: .milliseconds(delay))
             onReady()
         }
     }

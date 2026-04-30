@@ -13,6 +13,8 @@ struct ContentView: View {
     @State private var showLogin = false
     @State private var keypair: Keypair?
     @State private var checkedSavedAccount = false
+    @State private var accountSwitchInProgress = false
+    @State private var showAddAccount = false
 
     var body: some View {
         Group {
@@ -41,7 +43,8 @@ struct ContentView: View {
                 }
 
             case .loading:
-                LoadingView {
+                LoadingView(delay: accountSwitchInProgress ? 350 : 800) {
+                    accountSwitchInProgress = false
                     withAnimation { currentScreen = .main }
                 }
 
@@ -54,12 +57,27 @@ struct ContentView: View {
 
             case .main:
                 if let keypair {
-                    MainView(keypair: keypair) {
+                    MainView(keypair: keypair, onLogout: {
                         self.keypair = nil
                         currentScreen = .splash
-                    }
+                    }, onSwitchAccount: { newKeypair in
+                        self.keypair = newKeypair
+                        accountSwitchInProgress = true
+                        currentScreen = .loading
+                    }, onAddAccount: {
+                        showAddAccount = true
+                    })
                 }
             }
+        }
+        .fullScreenCover(isPresented: $showAddAccount) {
+            LoginView { newKeypair in
+                showAddAccount = false
+                self.keypair = newKeypair
+                accountSwitchInProgress = true
+                currentScreen = .loading
+            }
+            .interactiveDismissDisabled()
         }
         .onAppear {
             guard !checkedSavedAccount else { return }

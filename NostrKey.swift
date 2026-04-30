@@ -135,6 +135,8 @@ enum NostrKey {
         SecItemDelete(query as CFDictionary)
     }
 
+    static func registerInAccountList(_ pubkey: String) { addToAccountList(pubkey) }
+
     private static func addToAccountList(_ pubkey: String) {
         var list = accounts()
         if !list.contains(pubkey) {
