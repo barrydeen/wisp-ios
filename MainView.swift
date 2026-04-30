@@ -382,7 +382,16 @@ struct MainView: View {
                             // when the user pushes a destination, and content scrolls under
                             // it instead of starting below an opaque bar.
                             .safeAreaInset(edge: .top, spacing: 0) {
-                                topBar.background(Color.wispBackground.opacity(0.92))
+                                topBar.background(
+                                    LinearGradient(
+                                        colors: [
+                                            Color.wispBackground.opacity(0.92),
+                                            Color.wispBackground.opacity(0.65)
+                                        ],
+                                        startPoint: .top,
+                                        endPoint: .bottom
+                                    )
+                                )
                             }
                             .navigationDestination(for: ProfileRoute.self) { route in
                                 ProfileView(

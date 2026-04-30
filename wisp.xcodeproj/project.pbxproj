@@ -241,6 +241,7 @@
 		4CABCD010000000000060000 /* ProfileEditViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000060000 /* ProfileEditViewModel.swift */; };
 		4CABCD010000000000070000 /* ProfileEditView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000070000 /* ProfileEditView.swift */; };
 		4CABCD010000000000080000 /* FollowSender.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000080000 /* FollowSender.swift */; };
+		4CABCD010000000000050000 /* BackChevronButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000050000 /* BackChevronButton.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -496,6 +497,7 @@
 		4CABCD000000000000060000 /* ProfileEditViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileEditViewModel.swift; sourceTree = "<group>"; };
 		4CABCD000000000000070000 /* ProfileEditView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileEditView.swift; sourceTree = "<group>"; };
 		4CABCD000000000000080000 /* FollowSender.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowSender.swift; sourceTree = "<group>"; };
+		4CABCD000000000000050000 /* BackChevronButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackChevronButton.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -784,6 +786,7 @@
 				4CABCD000000000000060000 /* ProfileEditViewModel.swift */,
 				4CABCD000000000000070000 /* ProfileEditView.swift */,
 				4CABCD000000000000080000 /* FollowSender.swift */,
+				4CABCD000000000000050000 /* BackChevronButton.swift */,
 			);
 			sourceTree = "<group>";
 		};
@@ -1181,6 +1184,7 @@
 				4CABCD010000000000060000 /* ProfileEditViewModel.swift in Sources */,
 				4CABCD010000000000070000 /* ProfileEditView.swift in Sources */,
 				4CABCD010000000000080000 /* FollowSender.swift in Sources */,
+				4CABCD010000000000050000 /* BackChevronButton.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

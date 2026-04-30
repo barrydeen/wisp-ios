@@ -97,17 +97,9 @@ struct ProfileView: View {
     }
 
     private var unifiedHeader: some View {
-        VStack(spacing: 0) {
+        VStack(spacing: 8) {
             HStack(spacing: 8) {
-                Button {
-                    dismiss()
-                } label: {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .frame(width: 36, height: 36)
-                        .contentShape(Rectangle())
-                }
+                BackChevronButton { dismiss() }
 
                 Spacer(minLength: 0)
 
@@ -172,7 +164,16 @@ struct ProfileView: View {
 
             ProfileTabBar(selected: $selectedTab)
         }
-        .background(Color.wispBackground.opacity(0.92))
+        .background(
+            LinearGradient(
+                colors: [
+                    Color.wispBackground.opacity(0.92),
+                    Color.wispBackground.opacity(0.65)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        )
     }
 
     @ViewBuilder

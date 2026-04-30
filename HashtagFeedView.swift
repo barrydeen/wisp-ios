@@ -49,15 +49,7 @@ struct HashtagFeedView: View {
 
     private var header: some View {
         HStack(spacing: 12) {
-            Button {
-                dismiss()
-            } label: {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .frame(width: 32, height: 32)
-            }
-            .buttonStyle(.plain)
+            BackChevronButton { dismiss() }
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(viewModel.displayTitle)
