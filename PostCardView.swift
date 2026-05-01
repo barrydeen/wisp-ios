@@ -67,18 +67,17 @@ struct PostCardView: View {
     private var myPubkey: String? { NostrKey.load()?.pubkey }
 
     /// Event id reactions and reposts target — the inner note for kind-6
-    /// reposts, otherwise the post's own id. ReactionSender / RepostSender
-    /// write optimistic state to `EngagementRepository.shared.counts[<this>]`.
+    /// reposts, otherwise the post's own id.
     private var displayEventId: String { resolveRepost().event.id }
+
+    /// Per-event observable box. Accessing this creates a SwiftUI tracking dependency
+    /// only on this card's box, not on the entire EngagementRepository dict.
+    private var repoBox: EngagementBox { engagementRepo.box(for: displayEventId) }
 
     private var myReactor: Reactor? {
         guard let me = myPubkey else { return nil }
-        // Thread / profile / search views maintain their own engagement dicts
-        // separate from `EngagementRepository`. ReactionSender writes only to
-        // the shared repo, so the parent-passed `engagement` won't reflect the
-        // user's just-sent reaction in those views. Read the shared repo first
-        // so the heart updates immediately everywhere.
-        if let mine = engagementRepo.counts[displayEventId]?.reactors.first(where: { $0.pubkey == me }) {
+        // Read the shared repo first so optimistic reactions reflect immediately.
+        if let mine = repoBox.counts.reactors.first(where: { $0.pubkey == me }) {
             return mine
         }
         return engagement?.reactors.first(where: { $0.pubkey == me })
@@ -86,7 +85,7 @@ struct PostCardView: View {
     private var iReactedEmoji: String? { myReactor?.emoji }
     private var iReposted: Bool {
         guard let me = myPubkey else { return false }
-        if engagementRepo.counts[displayEventId]?.reposters.contains(me) == true { return true }
+        if repoBox.counts.reposters.contains(me) { return true }
         return engagement?.reposters.contains(me) == true
     }
 
@@ -95,10 +94,10 @@ struct PostCardView: View {
     /// repost counters in sync with `iReactedEmoji` / `iReposted` so the
     /// number bumps the moment the user reacts in any view, not just the feed.
     private var resolvedReactionCount: Int {
-        max(engagement?.reactions ?? 0, engagementRepo.counts[displayEventId]?.reactions ?? 0)
+        max(engagement?.reactions ?? 0, repoBox.counts.reactions)
     }
     private var resolvedRepostCount: Int {
-        max(engagement?.reposts ?? 0, engagementRepo.counts[displayEventId]?.reposts ?? 0)
+        max(engagement?.reposts ?? 0, repoBox.counts.reposts)
     }
     /// The user's reacted emoji as a displayable Unicode character, or nil for shortcode
     /// reactions (which the heart action renders as an inline image instead) or no
@@ -241,9 +240,9 @@ struct PostCardView: View {
 
                 if expanded {
                     NoteDetailsPanel(
-                        zappers: engagement?.zappers ?? [],
-                        reactors: engagement?.reactors ?? [],
-                        reposters: engagement?.reposters ?? [],
+                        zappers: repoBox.counts.zappers.isEmpty ? (engagement?.zappers ?? []) : repoBox.counts.zappers,
+                        reactors: repoBox.counts.reactors.isEmpty ? (engagement?.reactors ?? []) : repoBox.counts.reactors,
+                        reposters: repoBox.counts.reposters.isEmpty ? (engagement?.reposters ?? []) : repoBox.counts.reposters,
                         relays: combinedRelays(for: displayEvent.id),
                         tags: displayEvent.tags,
                         profiles: profiles,
@@ -340,13 +339,14 @@ struct PostCardView: View {
 
     private var repostBanner: some View {
         HStack(spacing: 6) {
+            CachedAvatarView(url: profile?.picture, size: 16)
             Image(systemName: "arrow.2.squarepath")
                 .font(.system(size: 12))
             Text("\(profile?.displayString ?? "Someone") reposted")
                 .font(.caption)
         }
-        .foregroundStyle(Color.wispRepostColor)
-        .padding(.leading, 68)
+        .foregroundStyle(.secondary)
+        .padding(.leading, 16)
         .padding(.top, 8)
     }
 
@@ -363,7 +363,7 @@ struct PostCardView: View {
             Button {
                 activeSheet = .replyCompose
             } label: {
-                actionItem(icon: "bubble.right", count: engagement?.replies)
+                actionItem(icon: "bubble.right", count: repoBox.counts.replies > 0 ? repoBox.counts.replies : engagement?.replies)
             }
             .buttonStyle(.plain)
             Spacer()
@@ -376,8 +376,8 @@ struct PostCardView: View {
             } label: {
                 actionItem(
                     icon: "bolt.fill",
-                    label: zapLabel(engagement?.zapSats),
-                    tint: (engagement?.zapSats ?? 0) > 0 ? Color.wispZapColor : nil
+                    label: zapLabel(repoBox.counts.zapSats > 0 ? repoBox.counts.zapSats : (engagement?.zapSats ?? 0)),
+                    tint: (repoBox.counts.zapSats > 0 || (engagement?.zapSats ?? 0) > 0) ? Color.wispZapColor : nil
                 )
             }
             .buttonStyle(.plain)

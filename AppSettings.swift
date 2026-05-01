@@ -34,6 +34,7 @@ final class AppSettings {
         static let postUndoTimerEnabled = "wisp_settings_post_undo_timer_enabled"
         static let postUndoTimerSeconds = "wisp_settings_post_undo_timer_seconds"
         static let postUndoTimerForReplies = "wisp_settings_post_undo_timer_for_replies"
+        static let autoApproveRelayAuth = "wisp_settings_auto_approve_relay_auth"
     }
 
     /// Allowed durations for the post-undo countdown. Picker shows these as
@@ -92,6 +93,11 @@ final class AppSettings {
     var postUndoTimerForReplies: Bool {
         didSet { UserDefaults.standard.set(postUndoTimerForReplies, forKey: Keys.postUndoTimerForReplies) }
     }
+    /// When true (default), AUTH challenges from relays are signed and sent automatically
+    /// without prompting. When false, each relay must be individually approved in relay settings.
+    var autoApproveRelayAuth: Bool {
+        didSet { UserDefaults.standard.set(autoApproveRelayAuth, forKey: Keys.autoApproveRelayAuth) }
+    }
 
     private init() {
         let defaults = UserDefaults.standard
@@ -113,6 +119,7 @@ final class AppSettings {
         let storedSeconds = defaults.object(forKey: Keys.postUndoTimerSeconds) as? Int ?? 10
         self.postUndoTimerSeconds = Self.postUndoTimerOptions.contains(storedSeconds) ? storedSeconds : 10
         self.postUndoTimerForReplies = defaults.object(forKey: Keys.postUndoTimerForReplies) as? Bool ?? false
+        self.autoApproveRelayAuth = defaults.object(forKey: Keys.autoApproveRelayAuth) as? Bool ?? true
     }
 
     var preferredColorScheme: ColorScheme? {

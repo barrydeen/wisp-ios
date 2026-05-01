@@ -854,7 +854,7 @@ struct MainView: View {
                                     event: event,
                                     profile: viewModel.profiles[event.pubkey],
                                     profiles: viewModel.profiles,
-                                    engagement: engagementRepo.counts[event.id],
+                                    engagement: nil,
                                     onProfileTap: { pubkey in
                                         Task { await viewModel.requestProfileIfNeeded(pubkey) }
                                     },

@@ -93,7 +93,7 @@ struct NoteListFeedView: View {
                                 event: event,
                                 profile: viewModel.profiles[event.pubkey],
                                 profiles: viewModel.profiles,
-                                engagement: engagementRepo.counts[event.id],
+                                engagement: nil,
                                 onProfileTap: onProfileTap,
                                 onNoteTap: onNoteTap,
                                 onHashtagTap: onHashtagTap

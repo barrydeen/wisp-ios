@@ -66,7 +66,7 @@ final class FeedViewModel {
 
     /// True for events that should appear as top-level rows in the feed list.
     /// Kept consistent across cache seed, live ingest, and relay backfill paths.
-    static func isFeedRenderable(_ event: NostrEvent) -> Bool {
+    nonisolated static func isFeedRenderable(_ event: NostrEvent) -> Bool {
         if event.isRootNote { return true }
         switch event.kind {
         case 6, 20, Nip88.kindPoll, Nip69.kindZapPoll: return true
@@ -105,31 +105,32 @@ final class FeedViewModel {
         let kp = keypair
         Task { await RelaySetRepository.shared.bootstrap(keypair: kp) }
 
-        // 1. Seed from local storage for instant display
-        let cached = await eventStore.seedCache(limit: 2000)
+        // 1. Seed from local storage for instant display.
+        //    Filter + sort run off the MainActor so the first frame isn't blocked.
+        let cached = await eventStore.seedCache(limit: 300)
         if !cached.isEmpty {
-            for event in cached {
-                markActivityIfFollowed(event)
-                // Apply the same SafetyFilter the live ingestion path uses
-                // (`onIncomingEvent`). Without this, on cold launch the user
-                // sees cached posts from authors they've muted / blocked /
-                // word-filtered until live filtering catches up; the bypass
-                // also let WoT-blocked authors leak through on the first
-                // paint when WoT was enabled.
-                if SafetyFilter.shared.shouldDrop(event: event, context: .feed) { continue }
-                if Self.isFeedRenderable(event) && passesFollowsFilter(event) {
-                    if seenIds.insert(event.id).inserted {
-                        events.append(event)
+            let myPubkey = keypair.pubkey
+            let follows = followsCache
+            let (filtered, ids) = await Task.detached(priority: .userInitiated) {
+                var result: [NostrEvent] = []
+                var seen: Set<String> = []
+                for event in cached {
+                    if SafetyFilter.shared.shouldDrop(event: event, context: .feed) { continue }
+                    if FeedViewModel.isFeedRenderable(event) &&
+                       (event.pubkey == myPubkey || follows.contains(event.pubkey)) {
+                        if seen.insert(event.id).inserted { result.append(event) }
                     }
                 }
-            }
-            events.sort { $0.createdAt > $1.createdAt }
+                result.sort { $0.createdAt > $1.createdAt }
+                return (result, seen)
+            }.value
 
-            // Pre-populate profiles from local cache for instant names/avatars
-            let pubkeysInCache = Set(events.map(\.pubkey))
+            for event in filtered { markActivityIfFollowed(event) }
+            seenIds.formUnion(ids)
+            events = filtered
+
+            let pubkeysInCache = Set(filtered.map(\.pubkey))
             profiles = profileRepo.getAll(Array(pubkeysInCache))
-
-            // Show cached data immediately while relay fetch continues
             isLoading = false
         }
 
@@ -139,11 +140,10 @@ final class FeedViewModel {
         let newestStored = await eventStore.newestTimestamp()
         let since = calculateSince(newestStored: newestStored, followCount: follows.count)
 
-        // 3. Fetch user profile, then start the persistent follow-feed subscription.
-        //    loadFeed kicks off long-lived sockets and returns immediately — events
-        //    flow into `self.events` from the consumer Task.
-        await loadUserProfile()
+        // 3. Open relay sockets immediately, then fetch profiles concurrently.
+        //    loadFeed fires tasks and returns — no need to gate it on profile fetch.
         loadFeed(follows: follows, scoreBoard: scoreBoard, since: since)
+        await loadUserProfile()
         await loadMissingProfiles()
 
         isLoading = false
@@ -200,12 +200,22 @@ final class FeedViewModel {
             isLoading = true
             // Re-seed from local cache (filtered to follows — EventStore is shared with the
             // Extended Network subscription, which persists every event it sees).
-            let cached = await eventStore.seedCache(limit: 2000)
-            for event in cached
-                where Self.isFeedRenderable(event) && passesFollowsFilter(event) {
-                if seenIds.insert(event.id).inserted { events.append(event) }
-            }
-            events.sort { $0.createdAt > $1.createdAt }
+            let cached = await eventStore.seedCache(limit: 300)
+            let myPubkey = keypair.pubkey
+            let fc = followsCache
+            let (reFiltered, reIds) = await Task.detached(priority: .userInitiated) {
+                var result: [NostrEvent] = []
+                var seen: Set<String> = []
+                for event in cached
+                    where FeedViewModel.isFeedRenderable(event) &&
+                          (event.pubkey == myPubkey || fc.contains(event.pubkey)) {
+                    if seen.insert(event.id).inserted { result.append(event) }
+                }
+                result.sort { $0.createdAt > $1.createdAt }
+                return (result, seen)
+            }.value
+            seenIds.formUnion(reIds)
+            events = reFiltered
             await refresh()
             isLoading = false
         }

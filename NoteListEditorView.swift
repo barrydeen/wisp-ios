@@ -108,7 +108,7 @@ struct NoteListEditorView: View {
                     event: event,
                     profile: profiles[event.pubkey],
                     profiles: profiles,
-                    engagement: engagementRepo.counts[event.id]
+                    engagement: nil
                 )
             } else {
                 HStack {

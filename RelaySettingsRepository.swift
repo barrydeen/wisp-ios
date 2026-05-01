@@ -56,6 +56,16 @@ final class RelaySettingsRepository {
         loadedFor = pubkey
     }
 
+    /// Force-refresh all relay lists from the network, ignoring local timestamps.
+    /// Use when the user updated their lists in another client and wants to pull them in.
+    func syncFromNetwork(keypair: Keypair) async {
+        generalUpdatedAt = 0
+        dmUpdatedAt = 0
+        searchUpdatedAt = 0
+        blockedUpdatedAt = 0
+        await bootstrap(keypair: keypair)
+    }
+
     /// Hydrate from UserDefaults for the given pubkey, then async-merge from relays.
     func bootstrap(keypair: Keypair) async {
         let pubkey = keypair.pubkey

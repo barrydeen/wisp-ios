@@ -8,12 +8,29 @@ import Observation
 /// engagement query (kinds 1/6/7/9735 with `#e`) goes to its author's read (inbox) relays,
 /// with fallbacks for authors without a published relay list and a safety-net broadcast to
 /// the top scored relays. Mirrors Android's `OutboxRouter.subscribeEngagementByAuthors`.
+/// Per-event observable wrapper. `PostCardView` holds a reference to its own box
+/// so only that specific card re-renders when its engagement updates — not the whole feed.
+@Observable
+final class EngagementBox {
+    var counts: EngagementCounts
+    init(_ counts: EngagementCounts = .init()) { self.counts = counts }
+}
+
 @Observable
 @MainActor
 final class EngagementRepository {
     static let shared = EngagementRepository()
 
-    private(set) var counts: [String: EngagementCounts] = [:]
+    /// Keyed by event id. `@ObservationIgnored` so mutations to this dict never
+    /// trigger observers of `EngagementRepository` itself — only the mutated box notifies.
+    @ObservationIgnored private var boxes: [String: EngagementBox] = [:]
+
+    func box(for eventId: String) -> EngagementBox {
+        if let b = boxes[eventId] { return b }
+        let b = EngagementBox()
+        boxes[eventId] = b
+        return b
+    }
 
     @ObservationIgnored private var queriedIds: Set<String> = []
     @ObservationIgnored private var pending: [(eventId: String, author: String)] = []
@@ -47,7 +64,7 @@ final class EngagementRepository {
         for task in liveTasks { task.cancel() }
         liveSubs.removeAll()
         liveTasks.removeAll()
-        counts = [:]
+        boxes.removeAll()
         queriedIds.removeAll()
         pending.removeAll()
         seenEngagementIds.removeAll()
@@ -75,23 +92,25 @@ final class EngagementRepository {
         // Make sure observers see the count even when the post wasn't visible yet.
         queriedIds.insert(eventId)
 
-        var current = counts[eventId] ?? EngagementCounts()
+        let b = box(for: eventId)
+        var current = b.counts
         current.reactions += 1
         let reactor = Reactor(pubkey: pubkey, emoji: emoji, customEmojiUrl: customEmojiUrl)
         if !current.reactors.contains(where: { $0.pubkey == pubkey && $0.emoji == emoji }) {
             current.reactors.append(reactor)
         }
-        counts[eventId] = current
+        b.counts = current
     }
 
     /// Revert a prior optimistic apply. Called when publishing fails.
     func revertOptimisticReaction(eventId: String, pubkey: String, emoji: String) {
         let key = "\(eventId)|\(pubkey)|\(emoji)"
         guard seenReactionKeys.remove(key) != nil else { return }
-        guard var current = counts[eventId] else { return }
+        let b = box(for: eventId)
+        var current = b.counts
         if current.reactions > 0 { current.reactions -= 1 }
         current.reactors.removeAll { $0.pubkey == pubkey && $0.emoji == emoji }
-        counts[eventId] = current
+        b.counts = current
     }
 
     // MARK: - Optimistic reposts
@@ -102,20 +121,22 @@ final class EngagementRepository {
     func applyOptimisticRepost(eventId: String, repostEventId: String, reposterPubkey: String) {
         seenEngagementIds.insert(repostEventId)
         queriedIds.insert(eventId)
-        var current = counts[eventId] ?? EngagementCounts()
+        let b = box(for: eventId)
+        var current = b.counts
         if current.reposters.contains(reposterPubkey) { return }
         current.reposts += 1
         current.reposters.append(reposterPubkey)
-        counts[eventId] = current
+        b.counts = current
     }
 
     /// Revert a prior optimistic repost. Called when publishing fails.
     func revertOptimisticRepost(eventId: String, reposterPubkey: String) {
-        guard var current = counts[eventId] else { return }
+        let b = box(for: eventId)
+        var current = b.counts
         guard current.reposters.contains(reposterPubkey) else { return }
         if current.reposts > 0 { current.reposts -= 1 }
         current.reposters.removeAll { $0 == reposterPubkey }
-        counts[eventId] = current
+        b.counts = current
     }
 
     // MARK: - Debounce + flush
@@ -217,7 +238,8 @@ final class EngagementRepository {
         }
         guard let primary = targets.last, queriedIds.contains(primary) else { return }
 
-        var current = counts[primary] ?? EngagementCounts()
+        let b = box(for: primary)
+        var current = b.counts
         current.seenRelays.insert(relayUrl)
         switch event.kind {
         case 1:
@@ -265,7 +287,7 @@ final class EngagementRepository {
         default:
             return
         }
-        counts[primary] = current
+        b.counts = current
     }
 
     /// If `content` is a NIP-30 `:shortcode:` reaction, find the matching `["emoji", shortcode, url]`

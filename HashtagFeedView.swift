@@ -115,7 +115,7 @@ struct HashtagFeedView: View {
                                 event: event,
                                 profile: viewModel.profiles[event.pubkey],
                                 profiles: viewModel.profiles,
-                                engagement: engagementRepo.counts[event.id],
+                                engagement: nil,
                                 onProfileTap: { _ in },
                                 onNoteTap: { _ in },
                                 onHashtagTap: { tag in
