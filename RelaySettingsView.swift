@@ -12,6 +12,7 @@ struct RelaySettingsView: View {
     @State private var inputError: String?
     @State private var toast: String?
     @State private var toastTask: Task<Void, Never>?
+    @State private var syncing = false
 
     enum Tab: String, CaseIterable, Identifiable {
         case general = "General"
@@ -23,47 +24,36 @@ struct RelaySettingsView: View {
 
     var body: some View {
         List {
-            // Tab picker
             Section {
                 Picker("Tab", selection: $tab) {
                     ForEach(Tab.allCases) { t in Text(t.rawValue).tag(t) }
                 }
                 .pickerStyle(.segmented)
-            }
-            .listRowBackground(Color.clear)
-            .listRowInsets(.init(top: 0, leading: 0, bottom: 0, trailing: 0))
-            .listRowSeparator(.hidden)
-
-            // Auto-approve toggle (general tab only)
-            if tab == .general {
-                Section {
-                    Toggle(isOn: $settings.autoApproveRelayAuth) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Auto-approve relay AUTH")
-                                .font(.system(size: 14, weight: .medium))
-                            Text("Automatically sign NIP-42 challenges without prompting")
-                                .font(.system(size: 12))
-                                .foregroundStyle(theme.palette.onSurfaceVariant)
-                        }
-                    }
-                    .tint(theme.primary)
-                }
-                .listRowBackground(theme.palette.surface)
+                .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
             }
 
-            // Add relay field
+            if tab == .general {
+                Section {
+                    Toggle("Sign in to relays automatically", isOn: $settings.autoApproveRelayAuth)
+                        .tint(theme.primary)
+                        .font(.system(size: 14))
+                        .listRowBackground(theme.palette.surface)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 16))
+                }
+            }
+
             Section {
                 addRelayField
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
             }
-            .listRowBackground(Color.clear)
-            .listRowInsets(.init(top: 8, leading: 0, bottom: 4, trailing: 0))
-            .listRowSeparator(.hidden)
 
-            // Relay rows
-            let urls = currentUrls
-            if urls.isEmpty {
-                Section {
+            Section {
+                let urls = currentUrls
+                if urls.isEmpty {
                     VStack(spacing: 6) {
                         Image(systemName: "server.rack")
                             .font(.system(size: 28))
@@ -73,14 +63,15 @@ struct RelaySettingsView: View {
                             .foregroundStyle(theme.palette.onSurfaceVariant)
                     }
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 32)
-                }
-                .listRowBackground(Color.clear)
-                .listRowSeparator(.hidden)
-            } else {
-                Section {
+                    .padding(.vertical, 24)
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                } else {
                     ForEach(urls, id: \.self) { url in
                         relayRow(url: url)
+                            .listRowBackground(theme.palette.surface)
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
                             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                                 Button(role: .destructive) {
                                     deleteCurrent(url: url)
@@ -89,18 +80,60 @@ struct RelaySettingsView: View {
                                 }
                             }
                     }
+                    Text("Swipe left to delete")
+                        .font(.system(size: 11))
+                        .foregroundStyle(theme.palette.onSurfaceVariant.opacity(0.5))
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 4, trailing: 16))
                 }
-                .listRowBackground(theme.palette.surface)
-                .listRowSeparator(.hidden)
             }
 
-            // Broadcast button
             Section {
-                broadcastButton
+                VStack(spacing: 10) {
+                    Button(action: broadcastCurrent) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "antenna.radiowaves.left.and.right")
+                            Text(broadcastLabel)
+                        }
+                        .font(.system(size: 14, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .foregroundStyle(.white)
+                        .background(theme.primary)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                    }
+                    Button {
+                        guard !syncing else { return }
+                        syncing = true
+                        Task {
+                            await repo.syncFromNetwork(keypair: keypair)
+                            syncing = false
+                            showToast("Synced from network")
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            if syncing {
+                                ProgressView().tint(theme.primary).scaleEffect(0.8)
+                            } else {
+                                Image(systemName: "arrow.down.circle")
+                            }
+                            Text(syncing ? "Syncing…" : "Sync Relay List (NIP-65)")
+                        }
+                        .font(.system(size: 14, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .foregroundStyle(theme.primary)
+                        .background(theme.palette.surface)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                    }
+                    .disabled(syncing)
+                }
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 16, trailing: 16))
             }
-            .listRowBackground(Color.clear)
-            .listRowInsets(.init(top: 8, leading: 0, bottom: 0, trailing: 0))
-            .listRowSeparator(.hidden)
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
@@ -118,7 +151,7 @@ struct RelaySettingsView: View {
     // MARK: - Pieces
 
     private var addRelayField: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 TextField("wss://relay.example.com", text: $newUrl)
                     .textFieldStyle(.plain)
@@ -152,27 +185,21 @@ struct RelaySettingsView: View {
     @ViewBuilder
     private func relayRow(url: String) -> some View {
         HStack(spacing: 8) {
-            Text(url)
+            Text(url
+                .replacingOccurrences(of: "wss://", with: "")
+                .replacingOccurrences(of: "ws://", with: ""))
                 .font(.system(size: 13, design: .monospaced))
                 .foregroundStyle(theme.palette.onSurface)
                 .lineLimit(1)
-                .truncationMode(.middle)
+                .truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             if tab == .general,
                let relay = repo.generalRelays.first(where: { $0.url == url }) {
-                chip(label: "read", on: relay.read) {
-                    repo.toggleGeneralRead(url, keypair: keypair)
-                }
-                chip(label: "write", on: relay.write) {
-                    repo.toggleGeneralWrite(url, keypair: keypair)
-                }
-                chip(label: "auth", on: relay.auth) {
-                    repo.toggleGeneralAuth(url)
-                }
+                chip(label: "read", on: relay.read) { repo.toggleGeneralRead(url, keypair: keypair) }
+                chip(label: "write", on: relay.write) { repo.toggleGeneralWrite(url, keypair: keypair) }
             }
         }
-        .padding(.vertical, 4)
     }
 
     @ViewBuilder
@@ -185,20 +212,6 @@ struct RelaySettingsView: View {
                 .foregroundStyle(on ? .white : theme.palette.onSurfaceVariant)
                 .background(on ? theme.primary : theme.palette.surfaceVariant)
                 .clipShape(Capsule())
-        }
-    }
-
-    private var broadcastButton: some View {
-        Button {
-            broadcastCurrent()
-        } label: {
-            Text(broadcastLabel)
-                .font(.system(size: 14, weight: .semibold))
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-                .foregroundStyle(.white)
-                .background(theme.primary)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
         }
     }
 
@@ -217,7 +230,7 @@ struct RelaySettingsView: View {
         }
     }
 
-    // MARK: - State helpers
+    // MARK: - Helpers
 
     private var currentUrls: [String] {
         switch tab {
