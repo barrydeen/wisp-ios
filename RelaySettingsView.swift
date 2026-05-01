@@ -6,6 +6,7 @@ struct RelaySettingsView: View {
     @Environment(\.theme) private var theme
     @Environment(\.dismiss) private var dismiss
     @State private var repo = RelaySettingsRepository.shared
+    @State private var settings = AppSettings.shared
     @State private var tab: Tab = .general
     @State private var newUrl: String = ""
     @State private var inputError: String?
@@ -27,6 +28,22 @@ struct RelaySettingsView: View {
                     ForEach(Tab.allCases) { t in Text(t.rawValue).tag(t) }
                 }
                 .pickerStyle(.segmented)
+
+                Toggle(isOn: $settings.autoApproveRelayAuth) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Auto-approve relay AUTH")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(theme.palette.onSurface)
+                        Text("Automatically sign NIP-42 challenges without prompting")
+                            .font(.system(size: 12))
+                            .foregroundStyle(theme.palette.onSurfaceVariant)
+                    }
+                }
+                .tint(theme.primary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .background(theme.palette.surface)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
 
                 addRelayField
 

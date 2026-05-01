@@ -44,14 +44,16 @@ enum RelayPool {
         // No-op: AUTH is handled silently via authSigner whenever a keypair is available.
     }
 
-    /// Handle an incoming `["AUTH", challenge]` frame. Signs and sends back an AUTH
-    /// response immediately whenever a keypair is available. Returns `true` only when
-    /// an AUTH event was actually signed and sent — callers use this to know whether
-    /// to replay their original REQ/EVENT (some relays drop the pre-AUTH frame).
+    /// Handle an incoming `["AUTH", challenge]` frame. If auto-approve is enabled (the
+    /// default) or the relay is individually approved, signs and sends back an AUTH
+    /// response immediately. Returns `true` only when an AUTH event was actually signed
+    /// and sent — callers use this to know whether to replay their original REQ/EVENT.
     @discardableResult
     fileprivate static func respondToAuthChallenge(challenge: String, urlString: String,
                                                    ws: URLSessionWebSocketTask) async -> Bool {
-        guard let event = authSigner?(urlString, challenge) else { return false }
+        let autoApprove = UserDefaults.standard.object(forKey: "wisp_settings_auto_approve_relay_auth") as? Bool ?? true
+        guard (autoApprove || authApprovalCheck?(urlString) == true),
+              let event = authSigner?(urlString, challenge) else { return false }
         let payload = "[\"AUTH\",\(event.toJSON())]"
         do {
             try await ws.send(.string(payload))
