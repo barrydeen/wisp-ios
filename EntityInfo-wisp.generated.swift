@@ -7,11 +7,18 @@ import Foundation
 
 // MARK: - Entity metadata
 
-extension EventEntity: ObjectBox.Entity {}
-extension GroupMessageEntity: ObjectBox.Entity {}
-extension GroupMetaEntity: ObjectBox.Entity {}
+// PROJECT NOTE: each `extension` and binding below is prefixed with
+// `nonisolated` so it doesn't inherit `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`.
+// Persistence is not UI work and the generated `static var` property
+// descriptors are referenced from inside `actor EventStore` / `actor GroupStore`.
+// On regeneration, re-apply this prefix to every extension and binding class.
 
-extension EventEntity: ObjectBox.__EntityRelatable {
+
+nonisolated extension EventEntity: ObjectBox.Entity {}
+nonisolated extension GroupMessageEntity: ObjectBox.Entity {}
+nonisolated extension GroupMetaEntity: ObjectBox.Entity {}
+
+nonisolated extension EventEntity: ObjectBox.__EntityRelatable {
     internal typealias EntityType = EventEntity
 
     internal var _id: EntityId<EventEntity> {
@@ -19,7 +26,7 @@ extension EventEntity: ObjectBox.__EntityRelatable {
     }
 }
 
-extension EventEntity: ObjectBox.EntityInspectable {
+nonisolated extension EventEntity: ObjectBox.EntityInspectable {
     internal typealias EntityBindingType = EventEntityBinding
 
     /// Generated metadata used by ObjectBox to persist the entity.
@@ -43,7 +50,7 @@ extension EventEntity: ObjectBox.EntityInspectable {
     }
 }
 
-extension EventEntity {
+nonisolated extension EventEntity {
     /// Generated entity property information.
     ///
     /// You may want to use this in queries to specify fetch conditions, for example:
@@ -104,7 +111,7 @@ extension EventEntity {
     }
 }
 
-extension ObjectBox.Property where E == EventEntity {
+nonisolated extension ObjectBox.Property where E == EventEntity {
     /// Generated entity property information.
     ///
     /// You may want to use this in queries to specify fetch conditions, for example:
@@ -181,7 +188,7 @@ extension ObjectBox.Property where E == EventEntity {
 
 
 /// Generated service type to handle persisting and reading entity data. Exposed through `EventEntity.EntityBindingType`.
-internal final class EventEntityBinding: ObjectBox.EntityBinding, Sendable {
+nonisolated internal final class EventEntityBinding: ObjectBox.EntityBinding, Sendable {
     internal typealias EntityType = EventEntity
     internal typealias IdType = Id
 
@@ -235,7 +242,7 @@ internal final class EventEntityBinding: ObjectBox.EntityBinding, Sendable {
 
 
 
-extension GroupMessageEntity: ObjectBox.__EntityRelatable {
+nonisolated extension GroupMessageEntity: ObjectBox.__EntityRelatable {
     internal typealias EntityType = GroupMessageEntity
 
     internal var _id: EntityId<GroupMessageEntity> {
@@ -243,7 +250,7 @@ extension GroupMessageEntity: ObjectBox.__EntityRelatable {
     }
 }
 
-extension GroupMessageEntity: ObjectBox.EntityInspectable {
+nonisolated extension GroupMessageEntity: ObjectBox.EntityInspectable {
     internal typealias EntityBindingType = GroupMessageEntityBinding
 
     /// Generated metadata used by ObjectBox to persist the entity.
@@ -265,7 +272,7 @@ extension GroupMessageEntity: ObjectBox.EntityInspectable {
     }
 }
 
-extension GroupMessageEntity {
+nonisolated extension GroupMessageEntity {
     /// Generated entity property information.
     ///
     /// You may want to use this in queries to specify fetch conditions, for example:
@@ -314,7 +321,7 @@ extension GroupMessageEntity {
     }
 }
 
-extension ObjectBox.Property where E == GroupMessageEntity {
+nonisolated extension ObjectBox.Property where E == GroupMessageEntity {
     /// Generated entity property information.
     ///
     /// You may want to use this in queries to specify fetch conditions, for example:
@@ -375,7 +382,7 @@ extension ObjectBox.Property where E == GroupMessageEntity {
 
 
 /// Generated service type to handle persisting and reading entity data. Exposed through `GroupMessageEntity.EntityBindingType`.
-internal final class GroupMessageEntityBinding: ObjectBox.EntityBinding, Sendable {
+nonisolated internal final class GroupMessageEntityBinding: ObjectBox.EntityBinding, Sendable {
     internal typealias EntityType = GroupMessageEntity
     internal typealias IdType = Id
 
@@ -425,7 +432,7 @@ internal final class GroupMessageEntityBinding: ObjectBox.EntityBinding, Sendabl
 
 
 
-extension GroupMetaEntity: ObjectBox.__EntityRelatable {
+nonisolated extension GroupMetaEntity: ObjectBox.__EntityRelatable {
     internal typealias EntityType = GroupMetaEntity
 
     internal var _id: EntityId<GroupMetaEntity> {
@@ -433,7 +440,7 @@ extension GroupMetaEntity: ObjectBox.__EntityRelatable {
     }
 }
 
-extension GroupMetaEntity: ObjectBox.EntityInspectable {
+nonisolated extension GroupMetaEntity: ObjectBox.EntityInspectable {
     internal typealias EntityBindingType = GroupMetaEntityBinding
 
     /// Generated metadata used by ObjectBox to persist the entity.
@@ -463,7 +470,7 @@ extension GroupMetaEntity: ObjectBox.EntityInspectable {
     }
 }
 
-extension GroupMetaEntity {
+nonisolated extension GroupMetaEntity {
     /// Generated entity property information.
     ///
     /// You may want to use this in queries to specify fetch conditions, for example:
@@ -560,7 +567,7 @@ extension GroupMetaEntity {
     }
 }
 
-extension ObjectBox.Property where E == GroupMetaEntity {
+nonisolated extension ObjectBox.Property where E == GroupMetaEntity {
     /// Generated entity property information.
     ///
     /// You may want to use this in queries to specify fetch conditions, for example:
@@ -685,7 +692,7 @@ extension ObjectBox.Property where E == GroupMetaEntity {
 
 
 /// Generated service type to handle persisting and reading entity data. Exposed through `GroupMetaEntity.EntityBindingType`.
-internal final class GroupMetaEntityBinding: ObjectBox.EntityBinding, Sendable {
+nonisolated internal final class GroupMetaEntityBinding: ObjectBox.EntityBinding, Sendable {
     internal typealias EntityType = GroupMetaEntity
     internal typealias IdType = Id
 
@@ -762,7 +769,7 @@ fileprivate func optConstruct<T: RawRepresentable>(_ type: T.Type, rawValue: T.R
 
 // MARK: - Store setup
 
-fileprivate func cModel() throws -> OpaquePointer {
+nonisolated fileprivate func cModel() throws -> OpaquePointer {
     let modelBuilder = try ObjectBox.ModelBuilder()
     try EventEntity.buildEntity(modelBuilder: modelBuilder)
     try GroupMessageEntity.buildEntity(modelBuilder: modelBuilder)
@@ -772,7 +779,7 @@ fileprivate func cModel() throws -> OpaquePointer {
     return modelBuilder.finish()
 }
 
-extension ObjectBox.Store {
+nonisolated extension ObjectBox.Store {
     /// A store with a fully configured model. Created by the code generator with your model's metadata in place.
     ///
     /// # In-memory database

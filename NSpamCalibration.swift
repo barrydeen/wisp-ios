@@ -5,7 +5,7 @@ import Compression
 /// two `.npy` blobs (`calib_x.npy`, `calib_y.npy`), each storing four little-endian
 /// Float32s. Used to convert `sigmoid(rawMargin)` into a calibrated probability via
 /// piecewise-linear interpolation. Mirrors NSpamClassifier.calibrate in the Android port.
-final class NSpamCalibration: @unchecked Sendable {
+nonisolated final class NSpamCalibration: @unchecked Sendable {
     let calibX: [Float]
     let calibY: [Float]
 

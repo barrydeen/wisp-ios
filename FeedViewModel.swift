@@ -87,10 +87,15 @@ final class FeedViewModel {
         NotificationCenter.default.addObserver(
             forName: .userBlocked, object: nil, queue: .main
         ) { [weak self] note in
-            guard let self, let blocked = note.object as? String else { return }
-            self.events.removeAll {
-                $0.pubkey == blocked
-                || (FeedViewModel.repostInnerPubkey($0) == blocked)
+            // The observer block is `@Sendable`. Hop to MainActor to mutate
+            // `events` and call the MainActor-isolated `repostInnerPubkey`.
+            guard let blocked = note.object as? String else { return }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.events.removeAll {
+                    $0.pubkey == blocked
+                    || (FeedViewModel.repostInnerPubkey($0) == blocked)
+                }
             }
         }
     }
@@ -735,7 +740,7 @@ final class FeedViewModel {
     }
 }
 
-extension Array {
+nonisolated extension Array {
     func chunked(into size: Int) -> [[Element]] {
         stride(from: 0, to: count, by: size).map {
             Array(self[$0..<Swift.min($0 + size, count)])

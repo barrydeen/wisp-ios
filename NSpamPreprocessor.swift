@@ -8,7 +8,7 @@ struct NSpamPrepared: Sendable {
 
 /// Mirrors Android's `NSpamPreprocessor`. NFKC normalize → count invisibles → strip them →
 /// replace `https?://host/...` with `http://<host>` → lowercase → collapse whitespace.
-enum NSpamPreprocessor {
+nonisolated enum NSpamPreprocessor {
 
     static let invisibleChars: Set<Character> = [
         "\u{180E}", "\u{200B}", "\u{200C}", "\u{200D}", "\u{200E}", "\u{200F}",

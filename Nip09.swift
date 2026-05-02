@@ -2,7 +2,7 @@ import Foundation
 
 /// NIP-09: event deletion via kind-5.
 /// Spec: https://github.com/nostr-protocol/nips/blob/master/09.md
-enum Nip09 {
+nonisolated enum Nip09 {
 
     static let kindDeletion: Int = 5
 

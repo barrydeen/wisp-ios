@@ -4,7 +4,7 @@ import CommonCrypto
 /// NIP-04 encrypted DMs (legacy). Used as a fallback for older NWC wallet services
 /// that haven't moved to NIP-44 v2. Spec: AES-256-CBC, raw 32-byte ECDH x-coordinate
 /// as the AES key (no SHA256), random IV, payload format `<base64-ct>?iv=<base64-iv>`.
-enum Nip04 {
+nonisolated enum Nip04 {
 
     enum Error: Swift.Error {
         case malformedContent

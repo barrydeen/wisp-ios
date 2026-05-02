@@ -2,7 +2,11 @@ import Foundation
 import ObjectBox
 
 // objectbox: entity
-class GroupMetaEntity {
+//
+// `nonisolated` so the `GroupStore` actor and the ObjectBox generated
+// descriptors / bindings (which extend this type) don't cross actor
+// boundaries on every property access. See `EventEntity.swift` for context.
+nonisolated class GroupMetaEntity {
     var id: Id = 0
 
     /// `"\(ownerPubkey)|\(relayUrl)|\(groupId)"` — see `groupRoomKey(...)` in GroupModels.

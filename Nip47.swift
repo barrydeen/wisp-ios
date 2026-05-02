@@ -2,7 +2,7 @@ import Foundation
 
 /// NIP-47 Nostr Wallet Connect — request/response wire format and event-build helpers.
 /// Spec: https://github.com/nostr-protocol/nips/blob/master/47.md
-enum Nip47 {
+nonisolated enum Nip47 {
     static let infoKind = 13194
     static let requestKind = 23194
     static let responseKind = 23195

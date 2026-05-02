@@ -7,7 +7,7 @@ import Foundation
 /// Encrypted body shape: `[["p", "<hex>"], ["word", "<text>"], ["e", "<rootEventId>"]]`,
 /// JSON-encoded as a UTF-8 string, then NIP-44-v2 encrypted with `Nip44.getConversationKey`
 /// using the user's privkey × own pubkey (self-encryption).
-enum Nip51Mute {
+nonisolated enum Nip51Mute {
 
     static let kindMuteList = 10000
 

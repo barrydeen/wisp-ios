@@ -4,7 +4,7 @@ import Foundation
 ///
 /// Poll author publishes kind 1068. Voters publish kind 1018 with `e` pointing
 /// at the poll and one `response` tag per chosen option id.
-enum Nip88 {
+nonisolated enum Nip88 {
     static let kindPoll = 1068
     static let kindPollResponse = 1018
 

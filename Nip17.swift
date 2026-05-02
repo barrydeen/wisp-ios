@@ -13,7 +13,7 @@ struct Rumor {
     let id: String
 }
 
-enum Nip17 {
+nonisolated enum Nip17 {
 
     enum Kind {
         static let chatMessage = 14

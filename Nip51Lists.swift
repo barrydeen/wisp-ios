@@ -5,7 +5,7 @@ import Foundation
 ///   - kind 30002: named relay set    (parameterized replaceable, keyed by `d` tag)
 ///
 /// Kept distinct from `Nip51Groups` (which covers kind 30001 simple group lists).
-enum Nip51Lists {
+nonisolated enum Nip51Lists {
     static let kindFavoriteRelays = 10012
     static let kindRelaySet = 30002
     static let kindRelayList = 10002        // NIP-65 read/write relays

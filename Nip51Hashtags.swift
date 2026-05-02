@@ -8,7 +8,7 @@ import Foundation
 ///   ["d", dTag]
 ///   ["title", name]
 ///   ["t", hashtag]   // one per hashtag, lowercased, leading `#` stripped
-enum Nip51Hashtags {
+nonisolated enum Nip51Hashtags {
     static let kindHashtagSet = 30015
 
     /// Normalize a hashtag for storage / equality:

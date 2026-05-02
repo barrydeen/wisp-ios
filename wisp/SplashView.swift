@@ -169,32 +169,47 @@ private struct AnimatedLogo: View {
 
 // Legacy palette accessors. Prefer `@Environment(\.theme)` and `theme.palette.*` /
 // `theme.primary` directly in new code — these globals reflect the active theme by
-// reading `AppSettings.shared.resolveTheme(...)` synchronously. They live on for the
-// many existing call sites that haven't been migrated yet.
-extension Color {
-    @MainActor static var wispBackground: Color { ResolvedThemeProxy.current.palette.background }
-    @MainActor static var wispSurface: Color { ResolvedThemeProxy.current.palette.surface }
-    @MainActor static var wispSurfaceVariant: Color { ResolvedThemeProxy.current.palette.surfaceVariant }
-    @MainActor static var wispPrimary: Color { ResolvedThemeProxy.current.primary }
-    @MainActor static var wispZapColor: Color { ResolvedThemeProxy.current.palette.zap }
-    @MainActor static var wispRepostColor: Color { ResolvedThemeProxy.current.palette.repost }
-    @MainActor static var wispBookmarkColor: Color { ResolvedThemeProxy.current.palette.bookmark }
-    @MainActor static var wispPaidColor: Color { ResolvedThemeProxy.current.palette.paid }
-    @MainActor static var wispOnSurface: Color { ResolvedThemeProxy.current.palette.onSurface }
-    @MainActor static var wispOnSurfaceVariant: Color { ResolvedThemeProxy.current.palette.onSurfaceVariant }
-    @MainActor static var wispOutline: Color { ResolvedThemeProxy.current.palette.outline }
+// reading `ResolvedThemeProxy.current` synchronously. They live on for the many
+// existing call sites that haven't been migrated yet.
+//
+// `nonisolated` so SwiftUI views, `Sendable` closures, and non-MainActor code
+// (`UIViewRepresentable` coordinators, `Task.detached` rendering helpers) can
+// read these without needing an actor hop. The underlying `ResolvedThemeProxy`
+// is lock-protected.
+nonisolated extension Color {
+    static var wispBackground: Color { ResolvedThemeProxy.current.palette.background }
+    static var wispSurface: Color { ResolvedThemeProxy.current.palette.surface }
+    static var wispSurfaceVariant: Color { ResolvedThemeProxy.current.palette.surfaceVariant }
+    static var wispPrimary: Color { ResolvedThemeProxy.current.primary }
+    static var wispZapColor: Color { ResolvedThemeProxy.current.palette.zap }
+    static var wispRepostColor: Color { ResolvedThemeProxy.current.palette.repost }
+    static var wispBookmarkColor: Color { ResolvedThemeProxy.current.palette.bookmark }
+    static var wispPaidColor: Color { ResolvedThemeProxy.current.palette.paid }
+    static var wispOnSurface: Color { ResolvedThemeProxy.current.palette.onSurface }
+    static var wispOnSurfaceVariant: Color { ResolvedThemeProxy.current.palette.onSurfaceVariant }
+    static var wispOutline: Color { ResolvedThemeProxy.current.palette.outline }
 }
 
-@MainActor
-enum ResolvedThemeProxy {
-    /// Last-resolved theme. Updated by the root view via `update(_:)` whenever
-    /// `AppSettings` or the system color scheme change. Reads from this proxy do
-    /// not subscribe to settings changes — but each `View.body` re-evaluation
-    /// reads fresh, which is enough for SwiftUI's normal redraw cycle.
-    static var current: ResolvedTheme = AppSettings.shared.resolveTheme(systemColorScheme: nil)
+/// Thread-safe holder for the active resolved theme.
+///
+/// Reads happen on every `View.body` re-evaluation, including inside
+/// `Sendable` closures and `UIViewRepresentable.updateUIView`, so the
+/// accessor must not require MainActor. Writes come from the root view's
+/// `task` via `update(_:)` whenever `AppSettings` or the system color
+/// scheme change. Brief staleness during an update (one frame) is fine —
+/// theme transitions are visual, not load-bearing.
+nonisolated enum ResolvedThemeProxy {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var _current: ResolvedTheme = .default
+
+    static var current: ResolvedTheme {
+        lock.lock(); defer { lock.unlock() }
+        return _current
+    }
 
     static func update(_ theme: ResolvedTheme) {
-        current = theme
+        lock.lock(); defer { lock.unlock() }
+        _current = theme
     }
 }
 

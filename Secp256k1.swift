@@ -3,7 +3,7 @@ import Foundation
 // Minimal pure-Swift secp256k1 implementation for public key derivation only.
 // y² = x³ + 7 over F_p, where p = 2²⁵⁶ - 2³² - 977
 
-enum Secp256k1 {
+nonisolated enum Secp256k1 {
 
     // MARK: - Public API
 

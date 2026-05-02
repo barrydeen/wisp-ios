@@ -1,7 +1,7 @@
 import Foundation
 
 /// NIP-10 helpers: parsing reply / root markers and constructing reply tags.
-enum Nip10 {
+nonisolated enum Nip10 {
 
     /// Returns the root event id of `event`, or nil if the event has no `e` tags.
     /// Prefers a marked `root` e-tag; falls back to the first e-tag (legacy positional).

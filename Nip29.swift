@@ -3,7 +3,7 @@ import Foundation
 /// NIP-29 relay-based groups (chat rooms).
 /// Spec: https://github.com/nostr-protocol/nips/blob/master/29.md
 /// Direct port of `Nip29.kt` from the Wisp Android client.
-enum Nip29 {
+nonisolated enum Nip29 {
 
     // MARK: - Event kinds
 

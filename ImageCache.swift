@@ -1,7 +1,7 @@
 import Foundation
 import UIKit
 
-final class ImageCache: @unchecked Sendable {
+nonisolated final class ImageCache: @unchecked Sendable {
     static let shared = ImageCache()
 
     private let cacheDir: URL

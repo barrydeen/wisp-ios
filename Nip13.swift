@@ -1,6 +1,6 @@
 import Foundation
 
-enum Nip13 {
+nonisolated enum Nip13 {
 
     /// Count leading zero bits in a hex event id. Each '0' nibble is 4 bits;
     /// the first non-zero nibble contributes its own leading-zero bit count.

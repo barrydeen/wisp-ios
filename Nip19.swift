@@ -6,7 +6,7 @@ enum NostrUriData {
     case addressRef(dTag: String, relays: [String], author: String?, kind: Int?)
 }
 
-enum Nip19 {
+nonisolated enum Nip19 {
     private static let charset = Array("qpzry9x8gf2tvdw0s3jn54khce6mua7l")
     private static let charsetRev: [Int] = {
         var arr = Array(repeating: -1, count: 128)

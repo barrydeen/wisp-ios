@@ -2,7 +2,7 @@ import Foundation
 
 /// NIP-42: client authentication on relays via kind-22242 events.
 /// Spec: https://github.com/nostr-protocol/nips/blob/master/42.md
-enum Nip42 {
+nonisolated enum Nip42 {
 
     static let kindAuth = 22242
 

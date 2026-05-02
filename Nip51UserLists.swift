@@ -8,7 +8,7 @@ import Foundation
 /// be public (plain tags) or private (NIP-44 encrypted JSON in `event.content`).
 /// The encryption peer is the user's own pubkey (self-conversation key) — the
 /// canonical NIP-51 pattern for personal private lists.
-enum Nip51UserLists {
+nonisolated enum Nip51UserLists {
     static let kindPeopleList = 30000
     static let kindNoteList = 30003
 

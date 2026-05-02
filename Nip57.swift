@@ -6,7 +6,7 @@ import CryptoKit
 /// Send flow: resolve recipient lud16 → build kind 9734 zap request → POST to LNURL callback
 /// with the request as a `nostr=` query param → receive bolt11 invoice → pay via active wallet.
 /// The LNURL server publishes the kind 9735 receipt to the relays in the request's `relays` tag.
-enum Nip57 {
+nonisolated enum Nip57 {
 
     struct LnurlPayInfo {
         let callback: String

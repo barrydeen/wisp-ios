@@ -2,7 +2,7 @@ import Foundation
 
 /// NIP-51 kind-10009 ("simple groups") slice — the user's persisted list of
 /// joined NIP-29 groups, used for cross-device sync.
-enum Nip51Groups {
+nonisolated enum Nip51Groups {
 
     static let kindSimpleGroups = 10009
 

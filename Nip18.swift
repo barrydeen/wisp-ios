@@ -1,6 +1,6 @@
 import Foundation
 
-enum Nip18 {
+nonisolated enum Nip18 {
 
     /// Tags for a kind-1 quote-repost referencing another event.
     /// Spec: `q` for the quoted id, `p` for the quoted author.

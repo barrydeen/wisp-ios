@@ -7,7 +7,7 @@ import CryptoKit
 /// d-tag format `spark-wallet-backup:<walletId>` matches the Android Wisp + addy
 /// cross-app format so backups round-trip across clients. `walletId` is the first
 /// 16 hex chars of SHA256(normalizedMnemonic).
-enum Nip78Backup {
+nonisolated enum Nip78Backup {
     static let kind = 30078
     private static let dTagPrefix = "spark-wallet-backup"
 

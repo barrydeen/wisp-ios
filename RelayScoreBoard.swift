@@ -1,6 +1,6 @@
 import Foundation
 
-final class RelayScoreBoard {
+nonisolated final class RelayScoreBoard {
     private(set) var relayAuthors: [String: Set<String>] = [:]
     private(set) var authorRelays: [String: Set<String>] = [:]
     private(set) var scoredRelays: [(url: String, count: Int)] = []

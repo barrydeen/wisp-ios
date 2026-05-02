@@ -135,7 +135,9 @@ final class AppSettings {
     }
 }
 
-extension Color {
+// `nonisolated` — these initializers and `hex(_:)` are pure value transforms
+// (Int → Color), used at module-load time by `Themes` and from any actor.
+nonisolated extension Color {
     init(argb: Int) {
         let a = Double((argb >> 24) & 0xFF) / 255.0
         let r = Double((argb >> 16) & 0xFF) / 255.0

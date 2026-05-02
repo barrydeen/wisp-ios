@@ -1,7 +1,7 @@
 import Foundation
 import ObjectBox
 
-enum ObjectBoxSetup {
+nonisolated enum ObjectBoxSetup {
     private(set) static var store: Store!
 
     static func setUp() throws {

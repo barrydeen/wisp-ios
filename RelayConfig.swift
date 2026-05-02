@@ -1,6 +1,6 @@
 import Foundation
 
-struct GeneralRelay: Codable, Equatable {
+nonisolated struct GeneralRelay: Codable, Equatable {
     var url: String
     var read: Bool
     var write: Bool

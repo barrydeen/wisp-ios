@@ -1,6 +1,6 @@
 import Foundation
 
-enum Bech32 {
+nonisolated enum Bech32 {
     private static let charset = Array("qpzry9x8gf2tvdw0s3jn54khce6mua7l")
 
     static func decode(_ str: String) -> (hrp: String, data: Data)? {

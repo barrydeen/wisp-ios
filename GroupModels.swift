@@ -111,6 +111,6 @@ enum AdminError: Error, Hashable {
 
 /// `"\(ownerPubkey)|\(relayUrl)|\(groupId)"`. Stable across processes; used as
 /// the unique key in the ObjectBox `GroupMetaEntity` and `GroupMessageEntity` tables.
-func groupRoomKey(ownerPubkey: String, relayUrl: String, groupId: String) -> String {
+nonisolated func groupRoomKey(ownerPubkey: String, relayUrl: String, groupId: String) -> String {
     "\(ownerPubkey)|\(relayUrl)|\(groupId)"
 }

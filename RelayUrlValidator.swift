@@ -7,7 +7,7 @@ import Foundation
 /// Many users have garbage in their kind:10002 lists (`http://`, `localhost`,
 /// raw IPs, `wss://host:port`, `.onion`). Connecting to those wastes sockets
 /// and blocks waiting for handshakes that will never complete. Filter early.
-enum RelayUrlValidator {
+nonisolated enum RelayUrlValidator {
 
     static func isOnion(_ url: String) -> Bool { url.contains(".onion") }
 

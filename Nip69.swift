@@ -6,7 +6,7 @@ import Foundation
 /// zap-request includes a `["poll_option", "<index>"]` tag, which the LNURL server
 /// then echoes verbatim into the kind-9735 receipt's `description` field. Tally is
 /// by total sats per option; one vote per pubkey, latest-wins.
-enum Nip69 {
+nonisolated enum Nip69 {
     static let kindZapPoll = 6969
 
     struct ZapPollOption: Hashable {

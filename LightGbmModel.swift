@@ -3,7 +3,7 @@ import Foundation
 /// Pure-Swift port of LightGBM's text-format model file. Mirrors Android's
 /// `com.wisp.app.ml.LightGbmModel`. Each tree is a flat array of nodes; positive node indices
 /// point to the next split, negative indices mean "leaf at index `-node - 1`".
-final class LightGbmModel: @unchecked Sendable {
+nonisolated final class LightGbmModel: @unchecked Sendable {
     struct Tree: Sendable {
         let splitFeature: [Int32]
         let threshold: [Float]

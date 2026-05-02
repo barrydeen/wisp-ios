@@ -1,6 +1,6 @@
 import SwiftUI
 
-struct ThemePalette: Equatable {
+nonisolated struct ThemePalette: Equatable {
     let primary: Color
     let secondary: Color
     let background: Color
@@ -16,14 +16,14 @@ struct ThemePalette: Equatable {
     let paid: Color
 }
 
-struct ThemePreset: Identifiable, Equatable {
+nonisolated struct ThemePreset: Identifiable, Equatable {
     let id: String
     let displayName: String
     let dark: ThemePalette
     let light: ThemePalette
 }
 
-struct ResolvedTheme: Equatable {
+nonisolated struct ResolvedTheme: Equatable {
     let presetId: String
     let isDark: Bool
     let palette: ThemePalette

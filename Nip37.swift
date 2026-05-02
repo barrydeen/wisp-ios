@@ -8,7 +8,7 @@ import Foundation
 /// `{ kind, pubkey, created_at, tags, content }`. The wrapper carries
 /// `["d", <uuid>]` (addressable identifier) and `["k", <innerKind>]`.
 /// An empty-content wrapper with the same `d` tag means "deleted".
-enum Nip37 {
+nonisolated enum Nip37 {
 
     static let kindDraft: Int = 31234
 

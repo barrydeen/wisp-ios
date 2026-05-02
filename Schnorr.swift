@@ -1,7 +1,7 @@
 import Foundation
 import P256K
 
-enum Schnorr {
+nonisolated enum Schnorr {
 
     static func sign(messageId32: Data, privkey32: Data) throws -> Data {
         let priv = try P256K.Schnorr.PrivateKey(dataRepresentation: privkey32)

@@ -1,6 +1,6 @@
 import Foundation
 
-enum Hex {
+nonisolated enum Hex {
     static func encode(_ data: Data) -> String {
         data.map { String(format: "%02x", $0) }.joined()
     }

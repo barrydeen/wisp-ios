@@ -1,7 +1,7 @@
 import Foundation
 import CryptoKit
 
-struct NostrEvent {
+nonisolated struct NostrEvent {
     let id: String
     let pubkey: String
     let kind: Int

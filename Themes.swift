@@ -1,6 +1,6 @@
 import SwiftUI
 
-enum Themes {
+nonisolated enum Themes {
     static let all: [ThemePreset] = [
         ThemePreset(
             id: "custom", displayName: "Custom",

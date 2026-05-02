@@ -10,7 +10,7 @@ struct NSpamNoteInput: Sendable {
 /// from a list of recent notes by the same author. Values are sums (n-grams), means
 /// (structural features), or aggregates (group features). The model was trained on this
 /// exact layout; any drift in regex behavior, hash sign, or feature ordering breaks scoring.
-enum NSpamFeatures {
+nonisolated enum NSpamFeatures {
 
     static let nChar = 131_072
     static let nWord = 131_072

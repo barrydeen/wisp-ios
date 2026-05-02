@@ -11,7 +11,7 @@ import Foundation
 ///
 /// Mirrors `Nip29.buildReaction` so the feed reaction path matches the
 /// shape of the existing group-chat reaction path.
-enum Nip25 {
+nonisolated enum Nip25 {
     static let kindReaction = 7
 
     /// Build the canonical NIP-25 tag set without signing. Used by the PoW path,

@@ -1,6 +1,6 @@
 import Foundation
 
-enum Bolt11 {
+nonisolated enum Bolt11 {
     private static let bech32Charset = Array("qpzry9x8gf2tvdw0s3jn54khce6mua7l")
     private static let hrpAmountRegex = try! NSRegularExpression(pattern: #"ln\w+?(\d+)([munp]?)$"#)
 

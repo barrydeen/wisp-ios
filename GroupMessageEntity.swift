@@ -2,7 +2,11 @@ import Foundation
 import ObjectBox
 
 // objectbox: entity
-class GroupMessageEntity {
+//
+// `nonisolated` so the `GroupStore` actor and the ObjectBox generated
+// descriptors / bindings (which extend this type) don't cross actor
+// boundaries on every property access. See `EventEntity.swift` for context.
+nonisolated class GroupMessageEntity {
     var id: Id = 0
 
     /// Source NIP-29 event id (kind 9).

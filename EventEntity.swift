@@ -2,7 +2,12 @@ import Foundation
 import ObjectBox
 
 // objectbox: entity
-class EventEntity {
+//
+// `nonisolated` overrides the project's `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`
+// for this class so reads/writes from the `EventStore` actor (and the ObjectBox
+// generated descriptors / bindings, which extend this type) don't cross actor
+// boundaries on every property access. Persistence is fundamentally not UI work.
+nonisolated class EventEntity {
     var id: Id = 0
 
     // objectbox: unique

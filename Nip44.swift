@@ -4,7 +4,7 @@ import CryptoKit
 /// NIP-44 v2 versioned encryption.
 /// Spec: https://github.com/nostr-protocol/nips/blob/master/44.md
 /// Payload layout (base64): version(1) || nonce(32) || ciphertext || mac(32)
-enum Nip44 {
+nonisolated enum Nip44 {
 
     enum Error: Swift.Error {
         case invalidPayload

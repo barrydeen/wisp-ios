@@ -1,6 +1,6 @@
 import Foundation
 
-enum ChaCha20 {
+nonisolated enum ChaCha20 {
 
     /// IETF ChaCha20 (RFC 7539) stream cipher.
     /// - key: 32 bytes
