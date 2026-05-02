@@ -13,12 +13,7 @@ final class NoteListRepository {
     @ObservationIgnored private var loadedFor: String?
     @ObservationIgnored private var listUpdatedAt: [String: Int] = [:]
 
-    private static let indexerRelays = [
-        "wss://indexer.nostrarchives.com",
-        "wss://indexer.coracle.social",
-        "wss://relay.damus.io",
-        "wss://relay.primal.net"
-    ]
+    private static let indexerRelays = RelayDefaults.indexers
 
     // MARK: - Lifecycle
 

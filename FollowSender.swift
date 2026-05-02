@@ -19,12 +19,7 @@ final class FollowSender {
         case publishFailed
     }
 
-    private static let indexerRelays = [
-        "wss://indexer.nostrarchives.com",
-        "wss://indexer.coracle.social",
-        "wss://relay.damus.io",
-        "wss://relay.primal.net"
-    ]
+    private static let indexerRelays = RelayDefaults.indexers
 
     /// Add `pubkey` to the active user's contact list. No-op if already followed.
     func follow(_ pubkey: String, keypair: Keypair) async throws {
@@ -41,7 +36,7 @@ final class FollowSender {
     }
 
     private func currentFollows(for pubkey: String) -> Set<String> {
-        Set(UserDefaults.standard.stringArray(forKey: "follow_pubkeys_\(pubkey)") ?? [])
+        FollowsCache.shared.followsSet(for: pubkey)
     }
 
     private func publish(follows: Set<String>, keypair: Keypair) async throws {
@@ -70,7 +65,7 @@ final class FollowSender {
 
         // Save the new set locally up front so the UI reflects the change
         // immediately even if the relay round-trip takes a moment.
-        UserDefaults.standard.set(Array(follows), forKey: "follow_pubkeys_\(keypair.pubkey)")
+        FollowsCache.shared.update(pubkey: keypair.pubkey, follows: Array(follows))
         await EventStore.shared.persist([event])
 
         let succeeded = await RelayPool.publish(event: event, to: relays, timeout: 8)

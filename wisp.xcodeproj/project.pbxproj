@@ -13,6 +13,9 @@
 		4CDA87E02F9C54960079A1BA /* NostrEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA87DF2F9C54960079A1BA /* NostrEvent.swift */; };
 		4CDA87E22F9C54970079A1BA /* NostrKey.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA87E12F9C54970079A1BA /* NostrKey.swift */; };
 		4CDA87E42F9C54980079A1BA /* RelayPool.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA87E32F9C54980079A1BA /* RelayPool.swift */; };
+		4CFA00010001000000A1BA01 /* RelayDefaults.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFA00020001000000A1BA01 /* RelayDefaults.swift */; };
+		4CFA00030001000000A1BA01 /* FollowsCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFA00040001000000A1BA01 /* FollowsCache.swift */; };
+		4CFA00050001000000A1BA01 /* EventPersistQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFA00060001000000A1BA01 /* EventPersistQueue.swift */; };
 		4CDA87E62F9C54990079A1BA /* RelayScoreBoard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA87E52F9C54990079A1BA /* RelayScoreBoard.swift */; };
 		4CDA87E72F9C549A0079A1BA /* RelayUrlValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA87E82F9C549A0079A1BA /* RelayUrlValidator.swift */; };
 		4CDA87E82F9C54B70079A1BA /* LoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA87E72F9C54B70079A1BA /* LoginView.swift */; };
@@ -273,6 +276,9 @@
 		4CDA87DF2F9C54960079A1BA /* NostrEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NostrEvent.swift; sourceTree = "<group>"; };
 		4CDA87E12F9C54970079A1BA /* NostrKey.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NostrKey.swift; sourceTree = "<group>"; };
 		4CDA87E32F9C54980079A1BA /* RelayPool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayPool.swift; sourceTree = "<group>"; };
+		4CFA00020001000000A1BA01 /* RelayDefaults.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayDefaults.swift; sourceTree = "<group>"; };
+		4CFA00040001000000A1BA01 /* FollowsCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowsCache.swift; sourceTree = "<group>"; };
+		4CFA00060001000000A1BA01 /* EventPersistQueue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventPersistQueue.swift; sourceTree = "<group>"; };
 		4CDA87E52F9C54990079A1BA /* RelayScoreBoard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayScoreBoard.swift; sourceTree = "<group>"; };
 		4CDA87E72F9C54B70079A1BA /* LoginView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginView.swift; sourceTree = "<group>"; };
 		4CDA87E82F9C549A0079A1BA /* RelayUrlValidator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayUrlValidator.swift; sourceTree = "<group>"; };
@@ -564,6 +570,9 @@
 				4CDA87DF2F9C54960079A1BA /* NostrEvent.swift */,
 				4CDA87E12F9C54970079A1BA /* NostrKey.swift */,
 				4CDA87E32F9C54980079A1BA /* RelayPool.swift */,
+				4CFA00020001000000A1BA01 /* RelayDefaults.swift */,
+				4CFA00040001000000A1BA01 /* FollowsCache.swift */,
+				4CFA00060001000000A1BA01 /* EventPersistQueue.swift */,
 				4CDA87E52F9C54990079A1BA /* RelayScoreBoard.swift */,
 				4CDA87E82F9C549A0079A1BA /* RelayUrlValidator.swift */,
 				4CDA88FA2F9C540000000001 /* AppDataWipe.swift */,
@@ -976,6 +985,9 @@
 				4CDA87F62F9C5CC70079A1BA /* MainView.swift in Sources */,
 				4CDA88042F9C6B770079A1BA /* ObjectBoxSetup.swift in Sources */,
 				4CDA87E42F9C54980079A1BA /* RelayPool.swift in Sources */,
+				4CFA00010001000000A1BA01 /* RelayDefaults.swift in Sources */,
+				4CFA00030001000000A1BA01 /* FollowsCache.swift in Sources */,
+				4CFA00050001000000A1BA01 /* EventPersistQueue.swift in Sources */,
 				4CDA87E02F9C54960079A1BA /* NostrEvent.swift in Sources */,
 				4CDA87EA2F9C54B80079A1BA /* OnboardingViewModel.swift in Sources */,
 				4CDA87E82F9C54B70079A1BA /* LoginView.swift in Sources */,

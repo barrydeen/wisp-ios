@@ -403,7 +403,21 @@ final class NotificationsViewModel {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(180))
                 if Task.isCancelled { break }
-                self?.reopenSubscriptions()
+                guard let self else { return }
+                // Same gate as the background-refresh path at the top of this
+                // file: skip the reopen if neither the resolved relay set nor
+                // the user's own event ids have changed since the last cycle.
+                // Blindly reopening every 3 minutes burns 5 sockets and forces
+                // every relay to redo its REQ work for no benefit.
+                let beforeRelays = Set(self.notifRelays)
+                let beforeIds = self.repo.selfEventIds
+                await self.resolveRelaySets()
+                await self.refreshSelfEventIds()
+                let relaysChanged = Set(self.notifRelays) != beforeRelays
+                let idsChanged = self.repo.selfEventIds != beforeIds
+                if relaysChanged || idsChanged {
+                    self.reopenSubscriptions()
+                }
             }
         }
     }
@@ -473,7 +487,7 @@ final class NotificationsViewModel {
         if spamScoringInflight.contains(author) { return }
 
         // Skip authors the user already follows — they get the benefit of the doubt.
-        let follows = UserDefaults.standard.stringArray(forKey: "follow_pubkeys_\(keypair.pubkey)") ?? []
+        let follows = FollowsCache.shared.follows(for: keypair.pubkey)
         if follows.contains(author) { return }
 
         spamScoringInflight.insert(author)

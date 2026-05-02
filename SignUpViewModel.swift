@@ -106,14 +106,7 @@ final class SignUpViewModel {
 
     private static let newsRelay = "wss://news.utxo.one"
 
-    private static let indexerRelays = [
-        "wss://indexer.coracle.social",
-        "wss://relay.nos.social",
-        "wss://nos.lol",
-        "wss://indexer.nostrarchives.com",
-        "wss://relay.damus.io",
-        "wss://relay.primal.net"
-    ]
+    private static let indexerRelays = RelayDefaults.onboarding
 
     static let popularHashtags = [
         "nostr", "bitcoin", "lightning", "art", "photography",
@@ -377,7 +370,7 @@ final class SignUpViewModel {
         var follows = selectedFollows
         follows.insert(keypair.pubkey)
 
-        UserDefaults.standard.set(Array(follows), forKey: "follow_pubkeys_\(keypair.pubkey)")
+        FollowsCache.shared.update(pubkey: keypair.pubkey, follows: Array(follows))
 
         let writeRelays = discoveredRelays.filter(\.write).map(\.url)
         let targets = (writeRelays + Self.indexerRelays).uniquedPreservingOrder()

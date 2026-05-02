@@ -46,12 +46,7 @@ final class SearchViewModel {
 
     static let defaultSearchRelay = "wss://search.nostrarchives.com"
 
-    private static let indexerRelays = [
-        "wss://indexer.nostrarchives.com",
-        "wss://indexer.coracle.social",
-        "wss://relay.damus.io",
-        "wss://relay.primal.net"
-    ]
+    private static let indexerRelays = RelayDefaults.indexers
 
     private static let engagementFallbackRelays = ["wss://relay.damus.io"]
 
@@ -253,7 +248,7 @@ final class SearchViewModel {
                 results.append(ProfileData(pubkey: event.pubkey))
             }
         }
-        let follows = Set(UserDefaults.standard.stringArray(forKey: "follow_pubkeys_\(keypair.pubkey)") ?? [])
+        let follows = FollowsCache.shared.followsSet(for: keypair.pubkey)
         results.sort { lhs, rhs in
             let lf = follows.contains(lhs.pubkey)
             let rf = follows.contains(rhs.pubkey)

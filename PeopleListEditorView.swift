@@ -168,12 +168,7 @@ struct PeopleListEditorView: View {
         guard !missing.isEmpty else { return }
         for batch in missing.chunked(into: 150) {
             let results = await RelayPool.query(
-                relays: [
-                    "wss://indexer.nostrarchives.com",
-                    "wss://indexer.coracle.social",
-                    "wss://relay.damus.io",
-                    "wss://relay.primal.net"
-                ],
+                relays: RelayDefaults.indexers,
                 filter: NostrFilter(kinds: [0], authors: batch),
                 timeout: 8
             )

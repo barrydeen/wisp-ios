@@ -49,19 +49,9 @@ final class ThreadViewModel {
     @ObservationIgnored private var publishObserver: NSObjectProtocol?
     @ObservationIgnored private var blockObserver: NSObjectProtocol?
 
-    private static let indexerRelays = [
-        "wss://indexer.nostrarchives.com",
-        "wss://indexer.coracle.social",
-        "wss://relay.damus.io",
-        "wss://relay.primal.net"
-    ]
+    private static let indexerRelays = RelayDefaults.indexers
 
-    private static let fallbackRelays = [
-        "wss://relay.damus.io",
-        "wss://relay.primal.net",
-        "wss://nos.lol",
-        "wss://relay.nostr.band"
-    ]
+    private static let fallbackRelays = RelayDefaults.fallbacks
 
     init(seedEventId: String, authorHint: String?, keypair: Keypair) {
         self.keypair = keypair
@@ -712,7 +702,7 @@ final class ThreadViewModel {
         if SafetyPreferences.shared.isSafelisted(author) { return }
         if hiddenSpamPubkeys.contains(author) { return }
         if spamScoringInflight.contains(author) { return }
-        let follows = UserDefaults.standard.stringArray(forKey: "follow_pubkeys_\(keypair.pubkey)") ?? []
+        let follows = FollowsCache.shared.follows(for: keypair.pubkey)
         if follows.contains(author) { return }
 
         spamScoringInflight.insert(author)

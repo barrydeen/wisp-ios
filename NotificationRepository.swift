@@ -86,7 +86,13 @@ final class NotificationRepository {
 
         guard let item else { return false }
         eventCache[event.id] = event
-        flatItems.insert(item, at: 0)
+        // Insert in timestamp-desc sorted position so the FIFO eviction at the
+        // tail actually drops the oldest item. A backfill burst delivers items
+        // out of order — without this, old events get placed at index 0 and
+        // push the most recent (in-window) items off the end of the buffer,
+        // which silently zeroes out `computeSummary24h`'s last-24h counters.
+        let insertIdx = flatItems.firstIndex(where: { $0.timestamp < item.timestamp }) ?? flatItems.count
+        flatItems.insert(item, at: insertIdx)
         if flatItems.count > Self.flatCap { flatItems.removeLast(flatItems.count - Self.flatCap) }
 
         mergeIntoGroup(item)
@@ -97,7 +103,7 @@ final class NotificationRepository {
         // forget — the actor handles its own queue and `persist` is a no-op for kinds outside
         // the persistedKinds set.
         if persist {
-            Task.detached { await EventStore.shared.persist([event]) }
+            Task { await EventPersistQueue.shared.enqueue(event) }
         }
         fireEffects(for: item, persist: persist)
         return true

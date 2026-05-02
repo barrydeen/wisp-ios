@@ -37,14 +37,7 @@ final class RelaySettingsRepository {
 
     /// Indexer fallback set for *publishing* list metadata. Mirrors Android's
     /// `DEFAULT_INDEXER_RELAYS` so cross-client visibility matches.
-    static let indexerRelays = [
-        "wss://indexer.coracle.social",
-        "wss://relay.nos.social",
-        "wss://nos.lol",
-        "wss://indexer.nostrarchives.com",
-        "wss://relay.damus.io",
-        "wss://relay.primal.net"
-    ]
+    static let indexerRelays = RelayDefaults.onboarding
 
     // MARK: - Lifecycle
 

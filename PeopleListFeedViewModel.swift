@@ -26,12 +26,7 @@ final class PeopleListFeedViewModel {
 
     @ObservationIgnored private var loadMoreTask: Task<Void, Never>?
 
-    private static let indexerRelays = [
-        "wss://indexer.nostrarchives.com",
-        "wss://indexer.coracle.social",
-        "wss://relay.damus.io",
-        "wss://relay.primal.net"
-    ]
+    private static let indexerRelays = RelayDefaults.indexers
 
     private static let feedKinds = [1, 6, 20]
 
@@ -164,7 +159,7 @@ final class PeopleListFeedViewModel {
         events.sort { $0.createdAt > $1.createdAt }
 
         if !added.isEmpty {
-            Task.detached { await EventStore.shared.persist(added) }
+            Task { await EventPersistQueue.shared.enqueue(added) }
         }
     }
 

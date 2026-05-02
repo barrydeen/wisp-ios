@@ -31,12 +31,7 @@ final class HashtagFeedViewModel {
         "wss://search.nostrarchives.com"
     ]
 
-    private static let indexerRelays = [
-        "wss://indexer.nostrarchives.com",
-        "wss://indexer.coracle.social",
-        "wss://relay.damus.io",
-        "wss://relay.primal.net"
-    ]
+    private static let indexerRelays = RelayDefaults.indexers
 
     init(keypair: Keypair, source: Source) {
         self.keypair = keypair
@@ -106,7 +101,7 @@ final class HashtagFeedViewModel {
         // Persist (kind 1 is in EventStore.persistedKinds)
         if !results.isEmpty {
             let toPersist = results
-            Task.detached { await EventStore.shared.persist(toPersist) }
+            Task { await EventPersistQueue.shared.enqueue(toPersist) }
         }
 
         await loadMissingProfiles()

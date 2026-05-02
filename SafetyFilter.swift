@@ -52,6 +52,12 @@ final class SafetyFilter: @unchecked Sendable {
     private let writeLock = NSLock()
     nonisolated(unsafe) private var _current: SafetyFilterSnapshot = .empty
 
+    /// Bounded LRU of lowercased event content keyed by event id. The hot path
+    /// `containsMutedWord` previously called `event.content.lowercased()` on
+    /// every check, allocating a fresh String even when re-checking the same
+    /// event after a mute-list rebuild. 1024 entries × ~1 KB avg → ~1 MB cap.
+    private let lowercaseCache = LowercaseCache(capacity: 1024)
+
     private init() {}
 
     var snapshot: SafetyFilterSnapshot { _current }
@@ -81,7 +87,7 @@ final class SafetyFilter: @unchecked Sendable {
             }
         }()
         if allowsWordCheck, !s.mutedWords.isEmpty,
-           containsMutedWord(content: event.content, words: s.mutedWords) {
+           containsMutedWord(eventId: event.id, content: event.content, words: s.mutedWords) {
             return true
         }
 
@@ -142,8 +148,8 @@ final class SafetyFilter: @unchecked Sendable {
 
     // MARK: - Private
 
-    private func containsMutedWord(content: String, words: Set<String>) -> Bool {
-        let lower = content.lowercased()
+    private func containsMutedWord(eventId: String, content: String, words: Set<String>) -> Bool {
+        let lower = lowercaseCache.get(key: eventId, fallback: content)
         for w in words where lower.contains(w) { return true }
         return false
     }
@@ -157,5 +163,42 @@ final class SafetyFilter: @unchecked Sendable {
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
         return json["pubkey"] as? String
+    }
+}
+
+/// Bounded FIFO of lowercased strings keyed by event id. Lookups are O(1);
+/// the eviction list lets us cap memory without an OS-managed NSCache (which
+/// can be aggressive under simulator-low-memory scenarios).
+private final class LowercaseCache: @unchecked Sendable {
+    private let capacity: Int
+    private let lock = NSLock()
+    private var byKey: [String: String] = [:]
+    private var order: [String] = []
+
+    init(capacity: Int) {
+        self.capacity = capacity
+        self.byKey.reserveCapacity(capacity)
+        self.order.reserveCapacity(capacity)
+    }
+
+    func get(key: String, fallback: @autoclosure () -> String) -> String {
+        lock.lock()
+        if let cached = byKey[key] {
+            lock.unlock()
+            return cached
+        }
+        lock.unlock()
+        let lower = fallback().lowercased()
+        lock.lock()
+        if byKey[key] == nil {
+            byKey[key] = lower
+            order.append(key)
+            while order.count > capacity {
+                let evict = order.removeFirst()
+                byKey.removeValue(forKey: evict)
+            }
+        }
+        lock.unlock()
+        return lower
     }
 }

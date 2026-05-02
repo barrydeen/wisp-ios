@@ -43,12 +43,7 @@ final class ProfileEditViewModel {
     @ObservationIgnored private var existingJson: [String: Any] = [:]
     @ObservationIgnored private var blossomServers: [String] = [BlossomServerList.defaultServer]
 
-    private static let indexerRelays = [
-        "wss://indexer.nostrarchives.com",
-        "wss://indexer.coracle.social",
-        "wss://relay.damus.io",
-        "wss://relay.primal.net"
-    ]
+    private static let indexerRelays = RelayDefaults.indexers
 
     init(keypair: Keypair) {
         self.keypair = keypair

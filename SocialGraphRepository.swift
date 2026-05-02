@@ -34,12 +34,7 @@ actor SocialGraphRepository {
     /// Indexer relays used as fallback when the score board hasn't been built yet.
     /// Same set as `FeedViewModel.indexerRelays` but duplicated here to keep the repository
     /// free of FeedViewModel coupling.
-    private static let indexerRelays = [
-        "wss://indexer.nostrarchives.com",
-        "wss://indexer.coracle.social",
-        "wss://relay.damus.io",
-        "wss://relay.primal.net"
-    ]
+    private static let indexerRelays = RelayDefaults.indexers
 
     /// Kicks off a fresh compute and returns a stream of `DiscoveryState` updates.
     /// Cancelling the consuming task (or finishing the stream) propagates cancellation
@@ -233,7 +228,7 @@ actor SocialGraphRepository {
 
     private func loadFollows(pubkey: String) async -> [String] {
         await MainActor.run {
-            UserDefaults.standard.stringArray(forKey: "follow_pubkeys_\(pubkey)") ?? []
+            FollowsCache.shared.follows(for: pubkey)
         }
     }
 

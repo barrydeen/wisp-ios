@@ -67,12 +67,7 @@ final class ProfileViewModel {
     @ObservationIgnored private let profileRepo = ProfileRepository.shared
     @ObservationIgnored private let eventStore = EventStore.shared
 
-    private static let indexerRelays = [
-        "wss://indexer.nostrarchives.com",
-        "wss://indexer.coracle.social",
-        "wss://relay.damus.io",
-        "wss://relay.primal.net"
-    ]
+    private static let indexerRelays = RelayDefaults.indexers
 
     private static let followersRelay = "wss://feeds.nostrarchives.com/profiles/followers"
 
@@ -91,7 +86,7 @@ final class ProfileViewModel {
         guard !hasStarted else { return }
         hasStarted = true
 
-        let myFollows = UserDefaults.standard.stringArray(forKey: "follow_pubkeys_\(activeUserPubkey)") ?? []
+        let myFollows = FollowsCache.shared.follows(for: activeUserPubkey)
         youFollow = myFollows.contains(pubkey)
 
         await withTaskGroup(of: Void.self) { group in

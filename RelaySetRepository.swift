@@ -23,12 +23,7 @@ final class RelaySetRepository {
     @ObservationIgnored private var favoritesUpdatedAt: Int = 0
     @ObservationIgnored private var relaySetUpdatedAt: [String: Int] = [:]
 
-    private static let indexerRelays = [
-        "wss://indexer.nostrarchives.com",
-        "wss://indexer.coracle.social",
-        "wss://relay.damus.io",
-        "wss://relay.primal.net"
-    ]
+    private static let indexerRelays = RelayDefaults.indexers
 
     // MARK: - Lifecycle
 

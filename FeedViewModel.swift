@@ -45,6 +45,12 @@ final class FeedViewModel {
     @ObservationIgnored private var firstEventDeadline: Task<Void, Never>?
     @ObservationIgnored private var pruneTask: Task<Void, Never>?
     @ObservationIgnored private var recentlySeenPubkeys: [String: Int] = [:]
+    /// Buffer for events arriving from the live subscription. Drained into
+    /// `events` on a debounced flush so a backfill burst produces ~one
+    /// observable mutation per frame instead of one per event.
+    @ObservationIgnored private var pendingInserts: [NostrEvent] = []
+    @ObservationIgnored private var isFlushScheduled = false
+    @ObservationIgnored private static let liveFlushDelayMs: UInt64 = 60
     @ObservationIgnored private var followsCache: Set<String> = []
     @ObservationIgnored private let eventStore = EventStore.shared
     @ObservationIgnored private let profileRepo = ProfileRepository.shared
@@ -52,12 +58,7 @@ final class FeedViewModel {
     private static let onlineActivityKinds: Set<Int> = [1, 6, 7, 30023, 20, 21, 22]
     private static let onlineWindowSeconds = 10 * 60
 
-    private static let indexerRelays = [
-        "wss://indexer.nostrarchives.com",
-        "wss://indexer.coracle.social",
-        "wss://relay.damus.io",
-        "wss://relay.primal.net"
-    ]
+    private static let indexerRelays = RelayDefaults.indexers
 
     /// Kinds queried from a single relay or relay set, matching the Android client.
     /// 1068 = NIP-88 poll, 6969 = NIP-69 zap poll, 30023 = long-form. Polls render as
@@ -135,7 +136,7 @@ final class FeedViewModel {
         }
 
         // 2. Calculate since timestamp for incremental sync
-        let follows = UserDefaults.standard.stringArray(forKey: "follow_pubkeys_\(keypair.pubkey)") ?? []
+        let follows = FollowsCache.shared.follows(for: keypair.pubkey)
         let scoreBoard = RelayScoreBoard.load(pubkey: keypair.pubkey)
         let newestStored = await eventStore.newestTimestamp()
         let since = calculateSince(newestStored: newestStored, followCount: follows.count)
@@ -160,7 +161,7 @@ final class FeedViewModel {
 
     func refresh() async {
         reloadFollowsCache()
-        let follows = UserDefaults.standard.stringArray(forKey: "follow_pubkeys_\(keypair.pubkey)") ?? []
+        let follows = FollowsCache.shared.follows(for: keypair.pubkey)
         let scoreBoard = RelayScoreBoard.load(pubkey: keypair.pubkey)
 
         let since: Int?
@@ -274,6 +275,69 @@ final class FeedViewModel {
         firstEventDeadline = nil
         loadMoreTask?.cancel()
         loadMoreTask = nil
+        pendingInserts.removeAll(keepingCapacity: true)
+        isFlushScheduled = false
+    }
+
+    /// Buffer a live event for the next debounced flush. SwiftUI sees one
+    /// `events` mutation per ~60 ms window instead of one per arriving event,
+    /// which on a populated follows feed is the difference between LazyVStack
+    /// recomputing visibility ~event-rate vs. ~16 Hz.
+    private func enqueueLiveEvent(_ event: NostrEvent) {
+        pendingInserts.append(event)
+        if !isFlushScheduled {
+            isFlushScheduled = true
+            Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(Self.liveFlushDelayMs))
+                await self?.flushPendingInserts()
+            }
+        }
+    }
+
+    /// Drain the live-event buffer in a single sorted-merge pass and republish
+    /// `events` once. Persistence + referenced-profile fetches run as
+    /// fire-and-forget tasks against the merged batch.
+    private func flushPendingInserts() {
+        isFlushScheduled = false
+        let batch = pendingInserts
+        pendingInserts.removeAll(keepingCapacity: true)
+        guard !batch.isEmpty else { return }
+
+        let sortedBatch = batch.sorted { $0.createdAt > $1.createdAt }
+        events = Self.mergeSortedDesc(events, sortedBatch)
+
+        if relayFeedStatus != .streaming {
+            relayFeedStatus = .streaming
+        }
+
+        Task { await EventPersistQueue.shared.enqueue(batch) }
+
+        let captured = batch
+        Task { [weak self] in
+            guard let self else { return }
+            for event in captured {
+                await self.requestReferencedProfiles(in: event)
+            }
+        }
+    }
+
+    /// Merge two arrays already sorted by `createdAt` desc into a single
+    /// desc-sorted array. O(n+k) — replaces the per-event `firstIndex` linear
+    /// search + insert that ran on every arrival.
+    static func mergeSortedDesc(_ a: [NostrEvent], _ b: [NostrEvent]) -> [NostrEvent] {
+        var merged: [NostrEvent] = []
+        merged.reserveCapacity(a.count + b.count)
+        var i = 0, j = 0
+        while i < a.count && j < b.count {
+            if a[i].createdAt >= b[j].createdAt {
+                merged.append(a[i]); i += 1
+            } else {
+                merged.append(b[j]); j += 1
+            }
+        }
+        while i < a.count { merged.append(a[i]); i += 1 }
+        while j < b.count { merged.append(b[j]); j += 1 }
+        return merged
     }
 
     private func startSubscription(relays: [String]) {
@@ -299,16 +363,8 @@ final class FeedViewModel {
                 if SafetyFilter.shared.shouldDrop(event: event, context: .feed) { continue }
                 self.markActivityIfFollowed(event)
                 guard Self.relayFeedKinds.contains(event.kind) else { continue }
-                if self.seenIds.insert(event.id).inserted {
-                    // Insert in sorted (createdAt desc) position
-                    let idx = self.events.firstIndex(where: { $0.createdAt < event.createdAt }) ?? self.events.count
-                    self.events.insert(event, at: idx)
-                    if self.relayFeedStatus != .streaming {
-                        self.relayFeedStatus = .streaming
-                    }
-                    Task.detached { await EventStore.shared.persist([event]) }
-                    Task { await self.requestReferencedProfiles(in: event) }
-                }
+                guard self.seenIds.insert(event.id).inserted else { continue }
+                self.enqueueLiveEvent(event)
             }
         }
     }
@@ -340,14 +396,13 @@ final class FeedViewModel {
             var added: [NostrEvent] = []
             for event in results where Self.relayFeedKinds.contains(event.kind) {
                 if self.seenIds.insert(event.id).inserted {
-                    self.events.append(event)
                     added.append(event)
                 }
             }
-            self.events.sort { $0.createdAt > $1.createdAt }
-            if !added.isEmpty {
-                Task.detached { await EventStore.shared.persist(added) }
-            }
+            guard !added.isEmpty else { return }
+            let sortedAdded = added.sorted { $0.createdAt > $1.createdAt }
+            self.events = Self.mergeSortedDesc(self.events, sortedAdded)
+            Task { await EventPersistQueue.shared.enqueue(added) }
         }
     }
 
@@ -505,12 +560,7 @@ final class FeedViewModel {
                 self.markActivityIfFollowed(event)
                 guard Self.isFeedRenderable(event) else { continue }
                 guard self.seenIds.insert(event.id).inserted else { continue }
-
-                let idx = self.events.firstIndex(where: { $0.createdAt < event.createdAt }) ?? self.events.count
-                self.events.insert(event, at: idx)
-
-                Task.detached { await EventStore.shared.persist([event]) }
-                Task { await self.requestReferencedProfiles(in: event) }
+                self.enqueueLiveEvent(event)
             }
         }
     }
@@ -610,7 +660,7 @@ final class FeedViewModel {
 
     private func reloadFollowsCache() {
         followsCache = Set(
-            UserDefaults.standard.stringArray(forKey: "follow_pubkeys_\(keypair.pubkey)") ?? []
+            FollowsCache.shared.follows(for: keypair.pubkey)
         )
     }
 

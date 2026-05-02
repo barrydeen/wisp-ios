@@ -269,12 +269,7 @@ final class MuteRepository {
     static func threadsKey(_ pubkey: String) -> String { "muted_threads_\(pubkey)" }
     static func updatedAtKey(_ pubkey: String) -> String { "mute_list_updated_at_\(pubkey)" }
 
-    static let fallbackRelays = [
-        "wss://relay.damus.io",
-        "wss://relay.primal.net",
-        "wss://nos.lol",
-        "wss://relay.nostr.band"
-    ]
+    static let fallbackRelays = RelayDefaults.fallbacks
 
     // MARK: - Private
 

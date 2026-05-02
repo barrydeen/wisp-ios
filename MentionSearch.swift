@@ -19,7 +19,7 @@ enum MentionSearch {
     /// in their stored order, mirroring the Android composer's "default top contacts" suggestion.
     static func search(query: String, currentUserPubkey: String) -> [MentionCandidate] {
         let q = query.lowercased()
-        let follows = UserDefaults.standard.stringArray(forKey: "follow_pubkeys_\(currentUserPubkey)") ?? []
+        let follows = FollowsCache.shared.follows(for: currentUserPubkey)
         let followSet = Set(follows)
         let repo = ProfileRepository.shared
         let profiles = repo.getAll(follows)

@@ -18,8 +18,57 @@ struct RichInlineTextView: UIViewRepresentable {
 
     @ObservedObject private var emojiCache = EmojiImageCache.shared
 
+    /// Compiled once at module load. Was `try!` inside `appendNameWithEmojis`,
+    /// recompiling on every mention render.
+    private static let mentionEmojiRegex = try! NSRegularExpression(pattern: #":([a-zA-Z0-9_-]+):"#)
+
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
+    }
+
+    /// Cheap hash of segment kinds + identifying values; stable across
+    /// re-renders of the same content. Used by `Coordinator` to skip
+    /// `ensureLoaded` and attributed-string rebuild when nothing changed.
+    fileprivate var segmentSignature: Int {
+        var hasher = Hasher()
+        hasher.combine(segments.count)
+        for seg in segments {
+            switch seg {
+            case .text(let s):                hasher.combine(0); hasher.combine(s)
+            case .hashtag(let t):             hasher.combine(1); hasher.combine(t)
+            case .nostrProfile(let pk, _):    hasher.combine(2); hasher.combine(pk)
+            case .inlineLink(let u):          hasher.combine(3); hasher.combine(u)
+            case .customEmoji(let s, let u):  hasher.combine(4); hasher.combine(s); hasher.combine(u)
+            default:                          hasher.combine(99)
+            }
+        }
+        return hasher.finalize()
+    }
+
+    /// Full key including the bits of state that affect the rendered string:
+    /// resolved profile names for mentions, emoji-loaded state, and font size
+    /// class. Two updates with the same key produce identical attributed
+    /// strings, so we can skip the rebuild.
+    fileprivate func cacheKey(segmentSig: Int) -> Int {
+        var hasher = Hasher()
+        hasher.combine(segmentSig)
+        hasher.combine(linksEnabled)
+        hasher.combine(UIFont.preferredFont(forTextStyle: .callout).pointSize)
+        for seg in segments {
+            switch seg {
+            case .nostrProfile(let pk, _):
+                let resolved = profiles[pk] ?? ProfileRepository.shared.get(pk)
+                hasher.combine(resolved?.displayString ?? "")
+                if let map = resolved?.emojiMap, !map.isEmpty {
+                    for (k, v) in map { hasher.combine(k); hasher.combine(v) }
+                }
+            case .customEmoji(_, let url):
+                hasher.combine(EmojiImageCache.shared.image(for: url) != nil)
+            default:
+                break
+            }
+        }
+        return hasher.finalize()
     }
 
     func makeUIView(context: Context) -> ContentSizingTextView {
@@ -43,15 +92,35 @@ struct RichInlineTextView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: ContentSizingTextView, context: Context) {
-        // ensure all referenced emojis are scheduled to load
-        for case let .customEmoji(_, url) in segments {
-            emojiCache.ensureLoaded(url)
+        context.coordinator.parent = self
+
+        let segSig = segmentSignature
+        // Schedule emoji loads once per segment-set change, not on every
+        // SwiftUI body re-evaluation. The cache itself is in-memory and
+        // already deduplicates, but the call still hits an actor hop.
+        if segSig != context.coordinator.lastSegmentSignature {
+            context.coordinator.lastSegmentSignature = segSig
+            for case let .customEmoji(_, url) in segments {
+                emojiCache.ensureLoaded(url)
+            }
         }
 
-        context.coordinator.parent = self
+        // Skip rebuild when nothing that affects the attributed output has
+        // changed. SwiftUI calls updateUIView on every body re-evaluation,
+        // even when our `segments` / `profiles` are byte-identical.
+        let key = cacheKey(segmentSig: segSig)
+        if key == context.coordinator.lastBuiltKey, let cached = context.coordinator.lastBuiltAttributed {
+            if uiView.attributedText !== cached {
+                uiView.attributedText = cached
+            }
+            return
+        }
+
         let attributed = buildAttributedString()
         uiView.attributedText = attributed
         uiView.invalidateIntrinsicContentSize()
+        context.coordinator.lastBuiltKey = key
+        context.coordinator.lastBuiltAttributed = attributed
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: ContentSizingTextView, context: Context) -> CGSize? {
@@ -165,9 +234,8 @@ struct RichInlineTextView: UIViewRepresentable {
             combined.append(NSAttributedString(string: name, attributes: attrs))
             return
         }
-        let regex = try! NSRegularExpression(pattern: #":([a-zA-Z0-9_-]+):"#)
         let ns = name as NSString
-        let matches = regex.matches(in: name, range: NSRange(location: 0, length: ns.length))
+        let matches = Self.mentionEmojiRegex.matches(in: name, range: NSRange(location: 0, length: ns.length))
         var lastEnd = 0
         for m in matches where m.numberOfRanges >= 2 {
             let r = m.range
@@ -214,6 +282,9 @@ struct RichInlineTextView: UIViewRepresentable {
 
     final class Coordinator: NSObject, UITextViewDelegate {
         var parent: RichInlineTextView
+        var lastBuiltKey: Int = 0
+        var lastBuiltAttributed: NSAttributedString?
+        var lastSegmentSignature: Int = -1
 
         init(parent: RichInlineTextView) {
             self.parent = parent

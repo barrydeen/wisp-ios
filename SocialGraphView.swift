@@ -381,12 +381,7 @@ struct SocialGraphView: View {
     private func fetchProfiles(pubkeys: [String]) {
         profileFetchTask?.cancel()
         profileFetchTask = Task {
-            let indexers = [
-                "wss://indexer.nostrarchives.com",
-                "wss://indexer.coracle.social",
-                "wss://relay.damus.io",
-                "wss://relay.primal.net"
-            ]
+            let indexers = RelayDefaults.indexers
             for batch in pubkeys.chunked(into: 150) {
                 let events = await RelayPool.query(
                     relays: indexers,

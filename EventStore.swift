@@ -22,7 +22,34 @@ actor EventStore {
         guard let box = ensureBox() else { return }
         let eligible = events.filter { Self.persistedKinds.contains($0.kind) }
         guard !eligible.isEmpty else { return }
-        let entities = eligible.map { EventEntity(from: $0) }
+
+        // Dedupe within the batch — multiple sources (live subscription, profile
+        // backfill, thread hydrator) often hand us the same event in the same
+        // 200ms `EventPersistQueue` flush window. Without this dedup the unique
+        // constraint on `EventEntity.eventId` aborts the entire put on the
+        // first duplicate and the rest of the batch is dropped.
+        var seen = Set<String>()
+        var unique: [NostrEvent] = []
+        unique.reserveCapacity(eligible.count)
+        for e in eligible where seen.insert(e.id).inserted {
+            unique.append(e)
+        }
+
+        // Skip events already on disk. Nostr events are immutable (signed),
+        // so the on-disk row is authoritative; re-inserting the same event
+        // is wasted work and would trigger the unique constraint.
+        let ids = unique.map(\.id)
+        let existingIds: Set<String>
+        do {
+            let existingQuery = try box.query { EventEntity.eventId.isIn(ids) }.build()
+            existingIds = Set(try existingQuery.find().map(\.eventId))
+        } catch {
+            existingIds = []
+        }
+
+        let toPut = existingIds.isEmpty ? unique : unique.filter { !existingIds.contains($0.id) }
+        guard !toPut.isEmpty else { return }
+        let entities = toPut.map { EventEntity(from: $0) }
         try? box.put(entities)
     }
 
@@ -169,22 +196,16 @@ actor EventStore {
     // MARK: - Author lookups
 
     /// Bulk fetch of cached events by id, in arbitrary order. Used to seed the
-    /// note-list feed before falling back to relays.
+    /// note-list feed before falling back to relays. Single indexed query
+    /// against `EventEntity.eventId` (unique-indexed) — was an N+1 loop.
     func eventsByIds(_ ids: [String]) -> [NostrEvent] {
         guard let box = ensureBox(), !ids.isEmpty else { return [] }
-        var out: [NostrEvent] = []
-        out.reserveCapacity(ids.count)
-        for id in ids {
-            do {
-                let query = try box.query { EventEntity.eventId == id }.build()
-                if let entity = try query.findFirst(), let event = entity.toNostrEvent() {
-                    out.append(event)
-                }
-            } catch {
-                continue
-            }
+        do {
+            let query = try box.query { EventEntity.eventId.isIn(ids) }.build()
+            return try query.find().compactMap { $0.toNostrEvent() }
+        } catch {
+            return []
         }
-        return out
     }
 
     /// Most-recent kind-1 events by a given author. Used by the spam scorer to feed up to N

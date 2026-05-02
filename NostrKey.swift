@@ -8,6 +8,27 @@ struct Keypair: Equatable {
 
 enum NostrKey {
 
+    /// In-memory mirror of the "active" Keychain entry. Hot-path callers like
+    /// `PostCardView`'s `myPubkey` and `EngagementRepository`'s author check
+    /// previously hit `SecItemCopyMatching` on every render; one keychain
+    /// round-trip is ~10–50 ms cold. Invalidated on `save`, `switchAccount`,
+    /// `delete`, and `saveToKeychain(account: "active")`.
+    private nonisolated(unsafe) static var _cachedActive: Keypair?
+    private static let cacheLock = NSLock()
+
+    private static func cachedActive() -> Keypair? {
+        cacheLock.lock()
+        let v = _cachedActive
+        cacheLock.unlock()
+        return v
+    }
+
+    private static func setCachedActive(_ keypair: Keypair?) {
+        cacheLock.lock()
+        _cachedActive = keypair
+        cacheLock.unlock()
+    }
+
     static func parseNsec(_ input: String) -> Keypair? {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -34,10 +55,14 @@ enum NostrKey {
         saveToKeychain(keypair, account: "active")
         saveToKeychain(keypair, account: "account_\(keypair.pubkey)")
         addToAccountList(keypair.pubkey)
+        setCachedActive(keypair)
     }
 
     static func load() -> Keypair? {
-        loadFromKeychain(account: "active")
+        if let cached = cachedActive() { return cached }
+        guard let kp = loadFromKeychain(account: "active") else { return nil }
+        setCachedActive(kp)
+        return kp
     }
 
     static func loadAccount(pubkey: String) -> Keypair? {
@@ -47,6 +72,7 @@ enum NostrKey {
     static func switchAccount(pubkey: String) -> Keypair? {
         guard let keypair = loadAccount(pubkey: pubkey) else { return nil }
         saveToKeychain(keypair, account: "active")
+        setCachedActive(keypair)
         return keypair
     }
 
@@ -56,10 +82,14 @@ enum NostrKey {
 
     static func delete() {
         deleteFromKeychain(account: "active")
+        setCachedActive(nil)
     }
 
     static func deleteAccount(pubkey: String) {
         deleteFromKeychain(account: "account_\(pubkey)")
+        if cachedActive()?.pubkey == pubkey {
+            setCachedActive(nil)
+        }
         var list = accounts()
         list.removeAll { $0 == pubkey }
         UserDefaults.standard.set(list, forKey: "wisp_accounts")
@@ -83,6 +113,7 @@ enum NostrKey {
         for key in keys {
             UserDefaults.standard.removeObject(forKey: key)
         }
+        FollowsCache.shared.invalidate(pubkey: pubkey)
     }
 
     static func isOnboardingComplete(pubkey: String) -> Bool {

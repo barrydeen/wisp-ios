@@ -172,20 +172,14 @@ struct NoteListEditorView: View {
         let missing = ids.filter { byId[$0] == nil }
         if !missing.isEmpty {
             for batch in missing.chunked(into: 200) {
-                let relays = [
-                    "wss://indexer.nostrarchives.com",
-                    "wss://indexer.coracle.social",
-                    "wss://relay.damus.io",
-                    "wss://relay.primal.net",
-                    "wss://nos.lol"
-                ]
+                let relays = RelayDefaults.indexers + ["wss://nos.lol"]
                 let results = await RelayPool.query(
                     relays: relays,
                     filter: NostrFilter(ids: batch, limit: batch.count),
                     timeout: 10
                 )
                 for event in results { byId[event.id] = event }
-                Task.detached { await EventStore.shared.persist(results) }
+                Task { await EventPersistQueue.shared.enqueue(results) }
             }
         }
         events = byId
@@ -203,12 +197,7 @@ struct NoteListEditorView: View {
         if !stillMissing.isEmpty {
             for batch in stillMissing.chunked(into: 150) {
                 let results = await RelayPool.query(
-                    relays: [
-                        "wss://indexer.nostrarchives.com",
-                        "wss://indexer.coracle.social",
-                        "wss://relay.damus.io",
-                        "wss://relay.primal.net"
-                    ],
+                    relays: RelayDefaults.indexers,
                     filter: NostrFilter(kinds: [0], authors: batch),
                     timeout: 8
                 )

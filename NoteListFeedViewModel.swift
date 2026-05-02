@@ -22,12 +22,7 @@ final class NoteListFeedViewModel {
     @ObservationIgnored private let profileRepo = ProfileRepository.shared
     @ObservationIgnored private let listRepo = NoteListRepository.shared
 
-    private static let indexerRelays = [
-        "wss://indexer.nostrarchives.com",
-        "wss://indexer.coracle.social",
-        "wss://relay.damus.io",
-        "wss://relay.primal.net"
-    ]
+    private static let indexerRelays = RelayDefaults.indexers
 
     init(keypair: Keypair, dTag: String) {
         self.keypair = keypair
@@ -98,7 +93,7 @@ final class NoteListFeedViewModel {
         events.sort { $0.createdAt > $1.createdAt }
 
         if !added.isEmpty {
-            Task.detached { await EventStore.shared.persist(added) }
+            Task { await EventPersistQueue.shared.enqueue(added) }
         }
 
         await loadMissingProfiles()

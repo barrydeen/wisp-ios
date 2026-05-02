@@ -19,12 +19,7 @@ final class RelayListRepository {
     private var cache: [String: Entry] = [:]
     private var inflight: [String: Task<Entry?, Never>] = [:]
 
-    private static let indexerRelays = [
-        "wss://indexer.nostrarchives.com",
-        "wss://indexer.coracle.social",
-        "wss://relay.damus.io",
-        "wss://relay.primal.net"
-    ]
+    private static let indexerRelays = RelayDefaults.indexers
 
     // MARK: - Public read API
 

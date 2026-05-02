@@ -25,12 +25,7 @@ final class OnboardingViewModel {
 
     var scoreBoard: RelayScoreBoard?
 
-    private static let indexerRelays = [
-        "wss://indexer.nostrarchives.com",
-        "wss://indexer.coracle.social",
-        "wss://relay.damus.io",
-        "wss://relay.primal.net"
-    ]
+    private static let indexerRelays = RelayDefaults.indexers
 
     static let statusMessages = [
         "Mapping your social graph\u{2026}",
@@ -71,7 +66,7 @@ final class OnboardingViewModel {
         }
 
         followCount = followPubkeys.count
-        UserDefaults.standard.set(followPubkeys, forKey: "follow_pubkeys_\(keypair.pubkey)")
+        FollowsCache.shared.update(pubkey: keypair.pubkey, follows: followPubkeys)
 
         guard !followPubkeys.isEmpty else {
             phase = .done

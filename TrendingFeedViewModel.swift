@@ -27,12 +27,7 @@ final class TrendingFeedViewModel {
     @ObservationIgnored private var loadTask: Task<Void, Never>?
     @ObservationIgnored private let profileRepo = ProfileRepository.shared
 
-    private static let indexerRelays = [
-        "wss://indexer.nostrarchives.com",
-        "wss://indexer.coracle.social",
-        "wss://relay.damus.io",
-        "wss://relay.primal.net"
-    ]
+    private static let indexerRelays = RelayDefaults.indexers
 
     init(keypair: Keypair) {
         self.keypair = keypair
@@ -140,7 +135,7 @@ final class TrendingFeedViewModel {
         // Persist anything ObjectBox cares about (kinds 1/6/20 etc — see EventStore.persistedKinds).
         if !results.isEmpty {
             let toPersist = results
-            Task.detached { await EventStore.shared.persist(toPersist) }
+            Task { await EventPersistQueue.shared.enqueue(toPersist) }
         }
 
         await loadMissingProfiles()

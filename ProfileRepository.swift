@@ -13,12 +13,7 @@ final class ProfileRepository {
     /// coalescing.
     private var inflight: [String: Task<ProfileData?, Never>] = [:]
 
-    private static let indexerRelays = [
-        "wss://indexer.nostrarchives.com",
-        "wss://indexer.coracle.social",
-        "wss://relay.damus.io",
-        "wss://relay.primal.net"
-    ]
+    private static let indexerRelays = RelayDefaults.indexers
 
     func get(_ pubkey: String) -> ProfileData? {
         if let cached = cache[pubkey] { return cached }

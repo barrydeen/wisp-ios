@@ -21,7 +21,7 @@ struct AddToPeopleListPickerSheet: View {
     private var list: PeopleList? { peopleRepo.list(dTag: dTag) }
 
     private var follows: [String] {
-        UserDefaults.standard.stringArray(forKey: "follow_pubkeys_\(keypair.pubkey)") ?? []
+        FollowsCache.shared.follows(for: keypair.pubkey)
     }
 
     private var filteredFollows: [String] {

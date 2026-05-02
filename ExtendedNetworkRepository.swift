@@ -62,7 +62,7 @@ actor ExtendedNetworkRepository {
         if computedAt == 0 { return true }
         let now = Int(Date().timeIntervalSince1970)
         if now - computedAt > Self.staleHours * 3600 { return true }
-        let currentFollows = UserDefaults.standard.stringArray(forKey: "follow_pubkeys_\(pk)") ?? []
+        let currentFollows = FollowsCache.shared.follows(for: pk)
         guard firstDegreeCount > 0 else { return false }
         let drift = abs(currentFollows.count - firstDegreeCount)
         return Double(drift) / Double(firstDegreeCount) > Self.staleDriftRatio
@@ -80,7 +80,7 @@ actor ExtendedNetworkRepository {
             emitState(.failed(reason: "No active account"))
             return
         }
-        let firstDegree = UserDefaults.standard.stringArray(forKey: "follow_pubkeys_\(pk)") ?? []
+        let firstDegree = FollowsCache.shared.follows(for: pk)
         guard !firstDegree.isEmpty else {
             emitState(.failed(reason: "Follow list is empty"))
             return
@@ -189,12 +189,7 @@ actor ExtendedNetworkRepository {
 
     // MARK: - Internals
 
-    private static let fallbackRelays = [
-        "wss://relay.damus.io",
-        "wss://relay.primal.net",
-        "wss://nos.lol",
-        "wss://relay.nostr.band"
-    ]
+    private static let fallbackRelays = RelayDefaults.fallbacks
 
     private func pickRelays(forUser pk: String) async -> [String] {
         var seen = Set<String>()

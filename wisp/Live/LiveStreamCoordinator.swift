@@ -17,12 +17,7 @@ final class LiveStreamCoordinator {
     private var profileFetchTask: Task<Void, Never>?
     private var pendingHostFetches = Set<String>()
 
-    private static let indexerRelays = [
-        "wss://indexer.nostrarchives.com",
-        "wss://indexer.coracle.social",
-        "wss://relay.damus.io",
-        "wss://relay.primal.net"
-    ]
+    private static let indexerRelays = RelayDefaults.indexers
 
     func startDiscovery(myPubkey: String, readRelays: [String]) {
         guard activitySub == nil, chatDiscoverySub == nil else { return }
