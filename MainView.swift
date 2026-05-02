@@ -82,14 +82,6 @@ struct MainView: View {
                         onLogout()
                     }
                 },
-                onSwitchAccount: { newKeypair in
-                    closeDrawer()
-                    onSwitchAccount(newKeypair)
-                },
-                onAddAccount: {
-                    closeDrawer()
-                    onAddAccount()
-                },
                 onOpenProfile: {
                     closeDrawer()
                     Task { @MainActor in
