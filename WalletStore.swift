@@ -148,6 +148,22 @@ final class WalletStore {
         }
     }
 
+    func checkLightningAddressAvailable(username: String) async -> Bool {
+        guard let spark = wallet as? SparkWallet else { return false }
+        return await spark.checkLightningAddressAvailable(username: username)
+    }
+
+    func registerLightningAddress(username: String) async throws {
+        guard let spark = wallet as? SparkWallet else { throw WalletError.notConnected }
+        lightningAddress = try await spark.registerLightningAddress(username: username)
+    }
+
+    func removeLightningAddress() async throws {
+        guard let spark = wallet as? SparkWallet else { throw WalletError.notConnected }
+        try await spark.deleteLightningAddress()
+        lightningAddress = nil
+    }
+
     @discardableResult
     func switchToMode(_ newMode: WalletMode) async throws -> Bool {
         disconnect()

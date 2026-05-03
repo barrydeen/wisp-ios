@@ -16,6 +16,7 @@ struct WalletView: View {
     @State private var showSend = false
     @State private var showReceive = false
     @AppStorage private var balanceHidden: Bool
+    @AppStorage("walletBalanceUnit") private var balanceUnitRaw: String = WalletBalanceUnit.sats.rawValue
 
     private var hasCachedDataOrConnected: Bool {
         store.balanceMsats != nil || !store.transactions.isEmpty
@@ -224,6 +225,7 @@ struct WalletView: View {
 
     private var balanceCard: some View {
         let sats = store.balanceMsats.map { $0 / 1000 } ?? 0
+        let unit = WalletBalanceUnit(rawValue: balanceUnitRaw) ?? .sats
         let syncing = store.mode != nil && !store.isConnected
         return VStack(spacing: 14) {
             Button {
@@ -235,13 +237,13 @@ struct WalletView: View {
                             .font(.system(size: 52, weight: .semibold, design: .rounded))
                             .foregroundStyle(.primary)
                     } else {
-                        Text(CurrencyFormatter.formatNumber(sats))
+                        Text(unit.formatNumber(sats))
                             .font(.system(size: 52, weight: .semibold, design: .rounded))
                             .foregroundStyle(.primary)
                             .contentTransition(.numericText(value: Double(sats)))
                             .animation(.easeInOut(duration: 0.25), value: sats)
                     }
-                    Text("sats")
+                    Text(unit.unitLabel)
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }

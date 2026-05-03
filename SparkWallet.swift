@@ -175,6 +175,26 @@ final class SparkWallet: Wallet {
         return try? await sdk.getLightningAddress()?.lightningAddress
     }
 
+    func checkLightningAddressAvailable(username: String) async -> Bool {
+        guard let sdk else { return false }
+        return (try? await sdk.checkLightningAddressAvailable(
+            req: CheckLightningAddressRequest(username: username)
+        )) ?? false
+    }
+
+    func registerLightningAddress(username: String) async throws -> String {
+        guard let sdk else { throw WalletError.notConnected }
+        let info = try await sdk.registerLightningAddress(
+            request: RegisterLightningAddressRequest(username: username)
+        )
+        return info.lightningAddress
+    }
+
+    func deleteLightningAddress() async throws {
+        guard let sdk else { throw WalletError.notConnected }
+        try await sdk.deleteLightningAddress()
+    }
+
     // MARK: - Wallet ops
 
     func fetchBalance() async -> Result<Int64, WalletError> {
