@@ -40,7 +40,9 @@ enum ZapSender {
         amountSats: Int64,
         message: String = "",
         relayHints: [String] = [],
-        extraTags: [[String]] = []
+        extraTags: [[String]] = [],
+        isAnonymous: Bool = false,
+        isPrivate: Bool = false
     ) async -> Result<Void, Failure> {
         guard let lud16 = recipientLud16, lud16.contains("@") else {
             return .failure(.noLightningAddress)
@@ -56,14 +58,20 @@ enum ZapSender {
             return .failure(.amountOutOfRange(minSats: payInfo.minSendable / 1000, maxSats: payInfo.maxSendable / 1000))
         }
 
-        // Receipt routing: recipient's read relays (so they see the receipt) + our read relays
-        // (so we can verify it). Cap at 5 — most LNURL servers reject more.
+        // Receipt routing: for private zaps, route exclusively to the sender's DM inbox
+        // relays so the receipt is not visible in public feeds. Otherwise use the
+        // recipient's read relays + our scored relays. Cap at 5.
         var relays: [String] = []
         relays.append(contentsOf: relayHints)
-        let recipientReads = await RelayListRepository.shared.getReadRelays(recipientPubkey)
-        relays.append(contentsOf: recipientReads)
-        if let scoreboard = RelayScoreBoard.load(pubkey: keypair.pubkey) {
-            relays.append(contentsOf: scoreboard.scoredRelays.prefix(5).map(\.url))
+        if isPrivate {
+            let dmRelays = RelaySettingsRepository.shared.dmRelays
+            relays.append(contentsOf: dmRelays.isEmpty ? ["wss://relay.damus.io"] : dmRelays)
+        } else {
+            let recipientReads = await RelayListRepository.shared.getReadRelays(recipientPubkey)
+            relays.append(contentsOf: recipientReads)
+            if let scoreboard = RelayScoreBoard.load(pubkey: keypair.pubkey) {
+                relays.append(contentsOf: scoreboard.scoredRelays.prefix(5).map(\.url))
+            }
         }
         var seen = Set<String>()
         let dedupedRelays = relays.filter { seen.insert($0).inserted }.prefix(5)
@@ -86,7 +94,9 @@ enum ZapSender {
                 relays: finalRelays,
                 lnurl: lud16,
                 message: message,
-                extraTags: extraTags + (NostrEvent.clientTagIfEnabled().map { [$0] } ?? [])
+                extraTags: extraTags + (NostrEvent.clientTagIfEnabled().map { [$0] } ?? []),
+                isAnonymous: isAnonymous,
+                isPrivate: isPrivate
             )
         } catch {
             return .failure(.payFailed(error.localizedDescription))

@@ -1,5 +1,21 @@
 import SwiftUI
 
+enum ZapType: String, CaseIterable, Identifiable {
+    case `public`   = "Public"
+    case anonymous  = "Anonymous"
+    case `private`  = "Private"
+
+    var id: String { rawValue }
+
+    var icon: String {
+        switch self {
+        case .public:    "eye"
+        case .anonymous: "eye.slash"
+        case .private:   "lock"
+        }
+    }
+}
+
 /// Modal for sending a zap. Presented from the post card's bolt icon button.
 struct ZapSheet: View {
     @Bindable var store: WalletStore
@@ -11,91 +27,293 @@ struct ZapSheet: View {
     var relayHints: [String] = []
     /// Optional extra zap-request tags (e.g. `["a", "30311:host:dTag"]` for stream zaps).
     var extraTags: [[String]] = []
-    /// Fires after a successful zap, with the chosen sats amount. Used by zap polls to
-    /// apply an optimistic tally update before the receipt round-trips through relays.
+    /// Fires after a successful zap, with the chosen sats amount.
     var onSuccess: ((Int64) -> Void)? = nil
     var dismiss: () -> Void
 
     @State private var amountSats: Int64 = 21
     @State private var customAmountText: String = ""
+    @State private var isCustom = false
     @State private var message: String = ""
+    @State private var zapType: ZapType = .public
     @State private var inFlight = false
     @State private var status: String?
     @State private var success = false
+    @State private var showEditPresets = false
+    @FocusState private var amountFocused: Bool
 
-    private let presetAmounts: [Int64] = [21, 100, 1_000, 10_000, 100_000]
+    // Persisted preset amounts as a comma-separated string
+    @AppStorage("zapPresetAmounts") private var presetsRaw: String = "21,100,500,1000,5000"
+
+    private static let maxPresets = 8
+
+    private var presets: [Int64] {
+        presetsRaw.split(separator: ",").compactMap { Int64($0.trimmingCharacters(in: .whitespaces)) }
+    }
+
+    private var canSaveAsPreset: Bool {
+        isCustom && amountSats > 0 && !presets.contains(amountSats)
+    }
+
+    private var canZap: Bool {
+        !inFlight && recipientLud16 != nil && store.activeWallet != nil && amountSats > 0
+    }
 
     var body: some View {
         NavigationStack {
-            Form {
-                if let lud16 = recipientLud16 {
-                    Section("Recipient") {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(recipientName ?? "User").font(.subheadline.weight(.semibold))
-                            Text(lud16).font(.caption.monospaced()).foregroundStyle(.secondary)
+            ScrollView {
+                VStack(spacing: 28) {
+                    // Hero
+                    VStack(spacing: 8) {
+                        Image(systemName: "bolt.fill")
+                            .font(.system(size: 40, weight: .semibold))
+                            .foregroundStyle(Color.wispZapColor)
+
+                        Text("Send Zap")
+                            .font(.title2.weight(.bold))
+
+                        // Big amount display — tap to edit
+                        Button {
+                            isCustom = true
+                            if customAmountText.isEmpty { customAmountText = String(amountSats) }
+                            amountFocused = true
+                        } label: {
+                            VStack(spacing: 2) {
+                                Text(isCustom && !customAmountText.isEmpty
+                                     ? customAmountText
+                                     : CurrencyFormatter.formatNumber(amountSats))
+                                    .font(.system(size: 48, weight: .bold, design: .rounded))
+                                    .foregroundStyle(Color.wispZapColor)
+                                    .contentTransition(.numericText(value: Double(amountSats)))
+                                    .animation(.easeInOut(duration: 0.15), value: amountSats)
+                                Text("sats")
+                                    .font(.subheadline.weight(.medium))
+                                    .foregroundStyle(Color.wispZapColor.opacity(0.8))
+                            }
                         }
+                        .buttonStyle(.plain)
                     }
-                } else {
-                    Section {
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 8)
+
+                    // Recipient
+                    if let lud16 = recipientLud16 {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Recipient")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .textCase(.uppercase)
+                                .tracking(0.5)
+                            VStack(alignment: .leading, spacing: 2) {
+                                if let name = recipientName {
+                                    Text(name).font(.subheadline.weight(.semibold))
+                                }
+                                Text(lud16).font(.caption.monospaced()).foregroundStyle(.secondary)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(14)
+                            .background(Color.wispSurfaceVariant.opacity(0.4), in: RoundedRectangle(cornerRadius: 12))
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
                         Text("Recipient has no lightning address — they cannot receive zaps.")
+                            .font(.subheadline)
                             .foregroundStyle(.red)
+                            .multilineTextAlignment(.center)
                     }
-                }
 
-                Section("Amount") {
-                    presetGrid
-                    TextField("Custom (sats)", text: $customAmountText)
-                        .keyboardType(.numberPad)
-                        .onChange(of: customAmountText) { _, new in
-                            if let v = Int64(new), v > 0 { amountSats = v }
+                    // Quick amounts
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            Text("Quick Amounts")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .textCase(.uppercase)
+                                .tracking(0.5)
+                            Spacer()
+                            Button("Edit") { showEditPresets = true }
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(Color.wispZapColor)
                         }
-                }
 
-                Section("Note (optional)") {
-                    TextField("Optional message", text: $message)
-                }
+                        FlowLayout(spacing: 10) {
+                            ForEach(presets, id: \.self) { sats in
+                                Button {
+                                    amountSats = sats
+                                    customAmountText = ""
+                                    isCustom = false
+                                } label: {
+                                    HStack(spacing: 4) {
+                                        if amountSats == sats && !isCustom {
+                                            Image(systemName: "bolt.fill")
+                                                .font(.system(size: 11, weight: .bold))
+                                        }
+                                        Text(CurrencyFormatter.short(sats: sats))
+                                            .font(.subheadline.weight(.semibold))
+                                    }
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 10)
+                                    .background(
+                                        amountSats == sats && !isCustom
+                                            ? Color.wispZapColor
+                                            : Color.wispSurfaceVariant.opacity(0.5),
+                                        in: Capsule()
+                                    )
+                                    .foregroundStyle(amountSats == sats && !isCustom ? .white : .primary)
+                                }
+                                .buttonStyle(.plain)
+                            }
 
-                if let status {
-                    Section { Text(status).font(.caption).foregroundStyle(success ? Color.wispRepostColor : .red) }
-                }
+                            // Custom pill
+                            Button {
+                                isCustom = true
+                            } label: {
+                                HStack(spacing: 4) {
+                                    if isCustom {
+                                        Image(systemName: "bolt.fill")
+                                            .font(.system(size: 11, weight: .bold))
+                                    }
+                                    Text(isCustom && amountSats > 0
+                                         ? CurrencyFormatter.short(sats: amountSats)
+                                         : "Custom")
+                                        .font(.subheadline.weight(.semibold))
+                                }
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 10)
+                                .background(isCustom ? Color.wispZapColor : Color.wispSurfaceVariant.opacity(0.5), in: Capsule())
+                                .foregroundStyle(isCustom ? .white : .primary)
+                            }
+                            .buttonStyle(.plain)
+                        }
 
-                Section {
-                    Button {
-                        Task { await send() }
-                    } label: {
-                        if inFlight {
-                            HStack { ProgressView(); Text("Zapping…") }
-                        } else {
-                            HStack {
-                                Image(systemName: "bolt.fill").foregroundStyle(Color.wispZapColor)
-                                Text("Send \(amountSats) sats")
+                        // Custom amount input — shown when Custom is selected
+                        if isCustom {
+                            TextField("Amount in sats", text: $customAmountText)
+                                .keyboardType(.numberPad)
+                                .font(.subheadline)
+                                .padding(12)
+                                .background(Color.wispSurfaceVariant.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
+                                .focused($amountFocused)
+                                .onChange(of: customAmountText) { _, new in
+                                    amountSats = Int64(new) ?? 0
+                                }
+
+                            if canSaveAsPreset {
+                                let atMax = presets.count >= ZapSheet.maxPresets
+                                HStack {
+                                    Button {
+                                        presetsRaw = (presets + [amountSats])
+                                            .sorted()
+                                            .map { String($0) }
+                                            .joined(separator: ",")
+                                    } label: {
+                                        Label("Save as Preset", systemImage: "star")
+                                            .font(.subheadline.weight(.medium))
+                                            .foregroundStyle(atMax ? .secondary : Color.wispZapColor)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .disabled(atMax)
+                                    if atMax {
+                                        Text("(\(ZapSheet.maxPresets) max)")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
                             }
                         }
                     }
-                    .disabled(inFlight || recipientLud16 == nil || store.activeWallet == nil)
-                }
-            }
-            .navigationTitle("Zap")
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close", action: dismiss) } }
-        }
-    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
-    private var presetGrid: some View {
-        let columns = [GridItem(.adaptive(minimum: 80))]
-        return LazyVGrid(columns: columns, spacing: 8) {
-            ForEach(presetAmounts, id: \.self) { sats in
+                    // Message
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Message (optional)")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .textCase(.uppercase)
+                            .tracking(0.5)
+                        TextField("Message (optional)", text: $message)
+                            .font(.subheadline)
+                            .padding(12)
+                            .background(Color.wispSurfaceVariant.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    // Zap type
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Type")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .textCase(.uppercase)
+                            .tracking(0.5)
+                        Picker("Zap type", selection: $zapType) {
+                            ForEach(ZapType.allCases) { type in
+                                Label(type.rawValue, systemImage: type.icon).tag(type)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        if zapType != .public {
+                            Text(zapType == .anonymous
+                                 ? "Your identity is hidden from the lightning provider."
+                                 : "Hidden identity, receipt routed to your DM inbox relays.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    // Status
+                    if let status {
+                        Text(status)
+                            .font(.subheadline)
+                            .foregroundStyle(success ? Color.wispRepostColor : .red)
+                            .multilineTextAlignment(.center)
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 12)
+            }
+            .safeAreaInset(edge: .bottom) {
+                // Pinned send button — always visible above the keyboard / tab bar
                 Button {
-                    amountSats = sats
-                    customAmountText = ""
+                    Task { await send() }
                 } label: {
-                    Text(formatSats(sats))
-                        .font(.subheadline.weight(.semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                        .background(amountSats == sats ? Color.wispZapColor.opacity(0.25) : Color.wispSurfaceVariant.opacity(0.4),
-                                    in: RoundedRectangle(cornerRadius: 10))
+                    Group {
+                        if inFlight {
+                            HStack(spacing: 8) {
+                                ProgressView().tint(.white)
+                                Text("Zapping…")
+                            }
+                        } else {
+                            HStack(spacing: 6) {
+                                Image(systemName: "bolt.fill")
+                                Text("Zap \(CurrencyFormatter.formatNumber(amountSats)) sats")
+                                    .fontWeight(.semibold)
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 16)
+                    .background(
+                        canZap ? Color.wispZapColor : Color.wispSurfaceVariant.opacity(0.4),
+                        in: RoundedRectangle(cornerRadius: 14)
+                    )
+                    .foregroundStyle(.white)
                 }
                 .buttonStyle(.plain)
+                .disabled(!canZap)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 12)
+                .background(.bar)
+            }
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close", action: dismiss)
+                }
+            }
+            .sheet(isPresented: $showEditPresets) {
+                EditPresetsSheet(presetsRaw: $presetsRaw)
             }
         }
     }
@@ -113,7 +331,9 @@ struct ZapSheet: View {
             amountSats: amountSats,
             message: message,
             relayHints: relayHints,
-            extraTags: extraTags
+            extraTags: extraTags,
+            isAnonymous: zapType == .anonymous || zapType == .private,
+            isPrivate: zapType == .private
         )
         switch result {
         case .success:
@@ -128,8 +348,49 @@ struct ZapSheet: View {
             success = false
         }
     }
+}
 
-    private func formatSats(_ sats: Int64) -> String {
-        CurrencyFormatter.short(sats: sats)
+// MARK: - Edit presets sheet
+
+private struct EditPresetsSheet: View {
+    @Binding var presetsRaw: String
+    @Environment(\.dismiss) private var dismiss
+    @State private var drafts: [String] = []
+
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach(drafts.indices, id: \.self) { i in
+                    TextField("Amount (sats)", text: $drafts[i])
+                        .keyboardType(.numberPad)
+                }
+                .onMove { from, to in drafts.move(fromOffsets: from, toOffset: to) }
+                .onDelete { drafts.remove(atOffsets: $0) }
+
+                Button {
+                    drafts.append("")
+                } label: {
+                    Label("Add preset", systemImage: "plus")
+                }
+            }
+            .navigationTitle("Edit Presets")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { EditButton() }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") {
+                        let valid = drafts.compactMap { Int64($0.trimmingCharacters(in: .whitespaces)) }.filter { $0 > 0 }
+                        if !valid.isEmpty {
+                            presetsRaw = valid.map { String($0) }.joined(separator: ",")
+                        }
+                        dismiss()
+                    }
+                }
+            }
+            .onAppear {
+                drafts = presetsRaw.split(separator: ",").map { String($0.trimmingCharacters(in: .whitespaces)) }
+            }
+        }
     }
 }
+

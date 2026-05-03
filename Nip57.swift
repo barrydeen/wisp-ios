@@ -51,7 +51,9 @@ nonisolated enum Nip57 {
         relays: [String],
         lnurl: String,
         message: String = "",
-        extraTags: [[String]] = []
+        extraTags: [[String]] = [],
+        isAnonymous: Bool = false,
+        isPrivate: Bool = false
     ) throws -> NostrEvent {
         var tags: [[String]] = [["p", recipientPubkey]]
         if let eventId { tags.append(["e", eventId]) }
@@ -60,9 +62,39 @@ nonisolated enum Nip57 {
         tags.append(["lnurl", lnurl])
         tags.append(contentsOf: extraTags)
 
+        // Anonymous or private: sign with an ephemeral random keypair.
+        // Private additionally encrypts the real sender identity in the `anon` tag
+        // (NIP-04, encrypted to recipient) so only the recipient can reveal the sender.
+        let signingPrivkey: Data
+        let signingPubkey: String
+
+        if isAnonymous || isPrivate {
+            var bytes = [UInt8](repeating: 0, count: 32)
+            _ = SecRandomCopyBytes(kSecRandomDefault, 32, &bytes)
+            signingPrivkey = Data(bytes)
+            signingPubkey = Secp256k1.publicKey(from: signingPrivkey).map { Hex.encode($0) } ?? senderPubkey
+        } else {
+            signingPrivkey = senderPrivkey32
+            signingPubkey = senderPubkey
+        }
+
+        if isPrivate {
+            // Encrypt real sender pubkey to recipient so only recipient can identify sender.
+            let plaintext = "{\"pubkey\":\"\(senderPubkey)\"}"
+            if let recipientPub32 = Hex.decode(recipientPubkey),
+               let secret = try? Nip04.sharedSecret(privkey32: signingPrivkey, peerXonlyPubkey32: recipientPub32),
+               let encrypted = try? Nip04.encrypt(plaintext, sharedSecret: secret) {
+                tags.append(["anon", encrypted])
+            } else {
+                tags.append(["anon", ""])
+            }
+        } else if isAnonymous {
+            tags.append(["anon", ""])
+        }
+
         return try NostrEvent.sign(
-            privkey32: senderPrivkey32,
-            pubkey: senderPubkey,
+            privkey32: signingPrivkey,
+            pubkey: signingPubkey,
             kind: 9734,
             createdAt: Int(Date().timeIntervalSince1970),
             tags: tags,

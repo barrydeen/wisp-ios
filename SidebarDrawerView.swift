@@ -7,6 +7,8 @@ struct SidebarDrawerView: View {
     private var pubkey: String { keypair.pubkey }
     let onSelectTab: (BottomTab) -> Void
     let onLogout: () -> Void
+    var onSwitchAccount: (Keypair) -> Void = { _ in }
+    var onAddAccount: () -> Void = {}
     var onOpenProfile: () -> Void = {}
     var onOpenInterface: () -> Void = {}
     var onOpenKeys: () -> Void = {}
@@ -289,6 +291,9 @@ struct SidebarDrawerView: View {
             ForEach(accounts, id: \.self) { acctPubkey in
                 Button {
                     accountsExpanded = false
+                    if acctPubkey != pubkey, let kp = NostrKey.loadAccount(pubkey: acctPubkey) {
+                        onSwitchAccount(kp)
+                    }
                 } label: {
                     HStack(spacing: 12) {
                         CachedAvatarView(url: nil, size: 32)
@@ -311,6 +316,7 @@ struct SidebarDrawerView: View {
 
             Button {
                 accountsExpanded = false
+                onAddAccount()
             } label: {
                 HStack(spacing: 12) {
                     Image(systemName: "plus.circle")
