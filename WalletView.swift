@@ -85,43 +85,58 @@ struct WalletView: View {
     // MARK: - Dashboard
 
     private var walletDashboard: some View {
-        VStack(spacing: 0) {
-            // Top bar
-            topBar
-                .padding(.horizontal, 20)
-                .padding(.top, 12)
-                .padding(.bottom, 8)
+        GeometryReader { geo in
+            ScrollView {
+                VStack(spacing: 0) {
+                    // Top bar
+                    topBar
+                        .padding(.horizontal, 20)
+                        .padding(.top, 12)
+                        .padding(.bottom, 8)
 
-            // Seed backup warning (Spark + unacknowledged only)
-            if store.mode == .spark && !store.seedBackupAcknowledged {
-                seedBackupBanner
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 12)
-            }
+                    // Seed backup warning (Spark + unacknowledged only)
+                    if store.mode == .spark && !store.seedBackupAcknowledged {
+                        seedBackupBanner
+                            .padding(.horizontal, 16)
+                            .padding(.bottom, 12)
+                    }
 
-            // Balance + actions — vertically centered in available space
-            Spacer(minLength: 0)
+                    // Balance + actions — vertically centered in available space
+                    Spacer(minLength: 0)
 
-            VStack(spacing: 32) {
-                balanceCard
+                    VStack(spacing: 32) {
+                        balanceCard
 
-                if !store.isConnected {
-                    reconnectingBanner
+                        if !store.isConnected {
+                            reconnectingBanner
+                        }
+
+                        actionRow
+                    }
+                    .padding(.horizontal, 20)
+
+                    Spacer(minLength: 0)
+
+                    // Recent transactions — anchored at bottom
+                    if !store.transactions.isEmpty {
+                        recentTransactionsSection
+                    }
                 }
-
-                actionRow
+                .frame(minHeight: geo.size.height)
             }
-            .padding(.horizontal, 20)
-
-            Spacer(minLength: 0)
-
-            // Recent transactions — anchored at bottom
-            if !store.transactions.isEmpty {
-                recentTransactionsSection
+            .refreshable {
+                await refreshWallet()
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task { await store.refreshTransactions() }
+    }
+
+    private func refreshWallet() async {
+        isRefreshing = true
+        defer { isRefreshing = false }
+        await store.fetchBalance()
+        await store.refreshTransactions()
+        await store.refreshLightningAddress()
     }
 
     // MARK: - Top bar
@@ -130,14 +145,35 @@ struct WalletView: View {
         HStack(alignment: .center) {
             walletLogo
             Spacer()
-            NavigationLink(value: WalletRoute.settings) {
-                Image(systemName: "gearshape")
-                    .font(.system(size: 18, weight: .medium))
+            HStack(spacing: 4) {
+                Button {
+                    Task { await refreshWallet() }
+                } label: {
+                    Group {
+                        if isRefreshing {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 16, weight: .medium))
+                        }
+                    }
                     .foregroundStyle(.secondary)
-                    .padding(8)
+                    .frame(width: 34, height: 34)
                     .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(isRefreshing)
+
+                NavigationLink(value: WalletRoute.settings) {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 18, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 34, height: 34)
+                        .contentShape(Rectangle())
+                }
+                .foregroundStyle(.secondary)
             }
-            .foregroundStyle(.secondary)
         }
     }
 
@@ -235,6 +271,7 @@ struct WalletView: View {
 
     @State private var addressCopied = false
     @State private var syncPulse = false
+    @State private var isRefreshing = false
 
     private func lightningAddressPill(_ address: String) -> some View {
         Button {
