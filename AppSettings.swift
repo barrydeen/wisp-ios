@@ -18,6 +18,11 @@ final class AppSettings {
         case stack
     }
 
+    enum ZapIconStyle: String, CaseIterable {
+        case bolt
+        case bitcoin
+    }
+
     private struct Keys {
         static let largeText = "wisp_settings_large_text"
         static let themeName = "wisp_settings_theme_name"
@@ -35,6 +40,7 @@ final class AppSettings {
         static let postUndoTimerSeconds = "wisp_settings_post_undo_timer_seconds"
         static let postUndoTimerForReplies = "wisp_settings_post_undo_timer_for_replies"
         static let autoApproveRelayAuth = "wisp_settings_auto_approve_relay_auth"
+        static let zapIconStyle = "wisp_settings_zap_icon_style"
     }
 
     /// Allowed durations for the post-undo countdown. Picker shows these as
@@ -98,6 +104,9 @@ final class AppSettings {
     var autoApproveRelayAuth: Bool {
         didSet { UserDefaults.standard.set(autoApproveRelayAuth, forKey: Keys.autoApproveRelayAuth) }
     }
+    var zapIconStyle: ZapIconStyle {
+        didSet { UserDefaults.standard.set(zapIconStyle.rawValue, forKey: Keys.zapIconStyle) }
+    }
 
     private init() {
         let defaults = UserDefaults.standard
@@ -120,6 +129,21 @@ final class AppSettings {
         self.postUndoTimerSeconds = Self.postUndoTimerOptions.contains(storedSeconds) ? storedSeconds : 10
         self.postUndoTimerForReplies = defaults.object(forKey: Keys.postUndoTimerForReplies) as? Bool ?? false
         self.autoApproveRelayAuth = defaults.object(forKey: Keys.autoApproveRelayAuth) as? Bool ?? true
+        let zapRaw = defaults.string(forKey: Keys.zapIconStyle) ?? ZapIconStyle.bitcoin.rawValue
+        self.zapIconStyle = ZapIconStyle(rawValue: zapRaw) ?? .bitcoin
+    }
+
+    /// SF Symbol name for the zap icon. Only valid when `fiatModeEnabled` is false.
+    /// Use `zapImage` for rendering — it handles the fiat coin stack automatically.
+    var zapSymbolName: String {
+        zapIconStyle == .bitcoin ? "bitcoinsign" : "bolt.fill"
+    }
+
+    /// The correct zap icon for the current mode. Fiat mode renders the coin stack asset;
+    /// otherwise uses the user's bolt / bitcoin SF Symbol preference.
+    var zapImage: Image {
+        if fiatModeEnabled { return Image("CoinStack") }
+        return Image(systemName: zapSymbolName)
     }
 
     var preferredColorScheme: ColorScheme? {

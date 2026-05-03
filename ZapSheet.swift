@@ -19,6 +19,7 @@ enum ZapType: String, CaseIterable, Identifiable {
 /// Modal for sending a zap. Presented from the post card's bolt icon button.
 struct ZapSheet: View {
     @Bindable var store: WalletStore
+    @Environment(AppSettings.self) private var settings
     let recipientPubkey: String
     let recipientLud16: String?
     let recipientName: String?
@@ -65,7 +66,7 @@ struct ZapSheet: View {
                 VStack(spacing: 28) {
                     // Hero
                     VStack(spacing: 8) {
-                        Image(systemName: "bolt.fill")
+                        settings.zapImage
                             .font(.system(size: 40, weight: .semibold))
                             .foregroundStyle(Color.wispZapColor)
 
@@ -285,7 +286,7 @@ struct ZapSheet: View {
                             }
                         } else {
                             HStack(spacing: 6) {
-                                Image(systemName: "bolt.fill")
+                                settings.zapImage
                                 Text("Zap \(CurrencyFormatter.formatNumber(amountSats)) sats")
                                     .fontWeight(.semibold)
                             }

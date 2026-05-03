@@ -193,6 +193,27 @@ struct InterfaceSettingsView: View {
                             .foregroundStyle(theme.primary)
                         }
                     }
+
+                    Divider()
+                        .padding(.vertical, 4)
+                    HStack {
+                        Text("Zap icon")
+                            .foregroundStyle(theme.palette.onSurface)
+                        Spacer()
+                        Picker("", selection: $settings.zapIconStyle) {
+                            Image(systemName: "bitcoinsign").tag(AppSettings.ZapIconStyle.bitcoin)
+                            Image(systemName: "bolt.fill").tag(AppSettings.ZapIconStyle.bolt)
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(width: 100)
+                        .disabled(settings.fiatModeEnabled)
+                        .opacity(settings.fiatModeEnabled ? 0.4 : 1)
+                    }
+                    if settings.fiatModeEnabled {
+                        Text("Using currency icon in fiat mode.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(theme.palette.onSurfaceVariant)
+                    }
                 }
 
                 Spacer(minLength: 40)
