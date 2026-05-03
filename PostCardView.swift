@@ -731,7 +731,9 @@ struct PostCardView: View {
     private func actionItem(image: Image, count: Int? = nil, label: String? = nil, tint: Color? = nil) -> some View {
         HStack(spacing: 4) {
             image
-                .font(.system(size: 15))
+                .resizable()
+                .scaledToFit()
+                .frame(width: 15, height: 15)
             if let label, !label.isEmpty {
                 Text(label).font(.caption)
             } else if let count, count > 0 {

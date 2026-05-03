@@ -76,7 +76,9 @@ struct ZapSheet: View {
                     // Hero
                     VStack(spacing: 8) {
                         settings.zapImage
-                            .font(.system(size: 40, weight: .semibold))
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 40, height: 40)
                             .foregroundStyle(Color.wispZapColor)
 
                         Text(settings.fiatModeEnabled ? "Send Money" : "Send Zap")
@@ -284,6 +286,9 @@ struct ZapSheet: View {
                         } else {
                             HStack(spacing: 6) {
                                 settings.zapImage
+                                    .resizable()
+                                    .scaledToFit()
+                                    .frame(width: 18, height: 18)
                                 Text(settings.fiatModeEnabled
                                      ? "Send \(CurrencyFormatter.short(sats: amountSats))"
                                      : "Zap \(CurrencyFormatter.formatNumber(amountSats)) sats")
