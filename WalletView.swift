@@ -1,4 +1,6 @@
 import SwiftUI
+import PhotosUI
+import Vision
 
 // MARK: - Navigation routes
 
@@ -463,6 +465,8 @@ struct SendInvoiceSheet: View {
     @State private var status: String?
     @State private var inFlight = false
     @State private var showScanner = false
+    @State private var selectedPhoto: PhotosPickerItem?
+    @State private var galleryError: String?
 
     private var decoded: Bolt11.DecodedInvoice? { Bolt11.decode(invoice) }
     private var isReady: Bool { !invoice.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
@@ -472,13 +476,24 @@ struct SendInvoiceSheet: View {
             VStack(spacing: 20) {
                 // Input card
                 VStack(alignment: .leading, spacing: 0) {
-                    TextEditor(text: $invoice)
-                        .frame(minHeight: 110)
-                        .font(.system(.footnote, design: .monospaced))
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
-                        .scrollContentBackground(.hidden)
-                        .padding(14)
+                    // TextEditor with placeholder overlay
+                    ZStack(alignment: .topLeading) {
+                        if invoice.isEmpty {
+                            Text("Lightning address or invoice")
+                                .font(.system(.footnote, design: .monospaced))
+                                .foregroundStyle(.tertiary)
+                                .padding(.horizontal, 18)
+                                .padding(.vertical, 18)
+                                .allowsHitTesting(false)
+                        }
+                        TextEditor(text: $invoice)
+                            .frame(minHeight: 110)
+                            .font(.system(.footnote, design: .monospaced))
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                            .scrollContentBackground(.hidden)
+                            .padding(14)
+                    }
 
                     Divider().opacity(0.25)
 
@@ -508,9 +523,32 @@ struct SendInvoiceSheet: View {
                                 .padding(.vertical, 12)
                         }
                         .buttonStyle(.plain)
+
+                        Divider().frame(height: 24)
+
+                        PhotosPicker(selection: $selectedPhoto, matching: .images) {
+                            Label("Gallery", systemImage: "photo")
+                                .font(.subheadline.weight(.medium))
+                                .foregroundStyle(Color.wispZapColor)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 12)
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
                 .background(Color.wispSurfaceVariant.opacity(0.4), in: RoundedRectangle(cornerRadius: 14))
+                .onChange(of: selectedPhoto) { _, item in
+                    guard let item else { return }
+                    Task { await decodeQRFromPhoto(item) }
+                }
+
+                if let galleryError {
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.orange)
+                        Text(galleryError).font(.caption).foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
 
                 // Decoded preview
                 if let d = decoded {
@@ -609,6 +647,31 @@ struct SendInvoiceSheet: View {
             s = String(s[range.upperBound...])
         }
         return s
+    }
+
+    private func decodeQRFromPhoto(_ item: PhotosPickerItem) async {
+        galleryError = nil
+        guard let data = try? await item.loadTransferable(type: Data.self),
+              let uiImage = UIImage(data: data),
+              let cgImage = uiImage.cgImage else {
+            galleryError = "Could not load image"
+            return
+        }
+
+        let request = VNDetectBarcodesRequest()
+        request.symbologies = [.qr]
+        let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+        do {
+            try handler.perform([request])
+            if let result = (request.results as? [VNBarcodeObservation])?.first,
+               let payload = result.payloadStringValue {
+                invoice = normalizeInvoice(payload)
+            } else {
+                galleryError = "No QR code found in image"
+            }
+        } catch {
+            galleryError = "Could not read image"
+        }
     }
 }
 
