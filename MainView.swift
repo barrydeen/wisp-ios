@@ -580,8 +580,6 @@ struct MainView: View {
         HStack(spacing: 12) {
             profileAvatar
 
-            feedPicker
-
             Spacer()
 
             HStack(spacing: 8) {
@@ -618,6 +616,7 @@ struct MainView: View {
                 }
             }
         }
+        .overlay(feedPicker)
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
     }
