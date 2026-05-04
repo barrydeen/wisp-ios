@@ -35,6 +35,13 @@ struct AnimatedImageView<Placeholder: View, Failure: View>: View {
             case .failure:
                 failure()
             case .success(let payload):
+                // No `.allowsHitTesting(false)` here: with it, the GIF's frame
+                // becomes non-hit-testable in SwiftUI and pinch / drag /
+                // double-tap gestures attached to the surrounding view never
+                // fire over animated content. UIImageView itself ships with
+                // `isUserInteractionEnabled = false` so it doesn't intercept
+                // touches at the UIKit layer either — gestures pass cleanly
+                // up to the SwiftUI parent.
                 AnimatedImageRenderer(payload: payload)
                     .aspectRatio(aspect ?? payload.aspect, contentMode: .fit)
                     .frame(maxWidth: .infinity)

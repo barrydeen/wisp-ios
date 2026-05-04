@@ -233,7 +233,13 @@ struct FullScreenMediaPager: View {
     let items: [MediaGridView.MediaItem]
     let initialIndex: Int
     @Environment(\.dismiss) private var dismiss
+
     @State private var index: Int
+    @State private var dragOffset: CGFloat = 0
+    @State private var dismissY: CGFloat = 0
+    /// Captured at gesture start so per-frame paging math doesn't have to
+    /// re-read `geo.size.width` from inside the inner-driven callback.
+    @State private var pageWidth: CGFloat = 0
 
     init(items: [MediaGridView.MediaItem], initialIndex: Int) {
         self.items = items
@@ -242,28 +248,91 @@ struct FullScreenMediaPager: View {
     }
 
     var body: some View {
-        ZStack(alignment: .topTrailing) {
-            Color.black.ignoresSafeArea()
+        GeometryReader { geo in
+            ZStack(alignment: .topTrailing) {
+                Color.black
+                    .ignoresSafeArea()
+                    .opacity(dismissY > 0 ? max(0.3, 1.0 - Double(dismissY) / 250.0) : 1.0)
 
-            TabView(selection: $index) {
-                ForEach(Array(items.enumerated()), id: \.offset) { i, item in
-                    pageContent(for: item)
-                        .tag(i)
+                HStack(spacing: 0) {
+                    ForEach(Array(items.enumerated()), id: \.offset) { i, item in
+                        pageContent(for: item)
+                            .frame(width: geo.size.width, height: geo.size.height)
+                    }
                 }
-            }
-            .tabViewStyle(.page(indexDisplayMode: .always))
-            .indexViewStyle(.page(backgroundDisplayMode: .always))
+                .frame(width: geo.size.width, height: geo.size.height, alignment: .leading)
+                .offset(
+                    x: -CGFloat(index) * geo.size.width + dragOffset,
+                    y: dismissY
+                )
+                .onAppear { pageWidth = geo.size.width }
+                .onChange(of: geo.size.width) { _, new in pageWidth = new }
 
-            Button {
-                dismiss()
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .padding(12)
-                    .background(Color.black.opacity(0.6), in: Circle())
+                if items.count > 1 {
+                    HStack(spacing: 6) {
+                        ForEach(0..<items.count, id: \.self) { i in
+                            Circle()
+                                .fill(Color.white.opacity(i == index ? 0.9 : 0.35))
+                                .frame(width: 6, height: 6)
+                        }
+                    }
+                    .padding(.vertical, 6)
+                    .padding(.horizontal, 10)
+                    .background(Color.black.opacity(0.4), in: Capsule())
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                    .padding(.bottom, 24)
+                    .allowsHitTesting(false)
+                }
+
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(12)
+                        .background(Color.black.opacity(0.6), in: Circle())
+                }
+                .padding()
             }
-            .padding()
+        }
+    }
+
+    /// Receives drag values forwarded from the active inner FullScreenImageView
+    /// when it's not zoomed. Direction-routes between L/R paging and
+    /// vertical-down dismiss; commits on `isEnded == true`.
+    private func handleCarouselDrag(_ value: DragGesture.Value, isEnded: Bool) {
+        let dx = value.translation.width
+        let dy = value.translation.height
+        if !isEnded {
+            if abs(dy) > abs(dx) {
+                dismissY = max(0, dy)
+                dragOffset = 0
+            } else {
+                var proposed = dx
+                if (index == 0 && dx > 0) || (index == items.count - 1 && dx < 0) {
+                    proposed = dx * 0.35
+                }
+                dragOffset = proposed
+                dismissY = 0
+            }
+            return
+        }
+        if abs(dy) > abs(dx) {
+            if dy > 120 {
+                dismiss()
+            } else {
+                withAnimation(.spring(response: 0.3)) { dismissY = 0 }
+            }
+        } else {
+            let threshold = pageWidth * 0.25
+            var newIndex = index
+            if dx < -threshold && index < items.count - 1 { newIndex += 1 }
+            else if dx > threshold && index > 0 { newIndex -= 1 }
+            withAnimation(.easeOut(duration: 0.25)) {
+                index = newIndex
+                dragOffset = 0
+            }
         }
     }
 
@@ -277,7 +346,12 @@ struct FullScreenMediaPager: View {
             ))
             .padding(.horizontal, 4)
         } else {
-            FullScreenImageView(url: item.url, mime: item.mime, showsCloseButton: false)
+            FullScreenImageView(
+                url: item.url,
+                mime: item.mime,
+                showsCloseButton: false,
+                onCarouselDrag: { value, ended in handleCarouselDrag(value, isEnded: ended) }
+            )
         }
     }
 }
