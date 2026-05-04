@@ -9,6 +9,15 @@ struct PostCardView: View {
     /// instead of navigating. Used by ThreadView reply rows so taps don't push
     /// a redundant ThreadRoute that just resolves back to the same thread root.
     var expandOnTap: Bool = false
+    /// When true, render a tightened ancestor variant: small avatar, no action bar,
+    /// no media expansion, no inner profile NavigationLink. Used by ThreadView for
+    /// the chain of parent posts above the focal so the outer ThreadRoute link
+    /// owns every tap on the card.
+    var ancestorCompact: Bool = false
+    /// When true, the timestamp in the header renders as a full date/time
+    /// ("Mar 5, 2026 · 8:52 PM") instead of a relative offset. Used by
+    /// ThreadView's focal row to flag it as the canonical post for the screen.
+    var useAbsoluteTimestamp: Bool = false
     var onProfileTap: ((String) -> Void)? = nil
     var onNoteTap: ((String) -> Void)? = nil
     var onHashtagTap: ((String) -> Void)? = nil
@@ -129,26 +138,44 @@ struct PostCardView: View {
             }
 
             // Header row — avatar + name + nip05 + badges/time. Indented to
-            // align with the avatar.
+            // align with the avatar. In ancestor-compact mode the inner profile
+            // links are dropped so the outer ThreadRoute link owns every tap.
             HStack(alignment: .top, spacing: 12) {
-                NavigationLink(value: ProfileRoute(pubkey: displayEvent.pubkey)) {
-                    avatar(picture: displayProfile?.picture)
+                if ancestorCompact {
+                    CachedAvatarView(url: displayProfile?.picture, size: 24)
+                } else {
+                    NavigationLink(value: ProfileRoute(pubkey: displayEvent.pubkey)) {
+                        avatar(picture: displayProfile?.picture)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
 
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        NavigationLink(value: ProfileRoute(pubkey: displayEvent.pubkey)) {
-                            EmojiText(
-                                displayProfile?.displayString ?? npubShort(displayEvent.pubkey),
-                                emojiMap: displayProfile?.emojiMap ?? [:],
-                                textStyle: .subheadline,
-                                weight: .semibold,
-                                color: .label,
-                                lineLimit: 1
-                            )
+                        Group {
+                            if ancestorCompact {
+                                EmojiText(
+                                    displayProfile?.displayString ?? npubShort(displayEvent.pubkey),
+                                    emojiMap: displayProfile?.emojiMap ?? [:],
+                                    textStyle: .subheadline,
+                                    weight: .semibold,
+                                    color: .label,
+                                    lineLimit: 1
+                                )
+                            } else {
+                                NavigationLink(value: ProfileRoute(pubkey: displayEvent.pubkey)) {
+                                    EmojiText(
+                                        displayProfile?.displayString ?? npubShort(displayEvent.pubkey),
+                                        emojiMap: displayProfile?.emojiMap ?? [:],
+                                        textStyle: .subheadline,
+                                        weight: .semibold,
+                                        color: .label,
+                                        lineLimit: 1
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                            }
                         }
-                        .buttonStyle(.plain)
 
                         Spacer(minLength: 0)
 
@@ -157,12 +184,14 @@ struct PostCardView: View {
                             PowBadge(bits: powBits)
                         }
 
-                        Text(relativeTime(from: displayEvent.createdAt))
+                        Text(useAbsoluteTimestamp
+                             ? absoluteTimestamp(displayEvent.createdAt)
+                             : relativeTime(from: displayEvent.createdAt))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
 
-                    if let nip05 = displayProfile?.nip05, !nip05.isEmpty {
+                    if !ancestorCompact, let nip05 = displayProfile?.nip05, !nip05.isEmpty {
                         Nip05Badge(nip05: nip05, pubkey: displayEvent.pubkey)
                     }
                 }
@@ -173,6 +202,28 @@ struct PostCardView: View {
             // Post body — full card width, not indented under the avatar. Lets
             // long text breathe and gives the media gallery room to bleed off
             // the screen's right edge. Matches the Android client's layout.
+            // Ancestor-compact mode still uses RichContentView (so npub
+            // mentions resolve and inline images render) but caps the body
+            // height with clipping and drops polls, top-zapper, and the
+            // action bar. Tap callbacks are nil because the outer
+            // NavigationLink owns the row-level tap.
+            if ancestorCompact {
+                // No height cap: the cap forced `.aspectRatio(.fit)` images to
+                // shrink, which left InlineImageView's clipShape rounding the
+                // empty parent frame instead of the image edges. Render at
+                // natural size so corner rounding actually shows.
+                RichContentView(
+                    content: displayEvent.content,
+                    tags: displayEvent.tags,
+                    profiles: profiles,
+                    onProfileTap: nil,
+                    onNoteTap: nil,
+                    onHashtagTap: nil
+                )
+                .padding(.horizontal, 16)
+                .padding(.top, 6)
+                .padding(.bottom, 12)
+            } else {
             VStack(alignment: .leading, spacing: 8) {
                 if !displayEvent.content.isEmpty || !displayEvent.tags.isEmpty {
                     let isLong = displayEvent.content.count > Self.longPostCharThreshold
@@ -261,9 +312,10 @@ struct PostCardView: View {
             .padding(.horizontal, 16)
             .padding(.top, 8)
             .padding(.bottom, 12)
+            }
         }
         .contentShape(Rectangle())
-        .modifier(TapToExpand(enabled: expandOnTap, expanded: $expanded))
+        .modifier(TapToExpand(enabled: expandOnTap && !ancestorCompact, expanded: $expanded))
         .onAppear {
             let displayed = resolveRepost().event
             if displayed.kind == Nip88.kindPoll || displayed.kind == Nip69.kindZapPoll {
@@ -1165,6 +1217,16 @@ private struct ChipFlowLayout: Layout {
             lineHeight = max(lineHeight, size.height)
         }
     }
+}
+
+/// Twitter-style "Mar 5, 2026 · 8:52 PM" — used by ThreadView's focal post.
+func absoluteTimestamp(_ timestamp: Int) -> String {
+    let date = Date(timeIntervalSince1970: Double(timestamp))
+    let dateFmt = DateFormatter()
+    dateFmt.dateFormat = "MMM d, yyyy"
+    let timeFmt = DateFormatter()
+    timeFmt.timeStyle = .short
+    return "\(dateFmt.string(from: date)) · \(timeFmt.string(from: date))"
 }
 
 func relativeTime(from timestamp: Int) -> String {

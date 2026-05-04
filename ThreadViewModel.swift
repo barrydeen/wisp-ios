@@ -10,8 +10,17 @@ final class ThreadViewModel {
 
     var rootId: String
     var rootEvent: NostrEvent?
-    var flat: [ThreadRow] = []
+    /// Chain from root → focal-1, in order. Empty when the focal is the root.
+    var ancestors: [ThreadRow] = []
+    /// The focal event for this screen — usually `events[seedEventId]`.
+    var focal: ThreadRow?
+    /// Direct replies to the focal, sorted oldest first.
+    var replies: [ThreadRow] = []
+    /// Replies hidden by the on-device spam filter, surfaced behind a "X hidden" expander.
     var hiddenSpamReplies: [ThreadRow] = []
+    /// Direct-child counts per event id, derived from the local `events` map.
+    /// Drives the "View N replies" hint on rows that have descendants we know about.
+    var childCounts: [String: Int] = [:]
     var profiles: [String: ProfileData] = [:]
     var engagement: [String: EngagementCounts] = [:]
     var isLoading = false
@@ -40,8 +49,8 @@ final class ThreadViewModel {
     /// relay subscription only delivers truly new events.
     @ObservationIgnored private var engagementSinceFloor: Int = 0
     @ObservationIgnored private var hiddenSpamPubkeys: Set<String> = []
-    @ObservationIgnored private var spamScoringInflight: Set<String> = []
     @ObservationIgnored private var blockedEventIds: Set<String> = []
+    @ObservationIgnored private var spamScoringInflight: Set<String> = []
 
     @ObservationIgnored private let eventStore = EventStore.shared
     @ObservationIgnored private let profileRepo = ProfileRepository.shared
@@ -98,7 +107,7 @@ final class ThreadViewModel {
             events.removeValue(forKey: id)
             blockedEventIds.remove(id)
         }
-        rebuildTree()
+        rebuildSlices()
     }
 
     /// Ingest a kind-1 the user just published from outside this thread (typically the
@@ -138,6 +147,12 @@ final class ThreadViewModel {
             relays = await resolveRelays()
         }
 
+        // 4. Walk the parent chain from focal upward to fill any missing ancestors so the
+        //    user sees how they got here without waiting for the broader replies stream.
+        if seedEventId != rootId {
+            await fetchAncestorChain(from: relays)
+        }
+
         // Hydrate every pubkey the root note references (author + repost inner + npub
         // mentions) — cold loads otherwise leave mentions as truncated hex.
         if let root = rootEvent {
@@ -147,7 +162,7 @@ final class ThreadViewModel {
             }
         }
 
-        // 4. Open live subscriptions for replies + engagement and let the UI update as events
+        // 5. Open live subscriptions for replies + engagement and let the UI update as events
         //    arrive. The relay race is what makes the thread feel instant.
         startReplyStream(relays: relays)
         startEngagementBatcher(relays: relays)
@@ -180,7 +195,7 @@ final class ThreadViewModel {
 
     // MARK: - Reply
 
-    /// Sends a kind:1 reply to `parentId` (defaults to the current root). Publishes to the user's
+    /// Sends a kind:1 reply to `parentId` (defaults to the focal). Publishes to the user's
     /// own write relays plus the inbox relays of the root author, parent author, and every pubkey
     /// already participating in the chain.
     /// Begin an undo countdown before actually publishing the reply (length
@@ -260,7 +275,10 @@ final class ThreadViewModel {
             errorMessage = "Thread root unavailable"
             return
         }
-        let parent: NostrEvent = pending.parentId.flatMap { events[$0] } ?? root
+        // Default reply parent is the screen's focal, not the root. Each pushed
+        // ThreadView replies to its own focal.
+        let defaultParent: NostrEvent = events[seedEventId] ?? root
+        let parent: NostrEvent = pending.parentId.flatMap { events[$0] } ?? defaultParent
 
         isSending = true
         defer { isSending = false }
@@ -328,7 +346,7 @@ final class ThreadViewModel {
         if profiles[keypair.pubkey] == nil, let me = profileRepo.get(keypair.pubkey) {
             profiles[keypair.pubkey] = me
         }
-        rebuildTree()
+        rebuildSlices()
     }
 
     // MARK: - Cache seed
@@ -379,7 +397,7 @@ final class ThreadViewModel {
         }
 
         if !events.isEmpty {
-            rebuildTree()
+            rebuildSlices()
             var referenced = Set<String>()
             for event in events.values {
                 for pk in FeedViewModel.referencedAuthorPubkeys(in: event) {
@@ -468,6 +486,30 @@ final class ThreadViewModel {
         }
     }
 
+    /// Walk `Nip10.replyTarget` upward from the focal, fetching any missing intermediate
+    /// ancestors one event at a time so the chain renders without waiting for the broad
+    /// `e: [rootId]` replies stream. Bounded at 30 hops as a safety stop.
+    private func fetchAncestorChain(from relays: [String]) async {
+        guard var current = events[seedEventId] else { return }
+        for _ in 0..<30 {
+            guard let parentId = Nip10.replyTarget(of: current) else { break }
+            if let parent = events[parentId] {
+                current = parent
+                continue
+            }
+            var filter = NostrFilter()
+            filter.ids = [parentId]
+            filter.limit = 1
+            let results = await RelayPool.query(relays: relays, filter: filter, timeout: 6)
+            guard let parent = results.first(where: { $0.id == parentId }) else { break }
+            events[parent.id] = parent
+            await eventStore.persist([parent])
+            if parent.id == rootId { rootEvent = parent }
+            current = parent
+        }
+        rebuildSlices()
+    }
+
     /// Open a live subscription for replies. Events are merged into the UI as each relay sends
     /// them — no waiting on EOSE. After `duration` seconds the subscription is cancelled.
     private func startReplyStream(relays: [String], duration: TimeInterval = 12) {
@@ -521,7 +563,7 @@ final class ThreadViewModel {
         }
 
         queueEngagement(ids: [event.id])
-        rebuildTree()
+        rebuildSlices()
         if isLoading { isLoading = false }
     }
 
@@ -665,44 +707,63 @@ final class ThreadViewModel {
         }
     }
 
-    // MARK: - Tree
+    // MARK: - Slices
 
-    private func rebuildTree() {
-        var parentToChildren: [String: [NostrEvent]] = [:]
-        for event in events.values where event.id != rootId {
-            var parentId = Nip10.replyTarget(of: event) ?? rootId
-            // If the named parent isn't in this thread, attach to root so the message is still visible.
-            if parentId != rootId, events[parentId] == nil {
-                parentId = rootId
+    /// Recompute `ancestors`, `focal`, `replies`, `childCounts`, and `hiddenSpamReplies`
+    /// from the current `events` map. Called whenever events change.
+    private func rebuildSlices() {
+        focal = events[seedEventId].map { ThreadRow(event: $0, isBlocked: blockedEventIds.contains($0.id)) }
+        ancestors = computeAncestors()
+
+        // Tally direct children per parent so reply rows can show a
+        // "View N replies" hint as soon as any descendants are loaded.
+        var counts: [String: Int] = [:]
+        for event in events.values {
+            guard let parentId = Nip10.replyTarget(of: event) else { continue }
+            counts[parentId, default: 0] += 1
+        }
+        childCounts = counts
+
+        let directReplies = events.values
+            .filter { event in
+                guard event.id != seedEventId else { return false }
+                return Nip10.replyTarget(of: event) == seedEventId
             }
-            parentToChildren[parentId, default: []].append(event)
-        }
-        for key in parentToChildren.keys {
-            parentToChildren[key]?.sort { $0.createdAt < $1.createdAt }
-        }
-
-        var rows: [ThreadRow] = []
-        var visited = Set<String>()
-        dfs(parentId: rootId, depth: 0, parentToChildren: parentToChildren, visited: &visited, into: &rows)
+            .sorted { $0.createdAt < $1.createdAt }
 
         if hiddenSpamPubkeys.isEmpty {
-            flat = rows
+            replies = directReplies.map { ThreadRow(event: $0, isBlocked: blockedEventIds.contains($0.id)) }
             hiddenSpamReplies = []
         } else {
             var visible: [ThreadRow] = []
             var hidden: [ThreadRow] = []
-            for row in rows {
-                // Blocked placeholder rows are never spam-hidden — they already
-                // have no visible content, so burying them again adds no value.
-                if !row.isBlocked, hiddenSpamPubkeys.contains(row.event.pubkey) {
-                    hidden.append(row)
-                } else {
-                    visible.append(row)
-                }
+            for event in directReplies {
+                let row = ThreadRow(event: event, isBlocked: blockedEventIds.contains(event.id))
+                if row.isBlocked { visible.append(row); continue }
+                if hiddenSpamPubkeys.contains(event.pubkey) { hidden.append(row) }
+                else { visible.append(row) }
             }
-            flat = visible
+            replies = visible
             hiddenSpamReplies = hidden
         }
+    }
+
+    /// Walk parent-of-parent from focal up to root, returning the chain in root → focal-1 order.
+    /// Stops at the first missing event (the live stream / `fetchAncestorChain` will fill in
+    /// gaps and this gets called again).
+    private func computeAncestors() -> [ThreadRow] {
+        guard let focal = events[seedEventId] else { return [] }
+        var chain: [NostrEvent] = []
+        var current = focal
+        var seen: Set<String> = [focal.id]
+        for _ in 0..<30 {
+            guard let parentId = Nip10.replyTarget(of: current),
+                  seen.insert(parentId).inserted,
+                  let parent = events[parentId] else { break }
+            chain.append(parent)
+            current = parent
+        }
+        return chain.reversed().map { ThreadRow(event: $0, isBlocked: blockedEventIds.contains($0.id)) }
     }
 
     // MARK: - NSpam
@@ -728,40 +789,21 @@ final class ThreadViewModel {
                 self.spamScoringInflight.remove(author)
                 guard let s = score, s >= SpamScorer.spamThreshold else { return }
                 self.hiddenSpamPubkeys.insert(author)
-                self.rebuildTree()
+                self.rebuildSlices()
             }
         }
     }
 
-    /// Surface a previously-hidden reply: drop the author from the local hidden set, add to the
-    /// global safelist so they bypass scoring on every future reply, and rebuild the tree.
     func revealHiddenSpamAuthor(_ pubkey: String) {
         hiddenSpamPubkeys.remove(pubkey)
         SafetyPreferences.shared.addToSafelist(pubkey)
         Task { await SpamScorer.shared.invalidate(pubkey: pubkey) }
-        rebuildTree()
-    }
-
-    private func dfs(
-        parentId: String,
-        depth: Int,
-        parentToChildren: [String: [NostrEvent]],
-        visited: inout Set<String>,
-        into out: inout [ThreadRow]
-    ) {
-        guard let children = parentToChildren[parentId] else { return }
-        for child in children {
-            if !visited.insert(child.id).inserted { continue }
-            out.append(ThreadRow(event: child, depth: depth, isBlocked: blockedEventIds.contains(child.id)))
-            dfs(parentId: child.id, depth: depth + 1, parentToChildren: parentToChildren, visited: &visited, into: &out)
-        }
+        rebuildSlices()
     }
 }
 
 struct ThreadRow: Identifiable {
     let event: NostrEvent
-    let depth: Int
     var isBlocked: Bool = false
     var id: String { event.id }
 }
-

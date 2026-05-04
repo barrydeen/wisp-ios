@@ -5,16 +5,26 @@ struct ThreadView: View {
     @State private var showError: Bool = false
     @State private var showHiddenSpam: Bool = false
     @State private var showReplyCompose: Bool = false
-    /// True once we've auto-scrolled to the seed event id. Stops the scroll
-    /// from re-firing every time the reply tree updates.
-    @State private var didScrollToSeed: Bool = false
+    @State private var didScrollToFocal: Bool = false
 
-    init(seedEventId: String, authorHint: String?, keypair: Keypair) {
+    /// The active tab's NavigationStack path. Mutated directly by smart-pop so a
+    /// tap on an ancestor that's already in the back stack pops to it instead of
+    /// pushing a duplicate ThreadView for the same eventId.
+    @Binding var path: NavigationPath
+    /// Side-channel mirror of the eventIds of every ThreadRoute on `path`, in
+    /// stack order. Maintained by `.task` (append) + `.onDisappear` (remove-tail)
+    /// so smart-pop can compute how many levels to pop.
+    @Binding var chain: [String]
+
+    init(seedEventId: String, authorHint: String?, keypair: Keypair,
+         path: Binding<NavigationPath>, chain: Binding<[String]>) {
         _viewModel = State(initialValue: ThreadViewModel(
             seedEventId: seedEventId,
             authorHint: authorHint,
             keypair: keypair
         ))
+        _path = path
+        _chain = chain
     }
 
     var body: some View {
@@ -22,66 +32,80 @@ struct ThreadView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 0) {
-                        if let root = viewModel.rootEvent {
-                            PostCardView(
-                                event: root,
-                                profile: viewModel.profiles[root.pubkey],
-                                profiles: viewModel.profiles,
-                                engagement: viewModel.engagement[root.id],
-                                onProfileTap: { _ in },
-                                onNoteTap: { _ in },
-                                onHashtagTap: { _ in }
-                            )
-                            .id(root.id)
+                        // Ancestors — chain from root → focal-1, each tappable to push
+                        // a new ThreadView focused on that ancestor.
+                        ForEach(viewModel.ancestors) { row in
+                            ancestorRow(row)
+                                .id(row.id)
                             Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
+                        }
+
+                        // Focal — the post this screen is "about". Not tappable; the
+                        // surrounding dividers + reply-count meta line distinguish it
+                        // from the rest of the stack.
+                        if let focal = viewModel.focal {
+                            focalRow(focal)
+                                .id(focal.id)
                         } else if viewModel.isLoading {
                             loadingHeader
                         }
 
-                        ForEach(viewModel.flat) { row in
+                        // Replies — direct children of the focal, each tappable to push.
+                        ForEach(viewModel.replies) { row in
                             replyRow(row)
-                                .id(row.event.id)
+                                .id(row.id)
                             Divider()
                                 .overlay(Color.wispSurfaceVariant.opacity(0.3))
-                                .padding(.leading, indent(for: row.depth))
                         }
 
                         if !viewModel.hiddenSpamReplies.isEmpty {
                             hiddenSpamSection
                         }
 
-                        if !viewModel.isLoading && viewModel.flat.isEmpty && viewModel.rootEvent != nil {
+                        if !viewModel.isLoading
+                            && viewModel.replies.isEmpty
+                            && viewModel.focal != nil {
                             emptyState
                         }
                     }
                 }
                 .refreshable { await viewModel.refresh() }
-                .onChange(of: viewModel.rootEvent?.id) { _, _ in
-                    scrollToSeedIfNeeded(proxy: proxy)
-                }
-                .onChange(of: viewModel.flat.count) { _, _ in
-                    scrollToSeedIfNeeded(proxy: proxy)
-                }
+                .onChange(of: viewModel.focal?.id) { _, _ in scrollToFocalIfNeeded(proxy: proxy) }
+                .onChange(of: viewModel.ancestors.count) { _, _ in scrollToFocalIfNeeded(proxy: proxy) }
             }
-
             composer
         }
         .background(Color.wispBackground)
         .navigationTitle("Thread")
         .navigationBarTitleDisplayMode(.inline)
-        .task { await viewModel.start() }
-        .onDisappear { viewModel.stop() }
-        .onChange(of: viewModel.errorMessage) { _, new in
-            showError = new != nil
+        .task {
+            // Register this thread on the side-channel chain so deeper
+            // ThreadViews can smart-pop back to it. The contains-guard keeps
+            // duplicate entries out if `.task` re-fires on the same view.
+            if !chain.contains(viewModel.seedEventId) {
+                chain.append(viewModel.seedEventId)
+            }
+            await viewModel.start()
         }
+        .onDisappear {
+            viewModel.stop()
+            // Pop our entry off the tail. This handles natural back / swipe-back
+            // and the cascading disappears that follow a smart-pop's
+            // `path.removeLast(N)`.
+            if chain.last == viewModel.seedEventId {
+                chain.removeLast()
+            }
+        }
+        .onChange(of: viewModel.errorMessage) { _, new in showError = new != nil }
         .alert("Reply failed", isPresented: $showError, presenting: viewModel.errorMessage) { _ in
             Button("OK") { viewModel.errorMessage = nil }
-        } message: { msg in
-            Text(msg)
-        }
+        } message: { msg in Text(msg) }
         .sheet(isPresented: $showReplyCompose) {
-            if let root = viewModel.rootEvent {
-                ComposeView(keypair: viewModel.keypair, mode: .reply(parent: root, root: root))
+            if let focalEvent = viewModel.focal?.event {
+                ComposeView(
+                    keypair: viewModel.keypair,
+                    mode: .reply(parent: focalEvent, root: viewModel.rootEvent)
+                )
             }
         }
     }
@@ -127,12 +151,10 @@ struct ThreadView: View {
                         }
                         .font(.caption.weight(.medium))
                         .foregroundStyle(Color.wispPrimary)
-                        .padding(.leading, indent(for: row.depth) + 16)
+                        .padding(.leading, 16)
                         .padding(.bottom, 4)
                     }
-                    Divider()
-                        .overlay(Color.wispSurfaceVariant.opacity(0.3))
-                        .padding(.leading, indent(for: row.depth))
+                    Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
                 }
             }
         }
@@ -151,9 +173,35 @@ struct ThreadView: View {
         .padding(.vertical, 32)
     }
 
-    private func replyRow(_ row: ThreadRow) -> some View {
-        HStack(alignment: .top, spacing: 0) {
-            depthGuides(row.depth)
+    // MARK: - Rows
+
+    @ViewBuilder
+    private func ancestorRow(_ row: ThreadRow) -> some View {
+        if row.isBlocked {
+            blockedPlaceholder
+        } else {
+            Button {
+                navigateToThread(eventId: row.event.id, authorPubkey: row.event.pubkey)
+            } label: {
+                PostCardView(
+                    event: row.event,
+                    profile: viewModel.profiles[row.event.pubkey],
+                    profiles: viewModel.profiles,
+                    engagement: viewModel.engagement[row.event.id],
+                    ancestorCompact: true,
+                    onProfileTap: { _ in },
+                    onNoteTap: { _ in },
+                    onHashtagTap: { _ in }
+                )
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    @ViewBuilder
+    private func focalRow(_ row: ThreadRow) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
             if row.isBlocked {
                 blockedPlaceholder
             } else {
@@ -161,14 +209,98 @@ struct ThreadView: View {
                     event: row.event,
                     profile: viewModel.profiles[row.event.pubkey],
                     profiles: viewModel.profiles,
-                    engagement: viewModel.engagement[row.event.id],
-                    expandOnTap: true,
+                    engagement: engagement(for: row.event.id),
+                    useAbsoluteTimestamp: true,
                     onProfileTap: { _ in },
                     onNoteTap: { _ in },
                     onHashtagTap: { _ in }
                 )
             }
+            if !viewModel.replies.isEmpty {
+                Text("\(viewModel.replies.count) \(viewModel.replies.count == 1 ? "reply" : "replies")")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 8)
+            }
+            Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
         }
+        .background(Color.wispSurfaceVariant.opacity(0.25))
+    }
+
+    @ViewBuilder
+    private func replyRow(_ row: ThreadRow) -> some View {
+        if row.isBlocked {
+            blockedPlaceholder
+        } else {
+            let replyCount = effectiveReplyCount(for: row.event.id)
+            Button {
+                navigateToThread(eventId: row.event.id, authorPubkey: row.event.pubkey)
+            } label: {
+                VStack(alignment: .leading, spacing: 0) {
+                    PostCardView(
+                        event: row.event,
+                        profile: viewModel.profiles[row.event.pubkey],
+                        profiles: viewModel.profiles,
+                        engagement: engagement(for: row.event.id),
+                        onProfileTap: { _ in },
+                        onNoteTap: { _ in },
+                        onHashtagTap: { _ in }
+                    )
+                    if replyCount > 0 {
+                        HStack(spacing: 4) {
+                            Text("\(replyCount) \(replyCount == 1 ? "reply" : "replies")")
+                            Image(systemName: "chevron.right")
+                                .font(.caption2.weight(.semibold))
+                        }
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.wispPrimary)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 10)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    /// Smart-nav: if the tapped event is already on the back stack, pop back
+    /// to it (skipping every level above) instead of pushing a duplicate
+    /// ThreadView. Tapping the current focal is a no-op. Otherwise push.
+    private func navigateToThread(eventId: String, authorPubkey: String) {
+        if eventId == viewModel.seedEventId { return }
+        if let idx = chain.firstIndex(of: eventId), idx < chain.count - 1 {
+            // Pop every level between the current tail and the target's level.
+            // Clamp to `path.count` defensively in case the path and chain
+            // ever drift out of sync (e.g. profile routes interleaved).
+            let popLevels = min(chain.count - idx - 1, path.count)
+            path.removeLast(popLevels)
+        } else {
+            path.append(ThreadRoute(eventId: eventId, authorPubkey: authorPubkey))
+        }
+    }
+
+    /// Larger of locally-known direct children or the relay engagement count.
+    /// Local count surfaces the moment a descendant is in the cache; the
+    /// engagement number catches descendants we haven't fetched yet.
+    private func effectiveReplyCount(for eventId: String) -> Int {
+        let local = viewModel.childCounts[eventId] ?? 0
+        let remote = viewModel.engagement[eventId]?.replies ?? 0
+        return max(local, remote)
+    }
+
+    /// Engagement passed to PostCardView, with `replies` bumped to the
+    /// effective count so the action-bar bubble shows a number even before
+    /// the engagement subscription returns.
+    private func engagement(for eventId: String) -> EngagementCounts? {
+        var counts = viewModel.engagement[eventId] ?? EngagementCounts()
+        let effective = effectiveReplyCount(for: eventId)
+        guard effective > 0 || counts.reactions > 0 || counts.reposts > 0
+              || counts.zapSats > 0 || counts.zapCount > 0 else {
+            return nil
+        }
+        counts.replies = effective
+        return counts
     }
 
     private var blockedPlaceholder: some View {
@@ -186,56 +318,31 @@ struct ThreadView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func depthGuides(_ depth: Int) -> some View {
-        let clamped = min(depth, 8)
-        return HStack(spacing: 0) {
-            ForEach(0..<clamped, id: \.self) { _ in
-                Rectangle()
-                    .fill(Color.wispSurfaceVariant.opacity(0.5))
-                    .frame(width: 2)
-                    .padding(.horizontal, 5)
-            }
-        }
-        .frame(width: indent(for: depth))
-    }
-
-    private func indent(for depth: Int) -> CGFloat {
-        CGFloat(min(depth, 8)) * 12
-    }
-
-    /// Scrolls the thread to the seed event id (the specific reply / mention
-    /// the user navigated from — typically a notification tap). Fires only
-    /// once per thread session and only after the seed is actually rendered
-    /// in the LazyVStack, so the scroll target exists.
-    private func scrollToSeedIfNeeded(proxy: ScrollViewProxy) {
-        guard !didScrollToSeed else { return }
-        let seed = viewModel.seedEventId
-        // Already at the top — the root is the seed, no scroll needed.
-        if seed == viewModel.rootId || seed == viewModel.rootEvent?.id {
-            didScrollToSeed = true
+    /// Scroll the focal post to the top once both it and its ancestors have resolved.
+    /// Fires once per ThreadView lifetime so the user can scroll up freely afterward.
+    private func scrollToFocalIfNeeded(proxy: ScrollViewProxy) {
+        guard !didScrollToFocal else { return }
+        guard let focalId = viewModel.focal?.id else { return }
+        // No ancestors yet AND the focal is the root → nothing to scroll past, mark done.
+        if viewModel.ancestors.isEmpty && viewModel.rootId == focalId {
+            didScrollToFocal = true
             return
         }
-        // Wait until the seed event has been ingested into the visible tree
-        // before trying to scroll, otherwise `proxy.scrollTo` is a no-op.
-        let seedRendered = viewModel.flat.contains(where: { $0.event.id == seed })
-        guard seedRendered else { return }
-        didScrollToSeed = true
+        // Otherwise wait for at least one ancestor to render before scrolling, so the
+        // focal lands at the top instead of in the middle of an empty view.
+        guard !viewModel.ancestors.isEmpty else { return }
+        didScrollToFocal = true
         DispatchQueue.main.async {
             withAnimation(.easeInOut(duration: 0.25)) {
-                proxy.scrollTo(seed, anchor: .top)
+                proxy.scrollTo(focalId, anchor: .top)
             }
         }
     }
 
-    /// Tap-to-open affordance that hands off to the full ComposeView in `.reply` mode.
-    /// Matches the Android pattern — same composer for new posts and replies, so mentions,
-    /// emoji, media, polls, hashtags, and the 10-second undo countdown all work uniformly.
     private var composer: some View {
         VStack(spacing: 0) {
             Divider().overlay(Color.wispSurfaceVariant.opacity(0.5))
-            Button {
-                showReplyCompose = true
-            } label: {
+            Button { showReplyCompose = true } label: {
                 HStack(spacing: 10) {
                     Text("Reply\u{2026}")
                         .font(.subheadline)
@@ -250,7 +357,7 @@ struct ThreadView: View {
                 .background(Color.wispSurfaceVariant.opacity(0.5), in: RoundedRectangle(cornerRadius: 18))
             }
             .buttonStyle(.plain)
-            .disabled(viewModel.rootEvent == nil)
+            .disabled(viewModel.focal == nil)
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
         }

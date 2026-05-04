@@ -15,6 +15,14 @@ struct MainView: View {
     @State private var placeholderPath = NavigationPath()
     @State private var notificationsPath = NavigationPath()
     @State private var searchPath = NavigationPath()
+    /// Per-tab side-channel mirroring the eventIds of any ThreadRoute pushes on
+    /// the matching path, in stack order. Lets ThreadView smart-pop back to an
+    /// already-visited ancestor instead of pushing a duplicate. Maintained by
+    /// ThreadView's `.task` (append) + `.onDisappear` (remove-tail).
+    @State private var feedThreadChain: [String] = []
+    @State private var placeholderThreadChain: [String] = []
+    @State private var notificationsThreadChain: [String] = []
+    @State private var searchThreadChain: [String] = []
     @State private var drawerOpen = false
     @State private var drawerDragOffset: CGFloat = 0
     @State private var engagementRepo = EngagementRepository.shared
@@ -402,7 +410,9 @@ struct MainView: View {
                                 ThreadView(
                                     seedEventId: route.eventId,
                                     authorHint: route.authorPubkey,
-                                    keypair: keypair
+                                    keypair: keypair,
+                                    path: $feedPath,
+                                    chain: $feedThreadChain
                                 )
                             }
                             .navigationDestination(for: LiveStreamRoute.self) { route in
@@ -476,7 +486,9 @@ struct MainView: View {
                                 ThreadView(
                                     seedEventId: route.eventId,
                                     authorHint: route.authorPubkey,
-                                    keypair: keypair
+                                    keypair: keypair,
+                                    path: $searchPath,
+                                    chain: $searchThreadChain
                                 )
                             }
                             .toolbar(.hidden, for: .navigationBar)
@@ -508,7 +520,9 @@ struct MainView: View {
                             ThreadView(
                                 seedEventId: route.eventId,
                                 authorHint: route.authorPubkey,
-                                keypair: keypair
+                                keypair: keypair,
+                                path: $notificationsPath,
+                                chain: $notificationsThreadChain
                             )
                         }
                         .toolbar(.hidden, for: .navigationBar)
@@ -528,7 +542,9 @@ struct MainView: View {
                                 ThreadView(
                                     seedEventId: route.eventId,
                                     authorHint: route.authorPubkey,
-                                    keypair: keypair
+                                    keypair: keypair,
+                                    path: $placeholderPath,
+                                    chain: $placeholderThreadChain
                                 )
                             }
                             .toolbar(.hidden, for: .navigationBar)
