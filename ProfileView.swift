@@ -119,7 +119,7 @@ struct ProfileView: View {
                 } label: {
                     Image(systemName: "qrcode")
                         .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(.primary)
+                        .foregroundStyle(Color.wispOnSurface)
                         .frame(width: 36, height: 36)
                         .contentShape(Rectangle())
                 }
@@ -154,7 +154,7 @@ struct ProfileView: View {
                 } label: {
                     Image(systemName: "ellipsis")
                         .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(.primary)
+                        .foregroundStyle(Color.wispOnSurface)
                         .frame(width: 36, height: 36)
                         .contentShape(Rectangle())
                 }

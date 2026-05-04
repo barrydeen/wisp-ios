@@ -270,26 +270,42 @@ enum ContentParser {
     }
 
     private static func isStandaloneUrl(content: String, range: NSRange) -> Bool {
+        // All position math stays in NSString (UTF-16) to avoid mixing
+        // Swift Character distances with NSString offsets — that mismatch
+        // breaks for content with multi-code-unit emoji (e.g. ⬛, 🟪),
+        // because Swift counts each emoji as one Character while NSString
+        // counts it as two code units, and the resulting prefix slice
+        // includes emoji that fail `isWhitespace`.
         let nsContent = content as NSString
-        let before = nsContent.substring(with: NSRange(location: 0, length: range.location))
-        let lineStart: Int
-        if let newlineRange = before.range(of: "\n", options: .backwards) {
-            lineStart = before.distance(from: before.startIndex, to: newlineRange.upperBound)
-        } else {
-            lineStart = 0
-        }
-        let prefix = (before as NSString).substring(from: lineStart)
+        let beforeRange = NSRange(location: 0, length: range.location)
+        let lastNewline = nsContent.range(
+            of: "\n",
+            options: .backwards,
+            range: beforeRange
+        )
+        let prefixStart = lastNewline.location == NSNotFound
+            ? 0
+            : lastNewline.location + lastNewline.length
+        let prefix = nsContent.substring(with: NSRange(
+            location: prefixStart,
+            length: range.location - prefixStart
+        ))
         if !prefix.allSatisfy(\.isWhitespace) { return false }
 
         let afterStart = range.location + range.length
-        let after = nsContent.substring(from: afterStart)
-        let lineEnd: Int
-        if let newlineRange = after.range(of: "\n") {
-            lineEnd = after.distance(from: after.startIndex, to: newlineRange.lowerBound)
-        } else {
-            lineEnd = (after as NSString).length
-        }
-        let suffix = (after as NSString).substring(to: lineEnd)
+        let afterRange = NSRange(location: afterStart, length: nsContent.length - afterStart)
+        let firstNewline = nsContent.range(
+            of: "\n",
+            options: [],
+            range: afterRange
+        )
+        let suffixEnd = firstNewline.location == NSNotFound
+            ? nsContent.length
+            : firstNewline.location
+        let suffix = nsContent.substring(with: NSRange(
+            location: afterStart,
+            length: suffixEnd - afterStart
+        ))
         return suffix.allSatisfy(\.isWhitespace)
     }
 

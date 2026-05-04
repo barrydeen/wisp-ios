@@ -35,7 +35,7 @@ struct NotesTabView: View {
 
             if viewModel.notesSortMode == .recency {
                 if viewModel.isLoadingNotes && viewModel.rootNotes.isEmpty {
-                    loading()
+                    loading("Loading notes…")
                 } else if viewModel.rootNotes.isEmpty {
                     emptyState("No notes yet")
                 } else {
@@ -59,7 +59,7 @@ struct NotesTabView: View {
                 }
             } else {
                 if viewModel.isLoadingSortedNotes && viewModel.sortedNotes.isEmpty {
-                    loading()
+                    loading("Loading notes…")
                 } else if viewModel.sortedNotes.isEmpty {
                     emptyState("Feed crawling…")
                 } else {
@@ -110,7 +110,7 @@ struct RepliesTabView: View {
 
             if viewModel.repliesSortMode == .recency {
                 if viewModel.isLoadingReplies && viewModel.replies.isEmpty {
-                    loading()
+                    loading("Loading replies…")
                 } else if viewModel.replies.isEmpty {
                     emptyState("No replies yet")
                 } else {
@@ -134,7 +134,7 @@ struct RepliesTabView: View {
                 }
             } else {
                 if viewModel.isLoadingSortedReplies && viewModel.sortedReplies.isEmpty {
-                    loading()
+                    loading("Loading replies…")
                 } else if viewModel.sortedReplies.isEmpty {
                     emptyState("Feed crawling…")
                 } else {
@@ -203,7 +203,7 @@ struct GalleryTabView: View {
     var body: some View {
         Group {
             if viewModel.isLoadingGallery && viewModel.galleryPosts.isEmpty {
-                loading()
+                loading("Loading gallery…")
             } else if viewModel.galleryPosts.isEmpty {
                 emptyState("No picture or video posts")
             } else {
@@ -330,7 +330,7 @@ struct FollowingTabView: View {
     var body: some View {
         Group {
             if viewModel.isLoadingFollowing && viewModel.followingProfiles.isEmpty {
-                loading()
+                loading("Loading following…")
             } else if viewModel.followingProfiles.isEmpty {
                 emptyState("Not following anyone")
             } else {
@@ -351,7 +351,7 @@ struct FollowersTabView: View {
     var body: some View {
         Group {
             if viewModel.isLoadingFollowers && viewModel.followerProfiles.isEmpty {
-                loading()
+                loading("Loading followers…")
             } else if viewModel.followerProfiles.isEmpty {
                 emptyState("No followers found")
             } else {
@@ -409,7 +409,7 @@ struct GroupsTabView: View {
     var body: some View {
         Group {
             if viewModel.isLoadingGroups && viewModel.groups.isEmpty {
-                loading()
+                loading("Loading chat rooms…")
             } else if viewModel.groups.isEmpty {
                 emptyState("No chat rooms")
             } else {
@@ -460,7 +460,7 @@ struct RelaysTabView: View {
     var body: some View {
         Group {
             if viewModel.isLoadingRelays && viewModel.relayList.isEmpty {
-                loading()
+                loading("Loading relays…")
             } else if viewModel.relayList.isEmpty {
                 emptyState("No relay list published")
             } else {
@@ -506,12 +506,15 @@ struct RelaysTabView: View {
 
 // MARK: - Shared bits
 
-private func loading() -> some View {
-    VStack {
+private func loading(_ label: String = "Loading…") -> some View {
+    VStack(spacing: 10) {
         ProgressView()
-            .padding(.top, 40)
-        Spacer()
+            .tint(Color.wispPrimary)
+        Text(label)
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
     }
+    .padding(.top, 40)
     .frame(maxWidth: .infinity)
 }
 
@@ -542,6 +545,7 @@ private struct LoadMoreFooter: View {
                 Spacer()
                 if loading {
                     ProgressView()
+                        .tint(Color.wispPrimary)
                 } else {
                     Text("Load more")
                         .font(.subheadline.weight(.medium))

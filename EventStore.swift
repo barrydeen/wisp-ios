@@ -225,6 +225,30 @@ actor EventStore {
         }
     }
 
+    /// Most-recent events of the given kinds by a single author. Lets the profile
+    /// tab seed the Notes / Replies lists from cache so the user sees their
+    /// latest content instantly while the relay round-trip catches up.
+    /// Filters kind in Swift after the query because ObjectBox-Swift's int
+    /// `isIn` semantics aren't straightforward; the over-fetch is bounded by
+    /// `limit * 4` which is still cheap for a single author's events.
+    func loadRecentByAuthor(pubkey: String, kinds: [Int], limit: Int) -> [NostrEvent] {
+        guard let box = ensureBox(), !kinds.isEmpty else { return [] }
+        do {
+            let kindSet = Set(kinds)
+            let query = try box.query { EventEntity.pubkey == pubkey }
+                .ordered(by: EventEntity.createdAt, flags: .descending)
+                .build()
+            let entities = try query.find(offset: 0, limit: limit * 4)
+            return entities
+                .compactMap { $0.toNostrEvent() }
+                .filter { kindSet.contains($0.kind) }
+                .prefix(limit)
+                .map { $0 }
+        } catch {
+            return []
+        }
+    }
+
     /// Remove every cached event by `pubkey`. Called on block so the author's existing notes
     /// disappear from feed reseeds and notification hydration.
     @discardableResult

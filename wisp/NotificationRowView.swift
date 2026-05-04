@@ -388,8 +388,11 @@ struct NotificationRowView: View {
 
     /// Replaces `nostr:npub1…`, `nostr:nprofile1…`, and bare `npub1…` / `nprofile1…`
     /// tokens in `content` with `@displayname` using the already-resolved `profiles` dict.
+    /// The bare-bech32 alternative excludes URL-context characters from the lookbehind
+    /// (`/`, `:`, `.`, `@`) and rejects matches followed by `.letter` (TLDs) so an
+    /// npub embedded in a URL like `https://npub1xxx.blossom.band/…` is left alone.
     private func resolveNostrMentions(_ content: String) -> String {
-        let pattern = #"nostr:(?:npub1|nprofile1)[a-z0-9]+|(?<!\w)(?:npub1|nprofile1)[a-z0-9]{50,}(?!\w)"#
+        let pattern = #"nostr:(?:npub1|nprofile1)[a-z0-9]+|(?<![\w/:.@])(?:npub1|nprofile1)[a-z0-9]{50,}(?!\w|\.[a-zA-Z])"#
         guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return content }
         let ns = content as NSString
         let matches = regex.matches(in: content, range: NSRange(location: 0, length: ns.length))
@@ -494,9 +497,10 @@ struct NotificationRowView: View {
     }
 
     /// Pull `nostr:npub1.../nprofile1...` and bare bech32 pubkey references out
-    /// of an event's body. Mirrors what `ContentParser` recognizes.
+    /// of an event's body. Mirrors what `ContentParser` recognizes — same URL-context
+    /// exclusions so a pubkey embedded in a URL isn't mistakenly hydrated as a mention.
     private func extractPubkeysFromContent(_ content: String) -> [String] {
-        let pattern = #"nostr:(?:npub1|nprofile1)[a-z0-9]+|(?<!\w)(?:npub1|nprofile1)[a-z0-9]{50,}(?!\w)"#
+        let pattern = #"nostr:(?:npub1|nprofile1)[a-z0-9]+|(?<![\w/:.@])(?:npub1|nprofile1)[a-z0-9]{50,}(?!\w|\.[a-zA-Z])"#
         guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return [] }
         let ns = content as NSString
         let range = NSRange(location: 0, length: ns.length)

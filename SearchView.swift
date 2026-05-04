@@ -118,7 +118,7 @@ struct SearchView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .background(Color.wispSurfaceVariant, in: RoundedRectangle(cornerRadius: 20))
-            .foregroundStyle(.primary)
+            .foregroundStyle(Color.wispOnSurface)
         }
     }
 
@@ -208,7 +208,7 @@ struct SearchView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
                 .background(Color.wispSurfaceVariant, in: RoundedRectangle(cornerRadius: 14))
-                .foregroundStyle(.primary)
+                .foregroundStyle(Color.wispOnSurface)
             }
 
             Spacer()

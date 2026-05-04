@@ -1,4 +1,6 @@
 import Foundation
+import LinkPresentation
+import UIKit
 
 struct OpenGraphData: Sendable {
     let title: String?
@@ -62,26 +64,163 @@ actor LinkPreviewService {
             }
         }
 
-        guard let url = URL(string: urlString) else { return nil }
+        // YouTube channel URLs with a `?sub_confirmation=1` query trigger an
+        // interstitial subscription confirmation page that has no OG meta
+        // tags. Drop the query for the OG fetch so the canonical channel
+        // page renders; the click-through uses the original URL untouched.
+        let fetchUrlString = sanitizeForFetch(urlString)
+        guard let url = URL(string: fetchUrlString) else { return nil }
         var request = URLRequest(url: url)
-        request.setValue("Mozilla/5.0 (compatible; Wisp/1.0)", forHTTPHeaderField: "User-Agent")
+        // Browser-realistic User-Agent — many large sites (notably YouTube)
+        // serve a stripped-down or interstitial page to bot-like UAs that
+        // omits the OG meta tags we need.
+        request.setValue(
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+            forHTTPHeaderField: "User-Agent"
+        )
+        request.setValue("text/html,application/xhtml+xml", forHTTPHeaderField: "Accept")
         request.timeoutInterval = 6
 
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             if let http = response as? HTTPURLResponse {
-                guard 200..<300 ~= http.statusCode else { return nil }
+                guard 200..<300 ~= http.statusCode else {
+                    return synthesizeYoutubeChannelPreview(urlString)
+                }
                 let contentType = http.value(forHTTPHeaderField: "Content-Type")?.lowercased() ?? ""
-                if !contentType.contains("text/html") { return nil }
+                if !contentType.contains("text/html") {
+                    return synthesizeYoutubeChannelPreview(urlString)
+                }
             }
-            // Use first 64KB
-            let limited = data.prefix(64 * 1024)
+            // Use first 256KB. YouTube + similar SPA-ish pages bury the OG
+            // meta tags well past the 64KB mark we used to allow.
+            let limited = data.prefix(256 * 1024)
             guard let html = String(data: Data(limited), encoding: .utf8) ??
-                             String(data: Data(limited), encoding: .isoLatin1) else { return nil }
-            return parseOgTags(html: html, fallbackUrl: urlString)
+                             String(data: Data(limited), encoding: .isoLatin1) else {
+                return synthesizeYoutubeChannelPreview(urlString)
+            }
+            if let parsed = parseOgTags(html: html, fallbackUrl: urlString) {
+                return parsed
+            }
+            // HTML parser came up empty (page served a JS shell, consent
+            // wall, or stripped tags). Hand off to Apple's WebKit-backed
+            // LinkPresentation, which competing clients use for tricky
+            // sites like YouTube channel pages.
+            if let lp = await fetchViaLinkPresentation(urlString) { return lp }
+            // Last resort: synthesize a minimal card from the URL itself
+            // for YouTube channels.
+            return synthesizeYoutubeChannelPreview(urlString)
+        } catch {
+            if let lp = await fetchViaLinkPresentation(urlString) { return lp }
+            return synthesizeYoutubeChannelPreview(urlString)
+        }
+    }
+
+    /// Use Apple's `LPMetadataProvider` (WebKit-backed) to fetch link
+    /// metadata. Slower than our regex-on-HTML path but handles consent
+    /// walls, JS-rendered OG tags, and other cases that defeat the
+    /// generic fetch — notably YouTube channel pages. The provided
+    /// image is loaded into the on-device caches directory and the
+    /// returned `image` field points at the resulting `file://` URL so
+    /// downstream `AsyncImage` can render it without a second fetch.
+    private func fetchViaLinkPresentation(_ urlString: String) async -> OpenGraphData? {
+        guard let url = URL(string: urlString) else { return nil }
+        let provider = LPMetadataProvider()
+        provider.timeout = 8
+
+        let metadata: LPLinkMetadata
+        do {
+            metadata = try await provider.startFetchingMetadata(for: url)
         } catch {
             return nil
         }
+
+        let title = metadata.title?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let siteName = metadata.url?.host?.replacingOccurrences(of: "www.", with: "")
+
+        var imageUrl: String?
+        if let imageProvider = metadata.imageProvider ?? metadata.iconProvider {
+            imageUrl = await loadProvidedImageToCache(imageProvider, sourceUrl: urlString)
+        }
+
+        let hasTitle = (title?.isEmpty == false)
+        guard hasTitle || imageUrl != nil else { return nil }
+        return OpenGraphData(
+            title: title,
+            description: nil,
+            image: imageUrl,
+            siteName: siteName
+        )
+    }
+
+    /// Pull a UIImage out of the `NSItemProvider`, encode it as JPEG, and
+    /// write it to a stable path under the caches directory. The returned
+    /// `file://` URL string can be handed to AsyncImage / RetryingAsyncImage
+    /// like any other URL. Stable filename per source URL means re-fetches
+    /// reuse the same cached file.
+    private nonisolated func loadProvidedImageToCache(
+        _ provider: NSItemProvider,
+        sourceUrl: String
+    ) async -> String? {
+        let image: UIImage? = await withCheckedContinuation { continuation in
+            provider.loadObject(ofClass: UIImage.self) { object, _ in
+                continuation.resume(returning: object as? UIImage)
+            }
+        }
+        guard let image, let data = image.jpegData(compressionQuality: 0.85) else {
+            return nil
+        }
+        let safeKey = sourceUrl
+            .replacingOccurrences(of: "://", with: "_")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "?", with: "_")
+            .replacingOccurrences(of: "&", with: "_")
+        let filename = "lp-\(safeKey.suffix(120)).jpg"
+        guard let cachesDir = FileManager.default.urls(
+            for: .cachesDirectory, in: .userDomainMask
+        ).first else { return nil }
+        let target = cachesDir.appendingPathComponent(filename)
+        do {
+            try data.write(to: target, options: .atomic)
+            return target.absoluteString
+        } catch {
+            return nil
+        }
+    }
+
+    /// When a YouTube channel URL fails the generic OG fetch, build a
+    /// minimal preview from the URL itself: handle / channel name as
+    /// title, "YouTube" as the site. Returns nil for non-channel URLs.
+    private nonisolated func synthesizeYoutubeChannelPreview(_ urlString: String) -> OpenGraphData? {
+        guard let url = URL(string: urlString),
+              let host = url.host?.lowercased(),
+              host == "youtube.com" || host == "www.youtube.com" || host == "m.youtube.com" else {
+            return nil
+        }
+        let path = url.path
+        var title: String?
+        if path.contains("/@") {
+            // path like "/@SovereignSessions" or "/@SovereignSessions/about"
+            let trimmed = path.drop(while: { $0 == "/" })
+            let firstSegment = trimmed.split(separator: "/").first.map(String.init) ?? String(trimmed)
+            title = firstSegment
+        } else if path.hasPrefix("/c/") {
+            let trimmed = String(path.dropFirst(3))
+            title = "@" + (trimmed.split(separator: "/").first.map(String.init) ?? trimmed)
+        } else if path.hasPrefix("/channel/") {
+            let trimmed = String(path.dropFirst(9))
+            title = trimmed.split(separator: "/").first.map(String.init) ?? trimmed
+        } else if path.hasPrefix("/user/") {
+            let trimmed = String(path.dropFirst(6))
+            title = "@" + (trimmed.split(separator: "/").first.map(String.init) ?? trimmed)
+        }
+        guard let title, !title.isEmpty else { return nil }
+        return OpenGraphData(
+            title: title,
+            description: "YouTube channel",
+            image: nil,
+            siteName: "YouTube"
+        )
     }
 
     private func youtubeVideoId(_ url: String) -> String? {
@@ -138,16 +277,59 @@ actor LinkPreviewService {
                 title = ns.substring(with: m.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
             }
         }
+        let resolvedImage = props["image"]
+            .map(unescapeHtml)
+            .flatMap { resolveOgUrl($0, against: fallbackUrl) }
         let result = OpenGraphData(
             title: title.map(unescapeHtml),
             description: props["description"].map(unescapeHtml),
-            image: props["image"].map(unescapeHtml),
+            image: resolvedImage,
             siteName: props["site_name"].map(unescapeHtml)
         )
         if result.title != nil || result.image != nil {
             return result
         }
         return nil
+    }
+
+    /// Some hosts serve interstitial / confirmation pages when query params
+    /// are present that have no OG meta tags. Strip those for the OG fetch
+    /// while leaving `urlString` untouched for the click-through. Currently
+    /// targets YouTube's `?sub_confirmation=1` flow on channel URLs.
+    private nonisolated func sanitizeForFetch(_ urlString: String) -> String {
+        guard var comps = URLComponents(string: urlString) else { return urlString }
+        let host = (comps.host ?? "").lowercased()
+        let isYoutube = host == "youtube.com" || host == "www.youtube.com" || host == "m.youtube.com"
+        if isYoutube,
+           let path = comps.path as String?,
+           path.contains("/@") || path.hasPrefix("/c/") || path.hasPrefix("/channel/") || path.hasPrefix("/user/") {
+            comps.query = nil
+            comps.fragment = nil
+        }
+        return comps.string ?? urlString
+    }
+
+    /// Resolve an `og:image` value to an absolute URL string. OG content frequently
+    /// arrives as a root-relative ("/og.png"), document-relative ("og.png"), or
+    /// protocol-relative ("//cdn.example.com/og.png") path; AsyncImage can only
+    /// render absolute http(s) URLs. Returns nil if resolution can't produce one.
+    private nonisolated func resolveOgUrl(_ raw: String, against pageUrl: String) -> String? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let lower = trimmed.lowercased()
+        if lower.hasPrefix("http://") || lower.hasPrefix("https://") {
+            return trimmed
+        }
+        if trimmed.hasPrefix("//") {
+            // Protocol-relative — adopt the page's scheme (default https).
+            let scheme = URL(string: pageUrl)?.scheme ?? "https"
+            return "\(scheme):\(trimmed)"
+        }
+        guard let base = URL(string: pageUrl),
+              let resolved = URL(string: trimmed, relativeTo: base)?.absoluteURL else {
+            return nil
+        }
+        return resolved.absoluteString
     }
 
     private nonisolated func unescapeHtml(_ s: String) -> String {

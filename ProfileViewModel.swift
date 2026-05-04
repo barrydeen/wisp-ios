@@ -22,8 +22,12 @@ final class ProfileViewModel {
     var sortedReplies: [NostrEvent] = []
     var notesSortMode: ProfileSortMode = .recency
     var repliesSortMode: ProfileSortMode = .recency
-    var isLoadingNotes: Bool = false
-    var isLoadingReplies: Bool = false
+    /// Init `true` so the Notes/Replies tabs render their loading placeholder
+    /// from the moment the profile opens — without this the brief window
+    /// between view appearance and `start()` kicking off the fetch flashed
+    /// the "No notes yet" empty state at users with slow relays.
+    var isLoadingNotes: Bool = true
+    var isLoadingReplies: Bool = true
     var isLoadingSortedNotes: Bool = false
     var isLoadingSortedReplies: Bool = false
     var noNotesAvailable: Bool = false
@@ -197,6 +201,25 @@ final class ProfileViewModel {
         isLoadingNotes = true
         defer { if gen == notesQueryGen { isLoadingNotes = false } }
 
+        // Seed from local cache first so the user sees their notes without
+        // waiting on the relay round-trip. The relay fetch below merges in
+        // anything newer.
+        let cached = await eventStore.loadRecentByAuthor(
+            pubkey: pubkey,
+            kinds: [1, 6, 30023, 20, 21, 22],
+            limit: 100
+        )
+        if gen == notesQueryGen {
+            let cachedNotes = cached
+                .filter { isRootOrRepost($0) }
+                .sorted { $0.createdAt > $1.createdAt }
+                .prefix(100)
+            if !cachedNotes.isEmpty {
+                rootNotes = Array(cachedNotes)
+                oldestNoteTs = cachedNotes.last?.createdAt
+            }
+        }
+
         let events = await fetchAuthorEvents(
             kinds: [1, 6, 30023, 20, 21, 22],
             limit: 100,
@@ -204,7 +227,11 @@ final class ProfileViewModel {
         )
         guard gen == notesQueryGen else { return }
 
-        let notes = events
+        // Merge cached + freshly-fetched, dedupe by id. Relay fetch is the
+        // source of truth for ordering once it returns.
+        let knownIds = Set(rootNotes.map(\.id))
+        let combined = rootNotes + events.filter { !knownIds.contains($0.id) }
+        let notes = combined
             .filter { isRootOrRepost($0) }
             .sorted { $0.createdAt > $1.createdAt }
             .prefix(100)
@@ -221,10 +248,26 @@ final class ProfileViewModel {
         isLoadingReplies = true
         defer { if gen == repliesQueryGen { isLoadingReplies = false } }
 
+        // Cache-seed the same way as loadInitialNotes so replies tab fills
+        // instantly when the user has prior history cached.
+        let cached = await eventStore.loadRecentByAuthor(pubkey: pubkey, kinds: [1], limit: 100)
+        if gen == repliesQueryGen {
+            let cachedReplies = cached
+                .filter { isReply($0) }
+                .sorted { $0.createdAt > $1.createdAt }
+                .prefix(100)
+            if !cachedReplies.isEmpty {
+                replies = Array(cachedReplies)
+                oldestReplyTs = cachedReplies.last?.createdAt
+            }
+        }
+
         let events = await fetchAuthorEvents(kinds: [1], limit: 100, until: nil)
         guard gen == repliesQueryGen else { return }
 
-        let onlyReplies = events
+        let knownIds = Set(replies.map(\.id))
+        let combined = replies + events.filter { !knownIds.contains($0.id) }
+        let onlyReplies = combined
             .filter { isReply($0) }
             .sorted { $0.createdAt > $1.createdAt }
             .prefix(100)

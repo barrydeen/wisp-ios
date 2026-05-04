@@ -51,7 +51,7 @@ struct LinkPreviewView: View {
                     .foregroundStyle(.secondary)
                 Text(url)
                     .font(.callout)
-                    .foregroundStyle(.blue)
+                    .foregroundStyle(Color.wispPrimary)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
                 Spacer(minLength: 0)

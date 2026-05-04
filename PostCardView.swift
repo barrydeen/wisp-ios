@@ -183,7 +183,8 @@ struct PostCardView: View {
                             profiles: profiles,
                             onProfileTap: onProfileTap,
                             onNoteTap: onNoteTap,
-                            onHashtagTap: onHashtagTap
+                            onHashtagTap: onHashtagTap,
+                            linksEnabled: true
                         )
                         .frame(
                             maxHeight: collapsed ? Self.longPostCollapsedHeight : .infinity,

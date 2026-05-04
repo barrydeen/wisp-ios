@@ -72,6 +72,13 @@ struct QuotedNoteView: View {
     @State private var event: NostrEvent?
     @State private var loaded = false
     @State private var profile: ProfileData?
+    @State private var contentExpanded = false
+
+    /// Mirror PostCardView's long-post threshold so a quoted long note collapses
+    /// to the same height with a "Show more" toggle instead of pushing the
+    /// surrounding card off-screen.
+    private static let longPostCharThreshold = 600
+    private static let longPostCollapsedHeight: CGFloat = 280
 
     var body: some View {
         Group {
@@ -89,6 +96,7 @@ struct QuotedNoteView: View {
     private var loadingCard: some View {
         HStack(spacing: 8) {
             ProgressView()
+                .tint(Color.wispPrimary)
             Text("Loading quoted note…")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -143,15 +151,47 @@ struct QuotedNoteView: View {
                 if event.kind == 9735 {
                     zapReceiptBody(event)
                 } else {
-                    RichContentView(
-                        content: event.content,
-                        tags: event.tags,
-                        profiles: profiles,
-                        onProfileTap: onProfileTap,
-                        onNoteTap: onNoteTap,
-                        onHashtagTap: onHashtagTap,
-                        showLinkPreviews: false
-                    )
+                    let isLong = event.content.count > Self.longPostCharThreshold
+                    let collapsed = isLong && !contentExpanded
+                    VStack(alignment: .leading, spacing: 6) {
+                        RichContentView(
+                            content: event.content,
+                            tags: event.tags,
+                            profiles: profiles,
+                            onProfileTap: onProfileTap,
+                            onNoteTap: onNoteTap,
+                            onHashtagTap: onHashtagTap,
+                            showLinkPreviews: false
+                        )
+                        .frame(
+                            maxHeight: collapsed ? Self.longPostCollapsedHeight : .infinity,
+                            alignment: .top
+                        )
+                        .clipped()
+                        .overlay(alignment: .bottom) {
+                            if collapsed {
+                                LinearGradient(
+                                    colors: [Color.wispBackground.opacity(0), Color.wispBackground],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                                .frame(height: 48)
+                                .allowsHitTesting(false)
+                            }
+                        }
+                        if isLong {
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    contentExpanded.toggle()
+                                }
+                            } label: {
+                                Text(contentExpanded ? "Show less" : "Show more")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(Color.wispPrimary)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
                 }
             }
             .padding(12)
