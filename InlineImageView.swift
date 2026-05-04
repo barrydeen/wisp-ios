@@ -104,8 +104,13 @@ struct FullScreenImageView: View {
     let mime: String?
     let showsCloseButton: Bool
     @Environment(\.dismiss) private var dismiss
+
     @State private var scale: CGFloat = 1.0
     @State private var lastScale: CGFloat = 1.0
+    @State private var panOffset: CGSize = .zero
+    @State private var lastPanOffset: CGSize = .zero
+    @State private var dismissY: CGFloat = 0
+    @State private var imageSize: CGSize = .zero
 
     init(url: String, mime: String? = nil, showsCloseButton: Bool = true) {
         self.url = url
@@ -114,76 +119,145 @@ struct FullScreenImageView: View {
     }
 
     var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-            if AnimatedImageHint.isLikelyAnimated(url: url, mime: mime) {
-                AnimatedImageView(
-                    url: URL(string: url),
-                    aspect: nil,
-                    placeholder: { ProgressView().tint(.white) },
-                    failure: {
-                        Image(systemName: "photo")
-                            .font(.largeTitle)
-                            .foregroundStyle(.white)
-                    }
-                )
-                .scaleEffect(scale)
-                .gesture(zoomGesture)
-                .onTapGesture(count: 2) { toggleZoom() }
-            } else {
-                RetryingAsyncImage(
-                    url: URL(string: url),
-                    content: { image in
-                        image.resizable()
-                            .scaledToFit()
-                            .scaleEffect(scale)
-                            .gesture(zoomGesture)
-                            .onTapGesture(count: 2) { toggleZoom() }
-                    },
-                    loading: { ProgressView().tint(.white) },
-                    failure: {
-                        VStack(spacing: 8) {
-                            Image(systemName: "arrow.clockwise")
-                                .font(.largeTitle)
-                            Text("Tap to retry")
-                                .font(.caption)
-                        }
-                        .foregroundStyle(.white)
-                    }
-                )
-            }
+        GeometryReader { geo in
+            ZStack {
+                Color.black
+                    .ignoresSafeArea()
+                    .opacity(dismissY > 0 ? max(0.3, 1.0 - Double(dismissY) / 250.0) : 1.0)
 
-            if showsCloseButton {
-                VStack {
-                    HStack {
-                        Spacer()
-                        Button {
-                            dismiss()
-                        } label: {
-                            Image(systemName: "xmark")
-                                .font(.system(size: 18, weight: .semibold))
-                                .foregroundStyle(.white)
-                                .padding(12)
-                                .background(Color.black.opacity(0.6), in: Circle())
-                        }
-                        .padding()
+                imageContent
+                    .onGeometryChange(for: CGSize.self, of: \.size) { newSize in
+                        if newSize.width > 0 && newSize.height > 0 { imageSize = newSize }
                     }
-                    Spacer()
+                    .scaleEffect(scale)
+                    .offset(x: panOffset.width, y: panOffset.height + dismissY)
+                    .gesture(pinchGesture(in: geo))
+                    .simultaneousGesture(dragGesture(in: geo))
+                    .onTapGesture(count: 2) { toggleZoom() }
+
+                if showsCloseButton {
+                    VStack {
+                        HStack {
+                            Spacer()
+                            Button { dismiss() } label: {
+                                Image(systemName: "xmark")
+                                    .font(.system(size: 18, weight: .semibold))
+                                    .foregroundStyle(.white)
+                                    .padding(12)
+                                    .background(Color.black.opacity(0.6), in: Circle())
+                            }
+                            .padding()
+                        }
+                        Spacer()
+                    }
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
-    private var zoomGesture: some Gesture {
+    @ViewBuilder
+    private var imageContent: some View {
+        if AnimatedImageHint.isLikelyAnimated(url: url, mime: mime) {
+            AnimatedImageView(
+                url: URL(string: url),
+                aspect: nil,
+                placeholder: { ProgressView().tint(.white) },
+                failure: {
+                    Image(systemName: "photo")
+                        .font(.largeTitle)
+                        .foregroundStyle(.white)
+                }
+            )
+        } else {
+            RetryingAsyncImage(
+                url: URL(string: url),
+                content: { image in
+                    image.resizable().scaledToFit()
+                },
+                loading: { ProgressView().tint(.white) },
+                failure: {
+                    VStack(spacing: 8) {
+                        Image(systemName: "arrow.clockwise").font(.largeTitle)
+                        Text("Tap to retry").font(.caption)
+                    }
+                    .foregroundStyle(.white)
+                }
+            )
+        }
+    }
+
+    private func pinchGesture(in geo: GeometryProxy) -> some Gesture {
         MagnificationGesture()
-            .onChanged { value in scale = lastScale * value }
-            .onEnded { _ in lastScale = scale }
+            .onChanged { value in
+                scale = max(1.0, lastScale * value)
+            }
+            .onEnded { value in
+                let newScale = max(1.0, lastScale * value)
+                scale = newScale
+                lastScale = newScale
+                if newScale <= 1.0 {
+                    withAnimation(.spring(response: 0.3)) {
+                        panOffset = .zero
+                        lastPanOffset = .zero
+                    }
+                } else {
+                    let clamped = clampedOffset(panOffset, scale: newScale, in: geo.size)
+                    withAnimation(.spring(response: 0.3)) {
+                        panOffset = clamped
+                        lastPanOffset = clamped
+                    }
+                }
+            }
+    }
+
+    private func dragGesture(in geo: GeometryProxy) -> some Gesture {
+        DragGesture(minimumDistance: 10)
+            .onChanged { value in
+                if scale <= 1.01 {
+                    dismissY = max(0, value.translation.height)
+                } else {
+                    let proposed = CGSize(
+                        width: lastPanOffset.width + value.translation.width,
+                        height: lastPanOffset.height + value.translation.height
+                    )
+                    panOffset = clampedOffset(proposed, scale: scale, in: geo.size)
+                }
+            }
+            .onEnded { value in
+                if scale <= 1.01 {
+                    if value.translation.height > 120 {
+                        dismiss()
+                    } else {
+                        withAnimation(.spring(response: 0.3)) { dismissY = 0 }
+                    }
+                } else {
+                    lastPanOffset = panOffset
+                }
+            }
+    }
+
+    private func clampedOffset(_ offset: CGSize, scale: CGFloat, in screenSize: CGSize) -> CGSize {
+        let img = imageSize == .zero ? screenSize : imageSize
+        let maxX = max(0, (scale * img.width - screenSize.width) / 2.0)
+        let maxY = max(0, (scale * img.height - screenSize.height) / 2.0)
+        return CGSize(
+            width: min(maxX, max(-maxX, offset.width)),
+            height: min(maxY, max(-maxY, offset.height))
+        )
     }
 
     private func toggleZoom() {
-        withAnimation {
-            scale = scale > 1 ? 1 : 2
-            lastScale = scale
+        withAnimation(.spring(response: 0.3)) {
+            if scale > 1.0 {
+                scale = 1.0
+                lastScale = 1.0
+                panOffset = .zero
+                lastPanOffset = .zero
+            } else {
+                scale = 2.0
+                lastScale = 2.0
+            }
         }
     }
 }
