@@ -5,7 +5,6 @@ import SwiftUI
 /// mentions, emoji, media, polls, and the 10-second undo countdown all work.
 struct NotificationComposer: View {
     let targetEvent: NostrEvent
-    let groupId: String
     @Binding var sending: Bool
     let viewModel: NotificationsViewModel
 

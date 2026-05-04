@@ -6,11 +6,13 @@ import Observation
 final class NotificationsViewModel {
     let keypair: Keypair
 
-    var groups: [NotificationGroup] = []
-    var summary: NotificationSummary = NotificationSummary()
-    var hasUnread: Bool = false
+    var enabledTypes: Set<NotificationFilter> = Set(NotificationFilter.allCases)
     var isLoading: Bool = false
-    var filter: NotificationFilterChip = .all
+
+    /// Hidden authors whose NSpam-classified notifications should not appear.
+    /// Tracked (not `@ObservationIgnored`) so `filteredItems` re-evaluates when
+    /// `maybeScoreReplyForSpam` or `unhideSpamAuthor` mutates this set.
+    var hiddenSpamPubkeys: Set<String> = []
 
     @ObservationIgnored private var subNotif: RelaySubscription?
     @ObservationIgnored private var subRepliesEtag: RelaySubscription?
@@ -29,7 +31,6 @@ final class NotificationsViewModel {
     @ObservationIgnored private let dmRepo = DmRepository.shared
     @ObservationIgnored private let profileRepo = ProfileRepository.shared
     @ObservationIgnored private var started = false
-    @ObservationIgnored private var hiddenSpamPubkeys: Set<String> = []
     @ObservationIgnored private var spamScoringInflight: Set<String> = []
 
     static let fallbackRelays = [
@@ -44,13 +45,30 @@ final class NotificationsViewModel {
         self.keypair = keypair
     }
 
+    // MARK: - Derived state
+
+    /// Filtered, in-memory snapshot rendered by the View. Re-evaluates whenever
+    /// `repo.flatItems`, `enabledTypes`, or `hiddenSpamPubkeys` change — under
+    /// `@Observable` the dependency tracking happens automatically when the
+    /// View reads `viewModel.filteredItems`.
+    var filteredItems: [FlatNotificationItem] {
+        let hidden = hiddenSpamPubkeys
+        let allowed = enabledTypes
+        return repo.flatItems.filter { item in
+            !hidden.contains(item.actorPubkey)
+                && allowed.contains(NotificationFilter.bucket(for: item.kind))
+        }
+    }
+
+    var summary: NotificationSummary { repo.summary }
+    var hasUnread: Bool { repo.hasUnread }
+
     // MARK: - Lifecycle
 
     func start() async {
         guard !started else { return }
         started = true
         repo.bind(activePubkey: keypair.pubkey)
-        refreshSnapshot()
         loadFilterFromDefaults()
 
         // Prime relay sets synchronously from cached state (UserDefaults + RelayScoreBoard)
@@ -68,7 +86,6 @@ final class NotificationsViewModel {
         Task { [weak self] in
             guard let self else { return }
             await self.hydrateFromObjectBox()
-            self.refreshSnapshot()
         }
 
         // Background freshening: kind-10002 / kind-10050 fetch + self-event-id query + 24h
@@ -146,17 +163,53 @@ final class NotificationsViewModel {
 
     func markAllRead() {
         repo.markAllRead()
-        refreshSnapshot()
     }
 
-    func setFilter(_ f: NotificationFilterChip) {
-        filter = f
-        UserDefaults.standard.set(f.rawValue, forKey: "notif_filter_\(keypair.pubkey)")
+    // MARK: - Filter API
+
+    func toggleType(_ t: NotificationFilter) {
+        if enabledTypes.contains(t) {
+            enabledTypes.remove(t)
+        } else {
+            enabledTypes.insert(t)
+        }
+        persistEnabledTypes()
+    }
+
+    func isolateType(_ t: NotificationFilter) {
+        enabledTypes = [t]
+        persistEnabledTypes()
+    }
+
+    func enableAll() {
+        enabledTypes = Set(NotificationFilter.allCases)
+        persistEnabledTypes()
+    }
+
+    func disableAll() {
+        enabledTypes = []
+        persistEnabledTypes()
+    }
+
+    private var enabledTypesKey: String { "notif_enabled_types_\(keypair.pubkey)" }
+
+    private func persistEnabledTypes() {
+        let raws = enabledTypes.map(\.rawValue)
+        UserDefaults.standard.set(raws, forKey: enabledTypesKey)
     }
 
     private func loadFilterFromDefaults() {
-        let raw = UserDefaults.standard.string(forKey: "notif_filter_\(keypair.pubkey)") ?? ""
-        filter = NotificationFilterChip(rawValue: raw) ?? .all
+        // Migrate the old single-chip key off so it doesn't linger.
+        let oldKey = "notif_filter_\(keypair.pubkey)"
+        if UserDefaults.standard.object(forKey: oldKey) != nil {
+            UserDefaults.standard.removeObject(forKey: oldKey)
+        }
+        if let raws = UserDefaults.standard.stringArray(forKey: enabledTypesKey) {
+            let decoded = raws.compactMap(NotificationFilter.init(rawValue:))
+            enabledTypes = Set(decoded)
+        } else {
+            enabledTypes = Set(NotificationFilter.allCases)
+        }
     }
 
     // MARK: - Relay set resolution
@@ -304,7 +357,6 @@ final class NotificationsViewModel {
             _ = repo.ingest(e, relayUrl: "", isFromDmRelay: false)
         }
         await prefetchActorProfilesIfNeeded()
-        refreshSnapshot()
     }
 
     // MARK: - Live subscriptions
@@ -322,7 +374,6 @@ final class NotificationsViewModel {
                 guard let self else { break }
                 if SafetyFilter.shared.shouldDrop(event: event, context: .notifications) { continue }
                 _ = self.repo.ingest(event, relayUrl: relayUrl, isFromDmRelay: false)
-                self.refreshSnapshot()
                 self.maybePrefetchProfile(for: event.pubkey)
                 self.maybeScoreReplyForSpam(event)
             }
@@ -337,7 +388,6 @@ final class NotificationsViewModel {
                     guard let self else { break }
                     if SafetyFilter.shared.shouldDrop(event: event, context: .notifications) { continue }
                     _ = self.repo.ingest(event, relayUrl: relayUrl, isFromDmRelay: false)
-                    self.refreshSnapshot()
                     self.maybePrefetchProfile(for: event.pubkey)
                     self.maybeScoreReplyForSpam(event)
                 }
@@ -351,7 +401,6 @@ final class NotificationsViewModel {
                     guard let self else { break }
                     if SafetyFilter.shared.shouldDrop(event: event, context: .notifications) { continue }
                     _ = self.repo.ingest(event, relayUrl: relayUrl, isFromDmRelay: false)
-                    self.refreshSnapshot()
                     self.maybePrefetchProfile(for: event.pubkey)
                     self.maybeScoreReplyForSpam(event)
                 }
@@ -366,7 +415,6 @@ final class NotificationsViewModel {
                     guard let self else { break }
                     if SafetyFilter.shared.shouldDrop(event: event, context: .notifications) { continue }
                     _ = self.repo.ingest(event, relayUrl: relayUrl, isFromDmRelay: false)
-                    self.refreshSnapshot()
                     self.maybePrefetchProfile(for: event.pubkey)
                 }
             })
@@ -381,7 +429,6 @@ final class NotificationsViewModel {
                     guard let self else { break }
                     if SafetyFilter.shared.shouldDrop(event: event, context: .notifications) { continue }
                     _ = self.repo.ingest(event, relayUrl: relayUrl, isFromDmRelay: true)
-                    self.refreshSnapshot()
                 }
             })
         }
@@ -404,11 +451,6 @@ final class NotificationsViewModel {
                 try? await Task.sleep(for: .seconds(180))
                 if Task.isCancelled { break }
                 guard let self else { return }
-                // Same gate as the background-refresh path at the top of this
-                // file: skip the reopen if neither the resolved relay set nor
-                // the user's own event ids have changed since the last cycle.
-                // Blindly reopening every 3 minutes burns 5 sockets and forces
-                // every relay to redo its REQ work for no benefit.
                 let beforeRelays = Set(self.notifRelays)
                 let beforeIds = self.repo.selfEventIds
                 await self.resolveRelaySets()
@@ -425,14 +467,11 @@ final class NotificationsViewModel {
     // MARK: - DM observation
 
     private func startDmObservation() {
-        // Snapshot DM conversations into NotificationGroup.dm rows. Re-fires whenever
-        // DmRepository.conversations changes via Observation.
         dmObserverTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { break }
                 let snapshot = self.dmRepo.conversationList()
                 self.projectDms(snapshot)
-                self.refreshSnapshot()
                 try? await Task.sleep(for: .seconds(2))
             }
         }
@@ -440,33 +479,20 @@ final class NotificationsViewModel {
 
     private func projectDms(_ list: [DmConversation]) {
         let lastRead = dmRepo.lastReadTimestamp
-        let groups: [NotificationGroup] = list.map { conv in
+        let items: [FlatNotificationItem] = list.map { conv in
             let unread = conv.messages.filter { $0.createdAt > lastRead && $0.senderPubkey != keypair.pubkey }.count
-            return .dm(
+            return FlatNotificationItem(
                 id: "dm:\(conv.conversationKey)",
-                peer: conv.peerPubkey,
-                conversationKey: conv.conversationKey,
-                lastMessageTs: conv.lastMessageAt,
-                unread: unread
+                kind: .dm,
+                actorPubkey: conv.peerPubkey,
+                referencedEventId: "",
+                timestamp: conv.lastMessageAt,
+                dmPeerPubkey: conv.peerPubkey,
+                dmConversationKey: conv.conversationKey,
+                dmUnread: unread
             )
         }
-        repo.setDmGroups(groups)
-    }
-
-    // MARK: - Snapshot
-
-    private func refreshSnapshot() {
-        var allGroups = repo.groups
-        if !hiddenSpamPubkeys.isEmpty {
-            allGroups = allGroups.filter { !hiddenSpamPubkeys.contains($0.primaryActor) }
-        }
-        if filter == .all {
-            groups = allGroups
-        } else {
-            groups = allGroups.filter { filter.matches($0) }
-        }
-        summary = repo.summary
-        hasUnread = repo.hasUnread
+        repo.upsertDms(items)
     }
 
     // MARK: - NSpam
@@ -503,7 +529,6 @@ final class NotificationsViewModel {
                 self.spamScoringInflight.remove(author)
                 guard let s = score, s >= SpamScorer.spamThreshold else { return }
                 self.hiddenSpamPubkeys.insert(author)
-                self.refreshSnapshot()
             }
         }
     }
@@ -513,7 +538,6 @@ final class NotificationsViewModel {
         hiddenSpamPubkeys.remove(pubkey)
         SafetyPreferences.shared.addToSafelist(pubkey)
         Task { await SpamScorer.shared.invalidate(pubkey: pubkey) }
-        refreshSnapshot()
     }
 
     // MARK: - Profiles
@@ -530,23 +554,8 @@ final class NotificationsViewModel {
 
     private func prefetchActorProfilesIfNeeded() async {
         var missing = Set<String>()
-        for g in repo.groups {
-            switch g {
-            case .reactions(_, _, let e, _, let z, let r, _):
-                for k in e.keys where profileRepo.get(k) == nil { missing.insert(k) }
-                for zap in z where profileRepo.get(zap.pubkey) == nil { missing.insert(zap.pubkey) }
-                for k in r where profileRepo.get(k) == nil { missing.insert(k) }
-            case .reply(_, let s, _, _, _, _),
-                 .quote(_, let s, _, _, _, _),
-                 .mention(_, let s, _, _, _):
-                if profileRepo.get(s) == nil { missing.insert(s) }
-            case .dm(_, let p, _, _, _):
-                if profileRepo.get(p) == nil { missing.insert(p) }
-            case .pollVotes(_, _, let map, _):
-                for voters in map.values {
-                    for pk in voters where profileRepo.get(pk) == nil { missing.insert(pk) }
-                }
-            }
+        for item in repo.flatItems {
+            if profileRepo.get(item.actorPubkey) == nil { missing.insert(item.actorPubkey) }
         }
         let chunk = Array(missing.prefix(60))
         guard !chunk.isEmpty else { return }
@@ -559,7 +568,7 @@ final class NotificationsViewModel {
 
     /// Sign a kind-1 reply per NIP-10, publish to a best-effort union of own write relays + the
     /// target author's known relays, then optimistically render it under the expanded row.
-    func sendQuickReply(targetEvent: NostrEvent, text: String, groupId: String) async throws {
+    func sendQuickReply(targetEvent: NostrEvent, text: String) async throws {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         guard let priv = Hex.decode(keypair.privkey) else {
@@ -584,7 +593,7 @@ final class NotificationsViewModel {
         for r in ownWriteRelays { publish.insert(r) }
         for r in targetWriteRelays(for: targetEvent.pubkey) { publish.insert(r) }
         if publish.isEmpty { for r in Self.fallbackRelays { publish.insert(r) } }
-        repo.addInlineReply(signed, groupId: groupId)
+        repo.addInlineReply(signed, targetEventId: targetEvent.id)
         _ = await RelayPool.publish(event: signed, to: Array(publish))
     }
 
