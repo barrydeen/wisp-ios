@@ -4,59 +4,54 @@ import Observation
 import UIKit
 #endif
 
-/// In-memory store for inbound notification events. Mirrors Android's NotificationRepository:
-/// LRU dedup, group + flat caps, persistent only for last-read / latest-seen / self-event-id state.
+/// In-memory store for inbound notification events. Mirrors Android's flat-row
+/// model — every event is its own row, no grouping, no aggregation. LRU dedup,
+/// timestamp-desc ordering, persistent only for last-read / latest-seen /
+/// self-event-id state.
 @MainActor
 @Observable
 final class NotificationRepository {
     static let shared = NotificationRepository()
 
-    private(set) var groups: [NotificationGroup] = []
     private(set) var flatItems: [FlatNotificationItem] = []
     private(set) var summary: NotificationSummary = NotificationSummary()
-    /// groupId → optimistic kind-1 reply events the user has just sent. Rendered instantly under
-    /// the expanded composer.
+    /// targetEventId → optimistic kind-1 reply events the user has just sent.
+    /// Rendered instantly under the expanded composer. Keyed by the event being
+    /// replied to (the actor's reply/quote/mention event id).
     private(set) var inlineReplies: [String: [NostrEvent]] = [:]
-    /// Cache of every inbound event we've ingested, keyed by id. Lets row views render the
-    /// actor's note (kind 1/quote/mention) without a re-fetch. Capped by trimming alongside
-    /// the seen-id LRU.
+    /// Cache of every inbound event we've ingested, keyed by id. Lets row views
+    /// render the actor's note (kind 1/quote/mention) without a re-fetch.
+    /// Capped by trimming alongside the seen-id LRU.
     private(set) var eventCache: [String: NostrEvent] = [:]
 
     func event(forId id: String) -> NostrEvent? { eventCache[id] }
 
-    /// Caller-supplied set of the user's most-recent kind-1 ids. Drives reply/quote/repost/reaction
-    /// reference-event ownership checks. NotificationsViewModel keeps this fresh.
+    /// Caller-supplied set of the user's most-recent kind-1 ids. Drives reply/
+    /// quote/repost/reaction reference-event ownership checks. NotificationsViewModel
+    /// keeps this fresh.
     var selfEventIds: Set<String> = []
 
     private var seenEventIds: Set<String> = []
     private var seenOrder: [String] = []
     private static let seenCap = 2000
-    private static let groupCap = 200
     private static let flatCap = 500
 
-    /// Aggregating bucket keyed by referenced event id. Replies/quotes/mentions get unique keys
-    /// so each remains its own row; reactions/zaps/reposts on the same target collapse together.
-    private var byKey: [String: NotificationGroup] = [:]
-
     private var activePubkey: String = ""
-    private var dmPlaceholders: [String: NotificationGroup] = [:]
 
-    /// Wall-clock at first construction. Mirrors Android's `soundEligibleAfter` so 24h backfill
-    /// after a cold start never blasts sounds for already-old events.
+    /// Wall-clock at first construction. Mirrors Android's `soundEligibleAfter`
+    /// so 24h backfill after a cold start never blasts sounds for already-old
+    /// events.
     private let sessionStartTime: Int = Int(Date().timeIntervalSince1970)
 
     func bind(activePubkey: String) {
         if activePubkey != self.activePubkey {
             self.activePubkey = activePubkey
-            groups = []
             flatItems = []
             summary = NotificationSummary()
             inlineReplies = [:]
             eventCache = [:]
             seenEventIds = []
             seenOrder = []
-            byKey = [:]
-            dmPlaceholders = [:]
             // Warm-load self event ids from prior launch so cold-start filters work even before
             // the first network call returns.
             let cached = UserDefaults.standard.stringArray(forKey: "notif_self_eventids_\(activePubkey)") ?? []
@@ -76,12 +71,12 @@ final class NotificationRepository {
 
         let item: FlatNotificationItem?
         switch event.kind {
-        case 1:  item = classifyKind1(event)
-        case 6:  item = classifyRepost(event)
-        case 7:  item = classifyReaction(event)
+        case 1:    item = classifyKind1(event)
+        case 6:    item = classifyRepost(event)
+        case 7:    item = classifyReaction(event)
         case 9735: item = classifyZap(event, isFromDmRelay: isFromDmRelay)
         case Nip88.kindPollResponse: item = classifyPollVote(event)
-        default: item = nil
+        default:   item = nil
         }
 
         guard let item else { return false }
@@ -95,13 +90,12 @@ final class NotificationRepository {
         flatItems.insert(item, at: insertIdx)
         if flatItems.count > Self.flatCap { flatItems.removeLast(flatItems.count - Self.flatCap) }
 
-        mergeIntoGroup(item)
-        rebuild()
+        summary = computeSummary24h()
         bumpLatestTimestamp(item.timestamp)
 
-        // Mirror to ObjectBox so the next launch can paint instantly from disk. Fire-and-
-        // forget — the actor handles its own queue and `persist` is a no-op for kinds outside
-        // the persistedKinds set.
+        // Mirror to ObjectBox so the next launch can paint instantly from disk.
+        // Fire-and-forget — the actor handles its own queue and `persist` is a
+        // no-op for kinds outside the persistedKinds set.
         if persist {
             Task { await EventPersistQueue.shared.enqueue(event) }
         }
@@ -110,22 +104,13 @@ final class NotificationRepository {
     }
 
     private func fireEffects(for item: FlatNotificationItem, persist: Bool) {
-        let now = Int(Date().timeIntervalSince1970)
-        NSLog("[NotifFX] kind=%@ persist=%d ts=%d sessionStart=%d delta=%d", String(describing: item.kind), persist ? 1 : 0, item.timestamp, sessionStartTime, now - item.timestamp)
-        guard persist else { NSLog("[NotifFX] dropped: persist=false"); return }
-        guard item.timestamp >= sessionStartTime else {
-            NSLog("[NotifFX] dropped: ts %d < sessionStart %d", item.timestamp, sessionStartTime)
-            return
-        }
+        guard persist else { return }
+        guard item.timestamp >= sessionStartTime else { return }
         #if canImport(UIKit)
         let state = UIApplication.shared.applicationState
-        guard state == .active else {
-            NSLog("[NotifFX] dropped: applicationState=%d (not .active)", state.rawValue)
-            return
-        }
+        guard state == .active else { return }
         #endif
         let soundsOn = AppSettings.shared.notificationSoundsEnabled
-        NSLog("[NotifFX] firing kind=%@ soundsOn=%d", String(describing: item.kind), soundsOn ? 1 : 0)
         switch item.kind {
         case .reply:
             if soundsOn { NotificationSounds.shared.play(.reply) }
@@ -141,24 +126,22 @@ final class NotificationRepository {
         }
     }
 
-    func addInlineReply(_ event: NostrEvent, groupId: String) {
-        var current = inlineReplies[groupId] ?? []
+    func addInlineReply(_ event: NostrEvent, targetEventId: String) {
+        var current = inlineReplies[targetEventId] ?? []
         current.append(event)
-        inlineReplies[groupId] = current
+        inlineReplies[targetEventId] = current
     }
 
-    /// Replace the DM-derived rows from observation. Caller passes a snapshot of all conversations
-    /// projected as `.dm` groups; we fold them into `byKey` keyed by `dm:<conversationKey>`.
-    func setDmGroups(_ dmGroups: [NotificationGroup]) {
-        // Drop any existing DM placeholders, then re-add from the snapshot.
-        for key in dmPlaceholders.keys { byKey.removeValue(forKey: key) }
-        dmPlaceholders.removeAll(keepingCapacity: true)
-        for g in dmGroups {
-            let key = g.id
-            byKey[key] = g
-            dmPlaceholders[key] = g
+    /// Replace the DM rows in `flatItems` with the latest snapshot from
+    /// DmRepository. One FlatNotificationItem per conversation, kind == .dm.
+    func upsertDms(_ items: [FlatNotificationItem]) {
+        flatItems.removeAll { $0.kind == .dm }
+        for item in items {
+            let i = flatItems.firstIndex(where: { $0.timestamp < item.timestamp }) ?? flatItems.count
+            flatItems.insert(item, at: i)
         }
-        rebuild()
+        if flatItems.count > Self.flatCap { flatItems.removeLast(flatItems.count - Self.flatCap) }
+        summary = computeSummary24h()
     }
 
     // MARK: - Classification
@@ -228,8 +211,9 @@ final class NotificationRepository {
         case "-":     emoji = "💔"
         default:      emoji = raw
         }
-        // Custom emoji (`:shortcode:`) → look for matching emoji tag for the URL. Kick off
-        // an image fetch immediately so the row renders the bitmap instead of literal text.
+        // Custom emoji (`:shortcode:`) → look for matching emoji tag for the URL.
+        // Kick off an image fetch immediately so the row renders the bitmap
+        // instead of literal text.
         var emojiUrl: String? = nil
         if emoji.hasPrefix(":"), emoji.hasSuffix(":") {
             let shortcode = String(emoji.dropFirst().dropLast())
@@ -305,200 +289,21 @@ final class NotificationRepository {
         )
     }
 
-    // MARK: - Grouping
-
-    private func mergeIntoGroup(_ item: FlatNotificationItem) {
-        switch item.kind {
-        case .reaction, .repost, .zap:
-            let key = "engagement:\(item.referencedEventId)"
-            let existing = byKey[key]
-            byKey[key] = mergeEngagement(existing: existing, item: item, key: key)
-        case .reply:
-            let key = "reply:\(item.id)"
-            byKey[key] = .reply(
-                id: key,
-                sender: item.actorPubkey,
-                replyEventId: item.id,
-                refEventId: item.referencedEventId,
-                latestTs: item.timestamp,
-                relayHints: item.relayHints
-            )
-        case .quote:
-            let key = "quote:\(item.id)"
-            byKey[key] = .quote(
-                id: key,
-                sender: item.actorPubkey,
-                actorEventId: item.actorEventId ?? item.id,
-                quoteEventId: item.quoteEventId ?? "",
-                latestTs: item.timestamp,
-                relayHints: item.relayHints
-            )
-        case .mention:
-            let key = "mention:\(item.id)"
-            byKey[key] = .mention(
-                id: key,
-                sender: item.actorPubkey,
-                eventId: item.id,
-                latestTs: item.timestamp,
-                relayHints: item.relayHints
-            )
-        case .pollVote:
-            let key = "pollvotes:\(item.referencedEventId)"
-            byKey[key] = mergePollVotes(existing: byKey[key], item: item, key: key)
-        case .dm:
-            // DM groups are managed via setDmGroups(_:). Ignore here.
-            break
-        }
-    }
-
-    private func mergePollVotes(
-        existing: NotificationGroup?,
-        item: FlatNotificationItem,
-        key: String
-    ) -> NotificationGroup {
-        var votersByOptionId: [String: [String]] = [:]
-        var latestTs = item.timestamp
-        if case let .pollVotes(_, _, prev, ts) = existing {
-            votersByOptionId = prev
-            latestTs = max(ts, item.timestamp)
-        }
-        for optionId in item.voteOptionIds {
-            var voters = votersByOptionId[optionId] ?? []
-            if !voters.contains(item.actorPubkey) {
-                voters.append(item.actorPubkey)
-            }
-            votersByOptionId[optionId] = voters
-        }
-        return .pollVotes(
-            id: key,
-            refEventId: item.referencedEventId,
-            votersByOptionId: votersByOptionId,
-            latestTs: latestTs
-        )
-    }
-
-    private func mergeEngagement(
-        existing: NotificationGroup?,
-        item: FlatNotificationItem,
-        key: String
-    ) -> NotificationGroup {
-        var emojiByActor: [String: String] = [:]
-        var emojiUrlByActor: [String: String] = [:]
-        var zaps: [ZapEntry] = []
-        var reposters: [String] = []
-        var latestTs = item.timestamp
-        if case let .reactions(_, _, e, eu, z, r, ts) = existing {
-            emojiByActor = e
-            emojiUrlByActor = eu
-            zaps = z
-            reposters = r
-            latestTs = max(ts, item.timestamp)
-        }
-        switch item.kind {
-        case .reaction:
-            emojiByActor[item.actorPubkey] = item.emoji ?? "❤"
-            if let url = item.emojiUrl { emojiUrlByActor[item.actorPubkey] = url }
-        case .zap:
-            // De-dup zaps by receipt id.
-            if !zaps.contains(where: { $0.receiptEventId == item.id }) {
-                zaps.append(ZapEntry(
-                    pubkey: item.actorPubkey,
-                    sats: item.zapSats,
-                    message: item.zapMessage,
-                    createdAt: item.timestamp,
-                    receiptEventId: item.id,
-                    isPrivate: item.isPrivateZap
-                ))
-            }
-        case .repost:
-            if !reposters.contains(item.actorPubkey) { reposters.append(item.actorPubkey) }
-        default: break
-        }
-        return .reactions(
-            id: key,
-            refEventId: item.referencedEventId,
-            emojiByActor: emojiByActor,
-            emojiUrlByActor: emojiUrlByActor,
-            zaps: zaps,
-            reposters: reposters,
-            latestTs: latestTs
-        )
-    }
-
-    private func rebuild() {
-        var sorted = Array(byKey.values)
-        sorted.sort { $0.latestTs > $1.latestTs }
-        if sorted.count > Self.groupCap { sorted = Array(sorted.prefix(Self.groupCap)) }
-        groups = sorted
-        summary = computeSummary24h()
-    }
-
     /// Drop every trace of `pubkey` from the in-memory notification state.
-    /// Called when the user blocks someone — without this, single-actor
-    /// notifications they triggered (`user quoted`, `user replied`) plus their
-    /// contributions to multi-actor reaction / zap / repost groups linger in
-    /// `groups` and `eventCache` until the next cold-launch.
+    /// Called when the user blocks someone — without this, notifications they
+    /// triggered linger in `flatItems` and `eventCache` until cold-launch.
     func purgeAuthor(_ pubkey: String) {
         eventCache = eventCache.filter { $0.value.pubkey != pubkey }
         flatItems.removeAll { $0.actorPubkey == pubkey }
-        for (groupId, replies) in inlineReplies {
+        for (key, replies) in inlineReplies {
             let filtered = replies.filter { $0.pubkey != pubkey }
             if filtered.isEmpty {
-                inlineReplies.removeValue(forKey: groupId)
+                inlineReplies.removeValue(forKey: key)
             } else {
-                inlineReplies[groupId] = filtered
+                inlineReplies[key] = filtered
             }
         }
-
-        // Walk byKey: drop single-actor groups whose sender is the blocked
-        // pubkey; rewrite multi-actor reaction groups to remove their entries.
-        var rewritten: [String: NotificationGroup] = [:]
-        for (key, group) in byKey {
-            switch group {
-            case .reply(_, let sender, _, _, _, _),
-                 .quote(_, let sender, _, _, _, _),
-                 .mention(_, let sender, _, _, _):
-                if sender == pubkey { continue }
-                rewritten[key] = group
-            case .reactions(let id, let refEventId, var emojiByActor, var emojiUrlByActor, var zaps, var reposters, let latestTs):
-                emojiByActor.removeValue(forKey: pubkey)
-                emojiUrlByActor.removeValue(forKey: pubkey)
-                zaps.removeAll { $0.pubkey == pubkey }
-                reposters.removeAll { $0 == pubkey }
-                if emojiByActor.isEmpty && zaps.isEmpty && reposters.isEmpty { continue }
-                rewritten[key] = .reactions(
-                    id: id,
-                    refEventId: refEventId,
-                    emojiByActor: emojiByActor,
-                    emojiUrlByActor: emojiUrlByActor,
-                    zaps: zaps,
-                    reposters: reposters,
-                    latestTs: latestTs
-                )
-            case .pollVotes(let id, let refEventId, var votersByOptionId, let latestTs):
-                for (optionId, voters) in votersByOptionId {
-                    let filtered = voters.filter { $0 != pubkey }
-                    if filtered.isEmpty {
-                        votersByOptionId.removeValue(forKey: optionId)
-                    } else {
-                        votersByOptionId[optionId] = filtered
-                    }
-                }
-                if votersByOptionId.isEmpty { continue }
-                rewritten[key] = .pollVotes(
-                    id: id,
-                    refEventId: refEventId,
-                    votersByOptionId: votersByOptionId,
-                    latestTs: latestTs
-                )
-            case .dm:
-                // DMs preserve their own block UX (the user can leave the conversation);
-                // don't auto-drop placeholder rows here.
-                rewritten[key] = group
-            }
-        }
-        byKey = rewritten
-        rebuild()
+        summary = computeSummary24h()
     }
 
     // MARK: - Summary (last 24h)
@@ -519,10 +324,6 @@ final class NotificationRepository {
             case .dm:       s.dmCount += 1
             case .pollVote: s.pollVoteCount += 1
             }
-        }
-        // DM count comes from active DM placeholders (each represents a recent conversation tail).
-        for case .dm(_, _, _, let ts, _) in dmPlaceholders.values where ts >= cutoff {
-            s.dmCount += 1
         }
         return s
     }
