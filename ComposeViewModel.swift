@@ -363,15 +363,11 @@ final class ComposeViewModel {
                     let r = MediaCompressor.compressImage(data: picked.data, mime: pendingMime)
                     prepared = (r.data, r.mime, r.dim)
                 }
-                guard let privkeyBytes = Hex.decode(keypair.privkey) else {
-                    throw BlossomError.authFailed
-                }
                 let result = try await BlossomClient.upload(
                     bytes: prepared.0,
                     mime: prepared.1,
                     servers: blossomServers,
-                    privkey32: privkeyBytes,
-                    pubkey: keypair.pubkey
+                    keypair: keypair
                 )
                 if let idx = attachments.firstIndex(where: { $0.id == pendingId }) {
                     attachments[idx] = ComposeAttachment(
@@ -472,15 +468,11 @@ final class ComposeViewModel {
         attachments.append(pending)
         uploadProgress = total > 1 ? "Uploading \(progressIndex + 1)/\(total)…" : "Uploading…"
         do {
-            guard let privkeyBytes = Hex.decode(keypair.privkey) else {
-                throw BlossomError.authFailed
-            }
             let result = try await BlossomClient.upload(
                 bytes: compressed.data,
                 mime: compressed.mime,
                 servers: blossomServers,
-                privkey32: privkeyBytes,
-                pubkey: keypair.pubkey
+                keypair: keypair
             )
             if let idx = attachments.firstIndex(where: { $0.id == pendingId }) {
                 attachments[idx] = ComposeAttachment(
@@ -652,12 +644,6 @@ final class ComposeViewModel {
     func saveDraft() async {
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        guard let privkey = Hex.decode(keypair.privkey),
-              let pub = Hex.decode(keypair.pubkey),
-              let convKey = try? Nip44.getConversationKey(privkey32: privkey, peerXonlyPubkey32: pub) else {
-            lastError = "Couldn't derive draft encryption key."
-            return
-        }
 
         let dTag = currentDraftId ?? Nip37.newDraftId()
         currentDraftId = dTag
@@ -678,15 +664,31 @@ final class ComposeViewModel {
             pubkeyHex: keypair.pubkey, innerKind: innerKind,
             content: materialized, tags: innerTags, createdAt: now
         )
-        guard let cipher = try? Nip44.encrypt(plaintext: innerJSON, conversationKey: convKey) else {
+        // NIP-37 encrypts the inner event to the user's own pubkey. For a
+        // remote-signer account this is a NIP-44 round-trip to the signer;
+        // for a local key it computes the conversation key in-process.
+        let cipher: String
+        do {
+            cipher = try await Signer.nip44Encrypt(
+                keypair: keypair,
+                peerPubkey: keypair.pubkey,
+                plaintext: innerJSON
+            )
+        } catch {
             lastError = "Failed to encrypt draft."
             return
         }
         let wrapperTags = Nip37.wrapperTags(dTag: dTag, innerKind: innerKind)
-        guard let wrapper = try? NostrEvent.sign(
-            privkey32: privkey, pubkey: keypair.pubkey,
-            kind: Nip37.kindDraft, createdAt: now, tags: wrapperTags, content: cipher
-        ) else {
+        let wrapper: NostrEvent
+        do {
+            wrapper = try await Signer.sign(
+                keypair: keypair,
+                kind: Nip37.kindDraft,
+                tags: wrapperTags,
+                content: cipher,
+                createdAt: now
+            )
+        } catch {
             lastError = "Failed to sign draft."
             return
         }
@@ -706,19 +708,22 @@ final class ComposeViewModel {
     private func clearDraftOnPublish() async {
         guard let dTag = currentDraftId else { return }
         currentDraftId = nil
-        guard let privkey = Hex.decode(keypair.privkey),
-              let pub = Hex.decode(keypair.pubkey),
-              let convKey = try? Nip44.getConversationKey(privkey32: privkey, peerXonlyPubkey32: pub) else { return }
         let now = Int(Date().timeIntervalSince1970)
         let innerJSON = Nip37.serializeInner(
             pubkeyHex: keypair.pubkey, innerKind: 1, content: "", tags: [], createdAt: now
         )
-        guard let cipher = try? Nip44.encrypt(plaintext: innerJSON, conversationKey: convKey),
-              let wrapper = try? NostrEvent.sign(
-                  privkey32: privkey, pubkey: keypair.pubkey,
-                  kind: Nip37.kindDraft, createdAt: now,
-                  tags: Nip37.wrapperTags(dTag: dTag, innerKind: 1), content: cipher
-              ) else { return }
+        guard let cipher = try? await Signer.nip44Encrypt(
+            keypair: keypair,
+            peerPubkey: keypair.pubkey,
+            plaintext: innerJSON
+        ) else { return }
+        guard let wrapper = try? await Signer.sign(
+            keypair: keypair,
+            kind: Nip37.kindDraft,
+            tags: Nip37.wrapperTags(dTag: dTag, innerKind: 1),
+            content: cipher,
+            createdAt: now
+        ) else { return }
         _ = await RelayPool.publish(event: wrapper, to: topWriteRelays(), timeout: 6)
     }
 
@@ -799,20 +804,14 @@ final class ComposeViewModel {
             createdAt = mined.createdAt
         }
 
-        guard let privkeyBytes = Hex.decode(keypair.privkey) else {
-            lastError = "Invalid signing key."
-            return
-        }
-
         let event: NostrEvent
         do {
-            event = try NostrEvent.sign(
-                privkey32: privkeyBytes,
-                pubkey: keypair.pubkey,
+            event = try await Signer.sign(
+                keypair: keypair,
                 kind: kind,
-                createdAt: createdAt,
                 tags: tags,
-                content: postContent
+                content: postContent,
+                createdAt: createdAt
             )
         } catch {
             lastError = "Signing failed: \(error)"

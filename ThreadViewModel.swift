@@ -269,19 +269,14 @@ final class ThreadViewModel {
         var tags = Nip10.buildReplyTags(replyTo: parent, relayHint: "")
         if let clientTag = NostrEvent.clientTagIfEnabled() { tags.append(clientTag) }
 
-        guard let privkeyBytes = Hex.decode(keypair.privkey) else {
-            errorMessage = "Invalid signing key"
-            return
-        }
         let signed: NostrEvent
         do {
-            signed = try NostrEvent.sign(
-                privkey32: privkeyBytes,
-                pubkey: keypair.pubkey,
+            signed = try await Signer.sign(
+                keypair: keypair,
                 kind: 1,
-                createdAt: createdAt,
                 tags: tags,
-                content: trimmed
+                content: trimmed,
+                createdAt: createdAt
             )
         } catch {
             errorMessage = "Failed to sign event: \(error.localizedDescription)"

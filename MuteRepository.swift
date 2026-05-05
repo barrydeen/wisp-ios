@@ -20,6 +20,7 @@ final class MuteRepository {
 
     @ObservationIgnored private var binding = false
     @ObservationIgnored private var activePrivkey32: Data?
+    @ObservationIgnored private var activeKeypair: Keypair?
     @ObservationIgnored private var syncSubscription: RelaySubscription?
     @ObservationIgnored private var syncListener: Task<Void, Never>?
 
@@ -27,12 +28,13 @@ final class MuteRepository {
 
     // MARK: - Lifecycle
 
-    func bind(activePubkey pk: String, privkey32: Data?) {
+    func bind(activePubkey pk: String, privkey32: Data?, keypair: Keypair? = nil) {
         binding = true
         defer { binding = false }
         unbindSync()
         activePubkey = pk
         activePrivkey32 = privkey32
+        activeKeypair = keypair
         let d = UserDefaults.standard
         mutedWords = Set(d.stringArray(forKey: Self.wordsKey(pk)) ?? [])
         // Lowercase on load so historical entries written before
@@ -64,6 +66,7 @@ final class MuteRepository {
         unbindSync()
         activePubkey = nil
         activePrivkey32 = nil
+        activeKeypair = nil
         mutedWords = []
         blockedPubkeys = []
         mutedThreads = []
@@ -143,16 +146,26 @@ final class MuteRepository {
     /// Build a fresh kind:10000 event reflecting the current state and publish to the user's
     /// write relays. Self-encrypted via NIP-44; tags are empty so other clients see only an
     /// opaque blob.
-    func republish(privkey32: Data) async {
+    func republish() async {
+        // Prefer the bound keypair so remote-signer accounts can publish too;
+        // synthesize a local keypair from the cached privkey32 for older
+        // callers that don't yet hand us the keypair at bind time.
         guard let pk = activePubkey else { return }
+        let signKeypair: Keypair
+        if let kp = activeKeypair, kp.pubkey == pk {
+            signKeypair = kp
+        } else if let priv = activePrivkey32 {
+            signKeypair = Keypair(privkey: Hex.encode(priv), pubkey: pk)
+        } else {
+            return
+        }
         let words = mutedWords
         let pubkeys = blockedPubkeys
         let threads = mutedThreads
         let createdAt = max(Int(Date().timeIntervalSince1970), lastUpdatedAt + 1)
         do {
-            let event = try Nip51Mute.buildSignedMuteEvent(
-                privkey32: privkey32,
-                ownPubkey: pk,
+            let event = try await Nip51Mute.buildSignedMuteEvent(
+                keypair: signKeypair,
                 blockedPubkeys: pubkeys,
                 mutedWords: words,
                 mutedThreads: threads,
@@ -281,9 +294,7 @@ final class MuteRepository {
         d.set(Array(blockedPubkeys), forKey: Self.pubkeysKey(pk))
         d.set(Array(mutedThreads), forKey: Self.threadsKey(pk))
         Task { await SafetyFilter.shared.rebuildSnapshot() }
-        if let priv = activePrivkey32 {
-            Task { [priv] in await self.republish(privkey32: priv) }
-        }
+        Task { [weak self] in await self?.republish() }
     }
 }
 

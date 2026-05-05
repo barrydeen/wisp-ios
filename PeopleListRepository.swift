@@ -198,32 +198,27 @@ final class PeopleListRepository {
     // MARK: - Publish
 
     private func publish(_ list: PeopleList, keypair: Keypair) {
-        guard let privkey = Hex.decode(keypair.privkey) else { return }
         let tags = Nip51UserLists.buildPeopleListTags(
             dTag: list.dTag,
             name: list.name,
             publicMembers: list.publicMembers
         )
-        let content: String
-        do {
-            content = try Nip51UserLists.buildPeopleListPrivateContent(
-                privateMembers: list.privateMembers,
-                keypair: keypair
-            )
-        } catch {
-            return
-        }
-        let pubkey = keypair.pubkey
         let createdAt = list.createdAt
-        let relays = topWriteRelays(pubkey: pubkey)
-        Task.detached {
-            guard let event = try? NostrEvent.sign(
-                privkey32: privkey,
-                pubkey: pubkey,
+        let relays = topWriteRelays(pubkey: keypair.pubkey)
+        Task { @MainActor in
+            let content: String
+            do {
+                content = try await Nip51UserLists.buildPeopleListPrivateContent(
+                    privateMembers: list.privateMembers,
+                    keypair: keypair
+                )
+            } catch { return }
+            guard let event = try? await Signer.sign(
+                keypair: keypair,
                 kind: Nip51UserLists.kindPeopleList,
-                createdAt: createdAt,
                 tags: tags,
-                content: content
+                content: content,
+                createdAt: createdAt
             ) else { return }
             _ = await RelayPool.publish(event: event, to: relays, timeout: 6)
             await EventStore.shared.persist([event])
@@ -234,19 +229,16 @@ final class PeopleListRepository {
     /// from clients that honor newer-wins semantics. The d-tag is preserved so
     /// the replacement targets the right address.
     private func publishDeletion(dTag: String, keypair: Keypair) {
-        guard let privkey = Hex.decode(keypair.privkey) else { return }
         let tags: [[String]] = [["d", dTag]]
-        let pubkey = keypair.pubkey
         let createdAt = Int(Date().timeIntervalSince1970)
-        let relays = topWriteRelays(pubkey: pubkey)
-        Task.detached {
-            guard let event = try? NostrEvent.sign(
-                privkey32: privkey,
-                pubkey: pubkey,
+        let relays = topWriteRelays(pubkey: keypair.pubkey)
+        Task { @MainActor in
+            guard let event = try? await Signer.sign(
+                keypair: keypair,
                 kind: Nip51UserLists.kindPeopleList,
-                createdAt: createdAt,
                 tags: tags,
-                content: ""
+                content: "",
+                createdAt: createdAt
             ) else { return }
             _ = await RelayPool.publish(event: event, to: relays, timeout: 6)
         }

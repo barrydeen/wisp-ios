@@ -67,12 +67,13 @@ nonisolated enum Nip51UserLists {
         return tags
     }
 
-    static func buildPeopleListPrivateContent(privateMembers: [String], keypair: Keypair) throws -> String {
+    @MainActor
+    static func buildPeopleListPrivateContent(privateMembers: [String], keypair: Keypair) async throws -> String {
         let entries: [[String]] = privateMembers
             .map { $0.lowercased() }
             .filter { isHexPubkey($0) }
             .map { ["p", $0] }
-        return try encodePrivateTags(entries: entries, keypair: keypair)
+        return try await encodePrivateTags(entries: entries, keypair: keypair)
     }
 
     // MARK: - Note list (kind 30003)
@@ -129,12 +130,13 @@ nonisolated enum Nip51UserLists {
         return tags
     }
 
-    static func buildNoteListPrivateContent(privateNotes: [String], keypair: Keypair) throws -> String {
+    @MainActor
+    static func buildNoteListPrivateContent(privateNotes: [String], keypair: Keypair) async throws -> String {
         let entries: [[String]] = privateNotes
             .map { $0.lowercased() }
             .filter { isHexId($0) }
             .map { ["e", $0] }
-        return try encodePrivateTags(entries: entries, keypair: keypair)
+        return try await encodePrivateTags(entries: entries, keypair: keypair)
     }
 
     // MARK: - Private-tag encoding
@@ -142,15 +144,17 @@ nonisolated enum Nip51UserLists {
     /// Encrypt a JSON array of tags (`[["p","<hex>"], …]`) with the user's
     /// self-conversation key. Returns "" when the input is empty so a deletion
     /// of all private members produces a clean event with empty content.
-    private static func encodePrivateTags(entries: [[String]], keypair: Keypair) throws -> String {
+    /// Async because remote-signer accounts dispatch the NIP-44 encrypt over
+    /// a relay round-trip via `Signer.nip44Encrypt`.
+    @MainActor
+    private static func encodePrivateTags(entries: [[String]], keypair: Keypair) async throws -> String {
         guard !entries.isEmpty else { return "" }
-        guard let privkey = Hex.decode(keypair.privkey),
-              let pubkeyBytes = Hex.decode(keypair.pubkey) else {
-            throw NSError(domain: "Nip51UserLists", code: 1)
-        }
-        let convKey = try Nip44.getConversationKey(privkey32: privkey, peerXonlyPubkey32: pubkeyBytes)
         let json = encodeTagsJSON(entries)
-        return try Nip44.encrypt(plaintext: json, conversationKey: convKey)
+        return try await Signer.nip44Encrypt(
+            keypair: keypair,
+            peerPubkey: keypair.pubkey,
+            plaintext: json
+        )
     }
 
     /// Decrypt `event.content` (NIP-44) and pull out values for `tagName`,

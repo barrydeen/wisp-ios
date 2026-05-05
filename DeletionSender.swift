@@ -22,21 +22,23 @@ final class DeletionSender {
     /// == keypair.pubkey` at the UI layer; this method also enforces it defensively.
     func delete(_ targetEvent: NostrEvent, keypair: Keypair, reason: String = "") async throws {
         guard targetEvent.pubkey == keypair.pubkey else { throw SendError.notAuthor }
-        guard let privkey32 = Hex.decode(keypair.privkey) else { throw SendError.missingKey }
 
         var tags = Nip09.deletionTagsForEvent(id: targetEvent.id, kind: targetEvent.kind)
         if let clientTag = NostrEvent.clientTagIfEnabled() {
             tags.append(clientTag)
         }
 
-        let event = try NostrEvent.sign(
-            privkey32: privkey32,
-            pubkey: keypair.pubkey,
-            kind: Nip09.kindDeletion,
-            createdAt: Int(Date().timeIntervalSince1970),
-            tags: tags,
-            content: reason
-        )
+        let event: NostrEvent
+        do {
+            event = try await Signer.sign(
+                keypair: keypair,
+                kind: Nip09.kindDeletion,
+                tags: tags,
+                content: reason
+            )
+        } catch {
+            throw SendError.missingKey
+        }
 
         var set = Set<String>()
         let writes = await RelayListRepository.shared.getWriteRelays(keypair.pubkey)

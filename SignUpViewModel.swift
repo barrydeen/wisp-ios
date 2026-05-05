@@ -186,18 +186,13 @@ final class SignUpViewModel {
         uploadError = nil
         defer { uploading = false }
 
-        guard let privkey = Hex.decode(keypair.privkey) else {
-            uploadError = "Invalid key"
-            return
-        }
         let servers = BlossomServerList.cached(for: keypair.pubkey)
         do {
             let result = try await BlossomClient.upload(
                 bytes: data,
                 mime: mime,
                 servers: servers,
-                privkey32: privkey,
-                pubkey: keypair.pubkey
+                keypair: keypair
             )
             self.pictureUrl = result.url
         } catch {

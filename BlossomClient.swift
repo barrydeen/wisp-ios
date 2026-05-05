@@ -25,25 +25,25 @@ enum BlossomClient {
 
     /// Build the `Authorization: Nostr <base64>` header value for a Blossom upload.
     /// `expirationOffset` is seconds from now; defaults to 5 minutes (per Android client).
+    /// Async because remote-signer accounts dispatch the auth-event sign over a relay.
+    @MainActor
     static func makeUploadAuthHeader(
-        privkey32: Data,
-        pubkey: String,
+        keypair: Keypair,
         sha256Hex: String,
         expirationOffset: Int = 300
-    ) -> String? {
+    ) async -> String? {
         let now = Int(Date().timeIntervalSince1970)
         let tags: [[String]] = [
             ["t", "upload"],
             ["x", sha256Hex],
             ["expiration", String(now + expirationOffset)]
         ]
-        guard let signed = try? NostrEvent.sign(
-            privkey32: privkey32,
-            pubkey: pubkey,
+        guard let signed = try? await Signer.sign(
+            keypair: keypair,
             kind: kindAuth,
-            createdAt: now,
             tags: tags,
-            content: "Upload"
+            content: "Upload",
+            createdAt: now
         ) else { return nil }
         let json = signed.toJSON()
         guard let data = json.data(using: .utf8) else { return nil }
@@ -54,16 +54,16 @@ enum BlossomClient {
     /// Upload `bytes` to one of the given Blossom servers. Tries `/media` (BUD-05) first
     /// and falls back to `/upload` on 404, then moves on to the next server on other errors.
     /// Returns the public URL of the uploaded blob on the first success.
+    @MainActor
     static func upload(
         bytes: Data,
         mime: String,
         servers: [String],
-        privkey32: Data,
-        pubkey: String
+        keypair: Keypair
     ) async throws -> BlossomUploadResult {
         guard !servers.isEmpty else { throw BlossomError.allServersFailed(nil) }
         let hash = sha256Hex(bytes)
-        guard let auth = makeUploadAuthHeader(privkey32: privkey32, pubkey: pubkey, sha256Hex: hash) else {
+        guard let auth = await makeUploadAuthHeader(keypair: keypair, sha256Hex: hash) else {
             throw BlossomError.authFailed
         }
 

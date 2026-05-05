@@ -79,15 +79,12 @@ enum ZapSender {
             ? ["wss://relay.damus.io", "wss://nos.lol"]
             : Array(dedupedRelays)
 
-        // Build + sign the kind 9734 zap request.
-        guard let privkey32 = Hex.decode(keypair.privkey) else {
-            return .failure(.payFailed("invalid signing key"))
-        }
+        // Build + sign the kind 9734 zap request via the Signer facade
+        // (works for both local-key and NIP-46 remote-signer accounts).
         let zapRequest: NostrEvent
         do {
-            zapRequest = try Nip57.buildZapRequest(
-                senderPrivkey32: privkey32,
-                senderPubkey: keypair.pubkey,
+            zapRequest = try await Nip57.buildZapRequest(
+                keypair: keypair,
                 recipientPubkey: recipientPubkey,
                 eventId: eventId,
                 amountMsats: amountMsats,

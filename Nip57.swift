@@ -41,10 +41,11 @@ nonisolated enum Nip57 {
         )
     }
 
-    /// Build an unsigned-then-signed kind 9734 zap request event.
+    /// Build + sign a kind 9734 zap request via the Signer facade
+    /// (local key or remote NIP-46).
+    @MainActor
     static func buildZapRequest(
-        senderPrivkey32: Data,
-        senderPubkey: String,
+        keypair: Keypair,
         recipientPubkey: String,
         eventId: String?,
         amountMsats: Int64,
@@ -54,7 +55,7 @@ nonisolated enum Nip57 {
         extraTags: [[String]] = [],
         isAnonymous: Bool = false,
         isPrivate: Bool = false
-    ) throws -> NostrEvent {
+    ) async throws -> NostrEvent {
         var tags: [[String]] = [["p", recipientPubkey]]
         if let eventId { tags.append(["e", eventId]) }
         tags.append(["relays"] + relays)
@@ -62,41 +63,41 @@ nonisolated enum Nip57 {
         tags.append(["lnurl", lnurl])
         tags.append(contentsOf: extraTags)
 
-        // Anonymous or private: sign with an ephemeral random keypair.
-        // Private additionally encrypts the real sender identity in the `anon` tag
-        // (NIP-04, encrypted to recipient) so only the recipient can reveal the sender.
-        let signingPrivkey: Data
-        let signingPubkey: String
-
+        // Anonymous or private: sign with an ephemeral random keypair so the
+        // user's real pubkey doesn't appear as the kind-9734 author. Private
+        // additionally encrypts the real sender identity in the `anon` tag
+        // (NIP-04 between the ephemeral key and the recipient) so only the
+        // recipient can reveal the sender. The ephemeral key is generated
+        // locally and the encryption needs only the ephemeral privkey +
+        // recipient pubkey, so this works for both local and remote-signer
+        // accounts.
+        let signingKeypair: Keypair
         if isAnonymous || isPrivate {
             var bytes = [UInt8](repeating: 0, count: 32)
             _ = SecRandomCopyBytes(kSecRandomDefault, 32, &bytes)
-            signingPrivkey = Data(bytes)
-            signingPubkey = Secp256k1.publicKey(from: signingPrivkey).map { Hex.encode($0) } ?? senderPubkey
-        } else {
-            signingPrivkey = senderPrivkey32
-            signingPubkey = senderPubkey
-        }
+            let ephemeralPriv = Data(bytes)
+            let ephemeralPub = Secp256k1.publicKey(from: ephemeralPriv).map { Hex.encode($0) } ?? keypair.pubkey
+            signingKeypair = Keypair(privkey: Hex.encode(ephemeralPriv), pubkey: ephemeralPub)
 
-        if isPrivate {
-            // Encrypt real sender pubkey to recipient so only recipient can identify sender.
-            let plaintext = "{\"pubkey\":\"\(senderPubkey)\"}"
-            if let recipientPub32 = Hex.decode(recipientPubkey),
-               let secret = try? Nip04.sharedSecret(privkey32: signingPrivkey, peerXonlyPubkey32: recipientPub32),
-               let encrypted = try? Nip04.encrypt(plaintext, sharedSecret: secret) {
-                tags.append(["anon", encrypted])
+            if isPrivate {
+                let plaintext = "{\"pubkey\":\"\(keypair.pubkey)\"}"
+                if let recipientPub32 = Hex.decode(recipientPubkey),
+                   let secret = try? Nip04.sharedSecret(privkey32: ephemeralPriv, peerXonlyPubkey32: recipientPub32),
+                   let encrypted = try? Nip04.encrypt(plaintext, sharedSecret: secret) {
+                    tags.append(["anon", encrypted])
+                } else {
+                    tags.append(["anon", ""])
+                }
             } else {
                 tags.append(["anon", ""])
             }
-        } else if isAnonymous {
-            tags.append(["anon", ""])
+        } else {
+            signingKeypair = keypair
         }
 
-        return try NostrEvent.sign(
-            privkey32: signingPrivkey,
-            pubkey: signingPubkey,
+        return try await Signer.sign(
+            keypair: signingKeypair,
             kind: 9734,
-            createdAt: Int(Date().timeIntervalSince1970),
             tags: tags,
             content: message
         )

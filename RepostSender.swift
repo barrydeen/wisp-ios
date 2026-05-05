@@ -29,10 +29,6 @@ final class RepostSender {
         let dedupKey = "\(keypair.pubkey)|\(targetEvent.id)"
         if sent.contains(dedupKey) { throw SendError.alreadyReposted }
 
-        guard let privkey32 = Hex.decode(keypair.privkey) else {
-            throw SendError.missingKey
-        }
-
         let relayHint = NoteSourceTracker.shared.relays(for: targetEvent.id).first ?? ""
         var tags: [[String]] = [
             ["e", targetEvent.id, relayHint],
@@ -43,14 +39,17 @@ final class RepostSender {
             tags.append(clientTag)
         }
 
-        let event = try NostrEvent.sign(
-            privkey32: privkey32,
-            pubkey: keypair.pubkey,
-            kind: 6,
-            createdAt: Int(Date().timeIntervalSince1970),
-            tags: tags,
-            content: targetEvent.toJSON()
-        )
+        let event: NostrEvent
+        do {
+            event = try await Signer.sign(
+                keypair: keypair,
+                kind: 6,
+                tags: tags,
+                content: targetEvent.toJSON()
+            )
+        } catch {
+            throw SendError.missingKey
+        }
 
         let relays = await relaySetForRepost(of: targetEvent, reposter: keypair.pubkey)
         guard !relays.isEmpty else { throw SendError.noRelays }

@@ -24,15 +24,13 @@ enum GifBlossomUploader {
     /// Best-effort re-host. Caller hands us a Giphy CDN URL plus the active
     /// keypair and the user's Blossom server list (the same one
     /// `ComposeViewModel` uses for image attachments).
+    @MainActor
     static func rehost(
         giphyURL: String,
         keypair: Keypair,
         servers: [String]
     ) async -> Outcome {
-        guard !servers.isEmpty,
-              let url = URL(string: giphyURL),
-              let privkeyBytes = Hex.decode(keypair.privkey)
-        else {
+        guard !servers.isEmpty, let url = URL(string: giphyURL) else {
             return Outcome(url: giphyURL, didRehost: false)
         }
 
@@ -57,8 +55,7 @@ enum GifBlossomUploader {
                 bytes: bytes,
                 mime: mime,
                 servers: servers,
-                privkey32: privkeyBytes,
-                pubkey: keypair.pubkey
+                keypair: keypair
             )
             return Outcome(url: result.url, didRehost: true)
         } catch {

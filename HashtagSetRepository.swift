@@ -167,19 +167,16 @@ final class HashtagSetRepository {
     // MARK: - Publish
 
     private func publishHashtagSet(_ set: HashtagSet, keypair: Keypair) {
-        guard let privkey = Hex.decode(keypair.privkey) else { return }
         let tags = Nip51Hashtags.buildHashtagSetTags(dTag: set.dTag, name: set.name, hashtags: set.hashtags)
-        let pubkey = keypair.pubkey
         let createdAt = set.createdAt
-        let relays = topWriteRelays(pubkey: pubkey)
-        Task.detached {
-            guard let event = try? NostrEvent.sign(
-                privkey32: privkey,
-                pubkey: pubkey,
+        let relays = topWriteRelays(pubkey: keypair.pubkey)
+        Task { @MainActor in
+            guard let event = try? await Signer.sign(
+                keypair: keypair,
                 kind: Nip51Hashtags.kindHashtagSet,
-                createdAt: createdAt,
                 tags: tags,
-                content: ""
+                content: "",
+                createdAt: createdAt
             ) else { return }
             _ = await RelayPool.publish(event: event, to: relays, timeout: 6)
             await EventStore.shared.persist([event])
@@ -189,19 +186,16 @@ final class HashtagSetRepository {
     /// Publish an "empty" replaceable set (only the `d` tag) to effectively delete it.
     /// The d-tag is preserved so the replacement targets the right address.
     private func publishHashtagSetDeletion(dTag: String, keypair: Keypair) {
-        guard let privkey = Hex.decode(keypair.privkey) else { return }
         let tags: [[String]] = [["d", dTag]]
-        let pubkey = keypair.pubkey
         let createdAt = Int(Date().timeIntervalSince1970)
-        let relays = topWriteRelays(pubkey: pubkey)
-        Task.detached {
-            guard let event = try? NostrEvent.sign(
-                privkey32: privkey,
-                pubkey: pubkey,
+        let relays = topWriteRelays(pubkey: keypair.pubkey)
+        Task { @MainActor in
+            guard let event = try? await Signer.sign(
+                keypair: keypair,
                 kind: Nip51Hashtags.kindHashtagSet,
-                createdAt: createdAt,
                 tags: tags,
-                content: ""
+                content: "",
+                createdAt: createdAt
             ) else { return }
             _ = await RelayPool.publish(event: event, to: relays, timeout: 6)
         }

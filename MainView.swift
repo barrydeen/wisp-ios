@@ -174,7 +174,11 @@ struct MainView: View {
             // recompute). All four ingest paths consult the snapshot lockless on every event,
             // so this must run before any subscription opens.
             let privkey32 = Hex.decode(keypair.privkey)
-            MuteRepository.shared.bind(activePubkey: keypair.pubkey, privkey32: privkey32)
+            MuteRepository.shared.bind(
+                activePubkey: keypair.pubkey,
+                privkey32: privkey32,
+                keypair: keypair
+            )
             SafetyPreferences.shared.bind(activePubkey: keypair.pubkey)
             await ExtendedNetworkRepository.shared.bind(activePubkey: keypair.pubkey)
             await SafetyFilter.shared.rebuildSnapshot()

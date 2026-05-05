@@ -575,9 +575,6 @@ final class NotificationsViewModel {
     func sendQuickReply(targetEvent: NostrEvent, text: String) async throws {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        guard let priv = Hex.decode(keypair.privkey) else {
-            throw NSError(domain: "Notifications", code: 1)
-        }
         let now = Int(Date().timeIntervalSince1970)
         let hint = relayHintForTargetAuthor(targetEvent.pubkey)
         var tags: [[String]] = [
@@ -585,13 +582,12 @@ final class NotificationsViewModel {
             ["p", targetEvent.pubkey]
         ]
         if let clientTag = NostrEvent.clientTagIfEnabled() { tags.append(clientTag) }
-        let signed = try NostrEvent.sign(
-            privkey32: priv,
-            pubkey: keypair.pubkey,
+        let signed = try await Signer.sign(
+            keypair: keypair,
             kind: 1,
-            createdAt: now,
             tags: tags,
-            content: trimmed
+            content: trimmed,
+            createdAt: now
         )
         var publish = Set<String>()
         for r in ownWriteRelays { publish.insert(r) }

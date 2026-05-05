@@ -248,6 +248,13 @@
 		4CABCD010000000000070000 /* ProfileEditView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000070000 /* ProfileEditView.swift */; };
 		4CABCD010000000000080000 /* FollowSender.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000080000 /* FollowSender.swift */; };
 		4CABCD010000000000050000 /* BackChevronButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000050000 /* BackChevronButton.swift */; };
+		4CABCE0100000000000F4601 /* Nip46.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCE0000000000000F4601 /* Nip46.swift */; };
+		4CABCE0100000000000F4602 /* Nip46Client.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCE0000000000000F4602 /* Nip46Client.swift */; };
+		4CABCE0100000000000F4603 /* Nip46Session.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCE0000000000000F4603 /* Nip46Session.swift */; };
+		4CABCE0100000000000F4604 /* Nip46Manager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCE0000000000000F4604 /* Nip46Manager.swift */; };
+		4CABCE0100000000000F4605 /* Nip46LoginViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCE0000000000000F4605 /* Nip46LoginViewModel.swift */; };
+		4CABCE0100000000000F4606 /* Nip46LoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCE0000000000000F4606 /* Nip46LoginView.swift */; };
+		4CABCE0100000000000F4607 /* Signer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCE0000000000000F4607 /* Signer.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -510,6 +517,13 @@
 		4CABCD000000000000070000 /* ProfileEditView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileEditView.swift; sourceTree = "<group>"; };
 		4CABCD000000000000080000 /* FollowSender.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowSender.swift; sourceTree = "<group>"; };
 		4CABCD000000000000050000 /* BackChevronButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackChevronButton.swift; sourceTree = "<group>"; };
+		4CABCE0000000000000F4601 /* Nip46.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Nip46.swift; sourceTree = "<group>"; };
+		4CABCE0000000000000F4602 /* Nip46Client.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Nip46Client.swift; sourceTree = "<group>"; };
+		4CABCE0000000000000F4603 /* Nip46Session.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Nip46Session.swift; sourceTree = "<group>"; };
+		4CABCE0000000000000F4604 /* Nip46Manager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Nip46Manager.swift; sourceTree = "<group>"; };
+		4CABCE0000000000000F4605 /* Nip46LoginViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Nip46LoginViewModel.swift; sourceTree = "<group>"; };
+		4CABCE0000000000000F4606 /* Nip46LoginView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Nip46LoginView.swift; sourceTree = "<group>"; };
+		4CABCE0000000000000F4607 /* Signer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Signer.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -805,6 +819,13 @@
 				4CABCD000000000000070000 /* ProfileEditView.swift */,
 				4CABCD000000000000080000 /* FollowSender.swift */,
 				4CABCD000000000000050000 /* BackChevronButton.swift */,
+				4CABCE0000000000000F4601 /* Nip46.swift */,
+				4CABCE0000000000000F4602 /* Nip46Client.swift */,
+				4CABCE0000000000000F4603 /* Nip46Session.swift */,
+				4CABCE0000000000000F4604 /* Nip46Manager.swift */,
+				4CABCE0000000000000F4605 /* Nip46LoginViewModel.swift */,
+				4CABCE0000000000000F4606 /* Nip46LoginView.swift */,
+				4CABCE0000000000000F4607 /* Signer.swift */,
 			);
 			sourceTree = "<group>";
 		};
@@ -1209,6 +1230,13 @@
 				4CABCD010000000000070000 /* ProfileEditView.swift in Sources */,
 				4CABCD010000000000080000 /* FollowSender.swift in Sources */,
 				4CABCD010000000000050000 /* BackChevronButton.swift in Sources */,
+				4CABCE0100000000000F4601 /* Nip46.swift in Sources */,
+				4CABCE0100000000000F4602 /* Nip46Client.swift in Sources */,
+				4CABCE0100000000000F4603 /* Nip46Session.swift in Sources */,
+				4CABCE0100000000000F4604 /* Nip46Manager.swift in Sources */,
+				4CABCE0100000000000F4605 /* Nip46LoginViewModel.swift in Sources */,
+				4CABCE0100000000000F4606 /* Nip46LoginView.swift in Sources */,
+				4CABCE0100000000000F4607 /* Signer.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -40,35 +40,29 @@ nonisolated enum Nip51Mute {
         return s
     }
 
+    @MainActor
     static func buildSignedMuteEvent(
-        privkey32: Data,
-        ownPubkey: String,
+        keypair: Keypair,
         blockedPubkeys: Set<String>,
         mutedWords: Set<String>,
         mutedThreads: Set<String>,
         createdAt: Int = Int(Date().timeIntervalSince1970)
-    ) throws -> NostrEvent {
+    ) async throws -> NostrEvent {
         let json = buildPrivateBodyJson(
             pubkeys: blockedPubkeys, words: mutedWords, threads: mutedThreads
         )
-        guard let ownPubkeyData = Hex.decode(ownPubkey) else {
-            throw NSError(domain: "Nip51Mute", code: 1,
-                          userInfo: [NSLocalizedDescriptionKey: "Invalid own pubkey hex"])
-        }
-        let convKey = try Nip44.getConversationKey(
-            privkey32: privkey32,
-            peerXonlyPubkey32: ownPubkeyData
-        )
         // NIP-44 rejects empty plaintext, so even an empty list still contains "[]".
-        let cipher = try Nip44.encrypt(plaintext: json, conversationKey: convKey)
-
-        return try NostrEvent.sign(
-            privkey32: privkey32,
-            pubkey: ownPubkey,
+        let cipher = try await Signer.nip44Encrypt(
+            keypair: keypair,
+            peerPubkey: keypair.pubkey,
+            plaintext: json
+        )
+        return try await Signer.sign(
+            keypair: keypair,
             kind: kindMuteList,
-            createdAt: createdAt,
             tags: [],
-            content: cipher
+            content: cipher,
+            createdAt: createdAt
         )
     }
 

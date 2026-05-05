@@ -8,6 +8,7 @@ struct LoginView: View {
     @State private var error: String?
     @State private var isSecure = true
     @State private var isLoading = false
+    @State private var showRemoteSigner = false
 
     var body: some View {
         NavigationStack {
@@ -69,6 +70,23 @@ struct LoginView: View {
                 .controlSize(.large)
                 .disabled(nsecInput.isEmpty || isLoading)
 
+                HStack(spacing: 8) {
+                    Rectangle().fill(.tertiary).frame(height: 1)
+                    Text("OR").font(.caption.bold()).foregroundStyle(.tertiary)
+                    Rectangle().fill(.tertiary).frame(height: 1)
+                }
+                .padding(.vertical, 4)
+
+                Button {
+                    showRemoteSigner = true
+                } label: {
+                    Label("Use a remote signer", systemImage: "link.badge.plus")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .tint(.wispPrimary)
+                .controlSize(.large)
+
                 Spacer()
             }
             .padding(.horizontal, 32)
@@ -77,6 +95,12 @@ struct LoginView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                         .foregroundStyle(.secondary)
+                }
+            }
+            .sheet(isPresented: $showRemoteSigner) {
+                Nip46LoginView { kp in
+                    showRemoteSigner = false
+                    onLogin(kp)
                 }
             }
         }

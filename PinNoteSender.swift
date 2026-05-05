@@ -20,10 +20,6 @@ final class PinNoteSender {
     /// Returns the new full list of pinned ids after the publish.
     @discardableResult
     func setPinned(noteId: String, pinned: Bool, keypair: Keypair) async throws -> [String] {
-        guard let privkey32 = Hex.decode(keypair.privkey) else {
-            throw SendError.missingKey
-        }
-
         let writeRelays = await RelayListRepository.shared.getWriteRelays(keypair.pubkey)
         let readRelays = await RelayListRepository.shared.getReadRelays(keypair.pubkey)
         var fetchSet = Set(writeRelays)
@@ -52,14 +48,17 @@ final class PinNoteSender {
             tags.append(clientTag)
         }
 
-        let event = try NostrEvent.sign(
-            privkey32: privkey32,
-            pubkey: keypair.pubkey,
-            kind: Nip10001.kindPinned,
-            createdAt: Int(Date().timeIntervalSince1970),
-            tags: tags,
-            content: ""
-        )
+        let event: NostrEvent
+        do {
+            event = try await Signer.sign(
+                keypair: keypair,
+                kind: Nip10001.kindPinned,
+                tags: tags,
+                content: ""
+            )
+        } catch {
+            throw SendError.missingKey
+        }
 
         let publishRelays = !writeRelays.isEmpty
             ? writeRelays

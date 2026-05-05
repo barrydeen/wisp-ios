@@ -134,13 +134,15 @@ struct SafetyTests {
         #expect(parsed.threads == threads)
     }
 
-    @Test func encryptedMuteEventRoundtrip() throws {
+    @MainActor
+    @Test func encryptedMuteEventRoundtrip() async throws {
         let priv = Schnorr.randomPrivkey()
         let pub = try Schnorr.xonlyPubkey(privkey32: priv)
         let pubHex = Hex.encode(pub)
+        let kp = Keypair(privkey: Hex.encode(priv), pubkey: pubHex)
 
-        let event = try Nip51Mute.buildSignedMuteEvent(
-            privkey32: priv, ownPubkey: pubHex,
+        let event = try await Nip51Mute.buildSignedMuteEvent(
+            keypair: kp,
             blockedPubkeys: ["abc"], mutedWords: ["junk"], mutedThreads: ["root1"],
             createdAt: 1_700_000_000
         )

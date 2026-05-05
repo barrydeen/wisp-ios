@@ -58,6 +58,16 @@ enum NostrKey {
         setCachedActive(keypair)
     }
 
+    /// Save a remote-signer (NIP-46) account. The private key is stored as an
+    /// empty string sentinel — `Keypair.isRemote` (defined in `Signer.swift`)
+    /// reads that as the marker for "signing is delegated, look up
+    /// `Nip46Manager.shared.activeClient`". The actual session lives in
+    /// `Nip46SessionStore`.
+    static func saveRemote(pubkey: String) {
+        let kp = Keypair(privkey: "", pubkey: pubkey)
+        save(kp)
+    }
+
     static func load() -> Keypair? {
         if let cached = cachedActive() { return cached }
         guard let kp = loadFromKeychain(account: "active") else { return nil }
@@ -90,6 +100,7 @@ enum NostrKey {
         if cachedActive()?.pubkey == pubkey {
             setCachedActive(nil)
         }
+        Nip46SessionStore.delete(pubkey: pubkey)
         var list = accounts()
         list.removeAll { $0 == pubkey }
         UserDefaults.standard.set(list, forKey: "wisp_accounts")

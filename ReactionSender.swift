@@ -56,21 +56,23 @@ final class ReactionSender {
         let dedupKey = "\(keypair.pubkey)|\(targetEvent.id)|\(picked.frequencyKey)"
         if sent.contains(dedupKey) { throw SendError.alreadyReacted }
 
-        guard let privkey32 = Hex.decode(keypair.privkey) else {
-            throw SendError.missingKey
-        }
-
         let custom: (shortcode: String, url: String)?
         switch picked {
         case .unicode: custom = nil
         case .custom(let sc, let url): custom = (sc, url)
         }
 
-        let event: NostrEvent
+        let baseTags = Nip25.reactionTags(targetEvent: targetEvent, customEmoji: custom)
+        let baseCreatedAt = Int(Date().timeIntervalSince1970)
         let powSnap = PowPreferences.snapshot()
-        if powSnap.reactionEnabled {
-            let baseTags = Nip25.reactionTags(targetEvent: targetEvent, customEmoji: custom)
-            let baseCreatedAt = Int(Date().timeIntervalSince1970)
+        let signTags: [[String]]
+        let signCreatedAt: Int
+
+        // PoW mining: bump nonce until the event id has the requested
+        // leading zeroes. Skipped for remote-signer accounts since the
+        // signer would mine its own — which most signers don't do, so
+        // PoW reactions on a NIP-46 account just publish without PoW.
+        if powSnap.reactionEnabled, !keypair.isRemote {
             let pubkey = keypair.pubkey
             let content = picked.content
             let bits = powSnap.reactionDifficulty
@@ -85,22 +87,24 @@ final class ReactionSender {
                 )
             }.value
             guard let mined else { throw SendError.publishFailed }
-            event = try NostrEvent.sign(
-                privkey32: privkey32,
-                pubkey: keypair.pubkey,
-                kind: Nip25.kindReaction,
-                createdAt: mined.createdAt,
-                tags: mined.tags,
-                content: picked.content
-            )
+            signTags = mined.tags
+            signCreatedAt = mined.createdAt
         } else {
-            event = try Nip25.buildReaction(
-                privkey32: privkey32,
-                pubkey: keypair.pubkey,
-                targetEvent: targetEvent,
-                emoji: picked.content,
-                customEmoji: custom
+            signTags = baseTags
+            signCreatedAt = baseCreatedAt
+        }
+
+        let event: NostrEvent
+        do {
+            event = try await Signer.sign(
+                keypair: keypair,
+                kind: Nip25.kindReaction,
+                tags: signTags,
+                content: picked.content,
+                createdAt: signCreatedAt
             )
+        } catch {
+            throw SendError.missingKey
         }
 
         let relays = await relaySetForReaction(to: targetEvent, reactor: keypair.pubkey)

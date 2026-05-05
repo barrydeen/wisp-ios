@@ -125,16 +125,11 @@ final class ProfileEditViewModel {
             defer { uploadStatus = nil }
 
             let compressed = MediaCompressor.compressImage(data: picked.data, mime: picked.mime)
-            guard let privkeyBytes = Hex.decode(keypair.privkey) else {
-                lastError = "Missing signing key."
-                return
-            }
             let result = try await BlossomClient.upload(
                 bytes: compressed.data,
                 mime: compressed.mime,
                 servers: blossomServers,
-                privkey32: privkeyBytes,
-                pubkey: keypair.pubkey
+                keypair: keypair
             )
             switch slot {
             case .picture:
@@ -162,11 +157,6 @@ final class ProfileEditViewModel {
         isSaving = true
         defer { isSaving = false }
 
-        guard let privkey32 = Hex.decode(keypair.privkey) else {
-            lastError = "Missing signing key."
-            return nil
-        }
-
         var merged = existingJson
         applyField(&merged, key: "display_name", value: displayName)
         applyField(&merged, key: "name", value: name)
@@ -191,13 +181,12 @@ final class ProfileEditViewModel {
 
         let event: NostrEvent
         do {
-            event = try NostrEvent.sign(
-                privkey32: privkey32,
-                pubkey: keypair.pubkey,
+            event = try await Signer.sign(
+                keypair: keypair,
                 kind: 0,
-                createdAt: Int(Date().timeIntervalSince1970),
                 tags: tags,
-                content: content
+                content: content,
+                createdAt: Int(Date().timeIntervalSince1970)
             )
         } catch {
             lastError = "Signing failed: \(error.localizedDescription)"
