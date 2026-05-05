@@ -149,11 +149,17 @@ struct ComposeView: View {
                 onCancel: { /* keep existing schedule */ }
             )
         }
-        .sheet(isPresented: $showGifPicker) {
-            GifPickerView { gifUrl in
+        // GIF picker is presented as a true UIKit modal via a hidden
+        // representable rather than a SwiftUI .sheet / .fullScreenCover.
+        // Embedding `GiphyViewController` as a child view (which is what
+        // SwiftUI's modal hosts do) breaks its internal layout — the
+        // bottom search bar collides with the trending-suggestions
+        // carousel because Giphy assumes it owns its modal context.
+        .background(
+            GifPickerPresenter(isPresented: $showGifPicker) { gifUrl in
                 appendGifUrl(gifUrl)
             }
-        }
+        )
         .confirmationDialog(
             "Discard this post?",
             isPresented: $showCancelConfirm,
