@@ -229,7 +229,7 @@ struct ComposeView: View {
                 Text("Replying to \(profile?.displayString ?? Nip19.shortNpub(hex: parent.pubkey))")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
-                Text(resolveNostrMentions(String(parent.content.prefix(140))))
+                Text(previewContent(parent.content, max: 140))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
@@ -249,7 +249,7 @@ struct ComposeView: View {
                 Text("Quoting \(profile?.displayString ?? Nip19.shortNpub(hex: quoted.pubkey))")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
-                Text(resolveNostrMentions(String(quoted.content.prefix(200))))
+                Text(previewContent(quoted.content, max: 200))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(3)
@@ -259,6 +259,30 @@ struct ComposeView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.wispSurfaceVariant.opacity(0.4),
                     in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    /// Render-friendly preview of an event's `.content`. When the content is
+    /// itself a serialized Nostr event (some clients embed events inside the
+    /// `content` string of a kind-1), surface the inner `content` field
+    /// instead of dumping the raw JSON envelope into the reply / quote
+    /// context card. Mentions are resolved before truncation so a long
+    /// `nostr:nprofile1…` token that straddles the cutoff still collapses
+    /// to its `@displayName` instead of leaking a half bech32 string.
+    private func previewContent(_ raw: String, max: Int) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let source: String
+        if trimmed.hasPrefix("{"),
+           let data = trimmed.data(using: .utf8),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           obj["id"] is String, obj["pubkey"] is String {
+            let inner = (obj["content"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if inner.isEmpty { return "[shared event]" }
+            source = inner
+        } else {
+            source = raw
+        }
+        let resolved = resolveNostrMentions(source)
+        return String(resolved.prefix(max))
     }
 
     private func resolveNostrMentions(_ content: String) -> String {
