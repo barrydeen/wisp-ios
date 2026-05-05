@@ -129,7 +129,7 @@ struct GroupDetailView: View {
     }
 
     private func short(_ s: String) -> String {
-        s.count >= 12 ? String(s.prefix(12)) + "…" : s
+        s.count >= 12 ? Nip19.shortNpub(hex: s) : s
     }
 
     // MARK: - Actions (delegate to GroupListViewModel via the singleton repo's parent)
@@ -228,6 +228,6 @@ private struct MemberRow: View {
     }
 
     private func short(_ s: String) -> String {
-        s.count >= 12 ? String(s.prefix(12)) + "…" : s
+        s.count >= 12 ? Nip19.shortNpub(hex: s) : s
     }
 }
