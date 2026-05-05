@@ -33,27 +33,13 @@ struct ThreadView: View {
                 ScrollView {
                     LazyVStack(spacing: 0) {
                         // Ancestors — chain from root → focal-1, each tappable to push
-                        // a new ThreadView focused on that ancestor. The whole stack
-                        // gets a 2pt connector line on the leading edge so the chain
-                        // reads as one structural element instead of three loose rows.
+                        // a new ThreadView focused on that ancestor. Plain divider
+                        // separation between rows; no connector line.
                         if !viewModel.ancestors.isEmpty {
-                            VStack(spacing: 0) {
-                                ForEach(viewModel.ancestors) { row in
-                                    ancestorRow(row)
-                                        .id(row.id)
-                                    Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
-                                }
-                            }
-                            .background(alignment: .leading) {
-                                // Sits behind the row content so the avatars
-                                // (24pt circles centred at ~28pt from the
-                                // leading edge) read as nodes on the line.
-                                Rectangle()
-                                    .fill(Color.wispSurfaceVariant.opacity(0.6))
-                                    .frame(width: 2)
-                                    .padding(.leading, 27)
-                                    .padding(.vertical, 4)
-                                    .allowsHitTesting(false)
+                            ForEach(viewModel.ancestors) { row in
+                                ancestorRow(row)
+                                    .id(row.id)
+                                Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
                             }
                         }
 
@@ -278,9 +264,10 @@ struct ThreadView: View {
         if row.isBlocked {
             blockedPlaceholder
         } else {
-            // No more "View N replies →" hint here. The action-bar bubble
-            // fills + tints when the reply has its own thread, which is
-            // enough signal — and the whole card is the tap target.
+            // The whole card is the tap target. The action-bar bubble
+            // shows the network reply count for this reply — tapping
+            // pushes a new ThreadView with this reply as its focal,
+            // where those deeper replies are loaded and shown.
             Button {
                 navigateToThread(eventId: row.event.id, authorPubkey: row.event.pubkey)
             } label: {

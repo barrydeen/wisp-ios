@@ -446,6 +446,18 @@ final class ThreadViewModel {
             }
         }
 
+        // Focal author inbox — replies to the focal are sent to its
+        // author's read relays (NIP-65 outbox model). When the focal
+        // isn't the root, the root author's inbox alone misses every
+        // reply that came in via the focal author's relay set, which
+        // is what made deep-thread navigation render "no replies".
+        let focalAuthor = events[seedEventId]?.pubkey ?? authorHint
+        if let pk = focalAuthor, pk != rootAuthor {
+            for url in await relayListRepo.getReadRelays(pk) where seen.insert(url).inserted {
+                ordered.append(url)
+            }
+        }
+
         // Top scored relays (highest follow coverage) — mirrors the Android `take(5)` safety net.
         if let board = RelayScoreBoard.load(pubkey: keypair.pubkey) {
             for relay in board.scoredRelays.prefix(5) where seen.insert(relay.url).inserted {
@@ -518,15 +530,25 @@ final class ThreadViewModel {
     /// them — no waiting on EOSE. After `duration` seconds the subscription is cancelled.
     private func startReplyStream(relays: [String], duration: TimeInterval = 12) {
         guard !relays.isEmpty else { return }
-        let filter = NostrFilter(kinds: [1], eTags: [rootId], limit: 500)
+        // Query for events tagging the root OR the focal — root catches the
+        // whole tree, focal catches direct children that some relays may
+        // store without the root e-tag.
+        var eTagTargets = [rootId]
+        if seedEventId != rootId { eTagTargets.append(seedEventId) }
+        let filter = NostrFilter(kinds: [1], eTags: eTagTargets, limit: 500)
         let subId = "thread-replies-\(UUID().uuidString.prefix(6))"
         let sub = RelayPool.subscribe(relays: relays, filter: filter, id: subId)
 
-        let consumer = Task { [weak self, rootId] in
+        let consumer = Task { [weak self, rootId, seedEventId] in
             for await (event, _) in sub.events {
                 guard let self else { break }
                 guard event.kind == 1 else { continue }
-                guard event.tags.contains(where: { $0.count >= 2 && $0[0] == "e" && $0[1] == rootId }) else { continue }
+                // Accept any event tagging the root or the focal — both
+                // are valid for the current screen.
+                guard event.tags.contains(where: { tag in
+                    guard tag.count >= 2, tag[0] == "e" else { return false }
+                    return tag[1] == rootId || tag[1] == seedEventId
+                }) else { continue }
                 let snap = SafetyFilter.shared.snapshot
                 if snap.blockedPubkeys.contains(event.pubkey) {
                     // Keep as a placeholder; do not score for spam.
