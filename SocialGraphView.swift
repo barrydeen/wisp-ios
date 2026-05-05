@@ -411,7 +411,7 @@ struct SocialGraphView: View {
     }
 
     private func truncated(_ pk: String) -> String {
-        String(pk.prefix(8)) + "\u{2026}"
+        Nip19.shortNpub(hex: pk)
     }
 }
 

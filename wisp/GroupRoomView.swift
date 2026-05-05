@@ -212,6 +212,6 @@ private struct GroupMessageBubble: View {
     }
 
     private func short(_ s: String) -> String {
-        s.count >= 8 ? String(s.prefix(8)) + "…" : s
+        s.count >= 8 ? Nip19.shortNpub(hex: s) : s
     }
 }

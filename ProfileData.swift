@@ -17,7 +17,7 @@ struct ProfileData {
     var displayString: String {
         if let dn = displayName, !dn.isEmpty { return dn }
         if let n = name, !n.isEmpty { return n }
-        return String(pubkey.prefix(8)) + "\u{2026}"
+        return Nip19.shortNpub(hex: pubkey)
     }
 
     init(pubkey: String, json: [String: Any] = [:], emojiMap: [String: String] = [:]) {

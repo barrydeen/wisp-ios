@@ -226,7 +226,7 @@ struct ComposeView: View {
         return HStack(alignment: .top, spacing: 8) {
             CachedAvatarView(url: profile?.picture, size: 28)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Replying to \(profile?.displayString ?? String(parent.pubkey.prefix(8)) + "\u{2026}")")
+                Text("Replying to \(profile?.displayString ?? Nip19.shortNpub(hex: parent.pubkey))")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Text(resolveNostrMentions(String(parent.content.prefix(140))))
@@ -246,7 +246,7 @@ struct ComposeView: View {
         return HStack(alignment: .top, spacing: 8) {
             CachedAvatarView(url: profile?.picture, size: 28)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Quoting \(profile?.displayString ?? String(quoted.pubkey.prefix(8)) + "\u{2026}")")
+                Text("Quoting \(profile?.displayString ?? Nip19.shortNpub(hex: quoted.pubkey))")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Text(resolveNostrMentions(String(quoted.content.prefix(200))))
@@ -274,7 +274,7 @@ struct ComposeView: View {
             let token = ns.substring(with: match.range)
             let uri = token.lowercased().hasPrefix("nostr:") ? token : "nostr:\(token)"
             if case .profileRef(let pk, _)? = Nip19.decodeNostrUri(uri) {
-                let name = ProfileRepository.shared.get(pk)?.displayString ?? String(pk.prefix(8)) + "\u{2026}"
+                let name = ProfileRepository.shared.get(pk)?.displayString ?? Nip19.shortNpub(hex: pk)
                 out += "@\(name)"
             } else {
                 out += token

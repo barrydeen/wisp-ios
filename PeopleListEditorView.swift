@@ -159,7 +159,7 @@ struct PeopleListEditorView: View {
     }
 
     private func shortKey(_ s: String) -> String {
-        String(s.prefix(8)) + "\u{2026}"
+        Nip19.shortNpub(hex: s)
     }
 
     private func fetchMissingProfiles() async {

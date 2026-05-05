@@ -366,7 +366,7 @@ struct NotificationRowView: View {
     private func displayName(_ pubkey: String) -> String {
         profiles[pubkey]?.displayString
             ?? profileRepo.get(pubkey)?.displayString
-            ?? (String(pubkey.prefix(8)) + "\u{2026}")
+            ?? Nip19.shortNpub(hex: pubkey)
     }
 
     private func hydrateProfiles() async {

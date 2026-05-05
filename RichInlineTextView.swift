@@ -169,11 +169,10 @@ struct RichInlineTextView: UIViewRepresentable {
 
             case .nostrProfile(let pubkey, _):
                 let resolvedProfile = profiles[pubkey] ?? ProfileRepository.shared.get(pubkey)
-                // Unresolved mentions render as `@…` rather than `@<8-hex>…`.
-                // The hex prefix was hard to read and visibly mutated to a real
-                // handle a second later when the lazy profile fetch landed; an
-                // ellipsis is calmer and reads as a clear "loading" state.
-                let name = resolvedProfile?.displayString ?? "\u{2026}"
+                // Unresolved mentions fall back to a short npub instead of a
+                // bare ellipsis: a stable identifier the reader can match
+                // against other surfaces, and which never exposes hex.
+                let name = resolvedProfile?.displayString ?? Nip19.shortNpub(hex: pubkey)
                 var attrs = baseAttrs
                 attrs[.foregroundColor] = primaryColor
                 if let url = URL(string: "wisp-profile://\(pubkey)") {

@@ -137,7 +137,7 @@ struct QuotedNoteView: View {
                 HStack(spacing: 8) {
                     CachedAvatarView(url: profile?.picture, size: 24)
                     EmojiText(
-                        profile?.displayString ?? String(event.pubkey.prefix(8)) + "…",
+                        profile?.displayString ?? Nip19.shortNpub(hex: event.pubkey),
                         emojiMap: profile?.emojiMap ?? [:],
                         textStyle: .caption1,
                         weight: .semibold

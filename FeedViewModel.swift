@@ -317,11 +317,55 @@ final class FeedViewModel {
 
         Task { await EventPersistQueue.shared.enqueue(batch) }
 
+        // Batch every referenced pubkey across the flushed events into a
+        // single kind-0 fan-out. The previous per-event loop fired one REQ
+        // per missing author, which on a cold-start with 100+ unique
+        // authors meant 100+ separate sockets to the indexer relays before
+        // the names rendered. Single batched query is dramatically faster.
         let captured = batch
         Task { [weak self] in
-            guard let self else { return }
-            for event in captured {
-                await self.requestReferencedProfiles(in: event)
+            await self?.fetchMissingProfilesBatched(for: captured)
+        }
+    }
+
+    /// Resolve every author / inner-repost author / npub mention referenced
+    /// by `events` in one batched fetch. Hits the local cache first; only the
+    /// truly-missing pubkeys go to the indexer relays, chunked by 150.
+    private func fetchMissingProfilesBatched(for events: [NostrEvent]) async {
+        var needed = Set<String>()
+        for event in events {
+            for pk in Self.referencedAuthorPubkeys(in: event) where profiles[pk] == nil {
+                needed.insert(pk)
+            }
+        }
+        guard !needed.isEmpty else { return }
+
+        var stillMissing: [String] = []
+        for pk in needed {
+            if let cached = profileRepo.get(pk) {
+                profiles[pk] = cached
+            } else {
+                stillMissing.append(pk)
+            }
+        }
+        guard !stillMissing.isEmpty else { return }
+
+        for chunk in stillMissing.chunked(into: 150) {
+            let results = await RelayPool.query(
+                relays: Self.indexerRelays,
+                filter: NostrFilter(kinds: [0], authors: chunk),
+                timeout: 10
+            )
+            var bestByAuthor: [String: NostrEvent] = [:]
+            for event in results where event.kind == 0 {
+                if let existing = bestByAuthor[event.pubkey],
+                   event.createdAt <= existing.createdAt { continue }
+                bestByAuthor[event.pubkey] = event
+            }
+            for (_, event) in bestByAuthor {
+                if let profile = profileRepo.updateFromEvent(event) {
+                    profiles[event.pubkey] = profile
+                }
             }
         }
     }

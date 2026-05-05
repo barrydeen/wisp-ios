@@ -891,7 +891,7 @@ struct PostCardView: View {
     }
 
     private func npubShort(_ pubkey: String) -> String {
-        String(pubkey.prefix(8)) + "\u{2026}"
+        Nip19.shortNpub(hex: pubkey)
     }
 
     private func handleCastVote(_ pollEvent: NostrEvent, optionIds: [String]) {
@@ -1134,7 +1134,7 @@ private struct NoteDetailsPanel: View {
     }
 
     private func short(_ pubkey: String) -> String {
-        String(pubkey.prefix(8)) + "\u{2026}"
+        Nip19.shortNpub(hex: pubkey)
     }
 
     private func hostname(of relay: String) -> String {

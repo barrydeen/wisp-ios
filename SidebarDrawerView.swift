@@ -38,7 +38,7 @@ struct SidebarDrawerView: View {
     private var hasEmbeddedWallet: Bool { false }
     private var displayName: String { profile?.displayString ?? truncatedPubkey }
     private var truncatedPubkey: String {
-        String(pubkey.prefix(8)) + "\u{2026}"
+        Nip19.shortNpub(hex: pubkey)
     }
     private var npub: String {
         if let data = Hex.decode(pubkey), let s = Nip19.npubEncode(pubkey: Array(data)) {
@@ -295,9 +295,10 @@ struct SidebarDrawerView: View {
                         onSwitchAccount(kp)
                     }
                 } label: {
+                    let acctProfile = ProfileRepository.shared.get(acctPubkey)
                     HStack(spacing: 12) {
-                        CachedAvatarView(url: nil, size: 32)
-                        Text(String(acctPubkey.prefix(12)) + "\u{2026}")
+                        CachedAvatarView(url: acctProfile?.picture, size: 32)
+                        Text(acctProfile?.displayString ?? Nip19.shortNpub(hex: acctPubkey))
                             .font(.system(size: 14))
                             .foregroundStyle(.primary)
                         Spacer()

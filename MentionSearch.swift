@@ -29,7 +29,7 @@ enum MentionSearch {
             let p = profiles[pk]
             let name = p?.displayName?.nilIfEmpty
                 ?? p?.name?.nilIfEmpty
-                ?? "npub" + String(pk.prefix(8)) + "\u{2026}"
+                ?? Nip19.shortNpub(hex: pk)
             let score = matchScore(query: q, name: name, secondary: p?.name)
             if q.isEmpty || score > 0 {
                 let cand = MentionCandidate(

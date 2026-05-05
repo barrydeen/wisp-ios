@@ -73,6 +73,31 @@ nonisolated enum Nip19 {
         return try? bech32Encode(hrp: "npub", data: pubkey)
     }
 
+    /// Cache the bech32 encode + truncate so each visible row pays the
+    /// per-event cost once instead of every layout pass.
+    private static let shortNpubCache = NSCache<NSString, NSString>()
+
+    /// Display-only short form of a hex pubkey: `npub1abcd…wxyz`.
+    /// Used everywhere the UI would otherwise fall back to truncated
+    /// hex — never expose hex pubkeys directly to the user.
+    /// Falls back to a hex prefix only when the input isn't a valid
+    /// 32-byte hex pubkey, which shouldn't happen in practice.
+    static func shortNpub(hex: String) -> String {
+        let key = hex as NSString
+        if let cached = shortNpubCache.object(forKey: key) {
+            return cached as String
+        }
+        guard let data = Hex.decode(hex), data.count == 32,
+              let full = npubEncode(pubkey: Array(data)) else {
+            return String(hex.prefix(8)) + "\u{2026}"
+        }
+        let prefix = full.prefix(9)
+        let suffix = full.suffix(4)
+        let result = "\(prefix)\u{2026}\(suffix)"
+        shortNpubCache.setObject(result as NSString, forKey: key)
+        return result
+    }
+
     static func nsecEncode(privkey: [UInt8]) -> String? {
         return try? bech32Encode(hrp: "nsec", data: privkey)
     }

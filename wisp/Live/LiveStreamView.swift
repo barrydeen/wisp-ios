@@ -292,7 +292,7 @@ private struct StreamInfoBar: View {
         HStack(spacing: 10) {
             CachedAvatarView(url: profile?.picture, size: 28)
             VStack(alignment: .leading, spacing: 1) {
-                Text(profile?.displayName ?? String(hostPubkey.prefix(8)))
+                Text(profile?.displayName ?? Nip19.shortNpub(hex: hostPubkey))
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
                 if let status, status.lowercased() == "live" {
@@ -421,7 +421,7 @@ private struct LiveChatBubble: View {
             CachedAvatarView(url: profile?.picture, size: 28)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    Text(profile?.displayName ?? String(message.senderPubkey.prefix(8)))
+                    Text(profile?.displayName ?? Nip19.shortNpub(hex: message.senderPubkey))
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(nameColor)
                     Text(timeText)
@@ -479,7 +479,7 @@ private struct LiveChatBubble: View {
             Image(systemName: "bolt.fill")
                 .foregroundStyle(Color.wispZapColor)
             VStack(alignment: .leading, spacing: 2) {
-                Text("\(message.zapAmountSats) sats from \(profile?.displayName ?? String(message.senderPubkey.prefix(8)))")
+                Text("\(message.zapAmountSats) sats from \(profile?.displayName ?? Nip19.shortNpub(hex: message.senderPubkey))")
                     .font(.caption.weight(.semibold))
                 if !message.content.isEmpty {
                     Text(message.content)
@@ -519,7 +519,7 @@ private struct ReplyQuoteBar: View {
                 .fill(Color.wispPrimary)
                 .frame(width: 3)
             VStack(alignment: .leading, spacing: 1) {
-                Text("Replying to \(profile?.displayName ?? String(message.senderPubkey.prefix(8)))")
+                Text("Replying to \(profile?.displayName ?? Nip19.shortNpub(hex: message.senderPubkey))")
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(Color.wispPrimary)
                 Text(message.content)

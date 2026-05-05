@@ -243,7 +243,7 @@ struct SafetySettingsView: View {
 
     private func truncated(_ pubkey: String) -> String {
         guard pubkey.count > 16 else { return pubkey }
-        return String(pubkey.prefix(8)) + "\u{2026}" + String(pubkey.suffix(8))
+        return Nip19.shortNpub(hex: pubkey)
     }
 
     private func timeAgo(_ epoch: Int) -> String {

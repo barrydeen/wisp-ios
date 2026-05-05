@@ -133,7 +133,7 @@ struct DmConversationView: View {
 
     private func shortPubkey(_ hex: String) -> String {
         guard hex.count >= 8 else { return hex }
-        return String(hex.prefix(8)) + "…"
+        return Nip19.shortNpub(hex: hex)
     }
 }
 

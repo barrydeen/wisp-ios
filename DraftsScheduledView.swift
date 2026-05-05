@@ -176,7 +176,7 @@ private struct DraftRow: View {
             CachedAvatarView(url: profile?.picture, size: 36)
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
-                    Text(profile?.displayString ?? String(authorPubkey.prefix(8)) + "\u{2026}")
+                    Text(profile?.displayString ?? Nip19.shortNpub(hex: authorPubkey))
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
@@ -250,7 +250,7 @@ private struct ScheduledPostRow: View {
             CachedAvatarView(url: profile?.picture, size: 36)
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 6) {
-                    Text(profile?.displayString ?? String(event.pubkey.prefix(8)) + "\u{2026}")
+                    Text(profile?.displayString ?? Nip19.shortNpub(hex: event.pubkey))
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(1)

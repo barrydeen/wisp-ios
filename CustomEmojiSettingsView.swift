@@ -413,8 +413,7 @@ struct CustomEmojiSettingsView: View {
         let parts = addr.split(separator: ":")
         guard parts.count == 3 else { return addr }
         let pk = String(parts[1])
-        let head = String(pk.prefix(8))
-        return "\(parts[0]):\(head)\u{2026}:\(parts[2])"
+        return "\(parts[0]):\(Nip19.shortNpub(hex: pk)):\(parts[2])"
     }
 
     private func isValidShortcode(_ s: String) -> Bool {
