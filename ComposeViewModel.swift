@@ -155,6 +155,14 @@ final class ComposeViewModel {
             }
         }
         Task { await EmojiRepository.shared.refresh(for: keypair.pubkey) }
+        // Pre-warm follow profiles so @-mention search can match by name
+        // even for follows whose kind-0 hasn't been pulled in by the feed
+        // path yet. Without this, MentionSearch falls through to the npub
+        // fallback for unloaded follows and can't match user-typed names.
+        let follows = FollowsCache.shared.follows(for: keypair.pubkey)
+        if !follows.isEmpty {
+            Task { _ = await ProfileRepository.shared.ensure(follows) }
+        }
         // Default mention popup state: empty until the user types `@`.
     }
 
