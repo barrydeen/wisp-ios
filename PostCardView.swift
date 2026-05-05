@@ -18,6 +18,11 @@ struct PostCardView: View {
     /// ("Mar 5, 2026 · 8:52 PM") instead of a relative offset. Used by
     /// ThreadView's focal row to flag it as the canonical post for the screen.
     var useAbsoluteTimestamp: Bool = false
+    /// When set, overrides every other reply-count source for the action-bar
+    /// chat bubble. ThreadView passes the focal's non-blocked direct-reply
+    /// count so the bubble matches the visible REPLIES list — without it
+    /// the engagement repo / network total would still show blocked authors.
+    var forcedReplyCount: Int? = nil
     var onProfileTap: ((String) -> Void)? = nil
     var onNoteTap: ((String) -> Void)? = nil
     var onHashtagTap: ((String) -> Void)? = nil
@@ -417,9 +422,9 @@ struct PostCardView: View {
             Button {
                 activeSheet = .replyCompose
             } label: {
-                let replyCount = repoBox.counts.replies > 0 ? repoBox.counts.replies : (engagement?.replies ?? 0)
+                let replyCount = forcedReplyCount ?? (repoBox.counts.replies > 0 ? repoBox.counts.replies : (engagement?.replies ?? 0))
                 actionItem(
-                    icon: replyCount > 0 ? "bubble.right.fill" : "bubble.right",
+                    icon: "bubble.right",
                     count: replyCount > 0 ? replyCount : nil,
                     tint: replyCount > 0 ? Color.wispPrimary : nil
                 )

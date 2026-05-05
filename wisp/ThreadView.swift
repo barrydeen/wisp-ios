@@ -68,12 +68,17 @@ struct ThreadView: View {
 
                         // Section header for replies — replaces the previous
                         // "X replies" caption tucked under the focal card.
-                        if !viewModel.replies.isEmpty {
+                        // Hidden when every direct reply is from a blocked
+                        // author so the thread reads as no-replies.
+                        if viewModel.visibleRepliesCount > 0 {
                             repliesSectionHeader
                         }
 
                         // Replies — direct children of the focal, each tappable to push.
-                        ForEach(viewModel.replies) { row in
+                        // Blocked rows are dropped entirely (no placeholder) so a
+                        // mixed thread doesn't show "Post from blocked user" entries
+                        // alongside the visible ones.
+                        ForEach(viewModel.replies.filter { !$0.isBlocked }) { row in
                             replyRow(row)
                                 .id(row.id)
                             Divider()
@@ -85,7 +90,7 @@ struct ThreadView: View {
                         }
 
                         if !viewModel.isLoading
-                            && viewModel.replies.isEmpty
+                            && viewModel.visibleRepliesCount == 0
                             && viewModel.focal != nil {
                             emptyState
                         }
@@ -233,6 +238,7 @@ struct ThreadView: View {
                     profiles: viewModel.profiles,
                     engagement: engagement(for: row.event.id),
                     useAbsoluteTimestamp: true,
+                    forcedReplyCount: viewModel.visibleRepliesCount,
                     onProfileTap: { _ in },
                     // Tapping a quoted note inside the focal pushes that
                     // note as its own focal, same as tapping a reply row.
@@ -258,7 +264,7 @@ struct ThreadView: View {
                 .foregroundStyle(.secondary)
             Text("·")
                 .foregroundStyle(.secondary)
-            Text("\(viewModel.replies.count)")
+            Text("\(viewModel.visibleRepliesCount)")
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(.secondary)
             Spacer()

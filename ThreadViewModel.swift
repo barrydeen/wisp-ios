@@ -16,6 +16,10 @@ final class ThreadViewModel {
     var focal: ThreadRow?
     /// Direct replies to the focal, sorted oldest first.
     var replies: [ThreadRow] = []
+    /// Count of direct replies excluding blocked-author rows. Used by the
+    /// thread UI so an all-blocked thread reads as "no replies" rather than
+    /// surfacing a count followed by suppressed entries.
+    var visibleRepliesCount: Int { replies.lazy.filter { !$0.isBlocked }.count }
     /// Replies hidden by the on-device spam filter, surfaced behind a "X hidden" expander.
     var hiddenSpamReplies: [ThreadRow] = []
     /// Direct-child counts per event id, derived from the local `events` map.
