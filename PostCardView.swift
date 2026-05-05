@@ -73,6 +73,26 @@ struct PostCardView: View {
     private static let longPostCharThreshold = 600
     private static let longPostCollapsedHeight: CGFloat = 280
 
+    /// Treat a post as "long" when it has at least one image / video whose
+    /// NIP-92 imeta `dim` is taller than wide — those render at intrinsic
+    /// height inside the card and dominate the feed otherwise (a single
+    /// portrait screenshot can scroll for screenfuls). Landscape media
+    /// stays uncollapsed since it sits within a normal card height.
+    static func eventHasTallMedia(_ event: NostrEvent) -> Bool {
+        for tag in event.tags where tag.first == "imeta" {
+            for entry in tag.dropFirst() where entry.hasPrefix("dim ") {
+                let dim = entry.dropFirst(4)
+                let parts = dim.split(separator: "x", maxSplits: 1)
+                guard parts.count == 2,
+                      let w = Double(parts[0]),
+                      let h = Double(parts[1]),
+                      w > 0 else { continue }
+                if h / w >= 1.0 { return true }
+            }
+        }
+        return false
+    }
+
     private struct ActionAlert: Identifiable {
         let id = UUID()
         let title: String
@@ -232,6 +252,7 @@ struct PostCardView: View {
             VStack(alignment: .leading, spacing: 8) {
                 if !displayEvent.content.isEmpty || !displayEvent.tags.isEmpty {
                     let isLong = displayEvent.content.count > Self.longPostCharThreshold
+                                 || Self.eventHasTallMedia(displayEvent)
                     let collapsed = isLong && !contentExpanded
                     VStack(alignment: .leading, spacing: 6) {
                         RichContentView(

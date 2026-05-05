@@ -28,6 +28,9 @@ enum ProfileTab: String, CaseIterable, Hashable {
 
 struct NotesTabView: View {
     @Bindable var viewModel: ProfileViewModel
+    var onProfileTap: ((String) -> Void)? = nil
+    var onNoteTap: ((String) -> Void)? = nil
+    var onHashtagTap: ((String) -> Void)? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -46,7 +49,10 @@ struct NotesTabView: View {
                                     event: event,
                                     profile: viewModel.profiles[event.pubkey],
                                     profiles: viewModel.profiles,
-                                    engagement: viewModel.engagement[event.id]
+                                    engagement: viewModel.engagement[event.id],
+                                    onProfileTap: onProfileTap,
+                                    onNoteTap: onNoteTap,
+                                    onHashtagTap: onHashtagTap
                                 )
                             }
                             .buttonStyle(.plain)
@@ -70,7 +76,10 @@ struct NotesTabView: View {
                                     event: event,
                                     profile: viewModel.profiles[event.pubkey],
                                     profiles: viewModel.profiles,
-                                    engagement: viewModel.engagement[event.id]
+                                    engagement: viewModel.engagement[event.id],
+                                    onProfileTap: onProfileTap,
+                                    onNoteTap: onNoteTap,
+                                    onHashtagTap: onHashtagTap
                                 )
                             }
                             .buttonStyle(.plain)
@@ -96,6 +105,9 @@ struct NotesTabView: View {
 
 struct RepliesTabView: View {
     @Bindable var viewModel: ProfileViewModel
+    var onProfileTap: ((String) -> Void)? = nil
+    var onNoteTap: ((String) -> Void)? = nil
+    var onHashtagTap: ((String) -> Void)? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -121,7 +133,10 @@ struct RepliesTabView: View {
                                     event: event,
                                     profile: viewModel.profiles[event.pubkey],
                                     profiles: viewModel.profiles,
-                                    engagement: viewModel.engagement[event.id]
+                                    engagement: viewModel.engagement[event.id],
+                                    onProfileTap: onProfileTap,
+                                    onNoteTap: onNoteTap,
+                                    onHashtagTap: onHashtagTap
                                 )
                             }
                             .buttonStyle(.plain)
@@ -145,7 +160,10 @@ struct RepliesTabView: View {
                                     event: event,
                                     profile: viewModel.profiles[event.pubkey],
                                     profiles: viewModel.profiles,
-                                    engagement: viewModel.engagement[event.id]
+                                    engagement: viewModel.engagement[event.id],
+                                    onProfileTap: onProfileTap,
+                                    onNoteTap: onNoteTap,
+                                    onHashtagTap: onHashtagTap
                                 )
                             }
                             .buttonStyle(.plain)

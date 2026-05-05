@@ -151,7 +151,12 @@ struct QuotedNoteView: View {
                 if event.kind == 9735 {
                     zapReceiptBody(event)
                 } else {
-                    let isLong = event.content.count > Self.longPostCharThreshold
+                    // "Long" for an embedded preview is text past the threshold OR
+                    // ANY inline media (NIP-92 imeta image / video). Without the
+                    // media check, a short-text + image embedded note expands to
+                    // its full intrinsic height and dominates the parent card.
+                    let hasMedia = event.tags.contains { $0.first == "imeta" }
+                    let isLong = event.content.count > Self.longPostCharThreshold || hasMedia
                     let collapsed = isLong && !contentExpanded
                     VStack(alignment: .leading, spacing: 6) {
                         RichContentView(

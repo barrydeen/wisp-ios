@@ -183,9 +183,19 @@ struct ProfileView: View {
         } else {
             switch selectedTab {
             case .notes:
-                NotesTabView(viewModel: viewModel)
+                NotesTabView(
+                    viewModel: viewModel,
+                    onProfileTap: onProfileTap,
+                    onNoteTap: onNoteTap,
+                    onHashtagTap: onHashtagTap
+                )
             case .replies:
-                RepliesTabView(viewModel: viewModel)
+                RepliesTabView(
+                    viewModel: viewModel,
+                    onProfileTap: onProfileTap,
+                    onNoteTap: onNoteTap,
+                    onHashtagTap: onHashtagTap
+                )
             case .gallery:
                 GalleryTabView(viewModel: viewModel)
             case .media:
