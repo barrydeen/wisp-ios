@@ -38,6 +38,7 @@ struct RichInlineTextView: UIViewRepresentable {
             case .hashtag(let t):             hasher.combine(1); hasher.combine(t)
             case .nostrProfile(let pk, _):    hasher.combine(2); hasher.combine(pk)
             case .inlineLink(let u):          hasher.combine(3); hasher.combine(u)
+            case .link(let u):                hasher.combine(7); hasher.combine(u)
             case .customEmoji(let s, let u):  hasher.combine(4); hasher.combine(s); hasher.combine(u)
             default:                          hasher.combine(99)
             }
@@ -182,7 +183,11 @@ struct RichInlineTextView: UIViewRepresentable {
                 combined.append(NSAttributedString(string: "@", attributes: attrs))
                 appendNameWithEmojis(name, into: combined, attrs: attrs, emojiMap: mentionMap, baseFont: baseFont)
 
-            case .inlineLink(let url):
+            case .inlineLink(let url), .link(let url):
+                // `.link` reaches us when the parent passed
+                // `showLinkPreviews: false` and RichContentView folded it
+                // into the inline run rather than rendering a card; treat
+                // it as a tappable inline URL just like `.inlineLink`.
                 var attrs = baseAttrs
                 attrs[.foregroundColor] = linkColor
                 if let u = URL(string: url) {

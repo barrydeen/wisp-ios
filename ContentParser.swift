@@ -270,28 +270,18 @@ enum ContentParser {
     }
 
     private static func isStandaloneUrl(content: String, range: NSRange) -> Bool {
-        // All position math stays in NSString (UTF-16) to avoid mixing
-        // Swift Character distances with NSString offsets — that mismatch
-        // breaks for content with multi-code-unit emoji (e.g. ⬛, 🟪),
-        // because Swift counts each emoji as one Character while NSString
-        // counts it as two code units, and the resulting prefix slice
-        // includes emoji that fail `isWhitespace`.
+        // The URL qualifies for a block-level preview card when it ENDS its
+        // line — i.e. the suffix from URL-end up to the next newline (or EOF)
+        // is pure whitespace. We don't require the prefix to be empty too:
+        // many posts read "…check it out: https://…" with the URL trailing
+        // a sentence on the same line, and those should still get a card.
+        // Mid-sentence URLs (text follows on the same line) stay inline.
+        //
+        // Position math stays in NSString (UTF-16) to avoid mixing Swift
+        // Character distances with NSString offsets — multi-code-unit
+        // emoji (⬛, 🟪) count as 1 Character but 2 code units and would
+        // otherwise misalign the slice and trip isWhitespace.
         let nsContent = content as NSString
-        let beforeRange = NSRange(location: 0, length: range.location)
-        let lastNewline = nsContent.range(
-            of: "\n",
-            options: .backwards,
-            range: beforeRange
-        )
-        let prefixStart = lastNewline.location == NSNotFound
-            ? 0
-            : lastNewline.location + lastNewline.length
-        let prefix = nsContent.substring(with: NSRange(
-            location: prefixStart,
-            length: range.location - prefixStart
-        ))
-        if !prefix.allSatisfy(\.isWhitespace) { return false }
-
         let afterStart = range.location + range.length
         let afterRange = NSRange(location: afterStart, length: nsContent.length - afterStart)
         let firstNewline = nsContent.range(

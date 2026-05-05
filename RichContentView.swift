@@ -102,10 +102,10 @@ struct RichContentView: View {
                     for m in run { groups.append(.block(m)) }
                 }
                 i = j
-            } else if Self.isInline(seg) {
+            } else if isInlineForRender(seg) {
                 var run = [seg]
                 var j = i + 1
-                while j < segments.count, Self.isInline(segments[j]) {
+                while j < segments.count, isInlineForRender(segments[j]) {
                     run.append(segments[j])
                     j += 1
                 }
@@ -117,6 +117,18 @@ struct RichContentView: View {
             }
         }
         return groups
+    }
+
+    /// Surfaces like the profile bio set `showLinkPreviews: false` — when
+    /// previews are off, `.link` segments shouldn't claim their own block
+    /// row (each row picks up the VStack's 8pt spacing, which stacks into
+    /// painful gaps in a bio with several lines that end in URLs). Fold
+    /// them into the surrounding inline text run so the bio reads as one
+    /// continuous block.
+    private func isInlineForRender(_ seg: ContentSegment) -> Bool {
+        if Self.isInline(seg) { return true }
+        if !showLinkPreviews, case .link = seg { return true }
+        return false
     }
 
     private static func isMedia(_ seg: ContentSegment) -> Bool {
