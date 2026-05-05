@@ -22,6 +22,10 @@ final class WalletStore {
     /// next to the NWC logo when set. Nil for Spark or before the first
     /// `get_info` round-trip lands.
     private(set) var nwcNodeAlias: String?
+    /// Method names the NWC wallet service advertised in its last
+    /// `get_info` response. Rendered as chips in wallet settings so the
+    /// user can see what the connection actually supports.
+    private(set) var nwcMethods: [String] = []
 
     private var wallet: Wallet?
     private var statusTask: Task<Void, Never>?
@@ -79,6 +83,14 @@ final class WalletStore {
         (wallet as? SparkWallet)?.loadMnemonic()
     }
 
+    /// First 16 hex chars of the SHA-256 of the Spark wallet's mnemonic.
+    /// Same format used for the NIP-78 backup d-tag, so the user sees the
+    /// same identifier surfaced in their cross-device backup. Nil for NWC.
+    var sparkWalletId: String? {
+        guard let mnemonic = sparkMnemonic else { return nil }
+        return Nip78Backup.computeWalletId(mnemonic)
+    }
+
     // MARK: - Disconnect / delete
 
     /// Disconnect the wallet, clear all credentials, and reset mode to nil so the
@@ -102,6 +114,7 @@ final class WalletStore {
         transactions = []
         lightningAddress = nil
         nwcNodeAlias = nil
+        nwcMethods = []
         relayBackupSearchState = .idle
         relayBackupPublishState = .idle
     }
@@ -172,11 +185,14 @@ final class WalletStore {
     func refreshNwcNodeAlias() async {
         guard let nwc = wallet as? NwcWallet else {
             nwcNodeAlias = nil
+            nwcMethods = []
             return
         }
         nwcNodeAlias = nwc.nodeAlias
+        nwcMethods = nwc.supportedMethods
         await nwc.fetchNodeAlias()
         nwcNodeAlias = nwc.nodeAlias
+        nwcMethods = nwc.supportedMethods
     }
 
     func checkLightningAddressAvailable(username: String) async -> Bool {

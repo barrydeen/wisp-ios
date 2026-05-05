@@ -54,6 +54,7 @@ struct WalletSettingsView: View {
     @State private var showDeleteAlert = false
     @State private var showRemoveAddressAlert = false
     @State private var showNwcDetails = false
+    @State private var showSparkDetails = false
     @AppStorage private var balanceHidden: Bool
     @AppStorage("walletBalanceUnit") private var balanceUnitRaw: String = WalletBalanceUnit.sats.rawValue
 
@@ -75,6 +76,7 @@ struct WalletSettingsView: View {
             VStack(alignment: .leading, spacing: 24) {
                 if store.mode == .spark {
                     lightningAddressSection
+                    sparkInfoSection
                 }
                 if store.mode == .nwc {
                     nwcConnectionSection
@@ -237,7 +239,7 @@ struct WalletSettingsView: View {
                         .scaledToFit()
                         .frame(width: 28, height: 28)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text((store.nwcNodeAlias?.isEmpty == false ? store.nwcNodeAlias : nil) ?? "NWC wallet")
+                        Text((store.nwcNodeAlias?.isEmpty == false ? store.nwcNodeAlias : nil) ?? "Nostr Wallet Connect")
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.primary)
                             .lineLimit(1)
@@ -270,55 +272,105 @@ struct WalletSettingsView: View {
 
     @ViewBuilder
     private func nwcDetailsList(_ conn: NwcConnection) -> some View {
+        let serviceHex = Hex.encode(Data(conn.walletServicePubkey))
+        let clientHex = Hex.encode(Data(conn.clientPubkey))
+        let serviceNpub = Nip19.npubEncode(pubkey: Array(conn.walletServicePubkey)) ?? serviceHex
+        let clientNpub = Nip19.npubEncode(pubkey: Array(conn.clientPubkey)) ?? clientHex
+
         VStack(alignment: .leading, spacing: 0) {
-            nwcDetailRow(
+            NwcDetailChip(
                 label: "Service pubkey",
-                value: nwcShortNpub(hex: Hex.encode(Data(conn.walletServicePubkey)))
+                display: Nip19.shortNpub(hex: serviceHex),
+                copyValue: serviceNpub
             )
             Divider().opacity(0.25).padding(.leading, 16)
-            nwcDetailRow(
-                label: conn.relays.count == 1 ? "Relay" : "Relays",
-                value: conn.relays.joined(separator: "\n"),
-                multiline: true
+            NwcDetailChip(
+                label: "Client pubkey",
+                display: Nip19.shortNpub(hex: clientHex),
+                copyValue: clientNpub
             )
+            ForEach(Array(conn.relays.enumerated()), id: \.offset) { idx, relay in
+                Divider().opacity(0.25).padding(.leading, 16)
+                NwcDetailChip(
+                    label: conn.relays.count == 1 ? "Relay" : "Relay \(idx + 1)",
+                    display: relay,
+                    copyValue: relay
+                )
+            }
             Divider().opacity(0.25).padding(.leading, 16)
-            nwcDetailRow(
+            NwcDetailChip(
                 label: "Encryption",
-                value: conn.encryption == .nip44 ? "NIP-44" : "NIP-04"
+                display: conn.encryption == .nip44 ? "NIP-44" : "NIP-04",
+                copyValue: conn.encryption == .nip44 ? "NIP-44" : "NIP-04"
             )
             if let lud = conn.lud16, !lud.isEmpty {
                 Divider().opacity(0.25).padding(.leading, 16)
-                nwcDetailRow(label: "Lightning address", value: lud)
+                NwcDetailChip(label: "Lightning address", display: lud, copyValue: lud)
+            }
+            if !store.nwcMethods.isEmpty {
+                Divider().opacity(0.25).padding(.leading, 16)
+                supportedMethodsRow(store.nwcMethods)
             }
         }
     }
 
-    private func nwcDetailRow(label: String, value: String, multiline: Bool = false) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            Text(label)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .frame(width: 110, alignment: .leading)
-            Text(value)
-                .font(.system(.caption, design: .monospaced))
-                .foregroundStyle(.primary)
-                .lineLimit(multiline ? nil : 1)
-                .truncationMode(.middle)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
+    // MARK: - Spark wallet info (Spark only)
+
+    private var sparkInfoSection: some View {
+        settingsGroup(header: "Wallet Info") {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) { showSparkDetails.toggle() }
+            } label: {
+                HStack(spacing: 12) {
+                    Image("SparkBreezLogo")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(height: 22)
+                    Spacer(minLength: 0)
+                    Image(systemName: showSparkDetails ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if showSparkDetails {
+                Divider().opacity(0.25).padding(.leading, 16)
+                if let walletId = store.sparkWalletId {
+                    NwcDetailChip(label: "Wallet ID", display: walletId, copyValue: walletId)
+                    Divider().opacity(0.25).padding(.leading, 16)
+                }
+                NwcDetailChip(label: "Network", display: "Mainnet", copyValue: "mainnet")
+                Divider().opacity(0.25).padding(.leading, 16)
+                NwcDetailChip(label: "SDK version", display: BreezConfig.sdkVersion, copyValue: BreezConfig.sdkVersion)
+            }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
     }
 
-    /// Inlined npub-short helper. Mirrors the one introduced on PR #63;
-    /// kept local so this branch doesn't depend on it.
-    private func nwcShortNpub(hex: String) -> String {
-        guard let data = Hex.decode(hex), data.count == 32,
-              let full = Nip19.npubEncode(pubkey: Array(data)) else {
-            return String(hex.prefix(8)) + "\u{2026}"
+    /// Chip-style display of NIP-47 methods the wallet service advertised
+    /// in its `get_info` response. Wraps to multiple lines as needed.
+    private func supportedMethodsRow(_ methods: [String]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Supported methods")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            FlowLayout(spacing: 6) {
+                ForEach(methods, id: \.self) { method in
+                    Text(method)
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(Color.wispOnSurface)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(Color.wispSurfaceVariant.opacity(0.7), in: Capsule())
+                }
+            }
         }
-        return "\(full.prefix(9))\u{2026}\(full.suffix(4))"
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
     }
 
     // MARK: - Display
@@ -567,6 +619,8 @@ struct WalletSettingsView: View {
                         .resizable()
                         .scaledToFit()
                         .frame(height: 22)
+                        .saturation(0)
+                        .opacity(0.55)
                     Text("Nostr Wallet Connect")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
@@ -576,6 +630,8 @@ struct WalletSettingsView: View {
                     .resizable()
                     .scaledToFit()
                     .frame(height: 18)
+                    .saturation(0)
+                    .opacity(0.55)
                 Text("Powered by Breez SDK v\(BreezConfig.sdkVersion)")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
@@ -767,6 +823,55 @@ struct LightningAddressSetupSheet: View {
             dismiss()
         } catch {
             registrationError = error.localizedDescription
+        }
+    }
+}
+
+// MARK: - NWC detail chip
+
+/// Tap-to-copy row inside the NWC connection details panel. Shows a
+/// truncated value, copies the full value to the clipboard on tap, and
+/// flips the trailing icon to a green checkmark for a beat as feedback.
+private struct NwcDetailChip: View {
+    let label: String
+    /// What's shown in the row (e.g. `npub1abcd…wxyz`).
+    let display: String
+    /// What gets copied (full unshortened value).
+    let copyValue: String
+
+    @State private var copied = false
+
+    var body: some View {
+        Button(action: copy) {
+            HStack(alignment: .center, spacing: 12) {
+                Text(label)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 110, alignment: .leading)
+                Text(display)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(copied ? Color.green : .secondary)
+                    .frame(width: 20)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func copy() {
+        UIPasteboard.general.string = copyValue
+        withAnimation(.easeInOut(duration: 0.15)) { copied = true }
+        Task {
+            try? await Task.sleep(for: .seconds(1.4))
+            withAnimation(.easeInOut(duration: 0.2)) { copied = false }
         }
     }
 }
