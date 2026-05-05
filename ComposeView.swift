@@ -334,6 +334,7 @@ struct ComposeView: View {
                                 in: RoundedRectangle(cornerRadius: 12))
                 }
                 .buttonStyle(.plain)
+                .tint(Color(.secondaryLabel))
                 .padding(.horizontal, 12)
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -353,6 +354,7 @@ struct ComposeView: View {
                             .foregroundStyle(.secondary)
                         }
                         .buttonStyle(.plain)
+                        .tint(Color(.secondaryLabel))
                     }
                     .padding(.horizontal, 12)
                 }
@@ -512,6 +514,7 @@ struct ComposeView: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
+                .tint(Color(.secondaryLabel))
             }
 
             if !viewModel.pollEnabled {
