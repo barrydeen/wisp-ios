@@ -7,10 +7,10 @@ import UIKit
 struct RichInlineTextView: UIViewRepresentable {
     let segments: [ContentSegment]
     let profiles: [String: ProfileData]
-    /// When true, the underlying UITextView is `isSelectable = true`, which is
-    /// what UIKit requires for link / mention / hashtag taps to fire. Default
-    /// is false because feed cards wrap the whole content in a NavigationLink
-    /// and need taps to fall through. Profile bios (no enclosing link) opt in.
+    /// When true, taps on `@mention` / `#hashtag` / inline-URL ranges fire the
+    /// matching closure. Default is false because feed cards wrap the whole
+    /// content in a NavigationLink and need taps to fall through. Profile bios
+    /// (no enclosing link) opt in.
     var linksEnabled: Bool = false
     var onProfileTap: ((String) -> Void)? = nil
     var onNoteTap: ((String) -> Void)? = nil
@@ -77,23 +77,32 @@ struct RichInlineTextView: UIViewRepresentable {
         tv.backgroundColor = .clear
         tv.isEditable = false
         tv.isScrollEnabled = false
-        tv.isSelectable = linksEnabled
+        // UIKit's built-in link tap requires `isSelectable = true`, which
+        // wires up a long-press selection recognizer that competes with
+        // single-tap delivery and made short `@mention` links feel sluggish
+        // or unresponsive on real devices. We bypass it with our own tap
+        // recognizer in `ContentSizingTextView` so selection /
+        // `shouldInteractWith` stay off.
+        tv.isSelectable = false
         tv.dataDetectorTypes = []
         tv.textContainerInset = .zero
         tv.textContainer.lineFragmentPadding = 0
         tv.textContainer.lineBreakMode = .byWordWrapping
         tv.adjustsFontForContentSizeCategory = true
-        tv.delegate = context.coordinator
-        tv.linkTextAttributes = [
-            .foregroundColor: UIColor(Color.wispPrimary)
-        ]
         tv.setContentCompressionResistancePriority(.required, for: .vertical)
         tv.setContentHuggingPriority(.required, for: .vertical)
+        let coordinator = context.coordinator
+        tv.onLinkTap = { [weak coordinator] url in
+            guard coordinator?.parent.linksEnabled == true else { return }
+            coordinator?.dispatchLink(url)
+        }
+        tv.linksEnabled = linksEnabled
         return tv
     }
 
     func updateUIView(_ uiView: ContentSizingTextView, context: Context) {
         context.coordinator.parent = self
+        uiView.linksEnabled = linksEnabled
 
         let segSig = segmentSignature
         // Schedule emoji loads once per segment-set change, not on every
@@ -298,7 +307,7 @@ struct RichInlineTextView: UIViewRepresentable {
         return clean
     }
 
-    final class Coordinator: NSObject, UITextViewDelegate {
+    final class Coordinator: NSObject {
         var parent: RichInlineTextView
         var lastBuiltKey: Int = 0
         var lastBuiltAttributed: NSAttributedString?
@@ -308,25 +317,24 @@ struct RichInlineTextView: UIViewRepresentable {
             self.parent = parent
         }
 
-        func textView(_ textView: UITextView, shouldInteractWith URL: URL, in characterRange: NSRange, interaction: UITextItemInteraction) -> Bool {
-            guard interaction == .invokeDefaultAction else { return true }
-            let scheme = URL.scheme?.lowercased() ?? ""
+        /// Called by `ContentSizingTextView`'s tap recognizer with the URL
+        /// found at (or near) the tap point. Custom `wisp-*` schemes route
+        /// to the matching parent closure; everything else opens externally.
+        func dispatchLink(_ url: URL) {
+            let scheme = url.scheme?.lowercased() ?? ""
             switch scheme {
             case "wisp-profile":
-                let pubkey = URL.host ?? URL.absoluteString.replacingOccurrences(of: "wisp-profile://", with: "")
+                let pubkey = url.host ?? url.absoluteString.replacingOccurrences(of: "wisp-profile://", with: "")
                 parent.onProfileTap?(pubkey)
-                return false
             case "wisp-note":
-                let id = URL.host ?? URL.absoluteString.replacingOccurrences(of: "wisp-note://", with: "")
+                let id = url.host ?? url.absoluteString.replacingOccurrences(of: "wisp-note://", with: "")
                 parent.onNoteTap?(id)
-                return false
             case "wisp-hashtag":
-                let raw = URL.host ?? URL.absoluteString.replacingOccurrences(of: "wisp-hashtag://", with: "")
+                let raw = url.host ?? url.absoluteString.replacingOccurrences(of: "wisp-hashtag://", with: "")
                 let tag = raw.removingPercentEncoding ?? raw
                 parent.onHashtagTap?(tag)
-                return false
             default:
-                return true   // let system handle http/https/lightning/etc.
+                UIApplication.shared.open(url)
             }
         }
     }
@@ -335,40 +343,94 @@ struct RichInlineTextView: UIViewRepresentable {
 /// UITextView whose width is owned by SwiftUI's `sizeThatFits` proposal.
 /// We don't drive layout from `intrinsicContentSize` here because that races
 /// with SwiftUI's proposal and produces a single, unwrapped line.
+///
+/// Tap dispatch:
+/// - `linksEnabled = false` — view is invisible to hit testing; every touch
+///   falls through to the enclosing NavigationLink / button. This matches
+///   the historical behavior for surfaces that opt out of inline taps.
+/// - `linksEnabled = true` — `point(inside:)` returns true only when the
+///   tap is at or beside a `.link` character (with horizontal snap), so
+///   touches on plain text still fall through. The custom tap recognizer
+///   then dispatches the resolved URL via `onLinkTap`.
 final class ContentSizingTextView: UITextView {
+    var linksEnabled: Bool = false {
+        didSet { linkTapRecognizer.isEnabled = linksEnabled }
+    }
+    var onLinkTap: ((URL) -> Void)?
+
+    private lazy var linkTapRecognizer: UITapGestureRecognizer = {
+        let r = UITapGestureRecognizer(target: self, action: #selector(handleLinkTap(_:)))
+        r.cancelsTouchesInView = true
+        r.isEnabled = false
+        return r
+    }()
+
+    override init(frame: CGRect, textContainer: NSTextContainer?) {
+        super.init(frame: frame, textContainer: textContainer)
+        addGestureRecognizer(linkTapRecognizer)
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        addGestureRecognizer(linkTapRecognizer)
+    }
+
     override var intrinsicContentSize: CGSize {
         // Let SwiftUI control width via sizeThatFits; height too.
         CGSize(width: UIView.noIntrinsicMetric, height: UIView.noIntrinsicMetric)
     }
 
-    /// Only claim hit-test ownership over characters that carry a `.link`
-    /// attribute. Without this, UITextView's tap / selection gesture
-    /// recognizers absorb taps on plain body text and defer them while they
-    /// disambiguate against double-tap and long-press, which is what made
-    /// note cards in the feed need 2–3 taps before navigation fired. Returning
-    /// `false` here lets the touch fall through to the enclosing SwiftUI
-    /// `.onTapGesture` immediately, while taps on real links still reach
-    /// `textView(_:shouldInteractWith:)`.
+    @objc private func handleLinkTap(_ gesture: UITapGestureRecognizer) {
+        let point = gesture.location(in: self)
+        guard let url = nearbyLinkURL(at: point) else { return }
+        onLinkTap?(url)
+    }
+
+    /// Only claim hit-test ownership over points within reach of a `.link`
+    /// character. Plain-text taps fall through to the enclosing
+    /// NavigationLink, which is what made note cards in the feed responsive
+    /// in the first place.
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
         guard super.point(inside: point, with: event) else { return false }
-        guard let attr = attributedText, attr.length > 0 else { return false }
-        guard let position = closestPosition(to: point) else { return false }
-        let index = offset(from: beginningOfDocument, to: position)
-        guard index >= 0, index < attr.length else { return false }
+        guard linksEnabled else { return false }
+        return nearbyLinkURL(at: point) != nil
+    }
 
-        // Verify the tap actually landed on the glyph (not just the closest
-        // position in trailing whitespace at line-end). `firstRect(for:)`
-        // returns the visual rect for the single character; a small slop
-        // keeps edge taps usable.
+    /// Resolve a `.link` attribute at or beside the tap point. A short
+    /// `@mention` is only a few characters wide, so a fingertip aimed at it
+    /// often lands on the trailing space, the punctuation that follows, or
+    /// the gap between two lines — `closestPosition(to:)` then returns a
+    /// non-link character and the tap is rejected, falling through to the
+    /// surrounding card / link-preview and reading as "the URL stole my
+    /// link." We first probe the exact point with a generous slop, then
+    /// scan a short horizontal radius for nearby link characters so the
+    /// effective hit target around any link is closer to a real fingertip.
+    private func nearbyLinkURL(at point: CGPoint) -> URL? {
+        if let url = linkURL(atExactPoint: point) { return url }
+        let scanRadius: CGFloat = 18
+        let step: CGFloat = 4
+        var dx: CGFloat = step
+        while dx <= scanRadius {
+            if let url = linkURL(atExactPoint: CGPoint(x: point.x - dx, y: point.y)) { return url }
+            if let url = linkURL(atExactPoint: CGPoint(x: point.x + dx, y: point.y)) { return url }
+            dx += step
+        }
+        return nil
+    }
+
+    private func linkURL(atExactPoint point: CGPoint) -> URL? {
+        guard let attr = attributedText, attr.length > 0 else { return nil }
+        guard let position = closestPosition(to: point) else { return nil }
+        let index = offset(from: beginningOfDocument, to: position)
+        guard index >= 0, index < attr.length else { return nil }
         if let next = self.position(from: position, offset: 1),
            let range = textRange(from: position, to: next) {
             let rect = firstRect(for: range)
             if !rect.isNull, !rect.isInfinite,
-               !rect.insetBy(dx: -2, dy: -2).contains(point) {
-                return false
+               !rect.insetBy(dx: -4, dy: -8).contains(point) {
+                return nil
             }
         }
-
-        return attr.attributes(at: index, effectiveRange: nil)[.link] != nil
+        return attr.attributes(at: index, effectiveRange: nil)[.link] as? URL
     }
 }
