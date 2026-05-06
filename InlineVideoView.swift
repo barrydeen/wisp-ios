@@ -70,27 +70,35 @@ struct InlineVideoView: View {
                 CroppingVideoPlayer(player: player, gravity: videoGravity)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .onAppear {
-                        // Don't grab the AVAudioSession on appear — videos
-                        // start muted by default (per the global single-
-                        // unmuted rule) and shouldn't interrupt whatever the
-                        // user is listening to in another app (podcast,
-                        // music). Activation happens lazily on the
-                        // muted → unmuted transition below, when the user
-                        // actually wants this video's audio.
+                        // Pin the shared AVAudioSession to mixed mode so
+                        // silent (muted) playback coexists with whatever
+                        // the user is listening to in another app
+                        // (podcast, music). Without this, an earlier
+                        // exclusive-mode player (live stream, audio note,
+                        // tapped-unmute video) would have left the session
+                        // at `.playback` no-mix, and AVPlayer.play() under
+                        // that mode interrupts other apps even with
+                        // `isMuted = true`.
+                        MediaAudioSession.activateMixed()
                         player.isMuted = isMuted
                         player.play()
                     }
                     .onDisappear {
                         player.pause()
                     }
-                    .onChange(of: muteState.unmutedUrl) { _, _ in
+                    .onChange(of: muteState.unmutedUrl) { _, newValue in
                         let nowMuted = isMuted
-                        // Take the session only on the muted → unmuted
-                        // transition for THIS player. Skipping when we're
-                        // already unmuted prevents redundant `setActive`
-                        // calls on every other video's mute-state shuffle.
                         if !nowMuted, player.isMuted {
-                            MediaAudioSession.activatePlayback()
+                            // Just transitioned muted → unmuted on THIS
+                            // player. Take ownership of the session so
+                            // background audio actually pauses.
+                            MediaAudioSession.activateExclusive()
+                        } else if nowMuted, !player.isMuted, newValue == nil {
+                            // Just transitioned unmuted → muted (the
+                            // global slot was cleared). Drop back to mixed
+                            // so any background audio that ducked / paused
+                            // can resume.
+                            MediaAudioSession.activateMixed()
                         }
                         player.isMuted = nowMuted
                     }

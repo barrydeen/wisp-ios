@@ -15,11 +15,34 @@ import AVFoundation
 /// activate call also re-arms the session after interruptions (phone
 /// calls, route changes, other apps' audio).
 enum MediaAudioSession {
-    static func activatePlayback() {
+    /// Configure the shared session for silent or mixed playback so muted
+    /// videos don't pause whatever the user is listening to in another app
+    /// (podcast, music, audiobook). Idempotent — safe to call from every
+    /// inline player's `onAppear`. The user-explicit "take over" call is
+    /// `activateExclusive()`.
+    static func activateMixed() {
+        #if os(iOS) || os(tvOS) || os(visionOS)
+        let session = AVAudioSession.sharedInstance()
+        try? session.setCategory(.playback, mode: .moviePlayback, options: [.mixWithOthers])
+        try? session.setActive(true, options: [])
+        #endif
+    }
+
+    /// Take ownership of the audio session — pauses other apps' audio.
+    /// Called only when the user explicitly unmutes a video, plays an
+    /// audio note, or opens a fullscreen / live-stream player.
+    static func activateExclusive() {
         #if os(iOS) || os(tvOS) || os(visionOS)
         let session = AVAudioSession.sharedInstance()
         try? session.setCategory(.playback, mode: .moviePlayback, options: [])
         try? session.setActive(true, options: [])
         #endif
+    }
+
+    /// Backward-compatible alias. Existing call sites that use this name
+    /// (audio notes, fullscreen video, live stream) all want the
+    /// exclusive variant.
+    static func activatePlayback() {
+        activateExclusive()
     }
 }
