@@ -904,7 +904,7 @@ struct MainView: View {
                                 feedPath.append(ThreadRoute(eventId: event.id, authorPubkey: event.pubkey))
                             }
                             .onAppear {
-                                engagementRepo.markVisible(eventId: event.id, author: event.pubkey)
+                                engagementRepo.markVisible(event: event)
                                 if let idx = viewModel.events.firstIndex(where: { $0.id == event.id }),
                                    idx >= viewModel.events.count - 5 {
                                     switch viewModel.currentKind {

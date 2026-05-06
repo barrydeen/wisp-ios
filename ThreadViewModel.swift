@@ -7,12 +7,25 @@ final class ThreadViewModel {
     let keypair: Keypair
     let seedEventId: String
     let authorHint: String?
+    /// The canonical id of the focal note for this screen.
+    ///
+    /// Defaults to `seedEventId`. When the seed turns out to be a kind-6
+    /// repost — e.g. a notification or feed deep-link handed us the
+    /// wrapper id — `seedFromCache` unwraps the inner kind-1 and re-
+    /// anchors `focalEventId` to the inner id. All reply / ancestor /
+    /// engagement filtering keys off this id, because real replies
+    /// `e`-tag the inner kind-1, not the kind-6 wrapper. Without this,
+    /// the focal card could show "15 replies" while `rebuildSlices`
+    /// rendered an empty replies list (the count came from the
+    /// engagement query targeting the inner; the filter compared
+    /// reply targets against the wrapper id and excluded everything).
+    @ObservationIgnored private(set) var focalEventId: String
 
     var rootId: String
     var rootEvent: NostrEvent?
     /// Chain from root → focal-1, in order. Empty when the focal is the root.
     var ancestors: [ThreadRow] = []
-    /// The focal event for this screen — usually `events[seedEventId]`.
+    /// The focal event for this screen — usually `events[focalEventId]`.
     var focal: ThreadRow?
     /// Direct replies to the focal, sorted oldest first.
     var replies: [ThreadRow] = []
@@ -71,6 +84,7 @@ final class ThreadViewModel {
         self.seedEventId = seedEventId
         self.authorHint = authorHint
         self.rootId = seedEventId
+        self.focalEventId = seedEventId
         // Catch the user's own freshly-published replies the moment ComposeViewModel
         // broadcasts them — the live relay subscription often doesn't reflect outbound
         // events back, so without this the new reply only shows after a manual refresh.
@@ -167,7 +181,7 @@ final class ThreadViewModel {
         //    they don't have to serialize. Both feed events into the same
         //    `events` map; rebuildSlices fires per-ingest.
         let needRoot = rootEvent == nil
-        let needAncestors = seedEventId != rootId
+        let needAncestors = focalEventId != rootId
         if needRoot && needAncestors {
             async let rootFetch: Void = fetchRoot(from: initialRelays)
             async let ancestorFetch: Void = fetchAncestorChain(from: initialRelays)
@@ -309,7 +323,7 @@ final class ThreadViewModel {
         }
         // Default reply parent is the screen's focal, not the root. Each pushed
         // ThreadView replies to its own focal.
-        let defaultParent: NostrEvent = events[seedEventId] ?? root
+        let defaultParent: NostrEvent = events[focalEventId] ?? root
         let parent: NostrEvent = pending.parentId.flatMap { events[$0] } ?? defaultParent
 
         isSending = true
@@ -407,11 +421,14 @@ final class ThreadViewModel {
             // inner kind-1 in as an ancestor on top — the same content
             // appearing twice in the thread. Substitute the parsed inner
             // kind-1 in for the focal slot so the chain walk operates
-            // against the original note.
+            // against the original note. Re-anchor `focalEventId` to the
+            // inner id so reply filtering and ancestor lookups use the
+            // id that real replies actually `e`-tag.
             let focalEvent = unwrapRepostForFocal(seedEvent)
+            focalEventId = focalEvent.id
             let resolvedRoot = Nip10.rootId(of: focalEvent) ?? focalEvent.id
             rootId = resolvedRoot
-            events[seedEventId] = focalEvent
+            events[focalEventId] = focalEvent
             if focalEvent.id == resolvedRoot {
                 rootEvent = focalEvent
                 isLoading = false
@@ -420,7 +437,7 @@ final class ThreadViewModel {
 
         // If the seed was a reply, pull its true root by id too so the header
         // renders without waiting on the network.
-        if rootEvent == nil, rootId != seedEventId,
+        if rootEvent == nil, rootId != focalEventId,
            let cachedRoot = await eventStore.eventsByIds([rootId]).first {
             events[cachedRoot.id] = cachedRoot
             rootEvent = cachedRoot
@@ -499,7 +516,7 @@ final class ThreadViewModel {
         // isn't the root, the root author's inbox alone misses every
         // reply that came in via the focal author's relay set, which
         // is what made deep-thread navigation render "no replies".
-        let focalAuthor = events[seedEventId]?.pubkey ?? authorHint
+        let focalAuthor = events[focalEventId]?.pubkey ?? authorHint
         if let pk = focalAuthor, pk != rootAuthor {
             for url in await relayListRepo.getReadRelays(pk) where seen.insert(url).inserted {
                 ordered.append(url)
@@ -567,7 +584,7 @@ final class ThreadViewModel {
     /// ancestors one event at a time so the chain renders without waiting for the broad
     /// `e: [rootId]` replies stream. Bounded at 30 hops as a safety stop.
     private func fetchAncestorChain(from relays: [String]) async {
-        guard var current = events[seedEventId] else { return }
+        guard var current = events[focalEventId] else { return }
         for _ in 0..<30 {
             guard let parentId = Nip10.replyTarget(of: current) else { break }
             if let parent = events[parentId] {
@@ -595,12 +612,12 @@ final class ThreadViewModel {
         // whole tree, focal catches direct children that some relays may
         // store without the root e-tag.
         var eTagTargets = [rootId]
-        if seedEventId != rootId { eTagTargets.append(seedEventId) }
+        if focalEventId != rootId { eTagTargets.append(focalEventId) }
         let filter = NostrFilter(kinds: [1], eTags: eTagTargets, limit: 500)
         let subId = "thread-replies-\(UUID().uuidString.prefix(6))"
         let sub = RelayPool.subscribe(relays: relays, filter: filter, id: subId)
 
-        let consumer = Task { [weak self, rootId, seedEventId] in
+        let consumer = Task { [weak self, rootId, focalEventId] in
             for await (event, _) in sub.events {
                 guard let self else { break }
                 guard event.kind == 1 else { continue }
@@ -608,7 +625,7 @@ final class ThreadViewModel {
                 // are valid for the current screen.
                 guard event.tags.contains(where: { tag in
                     guard tag.count >= 2, tag[0] == "e" else { return false }
-                    return tag[1] == rootId || tag[1] == seedEventId
+                    return tag[1] == rootId || tag[1] == focalEventId
                 }) else { continue }
                 let snap = SafetyFilter.shared.snapshot
                 if snap.blockedPubkeys.contains(event.pubkey) {
@@ -799,7 +816,7 @@ final class ThreadViewModel {
     /// Recompute `ancestors`, `focal`, `replies`, `childCounts`, and `hiddenSpamReplies`
     /// from the current `events` map. Called whenever events change.
     private func rebuildSlices() {
-        focal = events[seedEventId].map { ThreadRow(event: $0, isBlocked: blockedEventIds.contains($0.id)) }
+        focal = events[focalEventId].map { ThreadRow(event: $0, isBlocked: blockedEventIds.contains($0.id)) }
         ancestors = computeAncestors()
 
         // Tally direct children per parent so reply rows can show a
@@ -813,12 +830,12 @@ final class ThreadViewModel {
 
         let directReplies = events.values
             .filter { event in
-                guard event.id != seedEventId else { return false }
+                guard event.id != focalEventId else { return false }
                 // Replies are kind-1 only. A kind-6 repost references this note
                 // via its `e` tag too, but it isn't a reply — without this
                 // guard it'd surface as a duplicate card under the focal.
                 guard event.kind == 1 else { return false }
-                return Nip10.replyTarget(of: event) == seedEventId
+                return Nip10.replyTarget(of: event) == focalEventId
             }
             .sorted { $0.createdAt < $1.createdAt }
 
@@ -843,7 +860,7 @@ final class ThreadViewModel {
     /// Stops at the first missing event (the live stream / `fetchAncestorChain` will fill in
     /// gaps and this gets called again).
     private func computeAncestors() -> [ThreadRow] {
-        guard let focal = events[seedEventId] else { return [] }
+        guard let focal = events[focalEventId] else { return [] }
         var chain: [NostrEvent] = []
         var current = focal
         var seen: Set<String> = [focal.id]

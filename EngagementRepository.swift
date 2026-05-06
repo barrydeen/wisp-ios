@@ -56,6 +56,22 @@ final class EngagementRepository {
         if debounceTask == nil { scheduleFlush() }
     }
 
+    /// Convenience for feed rows: when the row is a kind-6 repost, the
+    /// stats users care about live on the *inner* kind-1, not the
+    /// wrapper. Routing the engagement query by the wrapper id misses
+    /// every reaction / reply / zap on the original note (since they
+    /// tag the inner id, not the wrapper) and leaves cards looking
+    /// like they have zero engagement. Resolve the inner ref here so
+    /// every feed surface gets it right without duplicating the
+    /// kind-6 unwrap at every call site.
+    func markVisible(event: NostrEvent) {
+        if event.kind == 6, let ref = FeedViewModel.innerRepostRef(of: event) {
+            markVisible(eventId: ref.id, author: ref.pubkey ?? event.pubkey)
+        } else {
+            markVisible(eventId: event.id, author: event.pubkey)
+        }
+    }
+
     /// Called on logout / pubkey switch.
     func clear() {
         debounceTask?.cancel()

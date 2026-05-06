@@ -101,7 +101,7 @@ struct PeopleListFeedView: View {
                         }
                         .buttonStyle(.plain)
                         .onAppear {
-                            engagementRepo.markVisible(eventId: event.id, author: event.pubkey)
+                            engagementRepo.markVisible(event: event)
                             if event.id == viewModel.events.last?.id {
                                 viewModel.loadMore()
                             }

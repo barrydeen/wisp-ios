@@ -182,7 +182,7 @@ struct TrendingFeedView: View {
                         }
                         .buttonStyle(.plain)
                         .onAppear {
-                            engagementRepo.markVisible(eventId: event.id, author: event.pubkey)
+                            engagementRepo.markVisible(event: event)
                         }
                         Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
                     }

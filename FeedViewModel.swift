@@ -428,14 +428,27 @@ final class FeedViewModel {
     /// payload in `content` per NIP-18, with the first `e` tag as a
     /// fallback for older clients that omit the embedded event.
     static func innerRepostId(of event: NostrEvent) -> String? {
+        innerRepostRef(of: event)?.id
+    }
+
+    /// The id and original-author pubkey of the inner kind-1 inside a
+    /// kind-6 repost. The pubkey is needed by callers that route by
+    /// NIP-65 (engagement queries follow the *original* author's read
+    /// relays, not the reposter's). Falls back to the first `e` / `p`
+    /// tag pair when older clients omit the embedded event JSON.
+    static func innerRepostRef(of event: NostrEvent) -> (id: String, pubkey: String?)? {
         guard event.kind == 6 else { return nil }
         if !event.content.isEmpty,
            let data = event.content.data(using: .utf8),
            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let id = json["id"] as? String, !id.isEmpty {
-            return id
+            return (id, json["pubkey"] as? String)
         }
-        return event.tags.first(where: { $0.count >= 2 && $0[0] == "e" })?[1]
+        if let id = event.tags.first(where: { $0.count >= 2 && $0[0] == "e" })?[1] {
+            let pk = event.tags.first(where: { $0.count >= 2 && $0[0] == "p" })?[1]
+            return (id, pk)
+        }
+        return nil
     }
 
     private func startSubscription(relays: [String]) {
