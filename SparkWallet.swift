@@ -200,7 +200,17 @@ final class SparkWallet: Wallet {
     func fetchBalance() async -> Result<Int64, WalletError> {
         guard let sdk else { return .failure(.notConnected) }
         do {
-            let info = try await sdk.getInfo(request: GetInfoRequest(ensureSynced: false))
+            // Force the SDK to sync with the network before reading. The
+            // cached on-disk balance loaded at init is often stale (whatever
+            // the previous session ended on), and `.synced` can take tens of
+            // seconds to fire after a cold launch — long enough for the user
+            // to wonder why the dashboard is showing the wrong number. This
+            // path is hit on initial load + pull-to-refresh, so blocking on
+            // a sync here trades latency for correctness exactly where it
+            // matters. The reactive refresh via the SDK's `.synced` event
+            // still uses `ensureSynced: false` since by definition that
+            // path runs *after* a sync has already landed.
+            let info = try await sdk.getInfo(request: GetInfoRequest(ensureSynced: true))
             let msats = Int64(info.balanceSats) * 1000
             balanceMsats = msats
             balanceContinuation.yield(msats)

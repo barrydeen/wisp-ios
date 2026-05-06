@@ -247,7 +247,12 @@ struct WalletView: View {
     private var balanceCard: some View {
         let sats = store.balanceMsats.map { $0 / 1000 } ?? 0
         let unit = WalletBalanceUnit(rawValue: balanceUnitRaw) ?? .sats
-        let syncing = store.mode != nil && !store.isConnected
+        // Pulse while no trustworthy value exists to display: still
+        // connecting, or no balance has landed yet (the just-imported
+        // Spark case, where the dashboard would otherwise read as a
+        // steady "0 sats" through the SDK's initial network sync).
+        let syncing = store.mode != nil
+            && (!store.isConnected || store.balanceMsats == nil)
         return VStack(spacing: 14) {
             Button {
                 withAnimation(.easeInOut(duration: 0.15)) { balanceHidden.toggle() }

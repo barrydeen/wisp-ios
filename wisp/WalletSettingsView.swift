@@ -35,11 +35,15 @@ enum WalletBalanceUnit: String, CaseIterable {
         }
     }
 
-    var pickerLabel: String {
+    /// Picker label for the balance-unit selector. Returned as `Text` so the
+    /// bolt prefix can use an SF Symbol via image interpolation — emoji bolt
+    /// (`⚡`) renders yellow regardless of `foregroundStyle`, but a system
+    /// `bolt.fill` adopts the row's tint and stays monochrome.
+    var pickerLabel: Text {
         switch self {
-        case .sats:  return "1,000 sats"
-        case .btc:   return "₿ 1,000"
-        case .msats: return "⚡ 1,000"
+        case .sats:  return Text("1,000 sats")
+        case .btc:   return Text("₿ 1,000")
+        case .msats: return Text("\(Image(systemName: "bolt.fill")) 1,000")
         }
     }
 }
@@ -238,20 +242,11 @@ struct WalletSettingsView: View {
                         .resizable()
                         .scaledToFit()
                         .frame(width: 28, height: 28)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text((store.nwcNodeAlias?.isEmpty == false ? store.nwcNodeAlias : nil) ?? "Nostr Wallet Connect")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                        if let lud = store.lightningAddress, !lud.isEmpty {
-                            Text(lud)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                        }
-                    }
+                    Text((store.nwcNodeAlias?.isEmpty == false ? store.nwcNodeAlias : nil) ?? "Nostr Wallet Connect")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                     Spacer(minLength: 0)
                     Image(systemName: showNwcDetails ? "chevron.up" : "chevron.down")
                         .font(.system(size: 12, weight: .semibold))
@@ -301,7 +296,7 @@ struct WalletSettingsView: View {
             NwcDetailChip(
                 label: "Encryption",
                 display: conn.encryption == .nip44 ? "NIP-44" : "NIP-04",
-                copyValue: conn.encryption == .nip44 ? "NIP-44" : "NIP-04"
+                copyValue: nil
             )
             if let lud = conn.lud16, !lud.isEmpty {
                 Divider().opacity(0.25).padding(.leading, 16)
@@ -343,9 +338,9 @@ struct WalletSettingsView: View {
                     NwcDetailChip(label: "Wallet ID", display: walletId, copyValue: walletId)
                     Divider().opacity(0.25).padding(.leading, 16)
                 }
-                NwcDetailChip(label: "Network", display: "Mainnet", copyValue: "mainnet")
+                NwcDetailChip(label: "Network", display: "Mainnet", copyValue: nil)
                 Divider().opacity(0.25).padding(.leading, 16)
-                NwcDetailChip(label: "SDK version", display: BreezConfig.sdkVersion, copyValue: BreezConfig.sdkVersion)
+                NwcDetailChip(label: "SDK version", display: BreezConfig.sdkVersion, copyValue: nil)
             }
         }
     }
@@ -402,7 +397,7 @@ struct WalletSettingsView: View {
                         Button {
                             balanceUnitRaw = unit.rawValue
                         } label: {
-                            Text(unit.pickerLabel)
+                            unit.pickerLabel
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(selected ? Color.wispZapColor : .secondary)
                                 .padding(.horizontal, 12)
@@ -829,44 +824,56 @@ struct LightningAddressSetupSheet: View {
 
 // MARK: - NWC detail chip
 
-/// Tap-to-copy row inside the NWC connection details panel. Shows a
-/// truncated value, copies the full value to the clipboard on tap, and
-/// flips the trailing icon to a green checkmark for a beat as feedback.
+/// Detail row inside the NWC / Spark info panels. When `copyValue` is
+/// non-nil the row renders as a tappable button that copies the full
+/// value and flashes a checkmark; when nil it's a plain label/value row
+/// (used for metadata fields like Encryption, Network, SDK version).
 private struct NwcDetailChip: View {
     let label: String
     /// What's shown in the row (e.g. `npub1abcd…wxyz`).
     let display: String
-    /// What gets copied (full unshortened value).
-    let copyValue: String
+    /// What gets copied (full unshortened value). Nil for non-copyable rows.
+    let copyValue: String?
 
     @State private var copied = false
 
     var body: some View {
-        Button(action: copy) {
-            HStack(alignment: .center, spacing: 12) {
-                Text(label)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 110, alignment: .leading)
-                Text(display)
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+        if copyValue != nil {
+            Button(action: copy) {
+                rowContent(showCopyIcon: true)
+            }
+            .buttonStyle(.plain)
+        } else {
+            rowContent(showCopyIcon: false)
+        }
+    }
+
+    private func rowContent(showCopyIcon: Bool) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 110, alignment: .leading)
+            Text(display)
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if showCopyIcon {
                 Image(systemName: copied ? "checkmark" : "doc.on.doc")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(copied ? Color.green : .secondary)
                     .frame(width: 20)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .contentShape(Rectangle())
     }
 
     private func copy() {
+        guard let copyValue else { return }
         UIPasteboard.general.string = copyValue
         withAnimation(.easeInOut(duration: 0.15)) { copied = true }
         Task {

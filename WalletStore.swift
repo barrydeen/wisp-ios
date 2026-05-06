@@ -246,6 +246,12 @@ final class WalletStore {
         let nwc = NwcWallet(pubkey: keypair.pubkey)
         nwc.saveConnection(uri)
         disconnect()
+        // Drop the previous wallet's metadata so the dashboard / settings
+        // can't render the old node alias, lud16, balance, or transaction
+        // list while the new connection's `get_info` round-trip is still
+        // in flight. Without this the user sees the old node's name with
+        // a stale balance for several seconds after pasting a new URI.
+        clearDisplayState()
         wireUp(nwc)
         mode = .nwc
         WalletMode.save(.nwc, for: keypair.pubkey)
@@ -254,6 +260,8 @@ final class WalletStore {
         if isConnected {
             Task { _ = await self.fetchBalance() }
             Task { await self.refreshTransactions() }
+            Task { await self.refreshNwcNodeAlias() }
+            Task { await self.refreshLightningAddress() }
         }
         return isConnected
     }
@@ -264,6 +272,7 @@ final class WalletStore {
         let spark = SparkWallet(pubkey: keypair.pubkey)
         spark.saveMnemonic(mnemonic)
         disconnect()
+        clearDisplayState()
         wireUp(spark)
         mode = .spark
         WalletMode.save(.spark, for: keypair.pubkey)
@@ -272,8 +281,23 @@ final class WalletStore {
         if isConnected {
             Task { _ = await self.fetchBalance() }
             Task { await self.refreshTransactions() }
+            Task { await self.refreshLightningAddress() }
         }
         return isConnected
+    }
+
+    /// Wipe every per-wallet UI surface so a swap to a different wallet
+    /// (NWC URI or Spark mnemonic) doesn't carry the previous wallet's
+    /// node alias / lightning address / balance / transaction list across.
+    /// Called from the connect-flows; the app-launch reconnect path goes
+    /// through `switchToMode` instead and intentionally keeps cached values
+    /// so the user sees their last-known balance immediately.
+    private func clearDisplayState() {
+        balanceMsats = nil
+        transactions = []
+        lightningAddress = nil
+        nwcNodeAlias = nil
+        nwcMethods = []
     }
 
     func disconnect() {
