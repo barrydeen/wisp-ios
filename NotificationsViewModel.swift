@@ -352,6 +352,9 @@ final class NotificationsViewModel {
         let events = await pTagged
         for e in events {
             _ = repo.ingest(e, relayUrl: "", isFromDmRelay: false)
+            if e.kind == 9735 {
+                ZapSender.recordIncomingAttribution(from: e)
+            }
         }
         for e in pollVotes {
             _ = repo.ingest(e, relayUrl: "", isFromDmRelay: false)
@@ -374,6 +377,9 @@ final class NotificationsViewModel {
                 guard let self else { break }
                 if SafetyFilter.shared.shouldDrop(event: event, context: .notifications) { continue }
                 _ = self.repo.ingest(event, relayUrl: relayUrl, isFromDmRelay: false)
+                if event.kind == 9735 {
+                    ZapSender.recordIncomingAttribution(from: event)
+                }
                 self.maybePrefetchProfile(for: event.pubkey)
                 self.maybeScoreReplyForSpam(event)
             }
@@ -429,6 +435,7 @@ final class NotificationsViewModel {
                     guard let self else { break }
                     if SafetyFilter.shared.shouldDrop(event: event, context: .notifications) { continue }
                     _ = self.repo.ingest(event, relayUrl: relayUrl, isFromDmRelay: true)
+                    ZapSender.recordIncomingAttribution(from: event)
                 }
             })
         }

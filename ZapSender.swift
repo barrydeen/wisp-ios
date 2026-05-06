@@ -139,6 +139,7 @@ enum ZapSender {
     // MARK: - Recipient persistence
 
     private static let recipientsKey = "wisp_zap_recipients"
+    private static let sendersKey = "wisp_zap_senders"
     private static let maxEntries = 500
 
     static func recipient(forPaymentHash hash: String) -> String? {
@@ -146,15 +147,48 @@ enum ZapSender {
         return map?[hash]
     }
 
+    /// Pubkey of whoever zapped the active user, keyed by the receipt's
+    /// bolt11 payment hash. Populated by `recordIncomingAttribution(from:)`
+    /// when a kind-9735 receipt with `p` = my pubkey is observed by the
+    /// notifications subscription. Read by `WalletTransactionRow` so an
+    /// incoming wallet transaction that matches a known zap receipt can
+    /// render the zapper's avatar + display name instead of a generic
+    /// "Received" label.
+    static func sender(forPaymentHash hash: String) -> String? {
+        let map = UserDefaults.standard.dictionary(forKey: sendersKey) as? [String: String]
+        return map?[hash]
+    }
+
     static func recordZapRecipient(paymentHash: String, recipientPubkey: String) {
-        var map = (UserDefaults.standard.dictionary(forKey: recipientsKey) as? [String: String]) ?? [:]
-        if map[paymentHash] == recipientPubkey { return }
-        map[paymentHash] = recipientPubkey
+        persistMapping(key: recipientsKey, paymentHash: paymentHash, pubkey: recipientPubkey)
+    }
+
+    static func recordZapSender(paymentHash: String, senderPubkey: String) {
+        persistMapping(key: sendersKey, paymentHash: paymentHash, pubkey: senderPubkey)
+    }
+
+    /// Pull the zapper's pubkey out of a kind-9735 receipt's embedded
+    /// kind-9734 description, decode the bolt11 tag for its payment hash,
+    /// and persist the mapping. No-op if either piece is missing —
+    /// receipts are produced by remote LSPs and occasionally arrive with
+    /// malformed descriptions or non-standard bolt11 encodings.
+    static func recordIncomingAttribution(from receipt: NostrEvent) {
+        guard receipt.kind == 9735 else { return }
+        guard let zapper = Nip57.zapperPubkey(receipt: receipt) else { return }
+        guard let bolt11 = receipt.tags.first(where: { $0.first == "bolt11" })?.dropFirst().first else { return }
+        guard let paymentHash = Bolt11.decode(String(bolt11))?.paymentHash, !paymentHash.isEmpty else { return }
+        recordZapSender(paymentHash: paymentHash, senderPubkey: zapper)
+    }
+
+    private static func persistMapping(key: String, paymentHash: String, pubkey: String) {
+        var map = (UserDefaults.standard.dictionary(forKey: key) as? [String: String]) ?? [:]
+        if map[paymentHash] == pubkey { return }
+        map[paymentHash] = pubkey
         // Trim FIFO. Plain dict has no order, so when over cap we drop arbitrary keys.
-        // Acceptable: ZapSender only uses this for "who got my last few zaps" display.
+        // Acceptable: this is only used for "who got / sent my last few zaps" display.
         while map.count > maxEntries {
             if let first = map.keys.first { map.removeValue(forKey: first) }
         }
-        UserDefaults.standard.set(map, forKey: recipientsKey)
+        UserDefaults.standard.set(map, forKey: key)
     }
 }

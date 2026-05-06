@@ -6,9 +6,18 @@ struct WalletTransactionRow: View {
     let tx: WalletTransaction
 
     var body: some View {
-        let recipientPubkey = tx.counterpartyPubkey ?? ZapSender.recipient(forPaymentHash: tx.paymentHash)
-        let profile = recipientPubkey.flatMap { ProfileRepository.shared.get($0) }
         let isIncoming = tx.type == .incoming
+        // Counterparty resolution: prefer whatever the wallet backend
+        // surfaced (none currently set this), then fall back to the
+        // direction-appropriate paymentHash → pubkey map. Outgoing zaps
+        // are recorded by ZapSender at zap time; incoming zaps are
+        // recorded by NotificationsViewModel as kind-9735 receipts arrive
+        // for the active user.
+        let counterpartyPubkey = tx.counterpartyPubkey
+            ?? (isIncoming
+                ? ZapSender.sender(forPaymentHash: tx.paymentHash)
+                : ZapSender.recipient(forPaymentHash: tx.paymentHash))
+        let profile = counterpartyPubkey.flatMap { ProfileRepository.shared.get($0) }
         let amountColor: Color = isIncoming ? Color.wispRepostColor : .red.opacity(0.85)
         let sats = abs(tx.amountMsats) / 1000
         let feeSats = tx.feeMsats / 1000
