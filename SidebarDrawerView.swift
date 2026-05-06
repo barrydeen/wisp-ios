@@ -244,6 +244,7 @@ struct SidebarDrawerView: View {
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(.secondary)
                     }
+                    .buttonStyle(.plain)
                 }
 
                 Text(subtitleText)
@@ -291,7 +292,12 @@ struct SidebarDrawerView: View {
             ForEach(accounts, id: \.self) { acctPubkey in
                 Button {
                     accountsExpanded = false
-                    if acctPubkey != pubkey, let kp = NostrKey.loadAccount(pubkey: acctPubkey) {
+                    // `switchAccount` (not `loadAccount`) so the keychain's
+                    // `active` slot and `cachedActive` are updated before
+                    // the loading splash reads `NostrKey.load()` to pick
+                    // the avatar — otherwise the splash renders the
+                    // previous account's avatar through the entire transition.
+                    if acctPubkey != pubkey, let kp = NostrKey.switchAccount(pubkey: acctPubkey) {
                         onSwitchAccount(kp)
                     }
                 } label: {

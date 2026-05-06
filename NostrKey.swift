@@ -163,7 +163,13 @@ enum NostrKey {
         guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
               let data = result as? Data,
               let str = String(data: data, encoding: .utf8) else { return nil }
-        let parts = str.split(separator: ":", maxSplits: 1).map(String.init)
+        // `omittingEmptySubsequences: false` is load-bearing here — remote
+        // signer accounts are persisted with an empty privkey (the
+        // `Keypair.isRemote` sentinel set by `saveRemote`), so the stored
+        // data is `":<pubkey>"`. The default `split` drops that leading
+        // empty substring, returns 1 part, and we'd hand back nil — making
+        // every NIP-46 account unswitchable from the sidebar picker.
+        let parts = str.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
         guard parts.count == 2 else { return nil }
         return Keypair(privkey: parts[0], pubkey: parts[1])
     }

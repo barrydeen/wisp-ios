@@ -91,9 +91,32 @@ struct MainView: View {
                 onLogout: {
                     closeDrawer()
                     Task {
-                        await AppDataWipe.wipeEverything()
-                        onLogout()
+                        // Multi-account branch: when another saved account
+                        // exists, only delete the current account's keychain
+                        // + per-pubkey UserDefaults + NIP-46 session and hand
+                        // off to the next account. The full `AppDataWipe`
+                        // path was throwing every saved account out of the
+                        // app, forcing a multi-account user back through the
+                        // splash login / signup flow on every logout.
+                        let currentPubkey = keypair.pubkey
+                        let nextPubkey = NostrKey.accounts().first { $0 != currentPubkey }
+                        if let nextPubkey, let nextKp = NostrKey.switchAccount(pubkey: nextPubkey) {
+                            NostrKey.deleteAccount(pubkey: currentPubkey)
+                            await Nip46Manager.shared.clearActive()
+                            onSwitchAccount(nextKp)
+                        } else {
+                            await AppDataWipe.wipeEverything()
+                            onLogout()
+                        }
                     }
+                },
+                onSwitchAccount: { newKeypair in
+                    closeDrawer()
+                    onSwitchAccount(newKeypair)
+                },
+                onAddAccount: {
+                    closeDrawer()
+                    onAddAccount()
                 },
                 onOpenProfile: {
                     closeDrawer()

@@ -54,6 +54,7 @@ struct LoginView: View {
                         Image(systemName: isSecure ? "eye.slash" : "eye")
                             .foregroundStyle(.secondary)
                     }
+                    .buttonStyle(.plain)
                 }
                 .onChange(of: nsecInput) { _, newValue in
                     error = nil

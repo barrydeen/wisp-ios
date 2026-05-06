@@ -1,6 +1,17 @@
 import SwiftUI
 import UIKit
 
+extension NSAttributedString.Key {
+    /// Tap-target attribute for `@mentions`, `#hashtags`, and inline URLs. We
+    /// avoid the system `.link` attribute because UITextView paints any range
+    /// carrying it in `tintColor` (system blue) regardless of the explicit
+    /// `.foregroundColor` we set in the attributed string — `linkTextAttributes`
+    /// would normally override that, but it only applies when `isSelectable` is
+    /// true, and we keep selection off so our custom tap recognizer doesn't
+    /// have to fight UITextView's selection / long-press gestures.
+    static let wispLinkURL = NSAttributedString.Key("wispLinkURL")
+}
+
 /// A UITextView wrapped in SwiftUI that renders inline content segments
 /// (text, hashtags, mentions, links, custom emoji images) with
 /// per-range link tap handling.
@@ -162,7 +173,13 @@ struct RichInlineTextView: UIViewRepresentable {
         let baseFont = UIFont.preferredFont(forTextStyle: .callout)
         let baseColor = UIColor.label
         let primaryColor = UIColor(Color.wispPrimary)
-        let linkColor = UIColor.systemBlue
+        // URLs paint with the same accent as @mentions / #hashtags. Used to
+        // be `UIColor.systemBlue` (relying on UITextView's linkTextAttributes
+        // override to repaint to `wispPrimary` at render time), but we
+        // disabled `isSelectable` to fix @mention tap reliability — that
+        // also bypassed the linkTextAttributes pass, so the systemBlue from
+        // the attributed string showed through. Set the accent directly here.
+        let linkColor = primaryColor
 
         let style = NSMutableParagraphStyle()
         style.lineSpacing = 3
@@ -187,7 +204,7 @@ struct RichInlineTextView: UIViewRepresentable {
                 attrs[.foregroundColor] = primaryColor
                 let encoded = tag.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? tag
                 if let url = URL(string: "wisp-hashtag://\(encoded)") {
-                    attrs[.link] = url
+                    attrs[.wispLinkURL] = url
                 }
                 combined.append(NSAttributedString(string: raw, attributes: attrs))
 
@@ -200,7 +217,7 @@ struct RichInlineTextView: UIViewRepresentable {
                 var attrs = baseAttrs
                 attrs[.foregroundColor] = primaryColor
                 if let url = URL(string: "wisp-profile://\(pubkey)") {
-                    attrs[.link] = url
+                    attrs[.wispLinkURL] = url
                 }
                 let mentionMap = resolvedProfile?.emojiMap ?? [:]
                 combined.append(NSAttributedString(string: "@", attributes: attrs))
@@ -214,7 +231,7 @@ struct RichInlineTextView: UIViewRepresentable {
                 var attrs = baseAttrs
                 attrs[.foregroundColor] = linkColor
                 if let u = URL(string: url) {
-                    attrs[.link] = u
+                    attrs[.wispLinkURL] = u
                 }
                 combined.append(NSAttributedString(string: shortenUrl(url), attributes: attrs))
 
@@ -431,6 +448,6 @@ final class ContentSizingTextView: UITextView {
                 return nil
             }
         }
-        return attr.attributes(at: index, effectiveRange: nil)[.link] as? URL
+        return attr.attributes(at: index, effectiveRange: nil)[.wispLinkURL] as? URL
     }
 }

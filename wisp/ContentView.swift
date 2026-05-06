@@ -74,8 +74,18 @@ struct ContentView: View {
             LoginView { newKeypair in
                 showAddAccount = false
                 self.keypair = newKeypair
-                accountSwitchInProgress = true
-                currentScreen = .loading
+                // First time we see this pubkey on the device, run onboarding
+                // so the outbox builder fetches kind-3 contacts and kind-10002
+                // relay lists — without that the feed has no follows to query
+                // and falls back to showing only the user's own posts. Already-
+                // onboarded accounts (the user re-adding a previously-used
+                // pubkey) skip straight to the loading splash.
+                if NostrKey.isOnboardingComplete(pubkey: newKeypair.pubkey) {
+                    accountSwitchInProgress = true
+                    currentScreen = .loading
+                } else {
+                    currentScreen = .onboarding
+                }
             }
             .interactiveDismissDisabled()
         }

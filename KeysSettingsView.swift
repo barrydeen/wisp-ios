@@ -198,8 +198,10 @@ struct KeysSettingsView: View {
                     Text("Signer Pubkey")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
+                    // Reference-only — the signer's identity is for display
+                    // and isn't something the user shares to receive zaps
+                    // or mentions, so no Copy / QR affordance.
                     keyCard(value: signerNpub)
-                    keyActionRow(value: signerNpub, qrLabel: "signer-npub")
                 }
                 .padding(.top, 4)
             }

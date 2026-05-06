@@ -249,6 +249,7 @@ struct SocialGraphView: View {
                     .background(Color.wispSurfaceVariant, in: RoundedRectangle(cornerRadius: 12))
                     .foregroundStyle(.primary)
             }
+            .buttonStyle(.plain)
             .padding(.bottom, 32)
         }
     }
