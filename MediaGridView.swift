@@ -353,17 +353,6 @@ struct FullScreenMediaPager: View {
                     .padding(.bottom, 24)
                     .allowsHitTesting(false)
                 }
-
-                Button {
-                    dismiss()
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .padding(12)
-                        .background(Color.black.opacity(0.6), in: Circle())
-                }
-                .padding()
             }
         }
     }
@@ -419,7 +408,6 @@ struct FullScreenMediaPager: View {
             FullScreenImageView(
                 url: item.url,
                 mime: item.mime,
-                showsCloseButton: false,
                 onCarouselDrag: { value, ended in handleCarouselDrag(value, isEnded: ended) }
             )
         }

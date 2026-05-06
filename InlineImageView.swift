@@ -102,11 +102,11 @@ struct InlineImageView: View {
 struct FullScreenImageView: View {
     let url: String
     let mime: String?
-    let showsCloseButton: Bool
     /// Forwarded drag value when the image is unzoomed and embedded in
     /// `FullScreenMediaPager`. Fires on every onChanged and once on onEnded;
     /// `isEnded` distinguishes the two so the carousel can commit on release.
-    /// Nil for the standalone viewer — it handles its own drag entirely.
+    /// Nil for the standalone viewer — it handles its own drag entirely
+    /// (swipe-down dismisses, no on-screen close button).
     var onCarouselDrag: ((DragGesture.Value, Bool) -> Void)?
     @Environment(\.dismiss) private var dismiss
 
@@ -117,15 +117,17 @@ struct FullScreenImageView: View {
     @State private var dismissY: CGFloat = 0
     @State private var imageSize: CGSize = .zero
 
+    /// True when this view runs standalone (handles its own dismiss) vs
+    /// embedded inside `FullScreenMediaPager` (forwards drags to the pager).
+    private var isStandalone: Bool { onCarouselDrag == nil }
+
     init(
         url: String,
         mime: String? = nil,
-        showsCloseButton: Bool = true,
         onCarouselDrag: ((DragGesture.Value, Bool) -> Void)? = nil
     ) {
         self.url = url
         self.mime = mime
-        self.showsCloseButton = showsCloseButton
         self.onCarouselDrag = onCarouselDrag
     }
 
@@ -139,55 +141,26 @@ struct FullScreenImageView: View {
                 gesturedImageContent(in: geo)
 
                 // Transparent gesture-capturing overlay sitting above the
-                // image and below the close button. Attaches every drag /
-                // pinch / double-tap gesture to a plain SwiftUI Rectangle —
-                // independent of whether the visible image is a SwiftUI
-                // `Image` or a UIViewRepresentable-hosted `UIImageView`,
-                // which used to swallow gestures on animated content.
+                // image. Attaches every drag / pinch / double-tap gesture
+                // to a plain SwiftUI Rectangle — independent of whether
+                // the visible image is a SwiftUI `Image` or a
+                // UIViewRepresentable-hosted `UIImageView`, which used to
+                // swallow gestures on animated content.
                 Color.clear
                     .contentShape(Rectangle())
                     .simultaneousGesture(pinchGesture(in: geo))
                     .simultaneousGesture(unifiedDrag(in: geo))
                     .onTapGesture(count: 2) { toggleZoom() }
-
-                if showsCloseButton {
-                    VStack {
-                        HStack {
-                            Spacer()
-                            Button { dismiss() } label: {
-                                Image(systemName: "xmark")
-                                    .font(.system(size: 18, weight: .semibold))
-                                    .foregroundStyle(.white)
-                                    .padding(12)
-                                    .background(Color.black.opacity(0.6), in: Circle())
-                            }
-                            .padding()
-                        }
-                        Spacer()
-                    }
-                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
-    /// Applies gestures conditionally based on context.
-    ///
-    /// Standalone (`showsCloseButton == true`):
-    ///   single drag gesture handles both pan-when-zoomed and dismiss-when-not.
-    ///
-    /// Carousel (`showsCloseButton == false`):
-    ///   - **Not zoomed** — attach a *simultaneous* dismiss gesture that only
-    ///     tracks dominantly-vertical drags. The TabView page-swipe recognizer
-    ///     coexists and wins horizontal swipes, so L/R paging stays responsive.
-    ///   - **Zoomed** — attach the pan gesture as `.gesture(...)` so it has
-    ///     priority over TabView. A horizontal pan inside a zoomed image stays
-    ///     in the image instead of accidentally paging to the next photo.
     /// Single drag gesture attached unconditionally to the image. Internally
-    /// branches on `scale` (and on `showsCloseButton`) to either pan inside a
-    /// zoomed image, dismiss the standalone preview on vertical drag, or
-    /// forward the drag to the carousel parent for paging / dismiss when
-    /// embedded in `FullScreenMediaPager`.
+    /// branches on `scale` and `isStandalone` to either pan inside a zoomed
+    /// image, dismiss the standalone preview on vertical drag, or forward
+    /// the drag to the carousel parent for paging / dismiss when embedded
+    /// in `FullScreenMediaPager`.
     ///
     /// Centralising every drag in one always-attached gesture eliminates the
     /// parent / child gesture-priority duel that used to leave gestures stuck
@@ -217,7 +190,7 @@ struct FullScreenImageView: View {
                         height: lastPanOffset.height + value.translation.height
                     )
                     panOffset = clampedOffset(proposed, scale: scale, in: geo.size)
-                } else if showsCloseButton {
+                } else if isStandalone {
                     guard abs(value.translation.height) > abs(value.translation.width) else { return }
                     dismissY = max(0, value.translation.height)
                 } else {
@@ -227,7 +200,7 @@ struct FullScreenImageView: View {
             .onEnded { value in
                 if scale > 1.01 {
                     lastPanOffset = panOffset
-                } else if showsCloseButton {
+                } else if isStandalone {
                     if value.translation.height > 120,
                        abs(value.translation.height) > abs(value.translation.width) {
                         dismiss()

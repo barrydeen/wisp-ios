@@ -69,6 +69,18 @@ struct InlineVideoView: View {
             if loaded, let player {
                 CroppingVideoPlayer(player: player, gravity: videoGravity)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        // Tapping anywhere on the playing video expands to
+                        // fullscreen — the corner expand button stays as a
+                        // discoverable affordance, but having to find a
+                        // 28pt target on the move is awkward. The inner
+                        // mute / expand buttons (rendered after this in
+                        // the ZStack) take SwiftUI hit-test priority over
+                        // an `onTapGesture`, so their actions still fire.
+                        player.pause()
+                        showFullScreen = true
+                    }
                     .onAppear {
                         // Pin the shared AVAudioSession to mixed mode so
                         // silent (muted) playback coexists with whatever
@@ -258,35 +270,51 @@ struct FullScreenVideoView: View {
     let url: String
     @Environment(\.dismiss) private var dismiss
     @State private var player: AVPlayer?
+    @State private var dismissY: CGFloat = 0
+
+    private var dismissProgress: CGFloat {
+        // Linearly fade the black backdrop as the user drags down so the
+        // gesture reads as a real "throw-away" — matches the Photos.app
+        // and `MediaGridView` fullscreen dismiss feel.
+        min(1, max(0, dismissY / 240))
+    }
 
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            Color.black
+                .opacity(1 - dismissProgress * 0.7)
+                .ignoresSafeArea()
             if let player {
                 VideoPlayer(player: player)
                     .ignoresSafeArea()
+                    .offset(y: dismissY)
                     .onAppear {
                         MediaAudioSession.activatePlayback()
                         player.play()
                     }
                     .onDisappear { player.pause() }
-            }
-
-            VStack {
-                HStack {
-                    Spacer()
-                    Button {
-                        dismiss()
-                    } label: {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 18, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .padding(12)
-                            .background(Color.black.opacity(0.6), in: Circle())
-                    }
-                    .padding()
-                }
-                Spacer()
+                    // `simultaneousGesture` runs alongside AVPlayer's
+                    // built-in tap-to-toggle-controls / scrubber drags, so
+                    // the system mute + PIP + AirPlay + scrubber + 10s-skip
+                    // controls keep working unchanged while the user can
+                    // also swipe down anywhere on the video to dismiss.
+                    // `minimumDistance: 20` keeps small touches that the
+                    // system would interpret as taps from being intercepted.
+                    .simultaneousGesture(
+                        DragGesture(minimumDistance: 20)
+                            .onChanged { value in
+                                guard abs(value.translation.height) > abs(value.translation.width) else { return }
+                                dismissY = max(0, value.translation.height)
+                            }
+                            .onEnded { value in
+                                if value.translation.height > 120,
+                                   abs(value.translation.height) > abs(value.translation.width) {
+                                    dismiss()
+                                } else {
+                                    withAnimation(.spring(response: 0.3)) { dismissY = 0 }
+                                }
+                            }
+                    )
             }
         }
         .task {
