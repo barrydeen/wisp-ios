@@ -293,6 +293,16 @@ struct PostCardView: View {
                             alignment: .top
                         )
                         .clipped()
+                        // Pin the hit-test area to the clipped rectangle.
+                        // `.clipped()` clips drawing but NOT taps, so a
+                        // tile (or any other inner Button) that overflows
+                        // past the height cap still receives taps in its
+                        // natural frame — including the y range where the
+                        // action bar sits below this body. Without this
+                        // tapping the heart icon on a collapsed
+                        // gallery-overflowing post would open the gallery
+                        // fullscreen instead.
+                        .contentShape(Rectangle())
                         .overlay(alignment: .bottom) {
                             if collapsed {
                                 LinearGradient(
