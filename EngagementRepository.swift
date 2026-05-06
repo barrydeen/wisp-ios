@@ -146,6 +146,21 @@ final class EngagementRepository {
         b.counts = current
     }
 
+    /// Seed the reposter list with a known kind-6 author (the wrapper currently
+    /// rendered in feed) before the engagement query has populated `reposters`.
+    /// Idempotent per `(eventId, reposterPubkey)`. Unlike `applyOptimisticRepost`
+    /// this does NOT bump the `reposts` counter — the number is sourced from
+    /// the engagement query / parent-passed `engagement` and represents network
+    /// total; the seed only makes sure the avatar row paints with at least one
+    /// known face on first frame so the banner doesn't flicker.
+    func seedReposter(eventId: String, reposterPubkey: String) {
+        let b = box(for: eventId)
+        guard !b.counts.reposters.contains(reposterPubkey) else { return }
+        var current = b.counts
+        current.reposters.append(reposterPubkey)
+        b.counts = current
+    }
+
     /// Revert a prior optimistic repost. Called when publishing fails.
     func revertOptimisticRepost(eventId: String, reposterPubkey: String) {
         let b = box(for: eventId)

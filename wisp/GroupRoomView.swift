@@ -56,6 +56,21 @@ struct GroupRoomView: View {
                     }
                 }
                 .padding(.vertical, 8)
+                // First-time anchor: when the room opens with messages already
+                // buffered (cache seed) the count change below never fires, so
+                // we'd land at the top. Jump to the latest unanimated on first
+                // paint, then again whenever the head of the list changes
+                // (covers the empty → non-empty transition for an async seed).
+                .onAppear {
+                    if let last = viewModel.messages.last {
+                        proxy.scrollTo(last.id, anchor: .bottom)
+                    }
+                }
+                .onChange(of: viewModel.messages.first?.id) { _, _ in
+                    if let last = viewModel.messages.last {
+                        proxy.scrollTo(last.id, anchor: .bottom)
+                    }
+                }
             }
             .onChange(of: viewModel.messages.count) { _, _ in
                 if let last = viewModel.messages.last {

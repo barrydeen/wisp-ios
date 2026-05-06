@@ -22,16 +22,20 @@ struct RichContentView: View {
     var nested: Bool = false
 
     @Environment(AppSettings.self) private var settings
+    @State private var emojiRepo = EmojiRepository.shared
 
     /// Process-wide segment cache. `ContentParser.parse` runs an expensive
     /// combined regex over the note's content + reads every imeta tag — at
     /// 50–100 visible cards a scroll frame, recomputing on each body call
-    /// stalls the main thread. The parse result depends only on `content` +
-    /// `tags`, both immutable for a given event, so caching is safe. Note
-    /// content is content-addressed at the event layer, so keying on it
-    /// directly is sufficient — two events with identical content + tags
-    /// would collide, but they're already the same event id from a nostr
-    /// standpoint. NSCache evicts under memory pressure.
+    /// stalls the main thread.
+    ///
+    /// Cache key is `"<emojiGeneration>|<content>"`. Without the generation
+    /// prefix, a note that first paints before `EmojiRepository` has resolved
+    /// its packs would lock in a "shortcode as plain text" parse that no
+    /// later refresh could displace — exactly the symptom that caused custom
+    /// emoji to render inconsistently. Old keys fall out of NSCache naturally
+    /// once new ones evict them. `tags` are immutable for a given event so
+    /// they aren't part of the key.
     private final class SegmentBox {
         let segments: [ContentSegment]
         init(_ segments: [ContentSegment]) { self.segments = segments }
@@ -43,12 +47,20 @@ struct RichContentView: View {
     }()
 
     private func memoizedParse() -> [ContentSegment] {
-        let key = content as NSString
+        let generation = emojiRepo.generation
+        let key = "\(generation)|\(content)" as NSString
         if let box = Self.parseCache.object(forKey: key) { return box.segments }
+        // Merge the user's resolved emoji packs under the note's own
+        // `["emoji", shortcode, url]` tags — the inline tags carry the URL
+        // the author/reactor signed for, so they win on shortcode collisions.
+        var merged = emojiRepo.resolvedCustomMap
+        for (shortcode, url) in ContentParser.parseEmojiTags(tags) {
+            merged[shortcode] = url
+        }
         let segments = ContentParser.parse(
             content: content,
             tags: tags,
-            emojiMap: ContentParser.parseEmojiTags(tags)
+            emojiMap: merged
         )
         Self.parseCache.setObject(SegmentBox(segments), forKey: key)
         return segments

@@ -66,6 +66,13 @@ final class EmojiRepository {
     /// kind-10030 createdAt — used so we publish replacement events with a strictly newer timestamp.
     private(set) var userListCreatedAt: Int = 0
 
+    /// Bumped each time `recomputeResolved()` rewrites `resolvedCustomMap`.
+    /// Lets observers (notably `RichContentView.parseCache`) key their caches
+    /// off the current emoji state — when a late pack arrives and resolves
+    /// a previously-unknown shortcode, the bump invalidates stale parses
+    /// without re-renders looping on equality of the dict itself.
+    private(set) var generation: Int = 0
+
     // MARK: - Internal
 
     private var loadedForPubkey: String?
@@ -98,7 +105,8 @@ final class EmojiRepository {
     // MARK: - Lifecycle
 
     /// Refresh emoji state for the given pubkey. Loads persisted quick-reactions/frequency
-    /// from UserDefaults and fetches kind-10030 + referenced kind-30030 events from relays.
+    /// from UserDefaults, seeds in-memory state from the ObjectBox cache, then fetches
+    /// kind-10030 + referenced kind-30030 events from relays in the background.
     /// Cheap to call repeatedly — subsequent calls for the same pubkey are no-ops.
     func refresh(for pubkey: String) async {
         if loadedForPubkey == pubkey { return }
@@ -106,16 +114,32 @@ final class EmojiRepository {
 
         loadPersisted(pubkey: pubkey)
 
+        // Seed from ObjectBox first so the UI sees a populated `resolvedCustomMap`
+        // immediately on cold start, before any relay round-trip. The network
+        // refresh below is layered on top: replaceable kind-10030 events use a
+        // strictly-newer createdAt check, and kind-30030 packs are upserted by
+        // `(pubkey, d-tag)`, so re-ingesting cached events into the same ingest
+        // path is correct and idempotent.
+        let cachedSeed = await EventStore.shared.loadEmojiState(pubkey: pubkey)
+        ingestUserList(cachedSeed.userList)
+        for ev in cachedSeed.ownPacks {
+            ingestEmojiSet(ev)
+        }
+        if !referencedPackAddrs.isEmpty {
+            let cachedReferenced = await EventStore.shared.loadEmojiPacksByAddress(referencedPackAddrs)
+            for ev in cachedReferenced {
+                ingestEmojiSet(ev)
+            }
+        }
+        recomputeResolved()
+
         let writeRelays: [String]
         if let board = RelayScoreBoard.load(pubkey: pubkey) {
             writeRelays = board.scoredRelays.prefix(8).map { $0.url }
         } else {
             writeRelays = ["wss://relay.damus.io", "wss://relay.primal.net"]
         }
-        guard !writeRelays.isEmpty else {
-            recomputeResolved()
-            return
-        }
+        guard !writeRelays.isEmpty else { return }
 
         // Pull the user's kind-10030 (one event, replaceable) and any kind-30030 events
         // they have authored themselves. External packs (`a`-tag refs) are fetched in a
@@ -128,6 +152,9 @@ final class EmojiRepository {
         ingestUserList(ownEvents.first { $0.kind == 10030 })
         for ev in ownEvents where ev.kind == 30030 {
             ingestEmojiSet(ev)
+        }
+        if !ownEvents.isEmpty {
+            await EventStore.shared.persist(ownEvents)
         }
 
         await fetchReferencedPacks()
@@ -292,6 +319,7 @@ final class EmojiRepository {
         }
         guard !byAuthor.isEmpty else { return }
 
+        var fetched: [NostrEvent] = []
         await withTaskGroup(of: [NostrEvent].self) { group in
             for (author, refs) in byAuthor {
                 group.addTask { [author, refs] in
@@ -313,7 +341,11 @@ final class EmojiRepository {
             }
             for await events in group {
                 for ev in events { ingestEmojiSet(ev) }
+                fetched.append(contentsOf: events)
             }
+        }
+        if !fetched.isEmpty {
+            await EventStore.shared.persist(fetched)
         }
     }
 
@@ -328,6 +360,7 @@ final class EmojiRepository {
                 map[ce.shortcode] = ce.url
             }
         }
+        let changed = map != resolvedCustomMap
         resolvedCustomMap = map
 
         // Backward-compat flat list for composer autocomplete.
@@ -343,6 +376,13 @@ final class EmojiRepository {
             }
         }
         emoji = flat
+
+        // Bump only on actual change so observers don't re-key their caches
+        // for no-op refreshes (cache seed → relay refresh that returns the
+        // same packs).
+        if changed {
+            generation &+= 1
+        }
     }
 
     // MARK: - Persistence (UserDefaults)
@@ -426,6 +466,10 @@ final class EmojiRepository {
         self.directEmojis = directEmojis
         self.referencedPackAddrs = packAddrs
         self.userListCreatedAt = createdAt
+        // Persist our own kind-10030 so the next cold launch sees the update
+        // even if the relay round-trip never returns it (e.g. user goes
+        // offline immediately after toggling a pack).
+        await EventStore.shared.persist([event])
         await fetchReferencedPacks()
         recomputeResolved()
     }
