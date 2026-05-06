@@ -1,5 +1,8 @@
 import Foundation
 import CryptoKit
+import os.log
+
+private let backupLog = Logger(subsystem: "wisp", category: "wallet-backup")
 
 /// Wisp-specific (non-standard NIP) protocol: encrypted Spark wallet seed backup
 /// stored on relays as a kind 30078 addressable event with NIP-44-encrypted content.
@@ -61,16 +64,36 @@ nonisolated enum Nip78Backup {
 
     /// Decrypt a backup event and return the mnemonic if it parses as a valid BIP-39 word count.
     /// Same Signer-facade routing as `createBackupEvent` so this works for remote signers.
-    static func decryptBackup(keypair: Keypair, event: NostrEvent) async -> String? {
-        guard !isDeletedBackup(event) else { return nil }
-        guard let decrypted = try? await Signer.nip44Decrypt(
-            keypair: keypair,
-            peerPubkey: event.pubkey,
-            payload: event.content
-        ) else { return nil }
-        let trimmed = decrypted.trimmingCharacters(in: .whitespacesAndNewlines)
-        let wordCount = trimmed.split(whereSeparator: { $0.isWhitespace }).count
-        return [12, 15, 18, 21, 24].contains(wordCount) ? trimmed : nil
+    /// Returns `.success(nil)` when the event itself is a tombstone (deleted backup) or the
+    /// decrypt produced text that doesn't match a BIP-39 word count — both cases are
+    /// "skip this entry, but don't blame the signer." Returns `.failure(...)` when the
+    /// decrypt RPC actually errored, so the caller can distinguish "no usable backup
+    /// here" from "the signer rejected nip44_decrypt and every event will fail."
+    enum DecryptOutcome {
+        case ok(String)
+        case skip
+        case failed(Error)
+    }
+
+    static func decryptBackup(keypair: Keypair, event: NostrEvent) async -> DecryptOutcome {
+        if isDeletedBackup(event) { return .skip }
+        do {
+            let decrypted = try await Signer.nip44Decrypt(
+                keypair: keypair,
+                peerPubkey: event.pubkey,
+                payload: event.content
+            )
+            let trimmed = decrypted.trimmingCharacters(in: .whitespacesAndNewlines)
+            let wordCount = trimmed.split(whereSeparator: { $0.isWhitespace }).count
+            if [12, 15, 18, 21, 24].contains(wordCount) {
+                return .ok(trimmed)
+            }
+            backupLog.warning("decrypt produced non-BIP39 text (\(wordCount) words) for event \(event.id, privacy: .public)")
+            return .skip
+        } catch {
+            backupLog.error("decrypt failed for event \(event.id, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            return .failed(error)
+        }
     }
 
     static func isDeletedBackup(_ event: NostrEvent) -> Bool {
