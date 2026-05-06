@@ -74,22 +74,31 @@ struct LinkPreviewView: View {
         } label: {
             VStack(alignment: .leading, spacing: 0) {
                 if let imageUrl = data.image, let img = URL(string: imageUrl), settings.autoLoadMedia {
-                    AsyncImage(url: img) { phase in
-                        switch phase {
-                        case .success(let image):
-                            image.resizable()
-                                .aspectRatio(contentMode: .fill)
-                                .frame(maxWidth: .infinity)
-                                .frame(maxHeight: 180)
-                                .clipped()
-                        case .failure:
-                            EmptyView()
-                        default:
-                            Color.wispSurfaceVariant.opacity(0.4)
-                                .frame(height: 120)
-                                .overlay { ProgressView() }
+                    // Wrap the image in a fixed-height container so an
+                    // `aspectRatio(.fill)` source (almost every OG image
+                    // is wider than tall) can't render past 180pt and
+                    // leave its overflow as live hit-test area above /
+                    // below the card. `.clipped()` masks drawing but
+                    // does NOT shrink the gesture region; without this
+                    // wrapper a tap on the body line just above the card
+                    // would land on the Button and open the URL.
+                    Color.clear
+                        .frame(height: 180)
+                        .overlay {
+                            AsyncImage(url: img) { phase in
+                                switch phase {
+                                case .success(let image):
+                                    image.resizable()
+                                        .aspectRatio(contentMode: .fill)
+                                case .failure:
+                                    EmptyView()
+                                default:
+                                    Color.wispSurfaceVariant.opacity(0.4)
+                                        .overlay { ProgressView() }
+                                }
+                            }
                         }
-                    }
+                        .clipped()
                 }
 
                 VStack(alignment: .leading, spacing: 4) {
@@ -120,6 +129,11 @@ struct LinkPreviewView: View {
             }
             .background(Color.wispSurfaceVariant.opacity(0.3))
             .clipShape(RoundedRectangle(cornerRadius: 12))
+            // Pin the gesture region to the visible rounded card so that
+            // taps in the body text or gap immediately above the preview
+            // fall through to the enclosing post NavigationLink instead
+            // of opening the link.
+            .contentShape(RoundedRectangle(cornerRadius: 12))
             .overlay(
                 RoundedRectangle(cornerRadius: 12)
                     .stroke(Color.wispSurfaceVariant, lineWidth: 1)

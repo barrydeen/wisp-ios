@@ -1,5 +1,16 @@
 import SwiftUI
 
+/// Reports the intrinsic body height of a post card up to the
+/// `naturalContentHeight` state. Defined as a `max` reducer so a tall
+/// child (an image grid, a quoted-note image) wins over a short sibling
+/// when the body holds multiple groups.
+private struct PostBodyHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 struct PostCardView: View {
     let event: NostrEvent
     let profile: ProfileData?
@@ -30,6 +41,14 @@ struct PostCardView: View {
     @Environment(AppSettings.self) private var settings
     @State private var expanded = false
     @State private var contentExpanded = false
+    /// Largest intrinsic height we've observed for the body content.
+    /// Latched (only grows) so the cap stays applied once the post is
+    /// known to overflow, even if a sub-pixel relayout reports a slightly
+    /// smaller value on a subsequent pass. Drives the "Show more" toggle
+    /// — text-only posts trigger via the char-count heuristic, anything
+    /// that *renders* taller than `longPostCollapsedHeight` (tall image,
+    /// quoted note with media, image grid, etc.) triggers via this.
+    @State private var naturalContentHeight: CGFloat = 0
     @State private var showReactionPicker = false
     @State private var showEmojiLibrary = false
     /// Cached global frame of the heart button, used to flip the popover
@@ -85,26 +104,11 @@ struct PostCardView: View {
     /// Threshold above which a kind-1 body gets a "Show more" toggle. Tuned for
     /// roughly the height of a 12-line post — anything longer dominates the feed.
     private static let longPostCharThreshold = 600
-    private static let longPostCollapsedHeight: CGFloat = 280
-
-    /// Treat a post as "long" when it has at least one image / video whose
-    /// NIP-92 imeta `dim` is taller than wide — those render at intrinsic
-    /// height inside the card and dominate the feed otherwise (a single
-    /// portrait screenshot can scroll for screenfuls). Landscape media
-    /// stays uncollapsed since it sits within a normal card height.
-    static func eventHasTallMedia(_ event: NostrEvent) -> Bool {
-        for tag in event.tags where tag.first == "imeta" {
-            for entry in tag.dropFirst() where entry.hasPrefix("dim ") {
-                let dim = entry.dropFirst(4)
-                let parts = dim.split(separator: "x", maxSplits: 1)
-                guard parts.count == 2,
-                      let w = Double(parts[0]),
-                      let h = Double(parts[1]),
-                      w > 0 else { continue }
-                if h / w >= 1.0 { return true }
-            }
-        }
-        return false
+    /// Cap on a long-text body before "Show more" kicks in. Sized to ~66%
+    /// of the screen so collapsed text still has enough room to set context
+    /// without dominating the feed.
+    private static var longPostCollapsedHeight: CGFloat {
+        UIScreen.main.bounds.height * 0.66
     }
 
     private struct ActionAlert: Identifiable {
@@ -271,8 +275,9 @@ struct PostCardView: View {
             } else {
             VStack(alignment: .leading, spacing: 8) {
                 if !displayEvent.content.isEmpty || !displayEvent.tags.isEmpty {
+                    let cap = Self.longPostCollapsedHeight
                     let isLong = displayEvent.content.count > Self.longPostCharThreshold
-                                 || Self.eventHasTallMedia(displayEvent)
+                                 || naturalContentHeight > cap
                     let collapsed = isLong && !contentExpanded
                     VStack(alignment: .leading, spacing: 6) {
                         RichContentView(
@@ -293,11 +298,31 @@ struct PostCardView: View {
                         // anything past the threshold rather than shrinking
                         // a portrait video into an unreadable thumbnail.
                         .fixedSize(horizontal: false, vertical: true)
+                        // Measure the intrinsic body height *before* the
+                        // maxHeight cap is applied. With `.fixedSize` upstream,
+                        // the inner content keeps its full intrinsic size even
+                        // when the outer frame is capped — so the GeometryReader
+                        // here reports e.g. 1000pt for a tall quoted-note image
+                        // post, even while the outer `.frame(maxHeight:)` clips
+                        // visible drawing to 615pt. Latching to the largest
+                        // observed value avoids feedback loops from sub-pixel
+                        // relayout passes.
+                        .background(
+                            GeometryReader { proxy in
+                                Color.clear
+                                    .preference(key: PostBodyHeightKey.self, value: proxy.size.height)
+                            }
+                        )
                         .frame(
-                            maxHeight: collapsed ? Self.longPostCollapsedHeight : .infinity,
+                            maxHeight: collapsed ? cap : .infinity,
                             alignment: .top
                         )
                         .clipped()
+                        .onPreferenceChange(PostBodyHeightKey.self) { h in
+                            if h > naturalContentHeight + 0.5 {
+                                naturalContentHeight = h
+                            }
+                        }
                         // Pin the hit-test area to the clipped rectangle.
                         // `.clipped()` clips drawing but NOT taps, so a
                         // tile (or any other inner Button) that overflows

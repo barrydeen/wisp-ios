@@ -170,6 +170,16 @@ struct QuotedNoteView: View {
                             showLinkPreviews: false,
                             nested: true
                         )
+                        // Render media at intrinsic height so an image
+                        // inside an embedded note fills the card's width
+                        // (parent_width × aspect). Without this, the
+                        // outer `.frame(maxHeight:)` propagates a hard
+                        // height down through `.aspectRatio(.fit)` and
+                        // the image shrinks horizontally to keep aspect,
+                        // leaving large empty margins around a postage-
+                        // stamp-sized preview. The cap then clips the
+                        // bottom rather than scaling the image.
+                        .fixedSize(horizontal: false, vertical: true)
                         .frame(
                             maxHeight: collapsed ? Self.longPostCollapsedHeight : .infinity,
                             alignment: .top
