@@ -39,7 +39,21 @@ struct PostCardView: View {
     @State private var heartButtonFrame: CGRect = .zero
     @State private var reactionArrowEdge: Edge = .top
     @State private var showDeleteConfirm = false
+    @State private var showMuteUserConfirm = false
+    /// True when the user tapped Zap but no wallet is configured. Surfaces a
+    /// confirmation prompt that can launch the Wallet tab to set one up.
+    @State private var showWalletSetupPrompt = false
+    /// Cached pubkey + display name of the user about to be muted, captured
+    /// when the menu item is tapped so the confirmation dialog has stable
+    /// values to render and act on regardless of whether the underlying
+    /// PostCardView re-renders during the dialog.
+    @State private var muteCandidate: MuteCandidate?
     @State private var actionAlert: ActionAlert?
+
+    private struct MuteCandidate: Equatable {
+        let pubkey: String
+        let displayName: String
+    }
     /// Single source of truth for every body-level sheet on the card. Stacking
     /// multiple `.sheet(isPresented:)` modifiers on the same view is a known
     /// SwiftUI antipattern that loops on real devices — a sheet's `dismiss()`
@@ -269,11 +283,29 @@ struct PostCardView: View {
                             onHashtagTap: onHashtagTap,
                             linksEnabled: true
                         )
+                        // `.fixedSize(vertical: true)` so inline media render
+                        // at their natural intrinsic height (parent_width ÷
+                        // aspect) instead of getting scaled down by the
+                        // parent's `maxHeight` constraint. The outer
+                        // `.frame(maxHeight:)` + `.clipped()` then crops
+                        // anything past the threshold rather than shrinking
+                        // a portrait video into an unreadable thumbnail.
+                        .fixedSize(horizontal: false, vertical: true)
                         .frame(
                             maxHeight: collapsed ? Self.longPostCollapsedHeight : .infinity,
                             alignment: .top
                         )
                         .clipped()
+                        // Pin the hit-test area to the clipped rectangle.
+                        // `.clipped()` clips drawing but NOT taps, so a
+                        // tile (or any other inner Button) that overflows
+                        // past the height cap still receives taps in its
+                        // natural frame — including the y range where the
+                        // action bar sits below this body. Without this
+                        // tapping the heart icon on a collapsed
+                        // gallery-overflowing post would open the gallery
+                        // fullscreen instead.
+                        .contentShape(Rectangle())
                         .overlay(alignment: .bottom) {
                             if collapsed {
                                 LinearGradient(
@@ -306,7 +338,7 @@ struct PostCardView: View {
                         onCastVote: { optionIds in handleCastVote(displayEvent, optionIds: optionIds) },
                         onZapVote: { idx in
                             zapPollOptionIndex = idx
-                            activeSheet = .zap
+                            triggerZapOrWalletSetup()
                         }
                     )
                 }
@@ -416,6 +448,35 @@ struct PostCardView: View {
         } message: {
             Text("Publishes a NIP-09 deletion request. Relays may keep their copy.")
         }
+        .confirmationDialog(
+            muteCandidate.map { "Mute \($0.displayName)?" } ?? "Mute this user?",
+            isPresented: $showMuteUserConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Mute", role: .destructive) {
+                if let pk = muteCandidate?.pubkey {
+                    MuteRepository.shared.blockUser(pk)
+                }
+                muteCandidate = nil
+            }
+            Button("Cancel", role: .cancel) { muteCandidate = nil }
+        } message: {
+            Text("Their posts will be hidden from your feed and replaced with a placeholder in threads.")
+        }
+        .confirmationDialog(
+            settings.fiatModeEnabled ? "Set up a wallet to send money" : "Set up a wallet to send zaps",
+            isPresented: $showWalletSetupPrompt,
+            titleVisibility: .visible
+        ) {
+            Button("Set Up Wallet") {
+                NotificationCenter.default.post(name: .openWalletTab, object: nil)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(settings.fiatModeEnabled
+                 ? "Connect a Lightning wallet (Spark or NWC) from the Wallet tab to send money."
+                 : "Connect a Lightning wallet (Spark or NWC) from the Wallet tab to send zaps.")
+        }
         .alert(item: $actionAlert) { alert in
             Alert(title: Text(alert.title), message: Text(alert.message), dismissButton: .default(Text("OK")))
         }
@@ -449,11 +510,17 @@ struct PostCardView: View {
             Button {
                 activeSheet = .replyCompose
             } label: {
-                let replyCount = forcedReplyCount ?? (repoBox.counts.replies > 0 ? repoBox.counts.replies : (engagement?.replies ?? 0))
+                // Display the highest count we know about across the three
+                // sources so cold opens get a count from the engagement
+                // network query instantly, without waiting for every reply
+                // event to stream in. `forcedReplyCount` (the in-thread
+                // visible count, blocked-author-aware) wins as more local
+                // replies arrive.
+                let networkCount = max(repoBox.counts.replies, engagement?.replies ?? 0)
+                let replyCount = max(forcedReplyCount ?? 0, networkCount)
                 actionItem(
                     icon: "bubble.right",
-                    count: replyCount > 0 ? replyCount : nil,
-                    tint: replyCount > 0 ? Color.wispPrimary : nil
+                    count: replyCount > 0 ? replyCount : nil
                 )
             }
             .buttonStyle(.plain)
@@ -463,7 +530,7 @@ struct PostCardView: View {
             repostAction
             Spacer()
             Button {
-                activeSheet = .zap
+                triggerZapOrWalletSetup()
             } label: {
                 actionItem(
                     image: settings.zapImage,
@@ -549,7 +616,18 @@ struct PostCardView: View {
 
             if !isMine {
                 Button {
-                    if userMuted { muteRepo.unblockUser(target.pubkey) } else { muteRepo.blockUser(target.pubkey) }
+                    if userMuted {
+                        muteRepo.unblockUser(target.pubkey)
+                    } else {
+                        // Confirmation prompt before muting — direct mute
+                        // can collapse the thread the user is reading
+                        // (per #69) and is hard to discover how to undo.
+                        let displayed = profiles[target.pubkey]?.displayString
+                            ?? profile?.displayString
+                            ?? Nip19.shortNpub(hex: target.pubkey)
+                        muteCandidate = MuteCandidate(pubkey: target.pubkey, displayName: displayed)
+                        showMuteUserConfirm = true
+                    }
                 } label: {
                     Label(userMuted ? "Unmute User" : "Mute User", systemImage: "speaker.slash")
                 }
@@ -924,6 +1002,19 @@ struct PostCardView: View {
     private func handleCastVote(_ pollEvent: NostrEvent, optionIds: [String]) {
         guard let keypair = NostrKey.load() else { return }
         Task { _ = await PollVoteSender.castVote(pollEvent: pollEvent, optionIds: optionIds, keypair: keypair) }
+    }
+
+    /// Open the zap composer if a wallet is configured. Otherwise surface a
+    /// confirmation prompt that suggests setting one up — without it the
+    /// zap button was a silent no-op (the `.zap` sheet renders nothing
+    /// when `walletStore` is unset, leaving the user wondering whether
+    /// the tap registered).
+    private func triggerZapOrWalletSetup() {
+        if let store = walletStore, store.mode != nil {
+            activeSheet = .zap
+        } else {
+            showWalletSetupPrompt = true
+        }
     }
 }
 

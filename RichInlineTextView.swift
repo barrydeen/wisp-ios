@@ -125,13 +125,27 @@ struct RichInlineTextView: UIViewRepresentable {
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: ContentSizingTextView, context: Context) -> CGSize? {
-        let width = proposal.width ?? .infinity
-        guard width.isFinite, width > 0 else { return nil }
-        // Constrain the text container so wrapping happens at the proposed width.
-        uiView.textContainer.size = CGSize(width: width, height: .greatestFiniteMagnitude)
-        let target = CGSize(width: width, height: .greatestFiniteMagnitude)
+        // Resolve the width SwiftUI proposed. Async re-layout passes (a quoted
+        // note finishing its load, an OG link preview image arriving, an
+        // inline image's bytes resolving) can briefly propose `nil` /
+        // `.infinity`. Returning `nil` in that window made SwiftUI fall back
+        // to the UITextView's natural size — which for an unconstrained
+        // text container is the entire body rendered as a single infinite
+        // line. That single-line frame then propagated up the stack and
+        // bursted the parent card past both screen edges. Cap to the
+        // screen content width so the text always wraps to a sane line.
+        let proposedWidth = proposal.width
+        let resolvedWidth: CGFloat
+        if let w = proposedWidth, w.isFinite, w > 0 {
+            resolvedWidth = w
+        } else {
+            resolvedWidth = max(1, UIScreen.main.bounds.width - 32)
+        }
+        // Constrain the text container so wrapping happens at the resolved width.
+        uiView.textContainer.size = CGSize(width: resolvedWidth, height: .greatestFiniteMagnitude)
+        let target = CGSize(width: resolvedWidth, height: .greatestFiniteMagnitude)
         let size = uiView.sizeThatFits(target)
-        return CGSize(width: width, height: ceil(size.height))
+        return CGSize(width: resolvedWidth, height: ceil(size.height))
     }
 
     @MainActor

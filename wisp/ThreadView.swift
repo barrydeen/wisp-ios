@@ -193,21 +193,23 @@ struct ThreadView: View {
         if row.isBlocked {
             blockedPlaceholder
         } else {
-            Button {
+            // See `replyRow` for the rationale on `.onTapGesture` vs a
+            // wrapping `Button` — same nested-button hit-test issue on
+            // real devices.
+            PostCardView(
+                event: row.event,
+                profile: viewModel.profiles[row.event.pubkey],
+                profiles: viewModel.profiles,
+                engagement: viewModel.engagement[row.event.id],
+                ancestorCompact: true,
+                onProfileTap: { _ in },
+                onNoteTap: { _ in },
+                onHashtagTap: { _ in }
+            )
+            .contentShape(Rectangle())
+            .onTapGesture {
                 navigateToThread(eventId: row.event.id, authorPubkey: row.event.pubkey)
-            } label: {
-                PostCardView(
-                    event: row.event,
-                    profile: viewModel.profiles[row.event.pubkey],
-                    profiles: viewModel.profiles,
-                    engagement: viewModel.engagement[row.event.id],
-                    ancestorCompact: true,
-                    onProfileTap: { _ in },
-                    onNoteTap: { _ in },
-                    onHashtagTap: { _ in }
-                )
             }
-            .buttonStyle(.plain)
         }
     }
 
@@ -224,13 +226,13 @@ struct ThreadView: View {
                     profiles: viewModel.profiles,
                     engagement: engagement(for: row.event.id),
                     forcedReplyCount: viewModel.visibleRepliesCount,
-                    onProfileTap: { _ in },
+                    onProfileTap: { pk in path.append(ProfileRoute(pubkey: pk)) },
                     // Tapping a quoted note inside the focal pushes that
                     // note as its own focal, same as tapping a reply row.
                     onNoteTap: { quotedId in
                         navigateToThread(eventId: quotedId, authorPubkey: row.event.pubkey)
                     },
-                    onHashtagTap: { _ in }
+                    onHashtagTap: { tag in path.append(HashtagFeedRoute(tag: tag)) }
                 )
             }
             Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
@@ -263,30 +265,34 @@ struct ThreadView: View {
         if row.isBlocked {
             blockedPlaceholder
         } else {
-            // The whole card is the tap target. The action-bar bubble
-            // shows the network reply count for this reply — tapping
-            // pushes a new ThreadView with this reply as its focal,
-            // where those deeper replies are loaded and shown.
-            Button {
+            // The whole card is the tap target — tapping pushes a new
+            // ThreadView with this reply as its focal. Use
+            // `.onTapGesture` rather than a `Button` wrapper so inner
+            // action-bar buttons + inline `@mention` link taps hit-test
+            // correctly on real devices. With a nested `Button`, real
+            // hardware fires both the inner and outer actions on the same
+            // touch — the comment icon opened compose AND triggered a
+            // push, which then dismissed the compose sheet and caused it
+            // to reopen in a tight loop.
+            PostCardView(
+                event: row.event,
+                profile: viewModel.profiles[row.event.pubkey],
+                profiles: viewModel.profiles,
+                engagement: engagement(for: row.event.id),
+                onProfileTap: { pk in path.append(ProfileRoute(pubkey: pk)) },
+                // Tap on an embedded quoted note pushes that note as
+                // its own focal. SwiftUI's nested-Button hit-testing
+                // gives the inner QuotedNoteView's tap area priority,
+                // so this fires before the surrounding row tap.
+                onNoteTap: { quotedId in
+                    navigateToThread(eventId: quotedId, authorPubkey: row.event.pubkey)
+                },
+                onHashtagTap: { tag in path.append(HashtagFeedRoute(tag: tag)) }
+            )
+            .contentShape(Rectangle())
+            .onTapGesture {
                 navigateToThread(eventId: row.event.id, authorPubkey: row.event.pubkey)
-            } label: {
-                PostCardView(
-                    event: row.event,
-                    profile: viewModel.profiles[row.event.pubkey],
-                    profiles: viewModel.profiles,
-                    engagement: engagement(for: row.event.id),
-                    onProfileTap: { _ in },
-                    // Tap on an embedded quoted note pushes that note as
-                    // its own focal. SwiftUI's nested-Button hit-testing
-                    // gives the inner QuotedNoteView's tap area priority,
-                    // so this fires before the surrounding row Button.
-                    onNoteTap: { quotedId in
-                        navigateToThread(eventId: quotedId, authorPubkey: row.event.pubkey)
-                    },
-                    onHashtagTap: { _ in }
-                )
             }
-            .buttonStyle(.plain)
         }
     }
 

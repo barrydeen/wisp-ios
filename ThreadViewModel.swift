@@ -105,11 +105,15 @@ final class ThreadViewModel {
 
     @MainActor
     private func purgeAuthor(_ pubkey: String) {
-        let dropped = events.values.filter { $0.pubkey == pubkey }.map(\.id)
-        guard !dropped.isEmpty else { return }
-        for id in dropped {
-            events.removeValue(forKey: id)
-            blockedEventIds.remove(id)
+        let affected = events.values.filter { $0.pubkey == pubkey }.map(\.id)
+        guard !affected.isEmpty else { return }
+        // Mark every event from this author as blocked rather than evicting
+        // it from `events`. `rebuildSlices` reads `blockedEventIds` to render
+        // a placeholder card in place — so the focal / ancestors / replies
+        // keep their positions and the thread doesn't collapse just because
+        // the user muted someone partway through reading (#69).
+        for id in affected {
+            blockedEventIds.insert(id)
         }
         rebuildSlices()
     }
@@ -374,17 +378,42 @@ final class ThreadViewModel {
 
     // MARK: - Cache seed
 
+    /// If `event` is a kind-6 repost whose JSON payload parses into an
+    /// inner kind-1, return that inner event; otherwise return `event`
+    /// unchanged. Used by the cache seed so a thread opened directly on a
+    /// repost's id still focuses on the original note rather than
+    /// rendering the kind-6 with its banner alongside the same inner
+    /// content as an ancestor.
+    private nonisolated func unwrapRepostForFocal(_ event: NostrEvent) -> NostrEvent {
+        guard event.kind == 6, !event.content.isEmpty,
+              let data = event.content.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let inner = NostrEvent(json: json), inner.kind == 1 else {
+            return event
+        }
+        return inner
+    }
+
     private func seedFromCache() async {
         // Fast path: direct id lookup for the seed so we can paint the root note
         // immediately. The thread-cache substring scan below is O(all kind-1 events)
         // and is what made tapping a feed note feel laggy — flipping `rootEvent`
         // synchronously here lets the UI render before we walk the replies.
         if let seedEvent = await eventStore.eventsByIds([seedEventId]).first {
-            let resolvedRoot = Nip10.rootId(of: seedEvent) ?? seedEvent.id
+            // If a notification deep-link or a caller that didn't resolve
+            // through `displayEventId` handed us a kind-6 repost as the
+            // seed, the focal would render the kind-6 (inner content +
+            // "X reposted" banner) AND `Nip10.replyTarget` would walk the
+            // inner kind-1 in as an ancestor on top — the same content
+            // appearing twice in the thread. Substitute the parsed inner
+            // kind-1 in for the focal slot so the chain walk operates
+            // against the original note.
+            let focalEvent = unwrapRepostForFocal(seedEvent)
+            let resolvedRoot = Nip10.rootId(of: focalEvent) ?? focalEvent.id
             rootId = resolvedRoot
-            events[seedEvent.id] = seedEvent
-            if seedEvent.id == resolvedRoot {
-                rootEvent = seedEvent
+            events[seedEventId] = focalEvent
+            if focalEvent.id == resolvedRoot {
+                rootEvent = focalEvent
                 isLoading = false
             }
         }
@@ -785,6 +814,10 @@ final class ThreadViewModel {
         let directReplies = events.values
             .filter { event in
                 guard event.id != seedEventId else { return false }
+                // Replies are kind-1 only. A kind-6 repost references this note
+                // via its `e` tag too, but it isn't a reply — without this
+                // guard it'd surface as a duplicate card under the focal.
+                guard event.kind == 1 else { return false }
                 return Nip10.replyTarget(of: event) == seedEventId
             }
             .sorted { $0.createdAt < $1.createdAt }

@@ -166,7 +166,8 @@ struct QuotedNoteView: View {
                             onProfileTap: onProfileTap,
                             onNoteTap: onNoteTap,
                             onHashtagTap: onHashtagTap,
-                            showLinkPreviews: false
+                            showLinkPreviews: false,
+                            nested: true
                         )
                         .frame(
                             maxHeight: collapsed ? Self.longPostCollapsedHeight : .infinity,

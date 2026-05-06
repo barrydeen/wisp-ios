@@ -9,4 +9,9 @@ extension Notification.Name {
     /// reflect the event back (which often doesn't happen at all when publish writes go to a
     /// different relay set than the read subscription).
     static let nostrEventPublished = Notification.Name("NostrEventPublished")
+
+    /// Posted when a deeply-nested view needs `MainView` to switch to the
+    /// wallet tab — typically the "Set Up Wallet" affordance shown when
+    /// the user tries to zap without a configured wallet.
+    static let openWalletTab = Notification.Name("WispOpenWalletTab")
 }

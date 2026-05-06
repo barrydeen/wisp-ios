@@ -133,7 +133,7 @@ final class FeedViewModel {
 
             for event in filtered { markActivityIfFollowed(event) }
             seenIds.formUnion(ids)
-            events = filtered
+            events = Self.consolidateReposts(filtered)
 
             let pubkeysInCache = Set(filtered.map(\.pubkey))
             profiles = profileRepo.getAll(Array(pubkeysInCache))
@@ -221,7 +221,7 @@ final class FeedViewModel {
                 return (result, seen)
             }.value
             seenIds.formUnion(reIds)
-            events = reFiltered
+            events = Self.consolidateReposts(reFiltered)
             await refresh()
             isLoading = false
         }
@@ -309,7 +309,7 @@ final class FeedViewModel {
         guard !batch.isEmpty else { return }
 
         let sortedBatch = batch.sorted { $0.createdAt > $1.createdAt }
-        events = Self.mergeSortedDesc(events, sortedBatch)
+        events = Self.consolidateReposts(Self.mergeSortedDesc(events, sortedBatch))
 
         if relayFeedStatus != .streaming {
             relayFeedStatus = .streaming
@@ -389,6 +389,55 @@ final class FeedViewModel {
         return merged
     }
 
+    /// Drop original kind-1 notes that have a kind-6 repost in the feed,
+    /// and keep only the most-recent kind-6 per inner-event-id. Reposts
+    /// then appear in the feed at their own `createdAt` (when the
+    /// repost happened) rather than back-to-back with the original
+    /// note's older timestamp, and multiple reposts of the same note
+    /// collapse into a single timeline event ordered by the latest
+    /// repost. Preserves the input order for non-repost events.
+    static func consolidateReposts(_ events: [NostrEvent]) -> [NostrEvent] {
+        // Pass 1: per inner-event-id, find the kind-6 with the highest
+        // `createdAt` and remember its event id.
+        var keepRepostIdByInner: [String: String] = [:]
+        var keepRepostTsByInner: [String: Int] = [:]
+        for event in events where event.kind == 6 {
+            guard let innerId = innerRepostId(of: event) else { continue }
+            if let prevTs = keepRepostTsByInner[innerId], prevTs >= event.createdAt {
+                continue
+            }
+            keepRepostIdByInner[innerId] = event.id
+            keepRepostTsByInner[innerId] = event.createdAt
+        }
+
+        let repostedInnerIds = Set(keepRepostIdByInner.keys)
+        let keptRepostIds = Set(keepRepostIdByInner.values)
+
+        // Pass 2: drop superseded kind-6 reposts and any kind-1 originals
+        // that one of the kept reposts already covers.
+        return events.filter { event in
+            switch event.kind {
+            case 6: return keptRepostIds.contains(event.id)
+            case 1: return !repostedInnerIds.contains(event.id)
+            default: return true
+            }
+        }
+    }
+
+    /// The id of the inner kind-1 inside a kind-6 repost — the JSON
+    /// payload in `content` per NIP-18, with the first `e` tag as a
+    /// fallback for older clients that omit the embedded event.
+    static func innerRepostId(of event: NostrEvent) -> String? {
+        guard event.kind == 6 else { return nil }
+        if !event.content.isEmpty,
+           let data = event.content.data(using: .utf8),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let id = json["id"] as? String, !id.isEmpty {
+            return id
+        }
+        return event.tags.first(where: { $0.count >= 2 && $0[0] == "e" })?[1]
+    }
+
     private func startSubscription(relays: [String]) {
         connectedRelayCount = relays.count
         let filter = NostrFilter(kinds: Self.relayFeedKinds, limit: 100)
@@ -450,7 +499,7 @@ final class FeedViewModel {
             }
             guard !added.isEmpty else { return }
             let sortedAdded = added.sorted { $0.createdAt > $1.createdAt }
-            self.events = Self.mergeSortedDesc(self.events, sortedAdded)
+            self.events = Self.consolidateReposts(Self.mergeSortedDesc(self.events, sortedAdded))
             Task { await EventPersistQueue.shared.enqueue(added) }
         }
     }

@@ -152,6 +152,13 @@ struct MainView: View {
         }
         .background(Color.wispBackground)
         .environment(walletStore)
+        .onReceive(NotificationCenter.default.publisher(for: .openWalletTab)) { _ in
+            // PostCardView posts this when the user tries to zap without
+            // a configured wallet and chooses "Set Up Wallet" on the
+            // resulting prompt — switch to the wallet tab so they land on
+            // the setup UI directly.
+            selectedTab = .wallet
+        }
         .task {
             GroupListViewModelRegistry.register(groupListVM)
 

@@ -14,6 +14,12 @@ struct RichContentView: View {
     /// NavigationLink and need the tap to fall through; surfaces with no
     /// enclosing tap target (profile bio, composer preview) opt in.
     var linksEnabled: Bool = false
+    /// When true, signal that this content is rendered inside a nested
+    /// container (e.g. `QuotedNoteView` inside a `PostCardView` body) so
+    /// children can size themselves against the actual available width
+    /// rather than the full screen. Used by `MediaGridView` to opt out of
+    /// its feed-only edge-bleed layout.
+    var nested: Bool = false
 
     @Environment(AppSettings.self) private var settings
 
@@ -155,7 +161,7 @@ struct RichContentView: View {
         case .block(let seg):
             renderBlock(seg)
         case .mediaGroup(let segs):
-            MediaGridView(items: segs.compactMap(mediaItem(from:)))
+            MediaGridView(items: segs.compactMap(mediaItem(from:)), nested: nested)
         }
     }
 

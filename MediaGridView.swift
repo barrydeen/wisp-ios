@@ -14,6 +14,14 @@ import SwiftUI
 ///    navigate every item in the post.
 struct MediaGridView: View {
     let items: [MediaItem]
+    /// When true, the gallery is rendered inside another card (typically
+    /// a `QuotedNoteView` embedded in a `PostCardView` body) and must
+    /// size itself against the parent's available width via
+    /// `GeometryReader` rather than the screen's full width. Without
+    /// this opt-in, the feed's edge-bleed math (`screenWidth - 16`,
+    /// negative trailing padding) overshoots the nested container by
+    /// the parent's own padding (~28pt) and bleeds past the screen edge.
+    var nested: Bool = false
     @State private var openIndex: Int?
     @State private var currentItemId: String?
 
@@ -59,6 +67,68 @@ struct MediaGridView: View {
     }
 
     var body: some View {
+        if nested {
+            nestedBody
+        } else {
+            feedBody
+        }
+    }
+
+    /// Nested-container layout: ask `GeometryReader` for the actual
+    /// available width and constrain the gallery to it. No edge bleed —
+    /// the parent owns its own padding so we shouldn't paint over it.
+    @ViewBuilder
+    private var nestedBody: some View {
+        GeometryReader { geo in
+            let galleryWidth = geo.size.width
+            let tileWidth = galleryWidth * tileWidthFraction
+            let tileHeight = tileWidth / tileAspect
+
+            ZStack(alignment: .bottom) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(spacing: tileSpacing) {
+                        ForEach(items) { item in
+                            tile(item, width: tileWidth, height: tileHeight)
+                        }
+                    }
+                    .scrollTargetLayout()
+                }
+                .scrollTargetBehavior(.viewAligned)
+                .scrollPosition(id: $currentItemId)
+                .frame(width: galleryWidth, height: tileHeight)
+
+                if items.count > 1 {
+                    indexBadge
+                        .padding(.bottom, 12)
+                }
+            }
+            .frame(width: galleryWidth, height: tileHeight, alignment: .leading)
+        }
+        .frame(height: tileHeightForNested)
+        .fullScreenCover(item: Binding(
+            get: { openIndex.map { GallerySelection(index: $0) } },
+            set: { openIndex = $0?.index }
+        )) { selection in
+            FullScreenMediaPager(items: items, initialIndex: selection.index)
+        }
+        .onAppear {
+            if currentItemId == nil { currentItemId = items.first?.id }
+        }
+    }
+
+    /// Approximate tile height for the nested case. Used as the
+    /// `GeometryReader`'s explicit height so the parent VStack reserves
+    /// the right vertical space — `GeometryReader` itself is greedy.
+    private var tileHeightForNested: CGFloat {
+        // Same formula as feedBody, but anchored to a typical nested
+        // container width (screen width minus the parent card's 16pt
+        // padding minus the QuotedNoteView's 12pt inner padding × 2).
+        let approxWidth = max(1, UIScreen.main.bounds.width - 56)
+        return approxWidth * tileWidthFraction / tileAspect
+    }
+
+    @ViewBuilder
+    private var feedBody: some View {
         let screenWidth = UIScreen.main.bounds.width
         // Gallery rect: from card's left padding (`cardLeadingPadding` from screen left)
         // all the way to the screen's right edge.

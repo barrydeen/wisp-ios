@@ -70,15 +70,37 @@ struct InlineVideoView: View {
                 CroppingVideoPlayer(player: player, gravity: videoGravity)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .onAppear {
-                        MediaAudioSession.activatePlayback()
+                        // Pin the shared AVAudioSession to mixed mode so
+                        // silent (muted) playback coexists with whatever
+                        // the user is listening to in another app
+                        // (podcast, music). Without this, an earlier
+                        // exclusive-mode player (live stream, audio note,
+                        // tapped-unmute video) would have left the session
+                        // at `.playback` no-mix, and AVPlayer.play() under
+                        // that mode interrupts other apps even with
+                        // `isMuted = true`.
+                        MediaAudioSession.activateMixed()
                         player.isMuted = isMuted
                         player.play()
                     }
                     .onDisappear {
                         player.pause()
                     }
-                    .onChange(of: muteState.unmutedUrl) { _, _ in
-                        player.isMuted = isMuted
+                    .onChange(of: muteState.unmutedUrl) { _, newValue in
+                        let nowMuted = isMuted
+                        if !nowMuted, player.isMuted {
+                            // Just transitioned muted → unmuted on THIS
+                            // player. Take ownership of the session so
+                            // background audio actually pauses.
+                            MediaAudioSession.activateExclusive()
+                        } else if nowMuted, !player.isMuted, newValue == nil {
+                            // Just transitioned unmuted → muted (the
+                            // global slot was cleared). Drop back to mixed
+                            // so any background audio that ducked / paused
+                            // can resume.
+                            MediaAudioSession.activateMixed()
+                        }
+                        player.isMuted = nowMuted
                     }
 
                 VStack {
