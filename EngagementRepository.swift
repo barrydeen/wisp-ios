@@ -69,6 +69,7 @@ final class EngagementRepository {
         pending.removeAll()
         seenEngagementIds.removeAll()
         seenReactionKeys.removeAll()
+        seenZapPaymentHashes.removeAll()
         ReactionSender.shared.clear()
         RepostSender.shared.clear()
     }
@@ -136,6 +137,59 @@ final class EngagementRepository {
         guard current.reposters.contains(reposterPubkey) else { return }
         if current.reposts > 0 { current.reposts -= 1 }
         current.reposters.removeAll { $0 == reposterPubkey }
+        b.counts = current
+    }
+
+    // MARK: - Optimistic zaps
+
+    /// Lightning payment hashes already accounted for in a card's zap counts.
+    /// A zap receipt's id is generated server-side by the LNURL operator and
+    /// can't be reserved up front the way kind-7 / kind-6 ids can, so we
+    /// dedupe by the bolt11 invoice's payment hash — both sides (the
+    /// optimistic apply and the inbound kind-9735 receipt) carry the same
+    /// hash.
+    @ObservationIgnored private var seenZapPaymentHashes: Set<String> = []
+
+    /// Bump the zap totals for `eventId` immediately after the wallet has
+    /// successfully paid the bolt11 invoice, before the relay-broadcast
+    /// kind-9735 receipt has reached the engagement query. Idempotent per
+    /// `paymentHash`.
+    func applyOptimisticZap(
+        eventId: String,
+        paymentHash: String,
+        sats: Int64,
+        zapperPubkey: String,
+        message: String
+    ) {
+        guard !paymentHash.isEmpty else { return }
+        guard seenZapPaymentHashes.insert(paymentHash).inserted else { return }
+        queriedIds.insert(eventId)
+        let b = box(for: eventId)
+        var current = b.counts
+        current.zapSats += sats
+        current.zapCount += 1
+        current.zappers.append(Zapper(pubkey: zapperPubkey, sats: sats, message: message))
+        b.counts = current
+    }
+
+    /// Revert a prior optimistic zap apply. Called when the wallet payment
+    /// ultimately fails after we've already shown the bump.
+    func revertOptimisticZap(
+        eventId: String,
+        paymentHash: String,
+        sats: Int64,
+        zapperPubkey: String
+    ) {
+        guard seenZapPaymentHashes.remove(paymentHash) != nil else { return }
+        let b = box(for: eventId)
+        var current = b.counts
+        current.zapSats = max(0, current.zapSats - sats)
+        current.zapCount = max(0, current.zapCount - 1)
+        if let idx = current.zappers.firstIndex(where: {
+            $0.pubkey == zapperPubkey && $0.sats == sats
+        }) {
+            current.zappers.remove(at: idx)
+        }
         b.counts = current
     }
 
@@ -265,10 +319,17 @@ final class EngagementRepository {
             }
         case 9735:
             var sats: Int64 = 0
+            var paymentHash: String?
             if let bolt = event.tags.first(where: { $0.first == "bolt11" && $0.count >= 2 })?[1],
-               let decoded = Bolt11.decode(bolt),
-               let amt = decoded.amountSats {
-                sats = amt
+               let decoded = Bolt11.decode(bolt) {
+                sats = decoded.amountSats ?? 0
+                paymentHash = decoded.paymentHash
+            }
+            // Skip when we already counted this invoice via
+            // `applyOptimisticZap` (or via a previous receipt for the same
+            // bolt11 — relays sometimes deliver duplicates).
+            if let hash = paymentHash, !seenZapPaymentHashes.insert(hash).inserted {
+                return
             }
             current.zapSats += sats
             current.zapCount += 1

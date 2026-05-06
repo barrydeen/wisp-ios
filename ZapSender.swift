@@ -103,14 +103,36 @@ enum ZapSender {
             return .failure(.invoiceFetchFailed)
         }
 
+        let decodedBolt = Bolt11.decode(bolt11)
+        let paymentHash = decodedBolt?.paymentHash ?? ""
+
         // Record recipient → payment hash for transaction history display.
-        if let decoded = Bolt11.decode(bolt11), let hash = decoded.paymentHash {
-            recordZapRecipient(paymentHash: hash, recipientPubkey: recipientPubkey)
+        if !paymentHash.isEmpty {
+            recordZapRecipient(paymentHash: paymentHash, recipientPubkey: recipientPubkey)
         }
 
         switch await wallet.payInvoice(bolt11) {
-        case .success: return .success(())
-        case .failure(let err): return .failure(.payFailed(err.localizedDescription))
+        case .success:
+            // Optimistic engagement bump: payment is irreversible at this
+            // point and the relay-broadcast kind-9735 receipt can take
+            // several seconds to reach the engagement query. Show the
+            // count + zapper now; the inbound receipt is deduped against
+            // this same `paymentHash` so it doesn't double-count.
+            if let eventId, !paymentHash.isEmpty {
+                let zapperPubkey = isAnonymous ? "" : keypair.pubkey
+                await MainActor.run {
+                    EngagementRepository.shared.applyOptimisticZap(
+                        eventId: eventId,
+                        paymentHash: paymentHash,
+                        sats: amountSats,
+                        zapperPubkey: zapperPubkey,
+                        message: message
+                    )
+                }
+            }
+            return .success(())
+        case .failure(let err):
+            return .failure(.payFailed(err.localizedDescription))
         }
     }
 
