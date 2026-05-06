@@ -61,6 +61,22 @@ struct InlineVideoView: View {
     /// play audio at once.
     private var isMuted: Bool { muteState.unmutedUrl != meta.url }
 
+    /// Pre-play poster fallback when there's no imeta `image` URL (or it
+    /// hasn't loaded yet): prefer the AVFoundation-decoded first frame, fall
+    /// back to the NIP-92 blurhash, fall back to the underlying black tile.
+    @ViewBuilder
+    private var blurhashOrGeneratedPoster: some View {
+        if let blurImage = BlurHash.decode(meta.blurhash, width: 32, height: 32) {
+            GeneratedVideoPoster(videoUrl: meta.url) {
+                Image(uiImage: blurImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            }
+        } else {
+            GeneratedVideoPoster(videoUrl: meta.url) { Color.black.opacity(0.001) }
+        }
+    }
+
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 12)
@@ -162,17 +178,21 @@ struct InlineVideoView: View {
                         // present, AVFoundation-decoded first frame otherwise.
                         // The black RoundedRectangle below this ZStack still
                         // shows during the brief gap before the poster lands.
+                        // When neither poster URL nor decoded frame are ready
+                        // yet, fall through to a NIP-92 blurhash if one was
+                        // tagged on the imeta — same intent as the still-image
+                        // placeholder.
                         if let posterUrl = meta.posterUrl, let url = URL(string: posterUrl) {
                             AsyncImage(url: url) { phase in
                                 switch phase {
                                 case .success(let image):
                                     image.resizable().scaledToFill()
                                 default:
-                                    GeneratedVideoPoster(videoUrl: meta.url) { Color.black.opacity(0.001) }
+                                    blurhashOrGeneratedPoster
                                 }
                             }
                         } else {
-                            GeneratedVideoPoster(videoUrl: meta.url) { Color.black.opacity(0.001) }
+                            blurhashOrGeneratedPoster
                         }
                         VStack(spacing: 8) {
                             Image(systemName: "play.circle.fill")

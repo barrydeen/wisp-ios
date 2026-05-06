@@ -326,8 +326,14 @@ struct PostCardView: View {
                                 Text(contentExpanded ? "Show less" : "Show more")
                                     .font(.caption.weight(.semibold))
                                     .foregroundStyle(Color.wispPrimary)
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 7)
+                                    .background(Color.wispSurfaceVariant.opacity(0.6), in: Capsule())
+                                    .contentShape(Capsule())
                             }
                             .buttonStyle(.plain)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                            .padding(.top, 4)
                         }
                     }
                 }
@@ -484,17 +490,77 @@ struct PostCardView: View {
 
     // MARK: - Repost Banner
 
+    /// "Reposted by …" header, ported from the Android app. Pulls the
+    /// aggregated reposter list out of `EngagementBox.counts.reposters`
+    /// (populated by `EngagementRepository`'s engagement subscription
+    /// against the inner kind-1 id) and stacks up to 5 overlapping
+    /// avatars with a count-aware label.
     private var repostBanner: some View {
-        HStack(spacing: 6) {
-            CachedAvatarView(url: profile?.picture, size: 16)
+        // Seed the wrapper's pubkey so the row paints with at least one
+        // avatar before the engagement query returns. The wrapper itself
+        // is one of the reposters, so this isn't optimistic — it's just
+        // making the local truth visible on first frame.
+        let wrapperPubkey = event.pubkey
+        let aggregated = repoBox.counts.reposters
+        // Wrapper-first ordering so the avatar we always have a profile
+        // for shows up leftmost. The aggregated list may not include
+        // the wrapper yet on the first frame.
+        var ordered: [String] = [wrapperPubkey]
+        for pk in aggregated where pk != wrapperPubkey {
+            ordered.append(pk)
+        }
+        let maxAvatars = 5
+        let visible = Array(ordered.prefix(maxAvatars))
+        let total = ordered.count
+        let firstName: String? = profiles[wrapperPubkey]?.displayString
+            ?? profile?.displayString
+        let label: String = {
+            if total <= 1 {
+                return "\(firstName ?? "Someone") reposted"
+            } else if let firstName {
+                return "\(firstName) and \(total - 1) others reposted"
+            } else {
+                return "\(total) people reposted"
+            }
+        }()
+        let avatarSize: CGFloat = 18
+        let stackOffset: CGFloat = 12  // 6pt overlap between adjacent 18pt circles
+
+        return HStack(spacing: 6) {
             Image(systemName: "arrow.2.squarepath")
-                .font(.system(size: 12))
-            Text("\(profile?.displayString ?? "Someone") reposted")
+                .font(.system(size: 12, weight: .semibold))
+            ZStack(alignment: .leading) {
+                ForEach(Array(visible.enumerated()), id: \.offset) { index, pk in
+                    NavigationLink(value: ProfileRoute(pubkey: pk)) {
+                        CachedAvatarView(url: profiles[pk]?.picture, size: avatarSize)
+                            .overlay(
+                                Circle().stroke(Color.wispBackground, lineWidth: 1.5)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .offset(x: CGFloat(index) * stackOffset)
+                }
+            }
+            // Reserve the stacked-row width: leftmost avatar at 0, each next
+            // shifted by `stackOffset`, plus the trailing avatar's full size.
+            .frame(
+                width: visible.isEmpty
+                    ? 0
+                    : CGFloat(visible.count - 1) * stackOffset + avatarSize,
+                height: avatarSize,
+                alignment: .leading
+            )
+            Text(label)
                 .font(.caption)
+                .lineLimit(1)
         }
         .foregroundStyle(.secondary)
-        .padding(.leading, 16)
+        .frame(maxWidth: .infinity, alignment: .center)
         .padding(.top, 8)
+        .padding(.horizontal, 16)
+        .onAppear {
+            engagementRepo.seedReposter(eventId: displayEventId, reposterPubkey: wrapperPubkey)
+        }
     }
 
     // MARK: - Avatar

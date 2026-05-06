@@ -79,11 +79,26 @@ struct InlineImageView: View {
         }
     }
 
+    /// Placeholder renders a NIP-92 blurhash (when the imeta tag carried one)
+    /// at the slot's natural aspect ratio. Reserving the right height before
+    /// bytes arrive is what kills the per-image layout-shift jank — the blur
+    /// itself is a bonus over the previous flat-gray placeholder.
+    @ViewBuilder
     private func placeholder(systemName: String?, height: CGFloat) -> some View {
+        let blurImage = BlurHash.decode(meta.blurhash, width: 32, height: 32)
         RoundedRectangle(cornerRadius: 12)
             .fill(Color.wispSurfaceVariant)
             .frame(maxWidth: .infinity)
             .frame(height: height)
+            .overlay {
+                if let blurImage {
+                    Image(uiImage: blurImage)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .allowsHitTesting(false)
+                }
+            }
             .overlay {
                 if let systemName {
                     Image(systemName: systemName)

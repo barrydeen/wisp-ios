@@ -122,6 +122,7 @@
 		4CFF0B0F0000000000000207 /* Nip78Backup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF0B0E0000000000000207 /* Nip78Backup.swift */; };
 		4CFF0B110000000000000208 /* BreezConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF0B100000000000000208 /* BreezConfig.swift */; };
 		4CFF0B130000000000000209 /* Bip39.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF0B120000000000000209 /* Bip39.swift */; };
+		4CFFFB010000000000000F10 /* BlurHash.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFFFB000000000000000F10 /* BlurHash.swift */; };
 		4CFF0B15000000000000020A /* NwcWallet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF0B14000000000000020A /* NwcWallet.swift */; };
 		4CFF0B17000000000000020B /* SparkWallet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF0B16000000000000020B /* SparkWallet.swift */; };
 		4CFF0B19000000000000020C /* WalletStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF0B18000000000000020C /* WalletStore.swift */; };
@@ -390,6 +391,7 @@
 		4CFF0B0E0000000000000207 /* Nip78Backup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Nip78Backup.swift; sourceTree = "<group>"; };
 		4CFF0B100000000000000208 /* BreezConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BreezConfig.swift; sourceTree = "<group>"; };
 		4CFF0B120000000000000209 /* Bip39.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Bip39.swift; sourceTree = "<group>"; };
+		4CFFFB000000000000000F10 /* BlurHash.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlurHash.swift; sourceTree = "<group>"; };
 		4CFF0B14000000000000020A /* NwcWallet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NwcWallet.swift; sourceTree = "<group>"; };
 		4CFF0B16000000000000020B /* SparkWallet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SparkWallet.swift; sourceTree = "<group>"; };
 		4CFF0B18000000000000020C /* WalletStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalletStore.swift; sourceTree = "<group>"; };
@@ -676,6 +678,7 @@
 				4CFF0B0E0000000000000207 /* Nip78Backup.swift */,
 				4CFF0B100000000000000208 /* BreezConfig.swift */,
 				4CFF0B120000000000000209 /* Bip39.swift */,
+				4CFFFB000000000000000F10 /* BlurHash.swift */,
 				4CFF0B14000000000000020A /* NwcWallet.swift */,
 				4CFF0B16000000000000020B /* SparkWallet.swift */,
 				4CFF0B18000000000000020C /* WalletStore.swift */,
@@ -1089,6 +1092,7 @@
 				4CFF0B0F0000000000000207 /* Nip78Backup.swift in Sources */,
 				4CFF0B110000000000000208 /* BreezConfig.swift in Sources */,
 				4CFF0B130000000000000209 /* Bip39.swift in Sources */,
+				4CFFFB010000000000000F10 /* BlurHash.swift in Sources */,
 				4CFF0B15000000000000020A /* NwcWallet.swift in Sources */,
 				4CFF0B17000000000000020B /* SparkWallet.swift in Sources */,
 				4CFF0B19000000000000020C /* WalletStore.swift in Sources */,

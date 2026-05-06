@@ -44,6 +44,10 @@ struct MainView: View {
     @State private var showRelaySettings = false
     @State private var pendingAuthRequest: PendingAuthRequest?
     @State private var feedFabOpacity: Double = 1.0
+    /// Bumped from `popToRoot(.home)` so the feed `ScrollViewReader` can scroll
+    /// to the top anchor. Tap-on-active-tab clears the nav stack first; on a
+    /// subsequent tap (when the stack is already empty) it animates to the top.
+    @State private var feedScrollToTopTrigger: Int = 0
 
     private let drawerWidth: CGFloat = 320
 
@@ -853,8 +857,12 @@ struct MainView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
+                ScrollViewReader { feedProxy in
                 ScrollView {
                     LazyVStack(spacing: 0) {
+                        // Anchor for tap-Home-on-Home → scroll-to-top. Zero-height
+                        // so it doesn't reserve layout space.
+                        Color.clear.frame(height: 0).id("feedTop")
                         let liveStreams = liveStreamRepo.liveNowSorted
                         if !liveStreams.isEmpty {
                             LiveNowRow(
@@ -931,6 +939,12 @@ struct MainView: View {
                         feedFabOpacity = 1.0
                     }
                 }
+                .onChange(of: feedScrollToTopTrigger) { _, _ in
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        feedProxy.scrollTo("feedTop", anchor: .top)
+                    }
+                }
+                }
             }
         }
     }
@@ -985,9 +999,15 @@ struct MainView: View {
 
     /// Tapping the already-selected tab pops its navigation stack back to the
     /// tab's root view. Mirrors the standard iOS tab-bar gesture.
+    /// For Home, also bump `feedScrollToTopTrigger` — when the stack is already
+    /// empty (already on the feed root) the path-clear is a no-op and only the
+    /// scroll-to-top fires; when there's something pushed, the path-clear pops
+    /// first and the scroll-to-top runs against the now-visible feed.
     private func popToRoot(_ tab: BottomTab) {
         switch tab {
-        case .home: feedPath = NavigationPath()
+        case .home:
+            feedPath = NavigationPath()
+            feedScrollToTopTrigger &+= 1
         case .wallet: placeholderPath = NavigationPath()
         case .search: searchPath = NavigationPath()
         case .notifications: notificationsPath = NavigationPath()

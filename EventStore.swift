@@ -7,7 +7,8 @@ actor EventStore {
     private var box: Box<EventEntity>?
 
     // 1068, 1018, 6969 are NIP-88 polls / poll responses and NIP-69 zap polls.
-    private static let persistedKinds: Set<Int> = [0, 1, 6, 7, 9735, 10002, 10012, 20, 21, 22, 30000, 30002, 30003, 1068, 1018, 6969]
+    // 10030 / 30030 are NIP-30 user emoji list / emoji set (custom emoji packs).
+    private static let persistedKinds: Set<Int> = [0, 1, 6, 7, 9735, 10002, 10012, 10030, 20, 21, 22, 30000, 30002, 30003, 30030, 1068, 1018, 6969]
 
     private func ensureBox() -> Box<EventEntity>? {
         if box == nil {
@@ -267,6 +268,60 @@ actor EventStore {
             return try Int(query.remove())
         } catch {
             return 0
+        }
+    }
+
+    // MARK: - Emoji (NIP-30)
+
+    /// Cached kind-10030 (user emoji list, replaceable) and kind-30030 packs
+    /// authored by `pubkey`. Returns `(userList, ownPacks)` so the caller can
+    /// replay them through its in-memory ingest before any network round-trip.
+    func loadEmojiState(pubkey: String) -> (userList: NostrEvent?, ownPacks: [NostrEvent]) {
+        guard let box = ensureBox() else { return (nil, []) }
+        do {
+            let listQuery = try box.query {
+                EventEntity.kind == 10030 && EventEntity.pubkey == pubkey
+            }
+            .ordered(by: EventEntity.createdAt, flags: .descending)
+            .build()
+            let userList = try listQuery.findFirst()?.toNostrEvent()
+
+            let packQuery = try box.query {
+                EventEntity.kind == 30030 && EventEntity.pubkey == pubkey
+            }.build()
+            let ownPacks = try packQuery.find(offset: 0, limit: 200).compactMap { $0.toNostrEvent() }
+            return (userList, ownPacks)
+        } catch {
+            return (nil, [])
+        }
+    }
+
+    /// Cached kind-30030 packs matching any of the given `30030:<pubkey>:<d>` addresses.
+    /// Filters in Swift after a kind-scoped query because the d-tag lives inside the
+    /// JSON tag blob (not a top-level indexed column).
+    func loadEmojiPacksByAddress(_ addrs: [String]) -> [NostrEvent] {
+        guard let box = ensureBox(), !addrs.isEmpty else { return [] }
+        // Parse "30030:<pubkey>:<d>" → (pubkey, dTag) lookup.
+        var wanted: [String: Set<String>] = [:]  // pubkey → dTags
+        for addr in addrs {
+            let parts = addr.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false).map(String.init)
+            guard parts.count == 3, parts[0] == "30030" else { continue }
+            wanted[parts[1], default: []].insert(parts[2])
+        }
+        guard !wanted.isEmpty else { return [] }
+        do {
+            let pubkeys = Array(wanted.keys)
+            let query = try box.query {
+                EventEntity.kind == 30030 && EventEntity.pubkey.isIn(pubkeys)
+            }.build()
+            let candidates = try query.find(offset: 0, limit: 1000)
+            return candidates.compactMap { entity -> NostrEvent? in
+                guard let event = entity.toNostrEvent() else { return nil }
+                guard let dTag = event.tags.first(where: { $0.count >= 2 && $0[0] == "d" })?[1] else { return nil }
+                return wanted[event.pubkey]?.contains(dTag) == true ? event : nil
+            }
+        } catch {
+            return []
         }
     }
 
