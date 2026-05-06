@@ -365,6 +365,8 @@ final class RelaySubscription: @unchecked Sendable {
     private let continuation: AsyncStream<(event: NostrEvent, relayUrl: String)>.Continuation
     private let dedupe = DedupeBox()
     private var listenerTasks: [Task<Void, Never>] = []
+    private var liveSockets: [UUID: URLSessionWebSocketTask] = [:]
+    private var reqText: String = ""
     private let lock = NSLock()
 
     init(id: String) {
@@ -379,6 +381,41 @@ final class RelaySubscription: @unchecked Sendable {
         listenerTasks.append(listener)
     }
 
+    /// Stash the REQ frame so `resendREQ` can re-broadcast it. Only the simple
+    /// `subscribe(relays:filter:id:)` path uses this — multi-filter outbox subs
+    /// don't need refresh and leave it empty.
+    func setREQ(_ text: String) {
+        lock.lock(); defer { lock.unlock() }
+        reqText = text
+    }
+
+    func registerSocket(_ ws: URLSessionWebSocketTask) -> UUID {
+        let key = UUID()
+        lock.lock(); defer { lock.unlock() }
+        liveSockets[key] = ws
+        return key
+    }
+
+    func unregisterSocket(_ key: UUID) {
+        lock.lock(); defer { lock.unlock() }
+        liveSockets.removeValue(forKey: key)
+    }
+
+    /// Re-send the stored REQ on every currently-live socket. Defeats silent
+    /// server-side subscription drops that the WebSocket itself doesn't surface
+    /// as an error. Best-effort: dead sockets fail and the auto-reconnect loop
+    /// will re-issue the REQ on the replacement.
+    func resendREQ() async {
+        let (req, sockets): (String, [URLSessionWebSocketTask]) = {
+            lock.lock(); defer { lock.unlock() }
+            return (reqText, Array(liveSockets.values))
+        }()
+        guard !req.isEmpty else { return }
+        for ws in sockets {
+            try? await ws.send(.string(req))
+        }
+    }
+
     func deliver(event: NostrEvent, relayUrl: String) async {
         if await dedupe.insert(event.id) {
             continuation.yield((event, relayUrl))
@@ -389,6 +426,7 @@ final class RelaySubscription: @unchecked Sendable {
         lock.lock()
         let tasks = listenerTasks
         listenerTasks.removeAll()
+        liveSockets.removeAll()
         lock.unlock()
         for t in tasks { t.cancel() }
         continuation.finish()
@@ -412,6 +450,7 @@ extension RelayPool {
         let urls = relays.compactMap(Self.wsURL)
         let req = "[\"REQ\",\"\(id)\",\(filter.toJSON())]"
         let closeMsg = "[\"CLOSE\",\"\(id)\"]"
+        sub.setREQ(req)
         for url in urls {
             let task = Task {
                 var attempt = 0
@@ -429,6 +468,7 @@ extension RelayPool {
                         continue
                     }
 
+                    let socketKey = sub.registerSocket(ws)
                     var serverClosed = false
                     var lastChallenge: String?
                     var didResendAfterAuth = false
@@ -451,11 +491,23 @@ extension RelayPool {
                                 await sub.deliver(event: event, relayUrl: urlString)
                             } else if type == "CLOSED" {
                                 let reason = (arr.count >= 3 ? (arr[2] as? String ?? "") : "").lowercased()
-                                if reason.contains("auth-required"), let challenge = lastChallenge {
-                                    emitPendingAuth(url: urlString, challenge: challenge)
+                                if reason.contains("auth-required") {
+                                    // NIP-42 relays send CLOSED auth-required for the pre-AUTH REQ
+                                    // (often interleaved with the AUTH challenge frame on the same
+                                    // socket). DO NOT tear down — the AUTH branch below will sign
+                                    // and replay the REQ, opening a fresh server-side sub on the
+                                    // same connection. Killing the task here was silently dropping
+                                    // every AUTH-required relay (auth.nostr1.com, inbox.nostr.wine, …)
+                                    // for the rest of the session.
+                                    if let challenge = lastChallenge {
+                                        emitPendingAuth(url: urlString, challenge: challenge)
+                                    }
+                                    // Allow re-replay of the REQ on the next AUTH frame.
+                                    didResendAfterAuth = false
+                                } else {
+                                    serverClosed = true
+                                    break inner
                                 }
-                                serverClosed = true
-                                break inner
                             } else if type == "AUTH", arr.count >= 2, let challenge = arr[1] as? String {
                                 lastChallenge = challenge
                                 let didAuth = await respondToAuthChallenge(challenge: challenge, urlString: urlString, ws: ws)
@@ -470,6 +522,7 @@ extension RelayPool {
                         }
                     }
 
+                    sub.unregisterSocket(socketKey)
                     if Task.isCancelled {
                         try? await ws.send(.string(closeMsg))
                         ws.cancel(with: .normalClosure, reason: nil)
@@ -539,11 +592,23 @@ extension RelayPool {
                                 await sub.deliver(event: event, relayUrl: urlString)
                             } else if type == "CLOSED" {
                                 let reason = (arr.count >= 3 ? (arr[2] as? String ?? "") : "").lowercased()
-                                if reason.contains("auth-required"), let challenge = lastChallenge {
-                                    emitPendingAuth(url: urlString, challenge: challenge)
+                                if reason.contains("auth-required") {
+                                    // NIP-42 relays send CLOSED auth-required for the pre-AUTH REQ
+                                    // (often interleaved with the AUTH challenge frame on the same
+                                    // socket). DO NOT tear down — the AUTH branch below will sign
+                                    // and replay the REQ, opening a fresh server-side sub on the
+                                    // same connection. Killing the task here was silently dropping
+                                    // every AUTH-required relay (auth.nostr1.com, inbox.nostr.wine, …)
+                                    // for the rest of the session.
+                                    if let challenge = lastChallenge {
+                                        emitPendingAuth(url: urlString, challenge: challenge)
+                                    }
+                                    // Allow re-replay of the REQ on the next AUTH frame.
+                                    didResendAfterAuth = false
+                                } else {
+                                    serverClosed = true
+                                    break inner
                                 }
-                                serverClosed = true
-                                break inner
                             } else if type == "AUTH", arr.count >= 2, let challenge = arr[1] as? String {
                                 lastChallenge = challenge
                                 let didAuth = await respondToAuthChallenge(challenge: challenge, urlString: urlString, ws: ws)

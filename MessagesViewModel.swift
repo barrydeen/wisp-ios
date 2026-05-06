@@ -12,17 +12,15 @@ final class MessagesViewModel {
 
     @ObservationIgnored private var subscription: RelaySubscription?
     @ObservationIgnored private var listenerTask: Task<Void, Never>?
-    @ObservationIgnored private var backfillTask: Task<Void, Never>?
+    @ObservationIgnored private var refreshTask: Task<Void, Never>?
     @ObservationIgnored private let repo = DmRepository.shared
     @ObservationIgnored private let profileRepo = ProfileRepository.shared
 
-    /// Per-page cap for the historical backfill. Most relays default to ~500 events per
-    /// REQ; we ask for that explicitly so we can detect a short page (= "you have it all"
-    /// from this relay's perspective) and stop.
-    private static let backfillPageLimit = 500
-    /// Hard cap on backfill pages — at 500 wraps/page that's 10000 wraps, a generous ceiling
-    /// for any human DM volume. Prevents runaway loops if a relay keeps sending non-empty pages.
-    private static let backfillMaxPages = 20
+    /// How often to re-issue the gift-wrap REQ on every live socket. Mirrors Android
+    /// (StartupCoordinator.subscribeDmsAndNotifications). Relays can silently drop
+    /// server-side subscriptions while the WebSocket stays alive — periodic re-issue
+    /// re-arms them and pulls anything that landed since.
+    private static let refreshIntervalSeconds: UInt64 = 180
 
     init(keypair: Keypair) {
         self.keypair = keypair
@@ -38,8 +36,11 @@ final class MessagesViewModel {
         //    from the user's own published relay lists.
         let relays = await resolveDmSubscriptionRelays()
 
-        // 2. Open persistent subscription for live delivery. NO `since` — wraps have
-        //    randomized timestamps (NIP-17 spec allows up to 2 days in the past).
+        // 2. Open persistent subscription. NO `since`, no `limit`, no `until` — wraps have
+        //    randomized timestamps (NIP-17 spec allows up to 2 days in the past), so any
+        //    time-window cursor mis-counts history. The unbounded REQ tells each relay
+        //    "give me everything you have for kind:1059 #p:me", which is the only correct
+        //    way to fetch DM history. Mirrors Android's `subscribeDmsAndNotifications`.
         let filter = NostrFilter(kinds: [Nip17.Kind.giftWrap], pTags: [keypair.pubkey])
         let sub = RelayPool.subscribe(relays: relays, filter: filter, id: "dms")
         subscription = sub
@@ -52,22 +53,25 @@ final class MessagesViewModel {
             }
         }
 
+        // 3. Re-issue the REQ on every live socket every 3 minutes. Some relays silently
+        //    drop subscriptions server-side while the WebSocket stays open; without a
+        //    periodic poke they go dark. DmRepository.markGiftWrapSeen dedupes any
+        //    duplicate frames produced by the refresh.
+        refreshTask = Task { [weak sub] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: Self.refreshIntervalSeconds * 1_000_000_000)
+                if Task.isCancelled { break }
+                await sub?.resendREQ()
+            }
+        }
+
         refreshSnapshot()
         isLoading = false
-
-        // 3. Walk back through history. Most relays cap a single REQ response at 500-1000
-        //    events, so for accounts with deep DM history the live subscription alone returns
-        //    only the newest slice — older conversations and older messages within
-        //    conversations are silently truncated. Page back with `until=<oldest-1>` until a
-        //    page returns 0 events or fewer than the limit.
-        backfillTask = Task { [weak self] in
-            await self?.backfillHistory(relays: relays, privkey: priv)
-        }
     }
 
     func stop() {
-        backfillTask?.cancel()
-        backfillTask = nil
+        refreshTask?.cancel()
+        refreshTask = nil
         listenerTask?.cancel()
         listenerTask = nil
         subscription?.cancel()
@@ -146,72 +150,28 @@ final class MessagesViewModel {
 
     // MARK: - Relay resolution
 
-    /// Build the kind-1059 subscription target set. Always unions the user's kind-10050 DM
-    /// relays with their NIP-65 read+write relays — gift wraps from older clients (or peers
-    /// who haven't fetched the recipient's kind-10050) frequently land on NIP-65 relays even
-    /// when a DM inbox is published, so excluding them silently drops conversations.
-    /// Mirrors Android's `relayPool.sendToAll(dmReqMsg) + sendToDmRelays(dmReqMsg)`.
+    /// Build the kind-1059 subscription target set. Use the user's kind-10050 DM inbox
+    /// relays if they have any, otherwise fall back to their NIP-65 inbox (read) relays.
+    /// We never apply hardcoded defaults and we never include NIP-65 write relays —
+    /// senders publish gift wraps to the recipient's *inbox*, not to the recipient's
+    /// outbox. Sourcing from the user's own published lists only.
     private func resolveDmSubscriptionRelays() async -> [String] {
         // Hydrate from disk (instant) for the case where MessagesViewModel.start runs before
         // RelaySettingsRepository.bootstrap completes its async merge.
         RelaySettingsRepository.shared.ensureLoaded(pubkey: keypair.pubkey)
 
-        var union: [String] = []
-        union.append(contentsOf: RelaySettingsRepository.shared.dmRelays)
-        let read = await RelayListRepository.shared.getReadRelays(keypair.pubkey)
-        union.append(contentsOf: read)
-        let write = await RelayListRepository.shared.getWriteRelays(keypair.pubkey)
-        union.append(contentsOf: write)
+        let dm = RelaySettingsRepository.shared.dmRelays
+        let source: [String] = dm.isEmpty
+            ? await RelayListRepository.shared.getReadRelays(keypair.pubkey)
+            : dm
 
         var seen = Set<String>()
         var canonical: [String] = []
-        for url in union {
+        for url in source {
             guard let n = RelayUrlValidator.canonicalize(url) else { continue }
             if seen.insert(n).inserted { canonical.append(n) }
         }
         return canonical
-    }
-
-    /// Page backwards through gift-wrap history until exhausted. Each page is a fresh REQ
-    /// fanned out to every relay in `relays`; events from all relays are deduped at the
-    /// `DmRepository.markGiftWrapSeen` layer (so the live subscription and the backfill can
-    /// both feed the same pipeline without double-processing).
-    ///
-    /// Stop conditions: empty page, short page (relay returned everything ≤ `until`), or
-    /// `backfillMaxPages` reached.
-    private func backfillHistory(relays: [String], privkey: Data) async {
-        guard !relays.isEmpty else { return }
-        var until: Int? = nil
-
-        for _ in 0..<Self.backfillMaxPages {
-            if Task.isCancelled { return }
-            var filter = NostrFilter(
-                kinds: [Nip17.Kind.giftWrap],
-                pTags: [keypair.pubkey],
-                limit: Self.backfillPageLimit
-            )
-            if let u = until { filter.until = u }
-
-            let events = await RelayPool.query(relays: relays, filter: filter, timeout: 15)
-            if events.isEmpty { return }
-
-            for event in events {
-                if Task.isCancelled { return }
-                // No relay attribution available from RelayPool.query (EventCollector
-                // doesn't track sources); pass the empty string. Worst case is the
-                // DmMessage.relayUrls set is missing one provenance entry — display
-                // is unaffected.
-                await handleGiftWrap(event: event, relayUrl: "", privkey: privkey)
-            }
-
-            // Walk the cursor back. Use the oldest createdAt across the union so the next
-            // page picks up where every relay in this round left off.
-            let oldest = events.map(\.createdAt).min() ?? 0
-            until = oldest - 1
-
-            // Short page → the relays said "that's all I have older than `until`".
-            if events.count < Self.backfillPageLimit { return }
-        }
     }
 
     func privkeyData() -> Data {
