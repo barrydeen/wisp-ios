@@ -70,7 +70,13 @@ struct InlineVideoView: View {
                 CroppingVideoPlayer(player: player, gravity: videoGravity)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .onAppear {
-                        MediaAudioSession.activatePlayback()
+                        // Don't grab the AVAudioSession on appear — videos
+                        // start muted by default (per the global single-
+                        // unmuted rule) and shouldn't interrupt whatever the
+                        // user is listening to in another app (podcast,
+                        // music). Activation happens lazily on the
+                        // muted → unmuted transition below, when the user
+                        // actually wants this video's audio.
                         player.isMuted = isMuted
                         player.play()
                     }
@@ -78,7 +84,15 @@ struct InlineVideoView: View {
                         player.pause()
                     }
                     .onChange(of: muteState.unmutedUrl) { _, _ in
-                        player.isMuted = isMuted
+                        let nowMuted = isMuted
+                        // Take the session only on the muted → unmuted
+                        // transition for THIS player. Skipping when we're
+                        // already unmuted prevents redundant `setActive`
+                        // calls on every other video's mute-state shuffle.
+                        if !nowMuted, player.isMuted {
+                            MediaAudioSession.activatePlayback()
+                        }
+                        player.isMuted = nowMuted
                     }
 
                 VStack {
