@@ -69,6 +69,18 @@ struct InlineVideoView: View {
             if loaded, let player {
                 CroppingVideoPlayer(player: player, gravity: videoGravity)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        // Tapping anywhere on the playing video expands to
+                        // fullscreen — the corner expand button stays as a
+                        // discoverable affordance, but having to find a
+                        // 28pt target on the move is awkward. The inner
+                        // mute / expand buttons (rendered after this in
+                        // the ZStack) take SwiftUI hit-test priority over
+                        // an `onTapGesture`, so their actions still fire.
+                        player.pause()
+                        showFullScreen = true
+                    }
                     .onAppear {
                         // Pin the shared AVAudioSession to mixed mode so
                         // silent (muted) playback coexists with whatever
