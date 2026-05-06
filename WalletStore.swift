@@ -1,5 +1,8 @@
 import Foundation
 import Observation
+import os.log
+
+private let backupSearchLog = Logger(subsystem: "wisp", category: "wallet-backup")
 
 /// Top-level wallet orchestrator. Holds the active `Wallet` instance for the current
 /// account, exposes Observation-driven UI state, and runs the relay-backup
@@ -420,10 +423,6 @@ final class WalletStore {
     /// dedupe by d-tag, decrypt with our own privkey, present results.
     func searchRelayBackup() async {
         relayBackupSearchState = .searching
-        guard let privkey32 = Hex.decode(keypair.privkey) else {
-            relayBackupSearchState = .error("No signing key available")
-            return
-        }
 
         let relays = backupRelays()
         guard !relays.isEmpty else {
@@ -431,17 +430,28 @@ final class WalletStore {
             return
         }
 
+        // `waitForAllRelays: true` so a slow relay holding the only copy of the
+        // backup gets a chance to respond before its task is cancelled. The
+        // default fast-path breaks 1.5s after the first EOSE, which is too
+        // short for "publish-then-immediately-search" — relays that haven't
+        // received-and-indexed the publish yet EOSE empty first and the slow
+        // relay carrying it gets cut off before EVENT lands.
+        backupSearchLog.notice("searching \(relays.count, privacy: .public) relays for kind-30078 by pubkey \(self.keypair.pubkey, privacy: .public)")
         let events = await RelayPool.query(
             relays: relays,
             filter: Nip78Backup.backupFilter(pubkey: keypair.pubkey),
-            timeout: 10
+            timeout: 10,
+            waitForAllRelays: true
         )
+        let sampleDtags = events.prefix(5).compactMap { Nip78Backup.extractDTag($0) }.joined(separator: ", ")
+        backupSearchLog.notice("fetched \(events.count, privacy: .public) total kind-30078 events; sample d-tags: \(sampleDtags, privacy: .public)")
 
         // Filter to spark-wallet-backup d-tag, dedupe by d-tag (newest wins).
         let valid = events.filter { event in
             guard let dTag = Nip78Backup.extractDTag(event) else { return false }
             return dTag.hasPrefix("spark-wallet-backup") && !Nip78Backup.isDeletedBackup(event)
         }
+        backupSearchLog.notice("after spark-wallet-backup d-tag filter: \(valid.count, privacy: .public) events")
         var newestPerWallet: [String: NostrEvent] = [:]
         for event in valid {
             guard let dTag = Nip78Backup.extractDTag(event) else { continue }
@@ -454,17 +464,64 @@ final class WalletStore {
             return
         }
 
-        let entries: [BackupEntry] = newestPerWallet.values.compactMap { event -> BackupEntry? in
-            guard let mnemonic = Nip78Backup.decryptBackup(privkey32: privkey32, event: event) else { return nil }
-            return BackupEntry(
-                mnemonic: mnemonic,
-                walletId: Nip78Backup.extractWalletId(event),
-                createdAt: event.createdAt
-            )
-        }.sorted { $0.createdAt > $1.createdAt }
+        // Decrypt every candidate concurrently. For nsec accounts each call
+        // resolves in-process and the loop is near-instant either way; for
+        // remote-signer accounts each call is a NIP-46 RPC round-trip
+        // (relay → bunker → relay → app), so parallelizing N decrypts
+        // collapses N × per-call latency into roughly the slowest single
+        // round-trip. The signer sees N concurrent requests; modern bunkers
+        // handle that fine, and the user sees one auth prompt per backup
+        // either way (sequential or parallel — same prompt count).
+        let kp = keypair
+        struct DecryptResult { let event: NostrEvent; let outcome: Nip78Backup.DecryptOutcome }
+        let results: [DecryptResult] = await withTaskGroup(of: DecryptResult.self) { group in
+            for event in newestPerWallet.values {
+                group.addTask {
+                    let outcome = await Nip78Backup.decryptBackup(keypair: kp, event: event)
+                    return DecryptResult(event: event, outcome: outcome)
+                }
+            }
+            var collected: [DecryptResult] = []
+            for await result in group { collected.append(result) }
+            return collected
+        }
+
+        var entries: [BackupEntry] = []
+        var lastDecryptError: Error?
+        var failedDecryptCount = 0
+        for result in results {
+            switch result.outcome {
+            case .ok(let mnemonic):
+                entries.append(BackupEntry(
+                    mnemonic: mnemonic,
+                    walletId: Nip78Backup.extractWalletId(result.event),
+                    createdAt: result.event.createdAt
+                ))
+            case .skip:
+                continue
+            case .failed(let error):
+                lastDecryptError = error
+                failedDecryptCount += 1
+            }
+        }
+        entries.sort { $0.createdAt > $1.createdAt }
+
+        // Distinguish "relays returned nothing usable" from "your signer
+        // refused to decrypt every backup we found" — the second is a
+        // signer-perms / connectivity issue, not actually missing data,
+        // and the user needs different next steps.
+        if entries.isEmpty {
+            if failedDecryptCount > 0, let lastDecryptError {
+                relayBackupSearchState = .error(
+                    "Found \(failedDecryptCount) backup\(failedDecryptCount == 1 ? "" : "s") but couldn't decrypt — \(lastDecryptError.localizedDescription)"
+                )
+            } else {
+                relayBackupSearchState = .notFound
+            }
+            return
+        }
 
         switch entries.count {
-        case 0: relayBackupSearchState = .notFound
         case 1: relayBackupSearchState = .found(entries[0])
         default: relayBackupSearchState = .multiple(entries)
         }
@@ -485,14 +542,9 @@ final class WalletStore {
             relayBackupPublishState = .error("No Spark wallet to back up")
             return
         }
-        guard let privkey32 = Hex.decode(keypair.privkey) else {
-            relayBackupPublishState = .error("No signing key")
-            return
-        }
         do {
-            let event = try Nip78Backup.createBackupEvent(
-                privkey32: privkey32,
-                pubkeyHex: keypair.pubkey,
+            let event = try await Nip78Backup.createBackupEvent(
+                keypair: keypair,
                 mnemonic: mnemonic
             )
             let relays = backupRelays()

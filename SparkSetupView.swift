@@ -347,7 +347,7 @@ struct SparkSetupView: View {
     @ViewBuilder
     private func foundCard(entry: BackupEntry) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 10) {
+            HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "checkmark.seal.fill")
                     .foregroundStyle(Color.wispRepostColor)
                     .font(.system(size: 18))
@@ -357,13 +357,22 @@ struct SparkSetupView: View {
                     Text("Created \(relativeTime(from: entry.createdAt))")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    // Full walletId (first 16 hex of SHA256(mnemonic)) so the
+                    // user can tell distinct backups apart in the `.multiple`
+                    // state and confirm "yes this is the wallet I just backed
+                    // up" in the `.found` state. The right-edge truncated
+                    // chip was visually too quiet to register.
+                    if let id = entry.walletId {
+                        Text("ID \(id)")
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.tertiary)
+                    } else {
+                        Text("Legacy backup (no wallet id)")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
                 }
-                Spacer()
-                if let id = entry.walletId {
-                    Text(id.prefix(8) + "…")
-                        .font(.caption2.monospaced())
-                        .foregroundStyle(.tertiary)
-                }
+                Spacer(minLength: 0)
             }
 
             Button {

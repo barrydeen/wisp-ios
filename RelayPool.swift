@@ -66,26 +66,40 @@ enum RelayPool {
     static func query(
         relays: [String],
         filter: NostrFilter,
-        timeout: TimeInterval = 8
+        timeout: TimeInterval = 8,
+        waitForAllRelays: Bool = false
     ) async -> [NostrEvent] {
         let urls = relays.compactMap(Self.wsURL)
         guard !urls.isEmpty else { return [] }
 
         let collector = EventCollector()
+        let total = urls.count
 
         let tasks = urls.map { url in
             Task { await streamInto(url: url, filter: filter, timeout: timeout, collector: collector) }
         }
 
-        // Wait until any relay EOSEs or overall timeout
+        // The default fast path breaks 1.5s after the *first* relay's EOSE — fine
+        // for feed-style queries where any one relay's reply is good enough, but
+        // wrong for "rare event might live on any single relay in the set" lookups
+        // (e.g. NIP-78 wallet backup search). When `waitForAllRelays` is set we
+        // wait for every relay to EOSE or the overall timeout, whichever comes
+        // first, so a slow relay holding the only copy of the event gets a chance
+        // to respond before its task is cancelled.
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            if await collector.hasEose { break }
+            if waitForAllRelays {
+                if await collector.allEose(of: total) { break }
+            } else {
+                if await collector.hasEose { break }
+            }
             try? await Task.sleep(for: .milliseconds(50))
         }
 
-        // Short grace for other relays to contribute
-        if await collector.hasEose {
+        if !waitForAllRelays, await collector.hasEose {
+            // Short grace for stragglers on the fast path. With waitForAllRelays
+            // the loop above already gave every relay until the deadline, so an
+            // additional grace just delays without adding coverage.
             try? await Task.sleep(for: .seconds(1.5))
         }
 
@@ -171,6 +185,7 @@ private actor EventCollector {
 
     var events: [NostrEvent] { _events }
     var hasEose: Bool { eoseCount > 0 }
+    func allEose(of total: Int) -> Bool { eoseCount >= total }
 
     func add(_ event: NostrEvent) {
         if seen.insert(event.id).inserted {
