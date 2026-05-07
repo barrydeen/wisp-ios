@@ -163,9 +163,19 @@ enum NostrKey {
         guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
               let data = result as? Data,
               let str = String(data: data, encoding: .utf8) else { return nil }
-        let parts = str.split(separator: ":", maxSplits: 1).map(String.init)
-        guard parts.count == 2 else { return nil }
-        return Keypair(privkey: parts[0], pubkey: parts[1])
+        return parseKeychainBlob(str)
+    }
+
+    /// Parse the `<privkey>:<pubkey>` keychain blob. Remote-signer accounts have
+    /// an empty privkey, so the blob starts with `:` — `String.split(separator:)`
+    /// would drop the leading empty subsequence by default and the load would
+    /// then fail, surfacing as "session wiped on app launch" for remote accounts.
+    static func parseKeychainBlob(_ str: String) -> Keypair? {
+        guard let i = str.firstIndex(of: ":") else { return nil }
+        let priv = String(str[..<i])
+        let pub = String(str[str.index(after: i)...])
+        guard !pub.isEmpty else { return nil }
+        return Keypair(privkey: priv, pubkey: pub)
     }
 
     private static func deleteFromKeychain(account: String) {
