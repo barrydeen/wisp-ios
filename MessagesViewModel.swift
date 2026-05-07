@@ -92,9 +92,14 @@ final class MessagesViewModel {
             return
         }
 
+        // Route both NIP-44 decrypts through `Signer` so remote (NIP-46) accounts can
+        // peel the gift wrap + seal layers via their signer. `privkey` is unused for
+        // remote accounts (Signer dispatches to `Nip46Manager.activeClient`); for local
+        // accounts Signer falls back to in-process `Nip44.decrypt` with the keypair's
+        // privkey, which is functionally identical to the previous direct call.
         let rumor: Rumor
         do {
-            rumor = try Nip17.unwrapGiftWrap(recipientPrivkey32: privkey, giftWrap: event)
+            rumor = try await Nip17.unwrapGiftWrapWithSigner(keypair: keypair, giftWrap: event)
         } catch {
             return
         }
