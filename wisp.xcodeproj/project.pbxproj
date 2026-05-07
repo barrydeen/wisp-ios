@@ -150,6 +150,7 @@
 		4CFF0B130000000000000209 /* Bip39.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF0B120000000000000209 /* Bip39.swift */; };
 		4CFF0B15000000000000020A /* NwcWallet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF0B14000000000000020A /* NwcWallet.swift */; };
 		4CFF0B17000000000000020B /* SparkWallet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF0B16000000000000020B /* SparkWallet.swift */; };
+		4CFF0B280000000000000215 /* SparkUsername.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF0B270000000000000214 /* SparkUsername.swift */; };
 		4CFF0B19000000000000020C /* WalletStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF0B18000000000000020C /* WalletStore.swift */; };
 		4CFF0B1B000000000000020D /* ZapSender.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF0B1A000000000000020D /* ZapSender.swift */; };
 		4CFF0B1D000000000000020E /* WalletView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF0B1C000000000000020E /* WalletView.swift */; };
@@ -427,6 +428,7 @@
 		4CFF0B120000000000000209 /* Bip39.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Bip39.swift; sourceTree = "<group>"; };
 		4CFF0B14000000000000020A /* NwcWallet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NwcWallet.swift; sourceTree = "<group>"; };
 		4CFF0B16000000000000020B /* SparkWallet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SparkWallet.swift; sourceTree = "<group>"; };
+		4CFF0B270000000000000214 /* SparkUsername.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SparkUsername.swift; sourceTree = "<group>"; };
 		4CFF0B18000000000000020C /* WalletStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalletStore.swift; sourceTree = "<group>"; };
 		4CFF0B1A000000000000020D /* ZapSender.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZapSender.swift; sourceTree = "<group>"; };
 		4CFF0B1C000000000000020E /* WalletView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalletView.swift; sourceTree = "<group>"; };
@@ -697,6 +699,7 @@
 				4CFFFB000000000000000F10 /* BlurHash.swift */,
 				4CFF0B14000000000000020A /* NwcWallet.swift */,
 				4CFF0B16000000000000020B /* SparkWallet.swift */,
+				4CFF0B270000000000000214 /* SparkUsername.swift */,
 				4CFF0B18000000000000020C /* WalletStore.swift */,
 				F8CCD16A2BD383B0A6B0F4DF /* LnurlResolver.swift */,
 				4CFF0B1A000000000000020D /* ZapSender.swift */,
@@ -1117,6 +1120,7 @@
 				4CFFFB010000000000000F10 /* BlurHash.swift in Sources */,
 				4CFF0B15000000000000020A /* NwcWallet.swift in Sources */,
 				4CFF0B17000000000000020B /* SparkWallet.swift in Sources */,
+				4CFF0B280000000000000215 /* SparkUsername.swift in Sources */,
 				4CFF0B19000000000000020C /* WalletStore.swift in Sources */,
 				F8CCD16A2BD383B0A6B0F4E0 /* LnurlResolver.swift in Sources */,
 				4CFF0B1B000000000000020D /* ZapSender.swift in Sources */,
