@@ -29,9 +29,13 @@ final class ThreadViewModel {
     var focal: ThreadRow?
     /// Direct replies to the focal, sorted oldest first.
     var replies: [ThreadRow] = []
+    /// Full descendant tree of the focal in DFS preorder, each row tagged with
+    /// its nesting depth. Drives the inline rendering so the user sees grand-
+    /// children without having to drill into each reply.
+    var nestedReplies: [NestedReplyRow] = []
     /// Count of direct replies excluding blocked-author rows. Used by the
-    /// thread UI so an all-blocked thread reads as "no replies" rather than
-    /// surfacing a count followed by suppressed entries.
+    /// focal card's reply-count bubble — deliberately the *direct* count so
+    /// it matches the kind:1 e-tag count returned by engagement queries.
     var visibleRepliesCount: Int { replies.lazy.filter { !$0.isBlocked }.count }
     /// Replies hidden by the on-device spam filter, surfaced behind a "X hidden" expander.
     var hiddenSpamReplies: [ThreadRow] = []
@@ -854,6 +858,43 @@ final class ThreadViewModel {
             replies = visible
             hiddenSpamReplies = hidden
         }
+
+        nestedReplies = buildNestedReplies()
+    }
+
+    /// DFS preorder walk from the focal through every known descendant.
+    /// Children of a parent are sorted oldest-first to match the direct-
+    /// reply ordering. Blocked rows and hidden-spam authors drop with their
+    /// entire subtree — same rule we apply to the direct list — so a muted
+    /// branch doesn't leave orphaned grandchildren stranded at depth 0.
+    private func buildNestedReplies() -> [NestedReplyRow] {
+        var childrenByParent: [String: [NostrEvent]] = [:]
+        for event in events.values where event.kind == 1 && event.id != focalEventId {
+            guard let parentId = Nip10.replyTarget(of: event) else { continue }
+            childrenByParent[parentId, default: []].append(event)
+        }
+        for key in childrenByParent.keys {
+            childrenByParent[key]?.sort { $0.createdAt < $1.createdAt }
+        }
+
+        var result: [NestedReplyRow] = []
+        var visited: Set<String> = [focalEventId]
+
+        func walk(parentId: String, depth: Int) {
+            guard let kids = childrenByParent[parentId] else { return }
+            for kid in kids {
+                guard visited.insert(kid.id).inserted else { continue }
+                if blockedEventIds.contains(kid.id) { continue }
+                if hiddenSpamPubkeys.contains(kid.pubkey) { continue }
+                result.append(NestedReplyRow(
+                    row: ThreadRow(event: kid, isBlocked: false),
+                    depth: depth
+                ))
+                walk(parentId: kid.id, depth: depth + 1)
+            }
+        }
+        walk(parentId: focalEventId, depth: 0)
+        return result
     }
 
     /// Walk parent-of-parent from focal up to root, returning the chain in root → focal-1 order.
@@ -914,4 +955,10 @@ struct ThreadRow: Identifiable {
     let event: NostrEvent
     var isBlocked: Bool = false
     var id: String { event.id }
+}
+
+struct NestedReplyRow: Identifiable {
+    let row: ThreadRow
+    let depth: Int
+    var id: String { row.id }
 }
