@@ -100,6 +100,7 @@ struct PostCardView: View {
     @State private var noteListRepo = NoteListRepository.shared
     @State private var sourceTracker = NoteSourceTracker.shared
     @State private var engagementRepo = EngagementRepository.shared
+    @State private var zapStore = ZapAnimationStore.shared
 
     /// Threshold above which a kind-1 body gets a "Show more" toggle. Tuned for
     /// roughly the height of a 12-line post — anything longer dominates the feed.
@@ -513,6 +514,14 @@ struct PostCardView: View {
         .alert(item: $actionAlert) { alert in
             Alert(title: Text(alert.title), message: Text(alert.message), dismissButton: .default(Text("OK")))
         }
+        // Hoist a zap failure into the existing single-alert binding. We clear
+        // the store entry as soon as we read it so the alert doesn't re-fire
+        // on subsequent renders of the same value.
+        .onChange(of: zapStore.errors[displayEventId]) { _, message in
+            guard let message else { return }
+            actionAlert = ActionAlert(title: "Zap Failed", message: message)
+            zapStore.clearError(eventId: displayEventId)
+        }
     }
 
     // MARK: - Repost Banner
@@ -622,16 +631,7 @@ struct PostCardView: View {
             Spacer()
             repostAction
             Spacer()
-            Button {
-                triggerZapOrWalletSetup()
-            } label: {
-                actionItem(
-                    image: settings.zapImage,
-                    label: zapLabel(repoBox.counts.zapSats > 0 ? repoBox.counts.zapSats : (engagement?.zapSats ?? 0)),
-                    tint: iZapped ? Color.wispZapColor : nil
-                )
-            }
-            .buttonStyle(.plain)
+            zapAction
             Spacer()
             Button {
                 activeSheet = .addToList
@@ -659,6 +659,46 @@ struct PostCardView: View {
             .buttonStyle(.plain)
         }
         .foregroundStyle(.secondary)
+    }
+
+    /// Zap button with the in-flight pulse + success burst overlay. While
+    /// `ZapAnimationStore.shared.inFlight` contains this card's event id the
+    /// label is replaced by a pulsing bolt and the sats label is hidden
+    /// (matches Android `ActionBar.kt:221`). The 160-pt burst overlay is always
+    /// mounted (`isActive` toggles the animation) so SwiftUI doesn't have to
+    /// race view-creation against the 1.1 s burst window. `.zIndex(1)` lifts
+    /// the burst above neighbouring action-bar items so the particles aren't
+    /// clipped by sibling Buttons / their own overlays.
+    private var zapAction: some View {
+        let eventId = displayEventId
+        let isFlying = zapStore.inFlight.contains(eventId)
+        let isBursting = zapStore.bursting.contains(eventId)
+        return Button {
+            triggerZapOrWalletSetup()
+        } label: {
+            ZStack {
+                if isFlying {
+                    LightningPulseView()
+                        .frame(width: 18, height: 18)
+                        .frame(height: 28)
+                        .foregroundStyle(Color.wispZapColor)
+                } else {
+                    actionItem(
+                        image: settings.zapImage,
+                        label: zapLabel(repoBox.counts.zapSats > 0 ? repoBox.counts.zapSats : (engagement?.zapSats ?? 0)),
+                        tint: iZapped ? Color.wispZapColor : nil
+                    )
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(isFlying)
+        .overlay(alignment: .center) {
+            ZapBurstView(isActive: isBursting)
+                .frame(width: 160, height: 160)
+                .allowsHitTesting(false)
+        }
+        .zIndex(1)
     }
 
     private var repostAction: some View {

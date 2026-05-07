@@ -37,9 +37,6 @@ struct ZapSheet: View {
     @State private var isCustom = false
     @State private var message: String = ""
     @State private var zapType: ZapType = .public
-    @State private var inFlight = false
-    @State private var status: String?
-    @State private var success = false
     @State private var showEditPresets = false
     @FocusState private var amountFocused: Bool
 
@@ -57,7 +54,7 @@ struct ZapSheet: View {
     }
 
     private var canZap: Bool {
-        !inFlight && recipientLud16 != nil && store.activeWallet != nil && amountSats > 0
+        recipientLud16 != nil && store.activeWallet != nil && amountSats > 0
     }
 
     /// Big amount shown in the hero. While typing custom in fiat mode the
@@ -373,41 +370,26 @@ struct ZapSheet: View {
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
-
-                    // Status
-                    if let status {
-                        Text(status)
-                            .font(.subheadline)
-                            .foregroundStyle(success ? Color.wispRepostColor : .red)
-                            .multilineTextAlignment(.center)
-                    }
                 }
                 .padding(.horizontal, 20)
                 .padding(.bottom, 12)
             }
             .safeAreaInset(edge: .bottom) {
-                // Pinned send button — always visible above the keyboard / tab bar
+                // Pinned send button — always visible above the keyboard / tab bar.
+                // The sheet dismisses the moment the user taps Send; the in-flight
+                // pulse + success burst run on the post card via ZapAnimationStore.
                 Button {
-                    Task { await send() }
+                    send()
                 } label: {
-                    Group {
-                        if inFlight {
-                            HStack(spacing: 8) {
-                                ProgressView().tint(.white)
-                                Text(settings.fiatModeEnabled ? "Sending…" : "Zapping…")
-                            }
-                        } else {
-                            HStack(spacing: 6) {
-                                settings.zapImage
-                                    .resizable()
-                                    .scaledToFit()
-                                    .frame(width: 18, height: 18)
-                                Text(settings.fiatModeEnabled
-                                     ? "Send \(CurrencyFormatter.short(sats: amountSats))"
-                                     : "Zap \(CurrencyFormatter.formatNumber(amountSats)) sats")
-                                    .fontWeight(.semibold)
-                            }
-                        }
+                    HStack(spacing: 6) {
+                        settings.zapImage
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 18, height: 18)
+                        Text(settings.fiatModeEnabled
+                             ? "Send \(CurrencyFormatter.short(sats: amountSats))"
+                             : "Zap \(CurrencyFormatter.formatNumber(amountSats)) sats")
+                            .fontWeight(.semibold)
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 16)
@@ -436,11 +418,12 @@ struct ZapSheet: View {
         }
     }
 
-    private func send() async {
-        guard let key = NostrKey.load() else { status = "No active account"; return }
-        inFlight = true
-        defer { inFlight = false }
-        let result = await ZapSender.sendZap(
+    private func send() {
+        guard let key = NostrKey.load() else { return }
+        // Hand off to the global store so the in-flight Task survives sheet
+        // dismissal. The store fires the success haptic + thunder sound, marks
+        // the eventId as bursting, and routes errors back via `errors[eventId]`.
+        ZapAnimationStore.shared.send(
             keypair: key,
             wallet: store,
             recipientPubkey: recipientPubkey,
@@ -451,20 +434,10 @@ struct ZapSheet: View {
             relayHints: relayHints,
             extraTags: extraTags,
             isAnonymous: zapType == .anonymous || zapType == .private,
-            isPrivate: zapType == .private
+            isPrivate: zapType == .private,
+            onSuccessSats: onSuccess
         )
-        switch result {
-        case .success:
-            Haptics.shared.zapBuzz()
-            status = "⚡️ Zap sent"
-            success = true
-            onSuccess?(amountSats)
-            try? await Task.sleep(for: .seconds(1))
-            dismiss()
-        case .failure(let err):
-            status = err.localizedDescription
-            success = false
-        }
+        dismiss()
     }
 }
 
