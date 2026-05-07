@@ -14,6 +14,7 @@ enum WalletRoute: Hashable {
 
 struct WalletView: View {
     @Bindable var store: WalletStore
+    @Environment(AppSettings.self) private var settings
     @State private var setupMode: WalletMode? = nil
     @State private var showSend = false
     @State private var showReceive = false
@@ -247,6 +248,14 @@ struct WalletView: View {
     private var balanceCard: some View {
         let sats = store.balanceMsats.map { $0 / 1000 } ?? 0
         let unit = WalletBalanceUnit(rawValue: balanceUnitRaw) ?? .sats
+        // When fiat mode is on, the sats/btc/msats picker is overridden — we
+        // render the fiat-converted balance with the currency symbol baked
+        // into the formatted string. Falls back to sats display if the
+        // exchange-rate cache hasn't loaded yet.
+        let fiatBalance: String? = settings.fiatModeEnabled
+            ? ExchangeRateCache.shared.satsToFiat(sats, currency: settings.fiatCurrency)
+                .map { _ in CurrencyFormatter.full(sats: sats) }
+            : nil
         // Pulse while no trustworthy value exists to display: still
         // connecting, or no balance has landed yet (the just-imported
         // Spark case, where the dashboard would otherwise read as a
@@ -262,6 +271,12 @@ struct WalletView: View {
                         Text("* * * * *")
                             .font(.system(size: 52, weight: .semibold, design: .rounded))
                             .foregroundStyle(.primary)
+                    } else if let fiatBalance {
+                        Text(fiatBalance)
+                            .font(.system(size: 52, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.primary)
+                            .contentTransition(.numericText(value: Double(sats)))
+                            .animation(.easeInOut(duration: 0.25), value: sats)
                     } else {
                         HStack(alignment: .center, spacing: 6) {
                             if let symbol = unit.symbolPrefix {
@@ -276,7 +291,7 @@ struct WalletView: View {
                                 .animation(.easeInOut(duration: 0.25), value: sats)
                         }
                     }
-                    if !unit.unitLabel.isEmpty {
+                    if fiatBalance == nil, !unit.unitLabel.isEmpty {
                         Text(unit.unitLabel)
                             .font(.callout)
                             .foregroundStyle(.secondary)
@@ -388,21 +403,19 @@ struct WalletView: View {
                     .textCase(.uppercase)
                     .tracking(0.5)
                 Spacer()
-                if store.transactions.count > 5 {
-                    Button {
-                        showAllTransactions = true
-                    } label: {
-                        HStack(spacing: 3) {
-                            Text("more")
-                                .font(.caption)
-                                .foregroundStyle(.tertiary)
-                            Image(systemName: "chevron.up")
-                                .font(.system(size: 9, weight: .semibold))
-                                .foregroundStyle(.tertiary)
-                        }
+                Button {
+                    showAllTransactions = true
+                } label: {
+                    HStack(spacing: 3) {
+                        Text("View all")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                        Image(systemName: "chevron.up")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(.tertiary)
                     }
-                    .buttonStyle(.plain)
                 }
+                .buttonStyle(.plain)
             }
             .padding(.horizontal, 20)
             .padding(.top, 14)
@@ -425,14 +438,12 @@ struct WalletView: View {
         .background(Color.wispBackground)
         .contentShape(Rectangle())
         .gesture(
-            store.transactions.count > 5
-                ? DragGesture(minimumDistance: 16, coordinateSpace: .local)
-                    .onEnded { value in
-                        if value.translation.height < -16 {
-                            showAllTransactions = true
-                        }
+            DragGesture(minimumDistance: 16, coordinateSpace: .local)
+                .onEnded { value in
+                    if value.translation.height < -16 {
+                        showAllTransactions = true
                     }
-                : nil
+                }
         )
     }
 }

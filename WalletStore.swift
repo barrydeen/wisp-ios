@@ -395,14 +395,24 @@ final class WalletStore {
     }
 
     private(set) var hasMoreTransactions: Bool = false
+    /// Last failure from `listTransactions`, surfaced in `TransactionHistoryView` so
+    /// users (especially NWC) can see why the list is empty — `timeout` (wallet
+    /// service unreachable / not listening), `rpcError` (e.g. wallet doesn't
+    /// implement `list_transactions`), or a decode/transport failure. Cleared on
+    /// the next successful fetch.
+    private(set) var lastTransactionError: String?
 
     func refreshTransactions() async {
         guard let wallet else { return }
         let pageSize = 50
-        if case .success(let txs) = await wallet.listTransactions(limit: pageSize, offset: 0) {
+        switch await wallet.listTransactions(limit: pageSize, offset: 0) {
+        case .success(let txs):
             transactions = txs
             hasMoreTransactions = txs.count == pageSize
+            lastTransactionError = nil
             WalletCache.saveTransactions(txs, for: keypair.pubkey)
+        case .failure(let err):
+            lastTransactionError = err.errorDescription ?? "Failed to fetch transactions"
         }
     }
 

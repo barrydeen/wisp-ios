@@ -16,6 +16,7 @@ struct TransactionHistoryView: View {
         .navigationTitle("Transactions")
         .navigationBarTitleDisplayMode(.large)
         .toolbar(.visible, for: .navigationBar)
+        .task { await store.refreshTransactions() }
     }
 
     private var transactionList: some View {
@@ -66,14 +67,35 @@ struct TransactionHistoryView: View {
     }
 
     private var emptyState: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "bolt.slash")
-                .font(.system(size: 40))
-                .foregroundStyle(.tertiary)
-            Text("No transactions yet")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+        ScrollView {
+            VStack(spacing: 12) {
+                Image(systemName: store.lastTransactionError == nil ? "bolt.slash" : "exclamationmark.triangle")
+                    .font(.system(size: 40))
+                    .foregroundStyle(store.lastTransactionError == nil ? Color.secondary.opacity(0.5) : .orange)
+                if let err = store.lastTransactionError {
+                    Text("Couldn't load transactions")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                    Text(err)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 32)
+                    Button("Try again") {
+                        Task { await store.refreshTransactions() }
+                    }
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(Color.wispZapColor)
+                    .padding(.top, 4)
+                } else {
+                    Text("No transactions yet")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.top, 80)
+            .frame(maxWidth: .infinity)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .refreshable { await store.refreshTransactions() }
     }
 }

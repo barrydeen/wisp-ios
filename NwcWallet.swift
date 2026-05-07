@@ -113,7 +113,9 @@ final class NwcWallet: Wallet {
         emit("Negotiating encryption…")
 
         // Fetch wallet info (kind 13194) for encryption negotiation. Many wallets don't
-        // publish one — fall back to NIP-04 in that case (per spec).
+        // publish one — fall back to NIP-04 in that case (per NIP-47 spec, and matching
+        // the Android client). Sending NIP-44 to a NIP-04-only wallet surfaces as an
+        // `INTERNAL` error from the wallet service.
         let infoEvents = await RelayPool.query(
             relays: conn.relays,
             filter: NostrFilter(
@@ -123,8 +125,7 @@ final class NwcWallet: Wallet {
             ),
             timeout: 5
         )
-        // Default to NIP-44 when no info event is found — modern wallets expect it.
-        let encryption = infoEvents.first.map(Nip47.parseInfoEncryption) ?? .nip44
+        let encryption = infoEvents.first.map(Nip47.parseInfoEncryption) ?? .nip04
         conn = conn.with(encryption: encryption)
         emit("Encryption: \(encryption == .nip44 ? "NIP-44" : "NIP-04")")
         connection = conn
@@ -218,15 +219,30 @@ final class NwcWallet: Wallet {
         guard let conn = connection else { return .failure(.notConnected) }
         do {
             let event = try Nip47.buildRequestEvent(connection: conn, request: request)
-            try await RelayPool.publish(event: event, to: conn.relays, timeout: 6)
-            emit("Request sent (\(event.kind))")
 
+            // Register the pending continuation BEFORE publishing — fast wallets
+            // (Alby, Mutiny on a hot relay) can have the response back on the
+            // subscription socket before `RelayPool.publish` returns its OK. If
+            // we registered after, `handleResponse` would find no pending entry
+            // and silently drop the response on the floor; the request would
+            // then time out 30s later as if the wallet never replied. Mirrors
+            // the Android client's "register deferred BEFORE publishing" comment.
             let response: Nip47.Response = try await withCheckedThrowingContinuation { cont in
                 pendingRequests[event.id] = cont
-                if timeout > 0 {
-                    Task { [weak self] in
+                Task { [weak self] in
+                    let accepted = await RelayPool.publish(event: event, to: conn.relays, timeout: 6)
+                    guard let self else { return }
+                    if accepted.isEmpty {
+                        await self.failRequest(
+                            eventId: event.id,
+                            error: WalletError.other("No relay accepted the request")
+                        )
+                        return
+                    }
+                    self.emit("Request sent (\(event.kind))")
+                    if timeout > 0 {
                         try? await Task.sleep(for: .seconds(timeout))
-                        await self?.timeoutRequest(eventId: event.id)
+                        await self.timeoutRequest(eventId: event.id)
                     }
                 }
             }
@@ -235,6 +251,12 @@ final class NwcWallet: Wallet {
             return .failure(err)
         } catch {
             return .failure(.other(error.localizedDescription))
+        }
+    }
+
+    private func failRequest(eventId: String, error: Error) {
+        if let cont = pendingRequests.removeValue(forKey: eventId) {
+            cont.resume(throwing: error)
         }
     }
 

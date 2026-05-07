@@ -4,6 +4,7 @@ import SwiftUI
 /// recent-strip and the full TransactionHistoryView.
 struct WalletTransactionRow: View {
     let tx: WalletTransaction
+    @Environment(AppSettings.self) private var settings
 
     var body: some View {
         let isIncoming = tx.type == .incoming
@@ -21,6 +22,20 @@ struct WalletTransactionRow: View {
         let amountColor: Color = isIncoming ? Color.wispRepostColor : .red.opacity(0.85)
         let sats = abs(tx.amountMsats) / 1000
         let feeSats = tx.feeMsats / 1000
+        let sign = isIncoming ? "+" : "-"
+        // Use fiat formatting only when the rate cache has actually loaded —
+        // otherwise `CurrencyFormatter.full` falls back to a "X sats" string
+        // and the layout would render that inline next to a stale "sats"
+        // suffix label. Checking the cache directly keeps the two-Text
+        // sats layout intact while the rate is in flight.
+        let fiatAmount: String? = settings.fiatModeEnabled
+            ? ExchangeRateCache.shared.satsToFiat(sats, currency: settings.fiatCurrency)
+                .map { _ in CurrencyFormatter.full(sats: sats) }
+            : nil
+        let fiatFee: String? = (settings.fiatModeEnabled && feeSats > 0)
+            ? ExchangeRateCache.shared.satsToFiat(feeSats, currency: settings.fiatCurrency)
+                .map { _ in CurrencyFormatter.full(sats: feeSats) }
+            : nil
 
         HStack(alignment: .center, spacing: 12) {
             ZStack {
@@ -45,18 +60,30 @@ struct WalletTransactionRow: View {
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 2) {
-                HStack(alignment: .firstTextBaseline, spacing: 3) {
-                    Text("\(isIncoming ? "+" : "-")\(CurrencyFormatter.formatNumber(sats))")
+                if let fiatAmount {
+                    Text("\(sign)\(fiatAmount)")
                         .font(.subheadline.weight(.semibold).monospacedDigit())
                         .foregroundStyle(amountColor)
-                    Text("sats")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                } else {
+                    HStack(alignment: .firstTextBaseline, spacing: 3) {
+                        Text("\(sign)\(CurrencyFormatter.formatNumber(sats))")
+                            .font(.subheadline.weight(.semibold).monospacedDigit())
+                            .foregroundStyle(amountColor)
+                        Text("sats")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 if !isIncoming, feeSats > 0 {
-                    Text("Fee: \(CurrencyFormatter.formatNumber(feeSats)) sats")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                    if let fiatFee {
+                        Text("Fee: \(fiatFee)")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("Fee: \(CurrencyFormatter.formatNumber(feeSats)) sats")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
         }

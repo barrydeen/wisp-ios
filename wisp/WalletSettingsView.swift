@@ -78,6 +78,7 @@ struct WalletSettingsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
+                transactionsSection
                 if store.mode == .spark {
                     lightningAddressSection
                     sparkInfoSection
@@ -134,6 +135,31 @@ struct WalletSettingsView: View {
         }
         .sheet(isPresented: $showAddressSheet) {
             LightningAddressSetupSheet(store: store)
+        }
+    }
+
+    // MARK: - Transactions (both modes)
+
+    private var transactionsSection: some View {
+        settingsGroup(header: "Activity") {
+            NavigationLink(value: WalletRoute.transactions) {
+                HStack(spacing: 12) {
+                    Image(systemName: "list.bullet.rectangle")
+                        .font(.system(size: 15))
+                        .foregroundStyle(Color.wispZapColor)
+                        .frame(width: 22)
+                    Text("Transactions")
+                        .font(.subheadline)
+                        .foregroundStyle(.primary)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
+            }
+            .buttonStyle(.plain)
         }
     }
 
