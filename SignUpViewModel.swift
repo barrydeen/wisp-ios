@@ -1,5 +1,8 @@
 import Foundation
 import Observation
+import os.log
+
+private let signupLog = Logger(subsystem: "wisp", category: "signup-wallet")
 
 /// Orchestrates the brand-new-user sign-up flow:
 ///
@@ -59,6 +62,15 @@ final class SignUpViewModel {
     // MARK: - Identity
 
     let keypair: Keypair
+
+    // MARK: - Wallet state
+
+    /// Lightning address registered for this account during signup, e.g.
+    /// "bluepanda42@<spark-domain>". Embedded into kind-0 as `lud16` when set.
+    var lightningAddress: String?
+
+    @ObservationIgnored private var sparkWallet: SparkWallet?
+    @ObservationIgnored private var sparkConnectTask: Task<Void, Never>?
 
     // MARK: - Profile step state
 
@@ -166,6 +178,7 @@ final class SignUpViewModel {
 
     func startRelayDiscovery() {
         guard relayPhase == .idle else { return }
+        startWalletSetup()
         relayPhase = .connecting
         let kp = self.keypair
         Task { [weak self] in
@@ -223,6 +236,76 @@ final class SignUpViewModel {
         board.save(pubkey: keypair.pubkey)
     }
 
+    // MARK: - Wallet setup
+
+    /// Generate a Bip39 mnemonic and start the Breez Spark connect in parallel
+    /// with relay discovery, so by the time the user taps Continue on the
+    /// profile step the SDK is usually already up. Silent on failure: a
+    /// missing API key, bad entropy, or network error just leaves
+    /// `sparkWallet?.isConnected == false` so `finishProfileStep` skips the
+    /// lud16 path and publishes the profile bare.
+    private func startWalletSetup() {
+        guard sparkWallet == nil else { return }
+        guard BreezConfig.hasApiKey else {
+            signupLog.warning("Breez API key missing — skipping auto-wallet setup")
+            return
+        }
+        let wallet = SparkWallet(pubkey: keypair.pubkey)
+        do {
+            let mnemonic = try Bip39.newMnemonic()
+            wallet.saveMnemonic(mnemonic)
+        } catch {
+            signupLog.warning("Bip39.newMnemonic failed: \(error.localizedDescription, privacy: .public)")
+            return
+        }
+        sparkWallet = wallet
+        sparkConnectTask = Task { await wallet.connect() }
+    }
+
+    /// Wait up to 15s for the Spark SDK to flip `isConnected = true`, then try
+    /// up to 3 random `{color}{animal}{number}` handles via Breez. On success
+    /// persists `WalletMode.spark` so MainView's WalletStore reconnects to the
+    /// same on-disk wallet automatically. Returns nil on any failure.
+    private func registerSparkLightningAddressIfReady() async -> String? {
+        guard let wallet = sparkWallet else { return nil }
+
+        let deadline = Date().addingTimeInterval(15)
+        while !wallet.isConnected && Date() < deadline {
+            try? await Task.sleep(for: .milliseconds(200))
+        }
+        guard wallet.isConnected else {
+            signupLog.warning("Spark connect timed out — skipping lud16 setup")
+            return nil
+        }
+
+        for attempt in 1...3 {
+            let username = SparkUsername.generate()
+            if await wallet.checkLightningAddressAvailable(username: username) {
+                do {
+                    let address = try await wallet.registerLightningAddress(username: username)
+                    WalletMode.save(.spark, for: keypair.pubkey)
+                    self.lightningAddress = address
+                    return address
+                } catch {
+                    signupLog.warning("registerLightningAddress(\(username, privacy: .public)) failed (attempt \(attempt)): \(error.localizedDescription, privacy: .public)")
+                }
+            }
+        }
+        signupLog.warning("All 3 lightning-address handle attempts failed")
+        return nil
+    }
+
+    /// Disconnect the signup-time SparkWallet so MainView's WalletStore can
+    /// connect its own SparkWallet against the same on-disk Spark store.
+    /// `SparkWallet.storageDir` is currently a single shared path, so two
+    /// concurrent connects would conflict.
+    func tearDownSignupWallet() {
+        sparkConnectTask?.cancel()
+        sparkConnectTask = nil
+        sparkWallet?.disconnect()
+        sparkWallet = nil
+    }
+
     func uploadAvatar(data: Data, mime: String) async {
         uploading = true
         uploadError = nil
@@ -251,11 +334,17 @@ final class SignUpViewModel {
         publishingProfile = true
         defer { publishingProfile = false }
 
+        // Wait up to 15s for the Spark wallet started in `startWalletSetup`
+        // to come up, then claim a random Lightning-address handle. Failure
+        // returns nil and the kind-0 below ships without `lud16` — never
+        // blocks the user from advancing.
+        let lightning = await registerSparkLightningAddressIfReady()
+
         let writeRelays = discoveredRelays.filter(\.write).map(\.url)
         let publishTargets = (writeRelays + Self.indexerRelays).uniquedPreservingOrder()
 
         let relayListEvent = signRelayListEvent()
-        let profileEvent = signProfileEvent()
+        let profileEvent = signProfileEvent(lightningAddress: lightning)
 
         if let e = relayListEvent {
             await EventStore.shared.persist([e])
@@ -281,6 +370,20 @@ final class SignUpViewModel {
                 _ = await RelayPool.publish(event: e, to: publishTargets, timeout: 6)
             }
         }
+
+        // NIP-78 encrypted seed backup: fire-and-forget to write relays only,
+        // matching Android's `relayPool.sendToWriteRelays(backupMsg)` semantics.
+        if lightning != nil, let mnemonic = sparkWallet?.loadMnemonic(), !writeRelays.isEmpty {
+            let kp = self.keypair
+            Task.detached { [mnemonic, writeRelays] in
+                do {
+                    let event = try await Nip78Backup.createBackupEvent(keypair: kp, mnemonic: mnemonic)
+                    _ = await RelayPool.publish(event: event, to: writeRelays, timeout: 6)
+                } catch {
+                    signupLog.warning("NIP-78 backup publish failed: \(error.localizedDescription, privacy: .public)")
+                }
+            }
+        }
     }
 
     private func signRelayListEvent() -> NostrEvent? {
@@ -297,7 +400,7 @@ final class SignUpViewModel {
         )
     }
 
-    private func signProfileEvent() -> NostrEvent? {
+    private func signProfileEvent(lightningAddress: String? = nil) -> NostrEvent? {
         guard let privkey = Hex.decode(keypair.privkey) else { return nil }
         var json: [String: String] = [:]
         let trimmedName = name.trimmingCharacters(in: .whitespaces)
@@ -308,6 +411,7 @@ final class SignUpViewModel {
         }
         if !trimmedAbout.isEmpty { json["about"] = trimmedAbout }
         if let pic = pictureUrl, !pic.isEmpty { json["picture"] = pic }
+        if let lud16 = lightningAddress, !lud16.isEmpty { json["lud16"] = lud16 }
         guard !json.isEmpty,
               let body = try? JSONSerialization.data(withJSONObject: json),
               let bodyStr = String(data: body, encoding: .utf8) else { return nil }

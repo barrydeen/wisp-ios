@@ -60,6 +60,10 @@ struct SignUpFlowView: View {
         // just-followed users and comes back empty.
         Task {
             await viewModel.awaitOutboxReady()
+            // SparkWallet.storageDir is a single shared path today, so let the
+            // signup-time wallet go before MainView's WalletStore stands up
+            // its own SparkWallet against the same on-disk store.
+            viewModel.tearDownSignupWallet()
             viewModel.markComplete()
             onComplete(viewModel.keypair)
         }
