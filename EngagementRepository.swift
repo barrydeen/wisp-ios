@@ -93,18 +93,19 @@ final class EngagementRepository {
     // MARK: - Optimistic reactions
 
     /// Increment the reaction count for `eventId` immediately, before the kind-7 has actually
-    /// been published. The reactor `pubkey` and `emoji` are stamped into `reactors` so the
-    /// detail panel reflects the pending state. The synthetic event id is reserved against
-    /// `seenEngagementIds` so the inbound copy doesn't double-count.
-    func applyOptimisticReaction(eventId: String, reactionEventId: String, pubkey: String, emoji: String, customEmojiUrl: String? = nil) {
+    /// been signed or published — so the heart fills in on tap rather than after PoW. The
+    /// reactor `pubkey` and `emoji` are stamped into `reactors` so the detail panel reflects
+    /// the pending state. The published event id isn't known yet; once signing produces it,
+    /// callers should call `reserveReactionEventId` for belt-and-suspenders inbound dedup.
+    /// The triple-key gate in `seenReactionKeys` already protects against double-counting
+    /// when the same kind-7 streams back from a relay.
+    func applyOptimisticReaction(eventId: String, pubkey: String, emoji: String, customEmojiUrl: String? = nil) {
         let key = "\(eventId)|\(pubkey)|\(emoji)"
         guard seenReactionKeys.insert(key).inserted else {
             NSLog("[Reaction] applyOptimistic skipped (dedup) key=%@", key)
             return
         }
         NSLog("[Reaction] applyOptimistic eventId=%@ emoji=%@", eventId.prefix(8) as CVarArg, emoji)
-        // Reserve the eventual inbound id too, in case the same event streams back.
-        seenEngagementIds.insert(reactionEventId)
 
         // Make sure observers see the count even when the post wasn't visible yet.
         queriedIds.insert(eventId)
@@ -128,6 +129,17 @@ final class EngagementRepository {
         if current.reactions > 0 { current.reactions -= 1 }
         current.reactors.removeAll { $0.pubkey == pubkey && $0.emoji == emoji }
         b.counts = current
+    }
+
+    /// Reserve the signed kind-7 event id against `seenEngagementIds` so the inbound copy
+    /// doesn't double-count. Call after `Signer.sign` succeeds.
+    func reserveReactionEventId(_ id: String) {
+        seenEngagementIds.insert(id)
+    }
+
+    /// Undo a prior `reserveReactionEventId` when the publish flow ultimately fails.
+    func unreserveReactionEventId(_ id: String) {
+        seenEngagementIds.remove(id)
     }
 
     // MARK: - Optimistic reposts

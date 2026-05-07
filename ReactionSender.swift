@@ -46,7 +46,8 @@ final class ReactionSender {
         case alreadyReacted
     }
 
-    /// Send a reaction. Optimistically updates engagement counts before publish; reverts on failure.
+    /// Send a reaction. Optimistically updates engagement counts before PoW + publish so the
+    /// heart fills in on tap, not after the mine. Reverts on any downstream failure.
     /// Records frequency only on confirmed publish.
     func react(
         to targetEvent: NostrEvent,
@@ -65,70 +66,83 @@ final class ReactionSender {
         let baseTags = Nip25.reactionTags(targetEvent: targetEvent, customEmoji: custom)
         let baseCreatedAt = Int(Date().timeIntervalSince1970)
         let powSnap = PowPreferences.snapshot()
-        let signTags: [[String]]
-        let signCreatedAt: Int
 
-        // PoW mining: bump nonce until the event id has the requested
-        // leading zeroes. Skipped for remote-signer accounts since the
-        // signer would mine its own — which most signers don't do, so
-        // PoW reactions on a NIP-46 account just publish without PoW.
-        if powSnap.reactionEnabled, !keypair.isRemote {
-            let pubkey = keypair.pubkey
-            let content = picked.content
-            let bits = powSnap.reactionDifficulty
-            let mined: Nip13.MineResult? = await Task.detached(priority: .userInitiated) {
-                Nip13.mine(
-                    pubkey: pubkey,
-                    kind: Nip25.kindReaction,
-                    createdAt: baseCreatedAt,
-                    tags: baseTags,
-                    content: content,
-                    targetBits: bits
-                )
-            }.value
-            guard let mined else { throw SendError.publishFailed }
-            signTags = mined.tags
-            signCreatedAt = mined.createdAt
-        } else {
-            signTags = baseTags
-            signCreatedAt = baseCreatedAt
-        }
-
-        let event: NostrEvent
-        do {
-            event = try await Signer.sign(
-                keypair: keypair,
-                kind: Nip25.kindReaction,
-                tags: signTags,
-                content: picked.content,
-                createdAt: signCreatedAt
-            )
-        } catch {
-            throw SendError.missingKey
-        }
-
-        let relays = await relaySetForReaction(to: targetEvent, reactor: keypair.pubkey)
-        guard !relays.isEmpty else { throw SendError.noRelays }
-
-        // Optimistic UI before publish.
+        // Applied before PoW so the heart fills in on tap, not after the mine.
         sent.insert(dedupKey)
         EngagementRepository.shared.applyOptimisticReaction(
             eventId: targetEvent.id,
-            reactionEventId: event.id,
             pubkey: keypair.pubkey,
             emoji: picked.content,
             customEmojiUrl: custom?.url
         )
 
-        let succeeded = await RelayPool.publish(event: event, to: relays, timeout: 8)
-        if succeeded.isEmpty {
-            sent.remove(dedupKey)
+        var reservedEventId: String? = nil
+        let revert: () -> Void = { [targetEventId = targetEvent.id, pubkey = keypair.pubkey, emoji = picked.content] in
+            self.sent.remove(dedupKey)
             EngagementRepository.shared.revertOptimisticReaction(
-                eventId: targetEvent.id,
-                pubkey: keypair.pubkey,
-                emoji: picked.content
+                eventId: targetEventId,
+                pubkey: pubkey,
+                emoji: emoji
             )
-            throw SendError.publishFailed
+            if let id = reservedEventId {
+                EngagementRepository.shared.unreserveReactionEventId(id)
+            }
+        }
+
+        do {
+            let signTags: [[String]]
+            let signCreatedAt: Int
+
+            // PoW mining: bump nonce until the event id has the requested
+            // leading zeroes. Skipped for remote-signer accounts since the
+            // signer would mine its own — which most signers don't do, so
+            // PoW reactions on a NIP-46 account just publish without PoW.
+            if powSnap.reactionEnabled, !keypair.isRemote {
+                let pubkey = keypair.pubkey
+                let content = picked.content
+                let bits = powSnap.reactionDifficulty
+                let mined: Nip13.MineResult? = await Task.detached(priority: .userInitiated) {
+                    Nip13.mine(
+                        pubkey: pubkey,
+                        kind: Nip25.kindReaction,
+                        createdAt: baseCreatedAt,
+                        tags: baseTags,
+                        content: content,
+                        targetBits: bits
+                    )
+                }.value
+                guard let mined else { throw SendError.publishFailed }
+                signTags = mined.tags
+                signCreatedAt = mined.createdAt
+            } else {
+                signTags = baseTags
+                signCreatedAt = baseCreatedAt
+            }
+
+            let event: NostrEvent
+            do {
+                event = try await Signer.sign(
+                    keypair: keypair,
+                    kind: Nip25.kindReaction,
+                    tags: signTags,
+                    content: picked.content,
+                    createdAt: signCreatedAt
+                )
+            } catch {
+                throw SendError.missingKey
+            }
+
+            EngagementRepository.shared.reserveReactionEventId(event.id)
+            reservedEventId = event.id
+
+            let relays = await relaySetForReaction(to: targetEvent, reactor: keypair.pubkey)
+            guard !relays.isEmpty else { throw SendError.noRelays }
+
+            let succeeded = await RelayPool.publish(event: event, to: relays, timeout: 8)
+            if succeeded.isEmpty { throw SendError.publishFailed }
+        } catch {
+            revert()
+            throw error
         }
 
         EmojiRepository.shared.recordUse(picked.frequencyKey)
