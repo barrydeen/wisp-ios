@@ -54,21 +54,20 @@ struct ThreadView: View {
 
                         // Section header for replies — replaces the previous
                         // "X replies" caption tucked under the focal card.
-                        // Hidden when every direct reply is from a blocked
-                        // author so the thread reads as no-replies.
-                        if viewModel.visibleRepliesCount > 0 {
+                        if !viewModel.nestedReplies.isEmpty {
                             repliesSectionHeader
                         }
 
-                        // Replies — direct children of the focal, each tappable to push.
-                        // Blocked rows are dropped entirely (no placeholder) so a
-                        // mixed thread doesn't show "Post from blocked user" entries
-                        // alongside the visible ones.
-                        ForEach(viewModel.replies.filter { !$0.isBlocked }) { row in
-                            replyRow(row)
-                                .id(row.id)
+                        // Replies — full descendant tree of the focal, rendered
+                        // inline with depth-based indentation. Tap still pushes
+                        // a focused sub-thread, but it's no longer the only way
+                        // to see grandchildren.
+                        ForEach(viewModel.nestedReplies) { item in
+                            nestedReplyRow(item)
+                                .id(item.row.id)
                             Divider()
                                 .overlay(Color.wispSurfaceVariant.opacity(0.3))
+                                .padding(.leading, indentationWidth(for: item.depth))
                         }
 
                         if !viewModel.hiddenSpamReplies.isEmpty {
@@ -76,7 +75,7 @@ struct ThreadView: View {
                         }
 
                         if !viewModel.isLoading
-                            && viewModel.visibleRepliesCount == 0
+                            && viewModel.nestedReplies.isEmpty
                             && viewModel.focal != nil {
                             emptyState
                         }
@@ -251,13 +250,36 @@ struct ThreadView: View {
                 .foregroundStyle(.secondary)
             Text("·")
                 .foregroundStyle(.secondary)
-            Text("\(viewModel.visibleRepliesCount)")
+            Text("\(viewModel.nestedReplies.count)")
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(.secondary)
             Spacer()
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
+    }
+
+    /// Wrap a reply row with depth-based leading indentation and a thin
+    /// vertical guide so the parent-child relationship reads at a glance
+    /// without having to count avatar offsets. Indent caps at depth 5 to
+    /// keep deep chains from sliding off the right edge.
+    @ViewBuilder
+    private func nestedReplyRow(_ item: NestedReplyRow) -> some View {
+        ZStack(alignment: .leading) {
+            if item.depth > 0 {
+                Rectangle()
+                    .fill(Color.wispSurfaceVariant.opacity(0.6))
+                    .frame(width: 1.5)
+                    .padding(.leading, indentationWidth(for: item.depth) - 8)
+                    .padding(.vertical, 6)
+            }
+            replyRow(item.row)
+                .padding(.leading, indentationWidth(for: item.depth))
+        }
+    }
+
+    private func indentationWidth(for depth: Int) -> CGFloat {
+        CGFloat(min(depth, 5)) * 14
     }
 
     @ViewBuilder
