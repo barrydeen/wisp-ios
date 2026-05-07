@@ -68,6 +68,27 @@ final class ProfileViewModel {
     @ObservationIgnored private var targetWriteRelays: [String] = []
     @ObservationIgnored private var hasStarted = false
 
+    // Streaming buffers — mirror FeedViewModel.enqueueLiveEvent /
+    // flushPendingInserts. Per-tab buffers keep a mid-flight flush from
+    // crossing tab boundaries.
+    @ObservationIgnored private var notesPending: [NostrEvent] = []
+    @ObservationIgnored private var notesFlushScheduled = false
+    @ObservationIgnored private var notesStreamTask: Task<Void, Never>?
+
+    @ObservationIgnored private var repliesPending: [NostrEvent] = []
+    @ObservationIgnored private var repliesFlushScheduled = false
+    @ObservationIgnored private var repliesStreamTask: Task<Void, Never>?
+
+    @ObservationIgnored private var galleryPending: [NostrEvent] = []
+    @ObservationIgnored private var galleryFlushScheduled = false
+    @ObservationIgnored private var galleryStreamTask: Task<Void, Never>?
+
+    @ObservationIgnored private var followersStreamTask: Task<Void, Never>?
+    @ObservationIgnored private var sortedNotesStreamTask: Task<Void, Never>?
+    @ObservationIgnored private var sortedRepliesStreamTask: Task<Void, Never>?
+
+    private static let liveFlushDelayMs: UInt64 = 60
+
     @ObservationIgnored private let profileRepo = ProfileRepository.shared
     @ObservationIgnored private let eventStore = EventStore.shared
 
@@ -206,11 +227,11 @@ final class ProfileViewModel {
         notesQueryGen += 1
         let gen = notesQueryGen
         isLoadingNotes = true
-        defer { if gen == notesQueryGen { isLoadingNotes = false } }
+        notesStreamTask?.cancel()
 
         // Seed from local cache first so the user sees their notes without
-        // waiting on the relay round-trip. The relay fetch below merges in
-        // anything newer.
+        // waiting on the relay round-trip. The stream below merges in
+        // anything newer as it arrives.
         let cached = await eventStore.loadRecentByAuthor(
             pubkey: pubkey,
             kinds: [1, 6, 30023, 20, 21, 22],
@@ -227,33 +248,54 @@ final class ProfileViewModel {
             }
         }
 
-        let events = await fetchAuthorEvents(
-            kinds: [1, 6, 30023, 20, 21, 22],
-            limit: 100,
-            until: nil
-        )
-        guard gen == notesQueryGen else { return }
+        let relays = queryRelays()
+        let filter = NostrFilter(kinds: [1, 6, 30023, 20, 21, 22], authors: [pubkey], limit: 100)
+        let queries = relays.map { RelayQuery(relayUrl: $0, filter: filter) }
+        let cancelGen = gen
 
-        // Merge cached + freshly-fetched, dedupe by id. Relay fetch is the
-        // source of truth for ordering once it returns.
-        let knownIds = Set(rootNotes.map(\.id))
-        let combined = rootNotes + events.filter { !knownIds.contains($0.id) }
-        let notes = combined
-            .filter { isRootOrRepost($0) }
-            .sorted { $0.createdAt > $1.createdAt }
-            .prefix(100)
-        rootNotes = Array(notes)
-        oldestNoteTs = notes.last?.createdAt
-        noNotesAvailable = rootNotes.isEmpty
-        await persistKnownKinds(events)
-        await subscribeEngagement(for: rootNotes.map(\.id))
+        notesStreamTask = Task { [weak self] in
+            guard let self else { return }
+            var seen = Set(self.rootNotes.map(\.id))
+            for await (event, _) in RelayPool.stream(queries: queries, timeout: 12) {
+                if Task.isCancelled || cancelGen != self.notesQueryGen { return }
+                guard self.isRootOrRepost(event), seen.insert(event.id).inserted else { continue }
+                self.enqueueNote(event)
+            }
+            guard cancelGen == self.notesQueryGen else { return }
+            self.flushNotesPending()
+            self.isLoadingNotes = false
+            self.noNotesAvailable = self.rootNotes.isEmpty
+            await self.subscribeEngagement(for: self.rootNotes.map(\.id))
+        }
+    }
+
+    private func enqueueNote(_ event: NostrEvent) {
+        notesPending.append(event)
+        if isLoadingNotes { isLoadingNotes = false }
+        guard !notesFlushScheduled else { return }
+        notesFlushScheduled = true
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(Self.liveFlushDelayMs))
+            await self?.flushNotesPending()
+        }
+    }
+
+    private func flushNotesPending() {
+        notesFlushScheduled = false
+        let batch = notesPending
+        notesPending.removeAll(keepingCapacity: true)
+        guard !batch.isEmpty else { return }
+        let sortedBatch = batch.sorted { $0.createdAt > $1.createdAt }
+        rootNotes = Array(FeedViewModel.mergeSortedDesc(rootNotes, sortedBatch).prefix(100))
+        oldestNoteTs = rootNotes.last?.createdAt
+        Task { await EventPersistQueue.shared.enqueue(batch) }
     }
 
     private func loadInitialReplies() async {
         repliesQueryGen += 1
         let gen = repliesQueryGen
         isLoadingReplies = true
-        defer { if gen == repliesQueryGen { isLoadingReplies = false } }
+        repliesStreamTask?.cancel()
 
         // Cache-seed the same way as loadInitialNotes so replies tab fills
         // instantly when the user has prior history cached.
@@ -269,20 +311,47 @@ final class ProfileViewModel {
             }
         }
 
-        let events = await fetchAuthorEvents(kinds: [1], limit: 100, until: nil)
-        guard gen == repliesQueryGen else { return }
+        let relays = queryRelays()
+        let filter = NostrFilter(kinds: [1], authors: [pubkey], limit: 100)
+        let queries = relays.map { RelayQuery(relayUrl: $0, filter: filter) }
+        let cancelGen = gen
 
-        let knownIds = Set(replies.map(\.id))
-        let combined = replies + events.filter { !knownIds.contains($0.id) }
-        let onlyReplies = combined
-            .filter { isReply($0) }
-            .sorted { $0.createdAt > $1.createdAt }
-            .prefix(100)
-        replies = Array(onlyReplies)
-        oldestReplyTs = onlyReplies.last?.createdAt
-        noRepliesAvailable = replies.isEmpty
-        await persistKnownKinds(events)
-        await subscribeEngagement(for: replies.map(\.id))
+        repliesStreamTask = Task { [weak self] in
+            guard let self else { return }
+            var seen = Set(self.replies.map(\.id))
+            for await (event, _) in RelayPool.stream(queries: queries, timeout: 12) {
+                if Task.isCancelled || cancelGen != self.repliesQueryGen { return }
+                guard self.isReply(event), seen.insert(event.id).inserted else { continue }
+                self.enqueueReply(event)
+            }
+            guard cancelGen == self.repliesQueryGen else { return }
+            self.flushRepliesPending()
+            self.isLoadingReplies = false
+            self.noRepliesAvailable = self.replies.isEmpty
+            await self.subscribeEngagement(for: self.replies.map(\.id))
+        }
+    }
+
+    private func enqueueReply(_ event: NostrEvent) {
+        repliesPending.append(event)
+        if isLoadingReplies { isLoadingReplies = false }
+        guard !repliesFlushScheduled else { return }
+        repliesFlushScheduled = true
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(Self.liveFlushDelayMs))
+            await self?.flushRepliesPending()
+        }
+    }
+
+    private func flushRepliesPending() {
+        repliesFlushScheduled = false
+        let batch = repliesPending
+        repliesPending.removeAll(keepingCapacity: true)
+        guard !batch.isEmpty else { return }
+        let sortedBatch = batch.sorted { $0.createdAt > $1.createdAt }
+        replies = Array(FeedViewModel.mergeSortedDesc(replies, sortedBatch).prefix(100))
+        oldestReplyTs = replies.last?.createdAt
+        Task { await EventPersistQueue.shared.enqueue(batch) }
     }
 
     func loadMoreNotes() async {
@@ -318,6 +387,7 @@ final class ProfileViewModel {
 
     func setNotesSortMode(_ mode: ProfileSortMode) async {
         notesSortMode = mode
+        sortedNotesStreamTask?.cancel()
         if mode == .recency {
             sortedNotes = []
             return
@@ -325,21 +395,33 @@ final class ProfileViewModel {
         notesQueryGen += 1
         let gen = notesQueryGen
         isLoadingSortedNotes = true
-        defer { if gen == notesQueryGen { isLoadingSortedNotes = false } }
         sortedNotes = []
         let url = "wss://feeds.nostrarchives.com/profiles/root/\(mode.relaySlug)"
-        let events = await RelayPool.query(
-            relays: [url],
-            filter: NostrFilter(kinds: [1], authors: [pubkey], limit: 100),
-            timeout: 12
-        )
-        guard gen == notesQueryGen else { return }
-        sortedNotes = events.filter { $0.kind == 1 || $0.kind == 6 }
-        await subscribeEngagement(for: sortedNotes.map(\.id))
+        let queries = [RelayQuery(
+            relayUrl: url,
+            filter: NostrFilter(kinds: [1], authors: [pubkey], limit: 100)
+        )]
+
+        // Curated relay returns events in sort order — preserve it by
+        // appending per-event without the recency-tab debounce.
+        sortedNotesStreamTask = Task { [weak self] in
+            guard let self else { return }
+            var seen = Set<String>()
+            for await (event, _) in RelayPool.stream(queries: queries, timeout: 12) {
+                guard gen == self.notesQueryGen else { return }
+                guard event.kind == 1 || event.kind == 6, seen.insert(event.id).inserted else { continue }
+                self.sortedNotes.append(event)
+                if self.isLoadingSortedNotes { self.isLoadingSortedNotes = false }
+            }
+            guard gen == self.notesQueryGen else { return }
+            self.isLoadingSortedNotes = false
+            await self.subscribeEngagement(for: self.sortedNotes.map(\.id))
+        }
     }
 
     func setRepliesSortMode(_ mode: ProfileSortMode) async {
         repliesSortMode = mode
+        sortedRepliesStreamTask?.cancel()
         if mode == .recency {
             sortedReplies = []
             return
@@ -347,30 +429,71 @@ final class ProfileViewModel {
         repliesQueryGen += 1
         let gen = repliesQueryGen
         isLoadingSortedReplies = true
-        defer { if gen == repliesQueryGen { isLoadingSortedReplies = false } }
         sortedReplies = []
         let url = "wss://feeds.nostrarchives.com/profiles/replies/\(mode.relaySlug)"
-        let events = await RelayPool.query(
-            relays: [url],
-            filter: NostrFilter(kinds: [1], authors: [pubkey], limit: 100),
-            timeout: 12
-        )
-        guard gen == repliesQueryGen else { return }
-        sortedReplies = events.filter { $0.kind == 1 }
-        await subscribeEngagement(for: sortedReplies.map(\.id))
+        let queries = [RelayQuery(
+            relayUrl: url,
+            filter: NostrFilter(kinds: [1], authors: [pubkey], limit: 100)
+        )]
+
+        sortedRepliesStreamTask = Task { [weak self] in
+            guard let self else { return }
+            var seen = Set<String>()
+            for await (event, _) in RelayPool.stream(queries: queries, timeout: 12) {
+                guard gen == self.repliesQueryGen else { return }
+                guard event.kind == 1, seen.insert(event.id).inserted else { continue }
+                self.sortedReplies.append(event)
+                if self.isLoadingSortedReplies { self.isLoadingSortedReplies = false }
+            }
+            guard gen == self.repliesQueryGen else { return }
+            self.isLoadingSortedReplies = false
+            await self.subscribeEngagement(for: self.sortedReplies.map(\.id))
+        }
     }
 
     // MARK: - Gallery
 
     private func loadGallery() async {
+        galleryStreamTask?.cancel()
         isLoadingGallery = true
-        defer { isLoadingGallery = false }
-        let events = await fetchAuthorEvents(kinds: [20, 21, 22], limit: 100, until: nil)
-        galleryPosts = events
-            .filter { [20, 21, 22].contains($0.kind) }
-            .sorted { $0.createdAt > $1.createdAt }
-        galleryLoaded = true
-        await persistKnownKinds(events)
+
+        let relays = queryRelays()
+        let filter = NostrFilter(kinds: [20, 21, 22], authors: [pubkey], limit: 100)
+        let queries = relays.map { RelayQuery(relayUrl: $0, filter: filter) }
+
+        galleryStreamTask = Task { [weak self] in
+            guard let self else { return }
+            var seen = Set<String>()
+            for await (event, _) in RelayPool.stream(queries: queries, timeout: 12) {
+                if Task.isCancelled { return }
+                guard [20, 21, 22].contains(event.kind), seen.insert(event.id).inserted else { continue }
+                self.enqueueGallery(event)
+            }
+            self.flushGalleryPending()
+            self.isLoadingGallery = false
+            self.galleryLoaded = true
+        }
+    }
+
+    private func enqueueGallery(_ event: NostrEvent) {
+        galleryPending.append(event)
+        if isLoadingGallery { isLoadingGallery = false }
+        guard !galleryFlushScheduled else { return }
+        galleryFlushScheduled = true
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(Self.liveFlushDelayMs))
+            await self?.flushGalleryPending()
+        }
+    }
+
+    private func flushGalleryPending() {
+        galleryFlushScheduled = false
+        let batch = galleryPending
+        galleryPending.removeAll(keepingCapacity: true)
+        guard !batch.isEmpty else { return }
+        let sortedBatch = batch.sorted { $0.createdAt > $1.createdAt }
+        galleryPosts = FeedViewModel.mergeSortedDesc(galleryPosts, sortedBatch)
+        Task { await EventPersistQueue.shared.enqueue(batch) }
     }
 
     // MARK: - Following
@@ -406,27 +529,33 @@ final class ProfileViewModel {
     // MARK: - Followers
 
     private func loadFollowers() async {
+        followersStreamTask?.cancel()
         isLoadingFollowers = true
-        defer { isLoadingFollowers = false }
+        followerProfiles = []
 
-        let events = await RelayPool.query(
-            relays: [Self.followersRelay],
-            filter: NostrFilter(kinds: [0], pTags: [pubkey], limit: 500),
-            timeout: 15
-        )
+        let queries = [RelayQuery(
+            relayUrl: Self.followersRelay,
+            filter: NostrFilter(kinds: [0], pTags: [pubkey], limit: 500)
+        )]
 
-        var seen = Set<String>()
-        var profilesOut: [ProfileData] = []
-        for e in events where e.kind == 0 && seen.insert(e.pubkey).inserted {
-            if let updated = profileRepo.updateFromEvent(e) {
-                profiles[e.pubkey] = updated
-                profilesOut.append(updated)
+        // Curated archive relay: append per-event so rows fill progressively
+        // rather than landing all at once after the 15s blocking wait.
+        followersStreamTask = Task { [weak self] in
+            guard let self else { return }
+            var seenPubkeys = Set<String>()
+            for await (event, _) in RelayPool.stream(queries: queries, timeout: 15) {
+                guard event.kind == 0,
+                      seenPubkeys.insert(event.pubkey).inserted,
+                      let updated = self.profileRepo.updateFromEvent(event) else { continue }
+                self.profiles[event.pubkey] = updated
+                self.followerProfiles.append(updated)
+                if self.isLoadingFollowers { self.isLoadingFollowers = false }
             }
+            self.followersCount = self.followerProfiles.count
+            self.followersCountIsApprox = false
+            self.followersLoaded = true
+            self.isLoadingFollowers = false
         }
-        followerProfiles = profilesOut
-        followersCount = profilesOut.count
-        followersCountIsApprox = false
-        followersLoaded = true
     }
 
     // MARK: - Groups
