@@ -90,6 +90,13 @@ final class ProfileViewModel {
         guard !hasStarted else { return }
         hasStarted = true
 
+        // Drop this pubkey from the watcher's exhausted set so explicit profile
+        // navigation re-tries even after a prior batched fetch came up empty.
+        // Result is fire-and-forget: `loadProfileHeader` below covers the UI
+        // path; `forceFetch` only resets negative-cache state.
+        let target = pubkey
+        Task { _ = await MissingProfileWatcher.shared.forceFetch(target) }
+
         let myFollows = FollowsCache.shared.follows(for: activeUserPubkey)
         youFollow = myFollows.contains(pubkey)
 

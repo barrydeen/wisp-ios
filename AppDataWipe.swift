@@ -38,6 +38,7 @@ enum AppDataWipe {
         MuteRepository.shared.unbind()
         SafetyPreferences.shared.unbind()
         ZapAnimationStore.shared.cancelAll()
+        MissingProfileWatcher.shared.stop()
 
         // 3. Empty the ObjectBox boxes. Both stores are actors; awaits serialise
         //    against any in-flight persists from the same isolation domain.

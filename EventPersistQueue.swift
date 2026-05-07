@@ -37,6 +37,7 @@ actor EventPersistQueue {
         pending.removeAll(keepingCapacity: true)
         guard !batch.isEmpty else { return }
         await EventStore.shared.persist(batch)
+        Task { @MainActor in MissingProfileWatcher.shared.observe(batch) }
     }
 
     private func scheduleOrFlush() {
@@ -64,5 +65,9 @@ actor EventPersistQueue {
         Task.detached(priority: .utility) {
             await EventStore.shared.persist(batch)
         }
+        // Catch-all for missing kind-0 profiles. Walks each event for outer
+        // author, inner-repost author, and nostr:npub mentions; the watcher
+        // skips anything already cached / inflight / exhausted.
+        Task { @MainActor in MissingProfileWatcher.shared.observe(batch) }
     }
 }

@@ -226,6 +226,11 @@ struct MainView: View {
             await ExtendedNetworkRepository.shared.bind(activePubkey: keypair.pubkey)
             await SafetyFilter.shared.rebuildSnapshot()
             Task.detached { try? await SpamScorer.shared.warmUp() }
+            // Background fetcher for kind-0 profiles whose pubkey we've seen
+            // but haven't cached. Hooks into EventPersistQueue, EngagementRepository,
+            // and individual VMs (which call observe / observePubkeys); also runs
+            // a periodic sweep over registered event sources at 3s/8s/15s/120s.
+            MissingProfileWatcher.shared.start(activePubkey: keypair.pubkey)
             if let priv = privkey32 {
                 MuteRepository.shared.startSync(privkey32: priv)
             }
@@ -260,6 +265,7 @@ struct MainView: View {
             notificationsVM.stop()
             groupListVM.stop()
             searchVM.stop()
+            MissingProfileWatcher.shared.stop()
         }
         .sheet(isPresented: $showInterfaceSettings) {
             NavigationStack {

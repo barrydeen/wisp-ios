@@ -44,6 +44,8 @@ final class FeedViewModel {
     @ObservationIgnored private var loadMoreTask: Task<Void, Never>?
     @ObservationIgnored private var firstEventDeadline: Task<Void, Never>?
     @ObservationIgnored private var pruneTask: Task<Void, Never>?
+    @ObservationIgnored private var profileUpdatesTask: Task<Void, Never>?
+    @ObservationIgnored private var sweepSourceId: UUID?
     @ObservationIgnored private var recentlySeenPubkeys: [String: Int] = [:]
     /// Buffer for events arriving from the live subscription. Drained into
     /// `events` on a debounced flush so a backfill burst produces ~one
@@ -94,7 +96,7 @@ final class FeedViewModel {
                 guard let self else { return }
                 self.events.removeAll {
                     $0.pubkey == blocked
-                    || (FeedViewModel.repostInnerPubkey($0) == blocked)
+                    || ($0.repostInnerPubkey == blocked)
                 }
             }
         }
@@ -108,6 +110,8 @@ final class FeedViewModel {
         metricsTask = Task { await fetchOnlineCount() }
         startPruneTask()
         startLiveDiscovery()
+        subscribeToProfileUpdates()
+        registerSweepSource()
         let kp = keypair
         Task { await RelaySetRepository.shared.bootstrap(keypair: kp) }
 
@@ -150,7 +154,7 @@ final class FeedViewModel {
         //    loadFeed fires tasks and returns — no need to gate it on profile fetch.
         loadFeed(follows: follows, scoreBoard: scoreBoard, since: since)
         await loadUserProfile()
-        await loadMissingProfiles()
+        MissingProfileWatcher.shared.observe(events)
 
         isLoading = false
 
@@ -177,7 +181,7 @@ final class FeedViewModel {
         }
 
         loadFeed(follows: follows, scoreBoard: scoreBoard, since: since)
-        await loadMissingProfiles()
+        MissingProfileWatcher.shared.observe(events)
 
         if let newest = events.first {
             UserDefaults.standard.set(newest.createdAt, forKey: "latest_feed_ts_\(keypair.pubkey)")
@@ -188,8 +192,39 @@ final class FeedViewModel {
         metricsTask?.cancel()
         pruneTask?.cancel()
         pruneTask = nil
+        profileUpdatesTask?.cancel()
+        profileUpdatesTask = nil
+        if let id = sweepSourceId {
+            MissingProfileWatcher.shared.unregisterSource(id)
+            sweepSourceId = nil
+        }
         cancelLiveSubscription()
         LiveStreamCoordinator.shared.stopDiscovery()
+    }
+
+    /// Bridge `MissingProfileWatcher.updates` into our local `profiles` dict so
+    /// rows refresh as freshly-fetched profiles land. Each VM owns its own
+    /// stream subscription; cancelling the task in `stop()` removes us from
+    /// the watcher's continuation list.
+    private func subscribeToProfileUpdates() {
+        profileUpdatesTask?.cancel()
+        profileUpdatesTask = Task { @MainActor [weak self] in
+            for await pk in MissingProfileWatcher.shared.updates {
+                guard let self else { return }
+                if let p = self.profileRepo.get(pk) { self.profiles[pk] = p }
+            }
+        }
+    }
+
+    /// Register `events` as a periodic-sweep source so the watcher can revisit
+    /// what's currently rendered (catches ObjectBox-seeded events that landed
+    /// before the watcher started, plus nostr:npub mentions resolved at render
+    /// time rather than ingest).
+    private func registerSweepSource() {
+        if sweepSourceId != nil { return }
+        sweepSourceId = MissingProfileWatcher.shared.registerSource { [weak self] in
+            self?.events ?? []
+        }
     }
 
     // MARK: - Feed kind selection
@@ -317,57 +352,11 @@ final class FeedViewModel {
 
         Task { await EventPersistQueue.shared.enqueue(batch) }
 
-        // Batch every referenced pubkey across the flushed events into a
-        // single kind-0 fan-out. The previous per-event loop fired one REQ
-        // per missing author, which on a cold-start with 100+ unique
-        // authors meant 100+ separate sockets to the indexer relays before
-        // the names rendered. Single batched query is dramatically faster.
-        let captured = batch
-        Task { [weak self] in
-            await self?.fetchMissingProfilesBatched(for: captured)
-        }
-    }
-
-    /// Resolve every author / inner-repost author / npub mention referenced
-    /// by `events` in one batched fetch. Hits the local cache first; only the
-    /// truly-missing pubkeys go to the indexer relays, chunked by 150.
-    private func fetchMissingProfilesBatched(for events: [NostrEvent]) async {
-        var needed = Set<String>()
-        for event in events {
-            for pk in Self.referencedAuthorPubkeys(in: event) where profiles[pk] == nil {
-                needed.insert(pk)
-            }
-        }
-        guard !needed.isEmpty else { return }
-
-        var stillMissing: [String] = []
-        for pk in needed {
-            if let cached = profileRepo.get(pk) {
-                profiles[pk] = cached
-            } else {
-                stillMissing.append(pk)
-            }
-        }
-        guard !stillMissing.isEmpty else { return }
-
-        for chunk in stillMissing.chunked(into: 150) {
-            let results = await RelayPool.query(
-                relays: Self.indexerRelays,
-                filter: NostrFilter(kinds: [0], authors: chunk),
-                timeout: 10
-            )
-            var bestByAuthor: [String: NostrEvent] = [:]
-            for event in results where event.kind == 0 {
-                if let existing = bestByAuthor[event.pubkey],
-                   event.createdAt <= existing.createdAt { continue }
-                bestByAuthor[event.pubkey] = event
-            }
-            for (_, event) in bestByAuthor {
-                if let profile = profileRepo.updateFromEvent(event) {
-                    profiles[event.pubkey] = profile
-                }
-            }
-        }
+        // Hand the batch to the watcher: it dedupes against its own pending /
+        // inflight / exhausted sets, batches into one kind-0 fan-out per 150
+        // pubkeys, and yields back through `updates` so our `profiles` dict
+        // hydrates as profiles land. Replaces the per-VM batched fetcher.
+        MissingProfileWatcher.shared.observe(batch)
     }
 
     /// Merge two arrays already sorted by `createdAt` desc into a single
@@ -537,14 +526,12 @@ final class FeedViewModel {
             profiles[pubkey] = cached
             return
         }
-        let results = await RelayPool.query(
-            relays: Self.indexerRelays,
-            filter: NostrFilter(kinds: [0], authors: [pubkey], limit: 5),
-            timeout: 6
-        )
-        if let best = results.filter({ $0.kind == 0 }).max(by: { $0.createdAt < $1.createdAt }),
-           let updated = profileRepo.updateFromEvent(best) {
-            profiles[pubkey] = updated
+        // Route through the watcher so we share the inflight coalescing and
+        // the negative-cache state. `forceFetch` bypasses the exhausted set
+        // so an explicit "I want this profile" call (mention tap, etc.) still
+        // tries even if a prior batched fetch came up empty.
+        if let resolved = await MissingProfileWatcher.shared.forceFetch(pubkey) {
+            profiles[pubkey] = resolved
         }
     }
 
@@ -672,97 +659,6 @@ final class FeedViewModel {
                 guard Self.isFeedRenderable(event) else { continue }
                 guard self.seenIds.insert(event.id).inserted else { continue }
                 self.enqueueLiveEvent(event)
-            }
-        }
-    }
-
-    private func requestReferencedProfiles(in event: NostrEvent) async {
-        for pk in Self.referencedAuthorPubkeys(in: event) {
-            await requestProfileIfNeeded(pk)
-        }
-    }
-
-    /// Inner author of a kind-6 repost (the original note's pubkey, embedded as JSON in `content`).
-    static func repostInnerPubkey(_ event: NostrEvent) -> String? {
-        guard event.kind == 6, !event.content.isEmpty,
-              let data = event.content.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-        return json["pubkey"] as? String
-    }
-
-    /// Every pubkey whose kind-0 profile is needed to render `event`: the outer author,
-    /// the inner-repost author (kind 6), and any `nostr:npub` / `nostr:nprofile` mentions
-    /// in the note body (or in the embedded inner note for reposts).
-    static func referencedAuthorPubkeys(in event: NostrEvent) -> [String] {
-        var result: Set<String> = [event.pubkey]
-        if let inner = repostInnerPubkey(event) {
-            result.insert(inner)
-        }
-        for pk in mentionPubkeys(content: event.content, tags: event.tags) {
-            result.insert(pk)
-        }
-        if event.kind == 6, !event.content.isEmpty,
-           let data = event.content.data(using: .utf8),
-           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let innerContent = json["content"] as? String {
-            let innerTags = (json["tags"] as? [[String]]) ?? []
-            for pk in mentionPubkeys(content: innerContent, tags: innerTags) {
-                result.insert(pk)
-            }
-        }
-        return Array(result)
-    }
-
-    private static func mentionPubkeys(content: String, tags: [[String]]) -> [String] {
-        let segments = ContentParser.parse(content: content, tags: tags, trimBlankLines: false)
-        var out: [String] = []
-        for seg in segments {
-            if case .nostrProfile(let pubkey, _) = seg {
-                out.append(pubkey)
-            }
-        }
-        return out
-    }
-
-    private func loadMissingProfiles() async {
-        var needed = Set<String>()
-        for event in events {
-            for pk in Self.referencedAuthorPubkeys(in: event) where profiles[pk] == nil {
-                needed.insert(pk)
-            }
-        }
-        guard !needed.isEmpty else { return }
-
-        // Resolve from local cache first
-        var stillMissing: [String] = []
-        for pk in needed {
-            if let cached = profileRepo.get(pk) {
-                profiles[pk] = cached
-            } else {
-                stillMissing.append(pk)
-            }
-        }
-        guard !stillMissing.isEmpty else { return }
-
-        // Fetch remaining from relays
-        for batch in stillMissing.chunked(into: 150) {
-            let results = await RelayPool.query(
-                relays: Self.indexerRelays,
-                filter: NostrFilter(kinds: [0], authors: batch),
-                timeout: 10
-            )
-
-            var bestByAuthor: [String: NostrEvent] = [:]
-            for event in results where event.kind == 0 {
-                if let existing = bestByAuthor[event.pubkey],
-                   event.createdAt <= existing.createdAt { continue }
-                bestByAuthor[event.pubkey] = event
-            }
-
-            for (_, event) in bestByAuthor {
-                if let profile = profileRepo.updateFromEvent(event) {
-                    profiles[event.pubkey] = profile
-                }
             }
         }
     }

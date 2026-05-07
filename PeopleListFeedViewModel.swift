@@ -20,6 +20,8 @@ final class PeopleListFeedViewModel {
     var displayTitle: String = ""
 
     @ObservationIgnored private var seenIds: Set<String> = []
+    @ObservationIgnored private var profileUpdatesTask: Task<Void, Never>?
+    @ObservationIgnored private var sweepSourceId: UUID?
     @ObservationIgnored private let eventStore = EventStore.shared
     @ObservationIgnored private let profileRepo = ProfileRepository.shared
     @ObservationIgnored private let listRepo = PeopleListRepository.shared
@@ -41,9 +43,33 @@ final class PeopleListFeedViewModel {
         self.displayTitle = listRepo.list(dTag: dTag)?.name ?? "List"
     }
 
+    deinit {
+        profileUpdatesTask?.cancel()
+        if let id = sweepSourceId {
+            Task { @MainActor in MissingProfileWatcher.shared.unregisterSource(id) }
+        }
+    }
+
     func start() async {
+        ensureProfileUpdatesSubscription()
         guard !isLoading, events.isEmpty else { return }
         await load(reset: true)
+    }
+
+    private func ensureProfileUpdatesSubscription() {
+        if profileUpdatesTask == nil {
+            profileUpdatesTask = Task { @MainActor [weak self] in
+                for await pk in MissingProfileWatcher.shared.updates {
+                    guard let self else { return }
+                    if let p = self.profileRepo.get(pk) { self.profiles[pk] = p }
+                }
+            }
+        }
+        if sweepSourceId == nil {
+            sweepSourceId = MissingProfileWatcher.shared.registerSource { [weak self] in
+                self?.events ?? []
+            }
+        }
     }
 
     func refresh() async {
@@ -91,7 +117,11 @@ final class PeopleListFeedViewModel {
         }()
 
         await fetchAndMerge(authors: members, since: since, until: nil)
-        await loadMissingProfiles()
+        let pubkeys = Set(events.map(\.pubkey))
+        for pk in pubkeys where profiles[pk] == nil {
+            if let cached = profileRepo.get(pk) { profiles[pk] = cached }
+        }
+        MissingProfileWatcher.shared.observe(events)
     }
 
     private func fetchAndMerge(authors: [String], since: Int?, until: Int?) async {
@@ -163,47 +193,4 @@ final class PeopleListFeedViewModel {
         }
     }
 
-    private func loadMissingProfiles() async {
-        var needed = Set(events.map(\.pubkey)).filter { profiles[$0] == nil }
-        for event in events where event.kind == 6 {
-            if let data = event.content.data(using: .utf8),
-               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let innerPubkey = json["pubkey"] as? String,
-               profiles[innerPubkey] == nil {
-                needed.insert(innerPubkey)
-            }
-        }
-        guard !needed.isEmpty else { return }
-
-        var stillMissing: [String] = []
-        for pk in needed {
-            if let cached = profileRepo.get(pk) {
-                profiles[pk] = cached
-            } else {
-                stillMissing.append(pk)
-            }
-        }
-        guard !stillMissing.isEmpty else { return }
-
-        for batch in stillMissing.chunked(into: 150) {
-            let results = await RelayPool.query(
-                relays: Self.indexerRelays,
-                filter: NostrFilter(kinds: [0], authors: batch),
-                timeout: 10
-            )
-
-            var bestByAuthor: [String: NostrEvent] = [:]
-            for event in results where event.kind == 0 {
-                if let existing = bestByAuthor[event.pubkey],
-                   event.createdAt <= existing.createdAt { continue }
-                bestByAuthor[event.pubkey] = event
-            }
-
-            for (_, event) in bestByAuthor {
-                if let profile = profileRepo.updateFromEvent(event) {
-                    profiles[event.pubkey] = profile
-                }
-            }
-        }
-    }
 }

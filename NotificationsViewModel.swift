@@ -554,25 +554,17 @@ final class NotificationsViewModel {
     // MARK: - Profiles
 
     private func maybePrefetchProfile(for pubkey: String) {
-        guard profileRepo.get(pubkey) == nil else { return }
-        Task { [weak self] in
-            guard let self else { return }
-            let filter = NostrFilter(kinds: [0], authors: [pubkey], limit: 1)
-            let events = await RelayPool.query(relays: Self.fallbackRelays, filter: filter, timeout: 4)
-            for e in events { self.profileRepo.updateFromEvent(e) }
-        }
+        if profileRepo.get(pubkey) != nil { return }
+        MissingProfileWatcher.shared.observePubkeys([pubkey])
     }
 
     private func prefetchActorProfilesIfNeeded() async {
-        var missing = Set<String>()
+        var missing: [String] = []
         for item in repo.flatItems {
-            if profileRepo.get(item.actorPubkey) == nil { missing.insert(item.actorPubkey) }
+            if profileRepo.get(item.actorPubkey) == nil { missing.append(item.actorPubkey) }
         }
-        let chunk = Array(missing.prefix(60))
-        guard !chunk.isEmpty else { return }
-        let filter = NostrFilter(kinds: [0], authors: chunk, limit: chunk.count)
-        let events = await RelayPool.query(relays: Self.fallbackRelays, filter: filter, timeout: 6)
-        for e in events { profileRepo.updateFromEvent(e) }
+        guard !missing.isEmpty else { return }
+        MissingProfileWatcher.shared.observePubkeys(missing)
     }
 
     // MARK: - Quick reply

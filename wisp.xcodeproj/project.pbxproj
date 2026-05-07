@@ -49,6 +49,7 @@
 		4CDA87F62F9C5CC70079A1BA /* MainView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA87F52F9C5CC70079A1BA /* MainView.swift */; };
 		4CDA87F82F9C63FA0079A1BA /* EventStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA87F72F9C63FA0079A1BA /* EventStore.swift */; };
 		4CDA87FC2F9C69E70079A1BA /* ProfileRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA87FB2F9C69E70079A1BA /* ProfileRepository.swift */; };
+		4CDA89AB2F9C540000001000 /* MissingProfileWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA89AA2F9C540000001000 /* MissingProfileWatcher.swift */; };
 		4CDA87FE2F9C69EE0079A1BA /* ImageCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA87FD2F9C69EE0079A1BA /* ImageCache.swift */; };
 		4CDA88022F9C6B720079A1BA /* EventEntity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA88012F9C6B720079A1BA /* EventEntity.swift */; };
 		4CDA88042F9C6B770079A1BA /* ObjectBoxSetup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA88032F9C6B770079A1BA /* ObjectBoxSetup.swift */; };
@@ -326,6 +327,7 @@
 		4CDA87F52F9C5CC70079A1BA /* MainView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainView.swift; sourceTree = "<group>"; };
 		4CDA87F72F9C63FA0079A1BA /* EventStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventStore.swift; sourceTree = "<group>"; };
 		4CDA87FB2F9C69E70079A1BA /* ProfileRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileRepository.swift; sourceTree = "<group>"; };
+		4CDA89AA2F9C540000001000 /* MissingProfileWatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MissingProfileWatcher.swift; sourceTree = "<group>"; };
 		4CDA87FD2F9C69EE0079A1BA /* ImageCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageCache.swift; sourceTree = "<group>"; };
 		4CDA88012F9C6B720079A1BA /* EventEntity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventEntity.swift; sourceTree = "<group>"; };
 		4CDA88032F9C6B770079A1BA /* ObjectBoxSetup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObjectBoxSetup.swift; sourceTree = "<group>"; };
@@ -617,6 +619,7 @@
 				4CDA87F52F9C5CC70079A1BA /* MainView.swift */,
 				4CDA87F72F9C63FA0079A1BA /* EventStore.swift */,
 				4CDA87FB2F9C69E70079A1BA /* ProfileRepository.swift */,
+				4CDA89AA2F9C540000001000 /* MissingProfileWatcher.swift */,
 				4CDA87FD2F9C69EE0079A1BA /* ImageCache.swift */,
 				4CDA88012F9C6B720079A1BA /* EventEntity.swift */,
 				4CDA88032F9C6B770079A1BA /* ObjectBoxSetup.swift */,
@@ -1032,6 +1035,7 @@
 				4CDA87F82F9C63FA0079A1BA /* EventStore.swift in Sources */,
 				4CDA87F22F9C5CC60079A1BA /* RichContentView.swift in Sources */,
 				4CDA87FC2F9C69E70079A1BA /* ProfileRepository.swift in Sources */,
+				4CDA89AB2F9C540000001000 /* MissingProfileWatcher.swift in Sources */,
 				4CDA87EE2F9C5CC50079A1BA /* ProfileData.swift in Sources */,
 				4CDA87FE2F9C69EE0079A1BA /* ImageCache.swift in Sources */,
 				4CDA87DC2F9C546F0079A1BA /* Bech32.swift in Sources */,

@@ -38,7 +38,7 @@ struct PeopleListEditorView: View {
             }
         }
         .task {
-            await fetchMissingProfiles()
+            queueMissingProfiles()
         }
     }
 
@@ -162,25 +162,10 @@ struct PeopleListEditorView: View {
         Nip19.shortNpub(hex: s)
     }
 
-    private func fetchMissingProfiles() async {
+    private func queueMissingProfiles() {
         guard let list else { return }
         let missing = list.allMembers.filter { profileRepo.get($0) == nil }
         guard !missing.isEmpty else { return }
-        for batch in missing.chunked(into: 150) {
-            let results = await RelayPool.query(
-                relays: RelayDefaults.indexers,
-                filter: NostrFilter(kinds: [0], authors: batch),
-                timeout: 8
-            )
-            var bestByAuthor: [String: NostrEvent] = [:]
-            for event in results where event.kind == 0 {
-                if let existing = bestByAuthor[event.pubkey],
-                   event.createdAt <= existing.createdAt { continue }
-                bestByAuthor[event.pubkey] = event
-            }
-            for (_, event) in bestByAuthor {
-                _ = profileRepo.updateFromEvent(event)
-            }
-        }
+        MissingProfileWatcher.shared.observePubkeys(missing)
     }
 }

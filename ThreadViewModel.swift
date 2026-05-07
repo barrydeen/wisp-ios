@@ -57,7 +57,8 @@ final class ThreadViewModel {
     @ObservationIgnored private var events: [String: NostrEvent] = [:]
     @ObservationIgnored private var loadedOnce = false
     @ObservationIgnored private var streamTasks: [Task<Void, Never>] = []
-    @ObservationIgnored private var profileFetchInflight = Set<String>()
+    @ObservationIgnored private var profileUpdatesTask: Task<Void, Never>?
+    @ObservationIgnored private var sweepSourceId: UUID?
     @ObservationIgnored private var engagedIds = Set<String>()
     @ObservationIgnored private var pendingEngagementIds = Set<String>()
     @ObservationIgnored private var engagementBatcher: Task<Void, Never>?
@@ -155,6 +156,7 @@ final class ThreadViewModel {
     // MARK: - Lifecycle
 
     func start() async {
+        ensureProfileUpdatesSubscription()
         guard !loadedOnce else { return }
         loadedOnce = true
         isLoading = true
@@ -215,10 +217,10 @@ final class ThreadViewModel {
         // Hydrate every pubkey the root note references (author + repost inner + npub
         // mentions) — cold loads otherwise leave mentions as truncated hex.
         if let root = rootEvent {
-            for pk in FeedViewModel.referencedAuthorPubkeys(in: root) where profiles[pk] == nil {
+            for pk in root.referencedAuthorPubkeys where profiles[pk] == nil {
                 if let cached = profileRepo.get(pk) { profiles[pk] = cached }
-                else { queueProfileFetch(pk) }
             }
+            MissingProfileWatcher.shared.observe(root)
         }
     }
 
@@ -234,6 +236,29 @@ final class ThreadViewModel {
 
     func stop() {
         cancelStreams()
+        profileUpdatesTask?.cancel()
+        profileUpdatesTask = nil
+        if let id = sweepSourceId {
+            MissingProfileWatcher.shared.unregisterSource(id)
+            sweepSourceId = nil
+        }
+    }
+
+    private func ensureProfileUpdatesSubscription() {
+        if profileUpdatesTask == nil {
+            profileUpdatesTask = Task { @MainActor [weak self] in
+                for await pk in MissingProfileWatcher.shared.updates {
+                    guard let self else { return }
+                    if let p = self.profileRepo.get(pk) { self.profiles[pk] = p }
+                }
+            }
+        }
+        if sweepSourceId == nil {
+            sweepSourceId = MissingProfileWatcher.shared.registerSource { [weak self] in
+                guard let self else { return [] }
+                return Array(self.events.values)
+            }
+        }
     }
 
     private func cancelStreams() {
@@ -473,17 +498,16 @@ final class ThreadViewModel {
             rebuildSlices()
             var referenced = Set<String>()
             for event in events.values {
-                for pk in FeedViewModel.referencedAuthorPubkeys(in: event) {
+                for pk in event.referencedAuthorPubkeys {
                     referenced.insert(pk)
                 }
             }
             for pk in referenced {
                 if let p = profileRepo.get(pk) {
                     profiles[pk] = p
-                } else {
-                    queueProfileFetch(pk)
                 }
             }
+            MissingProfileWatcher.shared.observePubkeys(referenced)
             if rootEvent != nil { isLoading = false }
         }
 
@@ -661,14 +685,13 @@ final class ThreadViewModel {
         Task { await eventStore.persist([event]) }
 
         // Hydrate every referenced author (note author + repost inner + npub mentions) from
-        // cache; queue an indexer fetch for any pubkey we've never seen.
-        for pk in FeedViewModel.referencedAuthorPubkeys(in: event) where profiles[pk] == nil {
+        // cache; the watcher takes care of fetching anything we haven't seen.
+        for pk in event.referencedAuthorPubkeys where profiles[pk] == nil {
             if let cached = profileRepo.get(pk) {
                 profiles[pk] = cached
-            } else {
-                queueProfileFetch(pk)
             }
         }
+        MissingProfileWatcher.shared.observe(event)
 
         queueEngagement(ids: [event.id])
         rebuildSlices()
@@ -677,40 +700,6 @@ final class ThreadViewModel {
 
     private func markStreamingDone() {
         if isLoading { isLoading = false }
-    }
-
-    /// Debounced batch fetch for profiles of newly-seen authors. Runs in the background so the
-    /// stream consumer stays responsive.
-    private func queueProfileFetch(_ pubkey: String) {
-        guard profileFetchInflight.insert(pubkey).inserted else { return }
-        Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(300))
-            await self?.flushProfileFetches()
-        }
-    }
-
-    private func flushProfileFetches() async {
-        let pubkeys = Array(profileFetchInflight)
-        profileFetchInflight.removeAll()
-        guard !pubkeys.isEmpty else { return }
-
-        for batch in pubkeys.chunked(into: 150) {
-            let results = await RelayPool.query(
-                relays: Self.indexerRelays,
-                filter: NostrFilter(kinds: [0], authors: batch),
-                timeout: 6
-            )
-            var bestByAuthor: [String: NostrEvent] = [:]
-            for event in results where event.kind == 0 {
-                if let existing = bestByAuthor[event.pubkey], event.createdAt <= existing.createdAt { continue }
-                bestByAuthor[event.pubkey] = event
-            }
-            for (_, event) in bestByAuthor {
-                if let profile = profileRepo.updateFromEvent(event) {
-                    profiles[event.pubkey] = profile
-                }
-            }
-        }
     }
 
     /// Coalesce engagement subscriptions: as new event ids arrive, batch them every 400ms and open

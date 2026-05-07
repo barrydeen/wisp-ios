@@ -41,12 +41,11 @@ final class SearchViewModel {
     @ObservationIgnored private var searchTask: Task<Void, Never>?
     @ObservationIgnored private var authorDebounceTask: Task<Void, Never>?
     @ObservationIgnored private var authorSearchTask: Task<Void, Never>?
+    @ObservationIgnored private var profileUpdatesTask: Task<Void, Never>?
     @ObservationIgnored private var searchCounter: Int = 0
     @ObservationIgnored private var authorCounter: Int = 0
 
     static let defaultSearchRelay = "wss://search.nostrarchives.com"
-
-    private static let indexerRelays = RelayDefaults.indexers
 
     private static let engagementFallbackRelays = ["wss://relay.damus.io"]
 
@@ -62,6 +61,17 @@ final class SearchViewModel {
 
     func start() {
         loadPreferences()
+        if profileUpdatesTask == nil {
+            profileUpdatesTask = Task { @MainActor [weak self] in
+                for await pk in MissingProfileWatcher.shared.updates {
+                    guard let self else { return }
+                    if self.notes.contains(where: { $0.pubkey == pk }),
+                       let p = self.profileRepo.get(pk) {
+                        self.noteProfiles[pk] = p
+                    }
+                }
+            }
+        }
     }
 
     func stop() {
@@ -69,6 +79,8 @@ final class SearchViewModel {
         searchTask?.cancel()
         authorDebounceTask?.cancel()
         authorSearchTask?.cancel()
+        profileUpdatesTask?.cancel()
+        profileUpdatesTask = nil
     }
 
     // MARK: - Persistence
@@ -283,9 +295,7 @@ final class SearchViewModel {
             await self?.loadEngagement(for: ids)
         }
         if !missingPubkeys.isEmpty {
-            Task { [weak self] in
-                await self?.loadAuthorProfiles(for: Array(missingPubkeys))
-            }
+            MissingProfileWatcher.shared.observePubkeys(missingPubkeys)
         }
     }
 
@@ -344,32 +354,6 @@ final class SearchViewModel {
             default: break
             }
             engagement[target] = current
-        }
-    }
-
-    // MARK: - Profiles
-
-    private func loadAuthorProfiles(for pubkeys: [String]) async {
-        guard !pubkeys.isEmpty else { return }
-        let relays = Self.indexerRelays
-        let timeout: TimeInterval = 6
-        await withTaskGroup(of: [NostrEvent].self) { group in
-            for chunk in pubkeys.chunked(into: 150) {
-                group.addTask {
-                    await RelayPool.query(
-                        relays: relays,
-                        filter: NostrFilter(kinds: [0], authors: chunk, limit: chunk.count),
-                        timeout: timeout
-                    )
-                }
-            }
-            for await batch in group {
-                for event in batch where event.kind == 0 {
-                    if let profile = profileRepo.updateFromEvent(event) {
-                        noteProfiles[profile.pubkey] = profile
-                    }
-                }
-            }
         }
     }
 

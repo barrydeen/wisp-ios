@@ -346,6 +346,7 @@ final class EngagementRepository {
             if !current.reposters.contains(event.pubkey) {
                 current.reposters.append(event.pubkey)
             }
+            MissingProfileWatcher.shared.observePubkeys([event.pubkey])
         case 7:
             // Dedupe by (target, pubkey, content) so an optimistic apply followed by the
             // server-streamed copy doesn't double-count.
@@ -360,6 +361,12 @@ final class EngagementRepository {
             if !current.reactors.contains(where: { $0.pubkey == reactor.pubkey && $0.emoji == reactor.emoji }) {
                 current.reactors.append(reactor)
             }
+            // Reactors are second-order pubkeys: the kind-7's event.pubkey is
+            // the reactor, but the EventPersistQueue walk only catches it via
+            // referencedAuthorPubkeys when the kind-7 itself flows through
+            // there. Enqueue here so the reaction-details panel populates names
+            // for every reactor regardless of persistence path.
+            MissingProfileWatcher.shared.observePubkeys([event.pubkey])
         case 9735:
             var sats: Int64 = 0
             var paymentHash: String?
@@ -388,6 +395,10 @@ final class EngagementRepository {
                 if let c = descJson["content"] as? String { message = c }
             }
             current.zappers.append(Zapper(pubkey: zapperPubkey, sats: sats, message: message))
+            // Zapper pubkey is sourced from the description tag (the actual
+            // sender), not event.pubkey (the LNURL server). Always observe it
+            // so the zaps section in the note details panel resolves names.
+            MissingProfileWatcher.shared.observePubkeys([zapperPubkey])
         default:
             return
         }

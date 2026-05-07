@@ -25,12 +25,36 @@ final class TrendingFeedViewModel {
     var lastError: String?
 
     @ObservationIgnored private var loadTask: Task<Void, Never>?
+    @ObservationIgnored private var profileUpdatesTask: Task<Void, Never>?
+    @ObservationIgnored private var sweepSourceId: UUID?
     @ObservationIgnored private let profileRepo = ProfileRepository.shared
-
-    private static let indexerRelays = RelayDefaults.indexers
 
     init(keypair: Keypair) {
         self.keypair = keypair
+    }
+
+    deinit {
+        profileUpdatesTask?.cancel()
+        if let id = sweepSourceId {
+            // Capture before crossing the actor boundary so we don't touch
+            // `self` after deinit.
+            Task { @MainActor in MissingProfileWatcher.shared.unregisterSource(id) }
+        }
+    }
+
+    private func ensureProfileUpdatesSubscription() {
+        if profileUpdatesTask != nil { return }
+        profileUpdatesTask = Task { @MainActor [weak self] in
+            for await pk in MissingProfileWatcher.shared.updates {
+                guard let self else { return }
+                if let p = self.profileRepo.get(pk) { self.profiles[pk] = p }
+            }
+        }
+        if sweepSourceId == nil {
+            sweepSourceId = MissingProfileWatcher.shared.registerSource { [weak self] in
+                self?.events ?? []
+            }
+        }
     }
 
     var displayTitle: String {
@@ -43,6 +67,7 @@ final class TrendingFeedViewModel {
     }
 
     func start() async {
+        ensureProfileUpdatesSubscription()
         guard events.isEmpty && users.isEmpty else { return }
         await load()
     }
@@ -138,7 +163,7 @@ final class TrendingFeedViewModel {
             Task { await EventPersistQueue.shared.enqueue(toPersist) }
         }
 
-        await loadMissingProfiles()
+        MissingProfileWatcher.shared.observe(events)
     }
 
     private func loadUsers() async {
@@ -169,39 +194,4 @@ final class TrendingFeedViewModel {
         }
     }
 
-    private func loadMissingProfiles() async {
-        let needed = Set(events.map(\.pubkey)).filter { profiles[$0] == nil }
-        guard !needed.isEmpty else { return }
-
-        var stillMissing: [String] = []
-        for pk in needed {
-            if let cached = profileRepo.get(pk) {
-                profiles[pk] = cached
-            } else {
-                stillMissing.append(pk)
-            }
-        }
-        guard !stillMissing.isEmpty else { return }
-
-        for batch in stillMissing.chunked(into: 150) {
-            let results = await RelayPool.query(
-                relays: Self.indexerRelays,
-                filter: NostrFilter(kinds: [0], authors: batch),
-                timeout: 10
-            )
-            guard !Task.isCancelled else { return }
-
-            var bestByAuthor: [String: NostrEvent] = [:]
-            for event in results where event.kind == 0 {
-                if let existing = bestByAuthor[event.pubkey],
-                   event.createdAt <= existing.createdAt { continue }
-                bestByAuthor[event.pubkey] = event
-            }
-            for (_, event) in bestByAuthor {
-                if let profile = profileRepo.updateFromEvent(event) {
-                    profiles[event.pubkey] = profile
-                }
-            }
-        }
-    }
 }
