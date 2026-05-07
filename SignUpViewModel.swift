@@ -116,8 +116,12 @@ final class SignUpViewModel {
 
     // MARK: - Init
 
-    /// Generate a fresh keypair and persist it via `NostrKey`. Marks the active
-    /// account so subsequent app launches resume into this user.
+    /// Generate a fresh keypair. Must be side-effect free: SwiftUI evaluates
+    /// the `@State` default value (`SignUpViewModel()` in `SignUpFlowView`)
+    /// on every parent-body reconstruction and discards every result except
+    /// the first. Persisting here would leak abandoned pubkeys into
+    /// `wisp_accounts`, surfacing them as phantom accounts in the sidebar.
+    /// Persistence happens once on view mount via `registerAccount()`.
     init() {
         let priv = Schnorr.randomPrivkey()
         let pub: Data
@@ -129,6 +133,12 @@ final class SignUpViewModel {
             pub = (try? Schnorr.xonlyPubkey(privkey32: Schnorr.randomPrivkey())) ?? Data(count: 32)
         }
         self.keypair = Keypair(privkey: Hex.encode(priv), pubkey: Hex.encode(pub))
+    }
+
+    /// Persist the generated keypair to the Keychain and the multi-account
+    /// list. Called from `SignUpFlowView.task`, which runs once per view
+    /// identity — i.e. once per signup flow.
+    func registerAccount() {
         NostrKey.save(self.keypair)
     }
 

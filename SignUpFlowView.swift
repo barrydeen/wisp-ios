@@ -10,29 +10,42 @@ struct SignUpFlowView: View {
     @State private var step = 0
 
     var body: some View {
-        TabView(selection: $step) {
-            ProfileStep(viewModel: viewModel, onNext: { advance() })
-                .tag(0)
-            SuggestionsStep(viewModel: viewModel, onNext: { advance() })
-                .tag(1)
-            HashtagsStep(viewModel: viewModel, onNext: { advance() }, onSkip: { advance() })
-                .tag(2)
-            IntroNoteStep(
-                viewModel: viewModel,
-                onPost: {
-                    Task {
-                        await viewModel.publishIntroNote()
-                        finish()
-                    }
-                },
-                onSkip: { finish() }
-            )
-            .tag(3)
+        // A `TabView(.page)` would let the user swipe horizontally back to
+        // earlier steps — easy to do by accident and capable of jumping all
+        // the way to the start of the flow. Drive the step transitions off
+        // a simple switch instead so the only way forward (or back) is via
+        // the explicit buttons each step provides.
+        Group {
+            switch step {
+            case 0:
+                ProfileStep(viewModel: viewModel, onNext: { advance() })
+            case 1:
+                SuggestionsStep(viewModel: viewModel, onNext: { advance() })
+            case 2:
+                HashtagsStep(viewModel: viewModel, onNext: { advance() }, onSkip: { advance() })
+            default:
+                IntroNoteStep(
+                    viewModel: viewModel,
+                    onPost: {
+                        Task {
+                            await viewModel.publishIntroNote()
+                            finish()
+                        }
+                    },
+                    onSkip: { finish() }
+                )
+            }
         }
-        .tabViewStyle(.page(indexDisplayMode: .never))
-        .background(Color.wispBackground)
-        .ignoresSafeArea()
+        .transition(.asymmetric(
+            insertion: .move(edge: .trailing),
+            removal: .move(edge: .leading)
+        ))
+        // Bleed the bg color into the safe area so the screen stays uniform
+        // edge-to-edge, but keep step content inside the safe area so titles
+        // don't sit under the dynamic island / home indicator.
+        .background(Color.wispBackground.ignoresSafeArea())
         .task {
+            viewModel.registerAccount()
             viewModel.startRelayDiscovery()
         }
     }
@@ -213,10 +226,12 @@ private struct SuggestionsStep: View {
             }
 
             Button {
-                Task {
-                    await viewModel.finishFollowsStep()
-                    onNext()
-                }
+                // Fire-and-forget: kind-3 publish takes up to ~6s waiting on
+                // relay acks. Advancing immediately keeps the flow snappy;
+                // the Task captures `viewModel`, so it survives the view's
+                // unmount and finishes in the background.
+                Task { await viewModel.finishFollowsStep() }
+                onNext()
             } label: {
                 Text("Continue (\(viewModel.selectedFollows.count) selected)")
                     .frame(maxWidth: .infinity)
