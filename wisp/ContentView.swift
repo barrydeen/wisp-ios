@@ -58,9 +58,11 @@ struct ContentView: View {
             case .main:
                 if let keypair {
                     MainView(keypair: keypair, onLogout: {
+                        ZapAnimationStore.shared.cancelAll()
                         self.keypair = nil
                         currentScreen = .splash
                     }, onSwitchAccount: { newKeypair in
+                        ZapAnimationStore.shared.cancelAll()
                         self.keypair = newKeypair
                         accountSwitchInProgress = true
                         currentScreen = .loading

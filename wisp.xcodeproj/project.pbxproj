@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		4CAA00010002000000A1BA01 /* AudioTrack.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CAA00020002000000A1BA01 /* AudioTrack.swift */; };
+		4CAA00030002000000A1BA01 /* AudioPlayerStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CAA00040002000000A1BA01 /* AudioPlayerStore.swift */; };
 		4CABCD010000000000010000 /* EventPublishNotification.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000010000 /* EventPublishNotification.swift */; };
 		4CABCD010000000000020000 /* VideoPosterCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000020000 /* VideoPosterCache.swift */; };
 		4CABCD010000000000030000 /* RetryingAsyncImage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000030000 /* RetryingAsyncImage.swift */; };
@@ -69,8 +71,6 @@
 		4CFA00010001000000A1BA01 /* RelayDefaults.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFA00020001000000A1BA01 /* RelayDefaults.swift */; };
 		4CFA00030001000000A1BA01 /* FollowsCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFA00040001000000A1BA01 /* FollowsCache.swift */; };
 		4CFA00050001000000A1BA01 /* EventPersistQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFA00060001000000A1BA01 /* EventPersistQueue.swift */; };
-		4CAA00010002000000A1BA01 /* AudioTrack.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CAA00020002000000A1BA01 /* AudioTrack.swift */; };
-		4CAA00030002000000A1BA01 /* AudioPlayerStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CAA00040002000000A1BA01 /* AudioPlayerStore.swift */; };
 		4CFADE0100000000000F1001 /* SafetyFilter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFADE0000000000000F1001 /* SafetyFilter.swift */; };
 		4CFADE0100000000000F1002 /* SafetyPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFADE0000000000000F1002 /* SafetyPreferences.swift */; };
 		4CFADE0100000000000F1003 /* MuteRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFADE0000000000000F1003 /* MuteRepository.swift */; };
@@ -154,6 +154,7 @@
 		4CFF0B1F000000000000020F /* NwcSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF0B1E000000000000020F /* NwcSetupView.swift */; };
 		4CFF0B210000000000000210 /* SparkSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF0B200000000000000210 /* SparkSetupView.swift */; };
 		4CFF0B230000000000000211 /* ZapSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF0B220000000000000211 /* ZapSheet.swift */; };
+		4CFF0B250000000000000213 /* ZapAnimationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF0B240000000000000212 /* ZapAnimationStore.swift */; };
 		4CFF0E010000000000000500 /* QRCodeScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF0E000000000000000500 /* QRCodeScannerView.swift */; };
 		4CFF0E030000000000000501 /* QRCodeImage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF0E020000000000000501 /* QRCodeImage.swift */; };
 		4CFF0E050000000000000502 /* EngagementRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF0E040000000000000502 /* EngagementRepository.swift */; };
@@ -278,6 +279,8 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		4CAA00020002000000A1BA01 /* AudioTrack.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioTrack.swift; sourceTree = "<group>"; };
+		4CAA00040002000000A1BA01 /* AudioPlayerStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioPlayerStore.swift; sourceTree = "<group>"; };
 		4CABCD000000000000010000 /* EventPublishNotification.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventPublishNotification.swift; sourceTree = "<group>"; };
 		4CABCD000000000000020000 /* VideoPosterCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoPosterCache.swift; sourceTree = "<group>"; };
 		4CABCD000000000000030000 /* RetryingAsyncImage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RetryingAsyncImage.swift; sourceTree = "<group>"; };
@@ -342,8 +345,6 @@
 		4CFA00020001000000A1BA01 /* RelayDefaults.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayDefaults.swift; sourceTree = "<group>"; };
 		4CFA00040001000000A1BA01 /* FollowsCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowsCache.swift; sourceTree = "<group>"; };
 		4CFA00060001000000A1BA01 /* EventPersistQueue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventPersistQueue.swift; sourceTree = "<group>"; };
-		4CAA00020002000000A1BA01 /* AudioTrack.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioTrack.swift; sourceTree = "<group>"; };
-		4CAA00040002000000A1BA01 /* AudioPlayerStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioPlayerStore.swift; sourceTree = "<group>"; };
 		4CFADE0000000000000F1001 /* SafetyFilter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafetyFilter.swift; sourceTree = "<group>"; };
 		4CFADE0000000000000F1002 /* SafetyPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafetyPreferences.swift; sourceTree = "<group>"; };
 		4CFADE0000000000000F1003 /* MuteRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MuteRepository.swift; sourceTree = "<group>"; };
@@ -427,6 +428,7 @@
 		4CFF0B1E000000000000020F /* NwcSetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NwcSetupView.swift; sourceTree = "<group>"; };
 		4CFF0B200000000000000210 /* SparkSetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SparkSetupView.swift; sourceTree = "<group>"; };
 		4CFF0B220000000000000211 /* ZapSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZapSheet.swift; sourceTree = "<group>"; };
+		4CFF0B240000000000000212 /* ZapAnimationStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZapAnimationStore.swift; sourceTree = "<group>"; };
 		4CFF0E000000000000000500 /* QRCodeScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRCodeScannerView.swift; sourceTree = "<group>"; };
 		4CFF0E020000000000000501 /* QRCodeImage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRCodeImage.swift; sourceTree = "<group>"; };
 		4CFF0E040000000000000502 /* EngagementRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngagementRepository.swift; sourceTree = "<group>"; };
@@ -694,6 +696,7 @@
 				4CFF0B1E000000000000020F /* NwcSetupView.swift */,
 				4CFF0B200000000000000210 /* SparkSetupView.swift */,
 				4CFF0B220000000000000211 /* ZapSheet.swift */,
+				4CFF0B240000000000000212 /* ZapAnimationStore.swift */,
 				4CFF0E000000000000000500 /* QRCodeScannerView.swift */,
 				4CFF0E020000000000000501 /* QRCodeImage.swift */,
 				4CFF21010000000000000301 /* AppSettings.swift */,
@@ -1110,6 +1113,7 @@
 				4CFF0B1F000000000000020F /* NwcSetupView.swift in Sources */,
 				4CFF0B210000000000000210 /* SparkSetupView.swift in Sources */,
 				4CFF0B230000000000000211 /* ZapSheet.swift in Sources */,
+				4CFF0B250000000000000213 /* ZapAnimationStore.swift in Sources */,
 				4CFF0E010000000000000500 /* QRCodeScannerView.swift in Sources */,
 				4CFF0E030000000000000501 /* QRCodeImage.swift in Sources */,
 				4CFF21020000000000000301 /* AppSettings.swift in Sources */,
