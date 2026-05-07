@@ -73,6 +73,8 @@ final class SignUpViewModel {
     var discoveredRelays: [GeneralRelay] = []
     var publishingProfile: Bool = false
 
+    @ObservationIgnored private var outboxBuilderTask: Task<Void, Never>?
+
     // MARK: - Suggestions step state
 
     var creators: Suggestions = Suggestions()
@@ -81,14 +83,24 @@ final class SignUpViewModel {
     var selectedFollows: Set<String> = []
     private var suggestionsLoaded = false
 
-    // MARK: - Hashtags step state
+    // MARK: - Topics step state (was "hashtags")
 
     var selectedHashtags: Set<String> = []
+    var topicQuery: String = "" {
+        didSet { applyTopicQuery() }
+    }
+    var topicSuggestions: [String] = []
+    var popularTopics: [String] = []
+    var loadingPopular: Bool = true
+    @ObservationIgnored private var allTopics: [String] = []
+    @ObservationIgnored private var topicsLoaded = false
 
     // MARK: - Intro note state
 
     var introContent: String = "#introductions\n\n"
     var publishingIntro: Bool = false
+    var postCountdown: Int? = nil
+    @ObservationIgnored private var countdownTask: Task<Void, Never>?
 
     // MARK: - Constants
 
@@ -106,7 +118,15 @@ final class SignUpViewModel {
 
     private static let newsRelay = "wss://news.utxo.one"
 
+    private static let topicsTrendingRelay = "wss://feeds.nostrarchives.com/hashtags/trending"
+    private static let topicsAllRelay = "wss://feeds.nostrarchives.com/hashtags/all"
+
     private static let indexerRelays = RelayDefaults.onboarding
+
+    /// Always-on relay published into every new user's kind-10002 (read+write)
+    /// and kind-10050 list, regardless of RelayProber outcome.
+    private static let wispOutboxRelay = "wss://relay.wisp.talk"
+    private static let wispDmRelay = "wss://auth.nostr1.com"
 
     static let popularHashtags = [
         "nostr", "bitcoin", "lightning", "art", "photography",
@@ -160,12 +180,24 @@ final class SignUpViewModel {
             )
             await MainActor.run {
                 guard let self else { return }
-                self.discoveredRelays = relays
+                let merged = Self.ensureWispOutbox(in: relays)
+                self.discoveredRelays = merged
                 self.probingUrl = nil
                 if self.relayPhase != .failed { self.relayPhase = .ready }
-                self.seedRelayScoreBoard(relays: relays)
+                self.seedRelayScoreBoard(relays: merged)
             }
         }
+    }
+
+    /// Inject the wisp outbox relay into the discovered list (read+write) so
+    /// it always lands in the published kind-10002, regardless of probing
+    /// outcome. Idempotent: matches by normalised URL.
+    private static func ensureWispOutbox(in relays: [GeneralRelay]) -> [GeneralRelay] {
+        let target = Nip51Lists.normalize(wispOutboxRelay) ?? wispOutboxRelay
+        if relays.contains(where: { (Nip51Lists.normalize($0.url) ?? $0.url) == target }) {
+            return relays
+        }
+        return [GeneralRelay(url: wispOutboxRelay, read: true, write: true)] + relays
     }
 
     private func applyProbePhase(_ phase: RelayProber.Phase) {
@@ -210,9 +242,10 @@ final class SignUpViewModel {
         }
     }
 
-    /// Publish kind-10002 (relay list) and kind-0 (profile metadata). Both go
-    /// to the discovered write relays plus the indexer fallback set so other
-    /// clients see them quickly.
+    /// Persist kind-10002 (relay list) and kind-0 (profile metadata) locally
+    /// and seed the DM relay (kind-10050). The relay fan-out is fire-and-forget
+    /// — we don't block the UI on a 6 s × N-relay timeout, matching the pattern
+    /// used by `RelaySettingsRepository.publish` and `finishFollowsStep`.
     func finishProfileStep() async {
         guard !publishingProfile else { return }
         publishingProfile = true
@@ -221,29 +254,51 @@ final class SignUpViewModel {
         let writeRelays = discoveredRelays.filter(\.write).map(\.url)
         let publishTargets = (writeRelays + Self.indexerRelays).uniquedPreservingOrder()
 
-        await publishRelayList(targets: publishTargets)
-        await publishProfile(targets: publishTargets)
+        let relayListEvent = signRelayListEvent()
+        let profileEvent = signProfileEvent()
+
+        if let e = relayListEvent {
+            await EventStore.shared.persist([e])
+            RelayListRepository.shared.ingest(e)
+        }
+        if let e = profileEvent {
+            await EventStore.shared.persist([e])
+            ProfileRepository.shared.updateFromEvent(e)
+        }
+
+        // Seed the DM relay so kind-10050 is published with auth.nostr1.com.
+        // `addDmRelay` already fires the publish via Task.detached internally.
+        RelaySettingsRepository.shared.ensureLoaded(pubkey: keypair.pubkey)
+        RelaySettingsRepository.shared.addDmRelay(Self.wispDmRelay, keypair: keypair)
+
+        // Background fan-out for kind-10002 and kind-0. Local state is already
+        // durable above, so the UI can advance immediately.
+        Task.detached { [relayListEvent, profileEvent, publishTargets] in
+            if let e = relayListEvent {
+                _ = await RelayPool.publish(event: e, to: publishTargets, timeout: 6)
+            }
+            if let e = profileEvent {
+                _ = await RelayPool.publish(event: e, to: publishTargets, timeout: 6)
+            }
+        }
     }
 
-    private func publishRelayList(targets: [String]) async {
-        guard let privkey = Hex.decode(keypair.privkey) else { return }
+    private func signRelayListEvent() -> NostrEvent? {
+        guard let privkey = Hex.decode(keypair.privkey) else { return nil }
         let now = Int(Date().timeIntervalSince1970)
         let tags = Nip51Lists.buildGeneralRelayTags(discoveredRelays)
-        guard let event = try? NostrEvent.sign(
+        return try? NostrEvent.sign(
             privkey32: privkey,
             pubkey: keypair.pubkey,
             kind: 10002,
             createdAt: now,
             tags: tags,
             content: ""
-        ) else { return }
-        _ = await RelayPool.publish(event: event, to: targets, timeout: 6)
-        await EventStore.shared.persist([event])
-        RelayListRepository.shared.ingest(event)
+        )
     }
 
-    private func publishProfile(targets: [String]) async {
-        guard let privkey = Hex.decode(keypair.privkey) else { return }
+    private func signProfileEvent() -> NostrEvent? {
+        guard let privkey = Hex.decode(keypair.privkey) else { return nil }
         var json: [String: String] = [:]
         let trimmedName = name.trimmingCharacters(in: .whitespaces)
         let trimmedAbout = about.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -255,19 +310,16 @@ final class SignUpViewModel {
         if let pic = pictureUrl, !pic.isEmpty { json["picture"] = pic }
         guard !json.isEmpty,
               let body = try? JSONSerialization.data(withJSONObject: json),
-              let bodyStr = String(data: body, encoding: .utf8) else { return }
+              let bodyStr = String(data: body, encoding: .utf8) else { return nil }
         let now = Int(Date().timeIntervalSince1970)
-        guard let event = try? NostrEvent.sign(
+        return try? NostrEvent.sign(
             privkey32: privkey,
             pubkey: keypair.pubkey,
             kind: 0,
             createdAt: now,
             tags: [],
             content: bodyStr
-        ) else { return }
-        _ = await RelayPool.publish(event: event, to: targets, timeout: 6)
-        await EventStore.shared.persist([event])
-        ProfileRepository.shared.updateFromEvent(event)
+        )
     }
 
     // MARK: - Step 2: suggestions
@@ -369,7 +421,12 @@ final class SignUpViewModel {
         }
     }
 
-    /// Publish kind-3 with selected pubkeys (plus own pubkey, matching Android).
+    /// Publish kind-3 with selected pubkeys (plus own pubkey, matching Android),
+    /// and kick off the outbox-model builder so the user's scoreboard contains
+    /// real per-author relay mappings by the time `MainView` mounts. Without
+    /// this, the freshly-signed-up feed comes back empty because every follow
+    /// falls through to `fallbackAuthors` and hits indexer relays that don't
+    /// stock their notes.
     func finishFollowsStep() async {
         guard let privkey = Hex.decode(keypair.privkey) else { return }
         var follows = selectedFollows
@@ -378,6 +435,15 @@ final class SignUpViewModel {
         FollowsCache.shared.update(pubkey: keypair.pubkey, follows: Array(follows))
 
         let writeRelays = discoveredRelays.filter(\.write).map(\.url)
+
+        // Kick off the outbox builder synchronously (Task.detached is non-
+        // blocking) BEFORE any awaits so `awaitOutboxReady` always finds a
+        // real task to wait on. The user's own write-relay set comes along
+        // for the ride so the resulting scoreboard keeps a mapping for
+        // ownPubkey even when their just-published kind-10002 hasn't yet
+        // landed on the indexer relays we fetch from.
+        startOutboxBuilder(follows: Array(follows), ownWriteRelays: writeRelays)
+
         let targets = (writeRelays + Self.indexerRelays).uniquedPreservingOrder()
         let now = Int(Date().timeIntervalSince1970)
         let tags: [[String]] = follows.map { ["p", $0] }
@@ -389,8 +455,96 @@ final class SignUpViewModel {
             tags: tags,
             content: ""
         ) else { return }
-        _ = await RelayPool.publish(event: event, to: targets, timeout: 6)
         await EventStore.shared.persist([event])
+        Task.detached { [event, targets] in
+            _ = await RelayPool.publish(event: event, to: targets, timeout: 6)
+        }
+    }
+
+    /// Mirror of `OnboardingViewModel.startOutboxBuilding`'s relay-list phase:
+    /// fetch kind-10002 for every follow, ingest, and rebuild the
+    /// `RelayScoreBoard` so the home feed has real per-author write-relays. Runs
+    /// in the background while the user is on Steps 3 and 4; `finish()` awaits
+    /// completion before transitioning to `MainView`.
+    ///
+    /// Merges with the existing scoreboard rather than replacing it — the
+    /// scoreboard `seedRelayScoreBoard` saved during Step 1 contains the
+    /// user's own pubkey → discovered-write-relays mapping, and the indexer
+    /// query below typically can't recover that (the user's just-published
+    /// kind-10002 hasn't propagated yet). Without the merge, the rebuilt
+    /// board drops ownPubkey, the user's own intro note routes through
+    /// fallback indexers (which don't have it yet), and the feed looks
+    /// almost-empty until app reopen.
+    private func startOutboxBuilder(follows: [String], ownWriteRelays: [String]) {
+        outboxBuilderTask?.cancel()
+        let pubkey = keypair.pubkey
+        outboxBuilderTask = Task.detached(priority: .userInitiated) {
+            let batchSize = 150
+            var bestByAuthor: [String: NostrEvent] = [:]
+            for start in stride(from: 0, to: follows.count, by: batchSize) {
+                let end = min(start + batchSize, follows.count)
+                let chunk = Array(follows[start..<end])
+                let events = await RelayPool.query(
+                    relays: RelayDefaults.indexers,
+                    filter: NostrFilter(kinds: [10002], authors: chunk),
+                    timeout: 15
+                )
+                for event in events {
+                    if let existing = bestByAuthor[event.pubkey] {
+                        if event.createdAt > existing.createdAt { bestByAuthor[event.pubkey] = event }
+                    } else {
+                        bestByAuthor[event.pubkey] = event
+                    }
+                }
+            }
+
+            await EventStore.shared.persist(Array(bestByAuthor.values))
+
+            var writeRelaysByAuthor: [String: [String]] = [:]
+            for (author, event) in bestByAuthor {
+                let relays = event.tags.compactMap { tag -> String? in
+                    guard tag.count >= 2, tag[0] == "r" else { return nil }
+                    if tag.count == 2 || tag[2] == "write" { return tag[1] }
+                    return nil
+                }
+                if !relays.isEmpty { writeRelaysByAuthor[author] = relays }
+            }
+
+            // Always preserve the user's own outbox so their own intro note,
+            // boosts, and replies stay reachable on relay.wisp.talk + the
+            // discovered set.
+            if writeRelaysByAuthor[pubkey] == nil, !ownWriteRelays.isEmpty {
+                writeRelaysByAuthor[pubkey] = ownWriteRelays
+            }
+
+            let snapshot = bestByAuthor
+            await MainActor.run {
+                for (_, event) in snapshot {
+                    RelayListRepository.shared.ingest(event)
+                }
+
+                // Carry forward any author entries we already had (notably
+                // ownPubkey from `seedRelayScoreBoard`) for follows whose
+                // kind-10002 wasn't on the indexers.
+                var merged = writeRelaysByAuthor
+                if let existing = RelayScoreBoard.load(pubkey: pubkey) {
+                    for (author, relays) in existing.authorRelays where merged[author] == nil {
+                        merged[author] = Array(relays)
+                    }
+                }
+
+                let board = RelayScoreBoard()
+                board.build(follows: follows, writeRelaysByAuthor: merged, redundancy: 3)
+                guard !board.scoredRelays.isEmpty else { return }
+                board.save(pubkey: pubkey)
+            }
+        }
+    }
+
+    /// Block until the background outbox-builder finishes (or the call returns
+    /// immediately if it never started or already completed).
+    func awaitOutboxReady() async {
+        await outboxBuilderTask?.value
     }
 
     // MARK: - Step 3: hashtags
@@ -401,6 +555,12 @@ final class SignUpViewModel {
         else { selectedHashtags.insert(n) }
     }
 
+    func addCustomTopic() {
+        guard let n = Nip51Hashtags.normalize(topicQuery) else { return }
+        selectedHashtags.insert(n)
+        topicQuery = ""
+    }
+
     func finishHashtagsStep() {
         guard !selectedHashtags.isEmpty else { return }
         _ = HashtagSetRepository.shared.createHashtagSet(
@@ -408,6 +568,65 @@ final class SignUpViewModel {
             initialHashtags: Array(selectedHashtags),
             keypair: keypair
         )
+    }
+
+    /// Fetch trending + all kind-30015 interest sets from the
+    /// `feeds.nostrarchives.com` topic feeds. Trending populates the popular
+    /// chip list; "all" backs the search-suggestions filter.
+    func loadTopics() {
+        guard !topicsLoaded else { return }
+        topicsLoaded = true
+        Task { await fetchTrendingTopics() }
+        Task { await fetchAllTopics() }
+    }
+
+    private func fetchTrendingTopics() async {
+        let events = await RelayPool.query(
+            relays: [Self.topicsTrendingRelay],
+            filter: NostrFilter(kinds: [30015], dTags: ["trending"], limit: 1),
+            timeout: 8
+        )
+        let topics = extractTopics(from: events)
+        popularTopics = topics
+        loadingPopular = false
+    }
+
+    private func fetchAllTopics() async {
+        let events = await RelayPool.query(
+            relays: [Self.topicsAllRelay],
+            filter: NostrFilter(kinds: [30015], dTags: ["all"], limit: 1),
+            timeout: 8
+        )
+        let topics = extractTopics(from: events)
+        allTopics = topics
+        applyTopicQuery()
+    }
+
+    private func extractTopics(from events: [NostrEvent]) -> [String] {
+        let latest = events.max(by: { $0.createdAt < $1.createdAt })
+        guard let event = latest else { return [] }
+        var seen = Set<String>()
+        var out: [String] = []
+        for tag in event.tags where tag.count >= 2 && tag[0] == "t" {
+            guard let n = Nip51Hashtags.normalize(tag[1]) else { continue }
+            if seen.insert(n).inserted { out.append(n) }
+        }
+        return out
+    }
+
+    private func applyTopicQuery() {
+        let q = topicQuery
+            .trimmingCharacters(in: .whitespaces)
+            .replacingOccurrences(of: "#", with: "")
+            .lowercased()
+        guard !q.isEmpty else {
+            topicSuggestions = []
+            return
+        }
+        let prefix = allTopics.filter { $0.hasPrefix(q) }
+        let other = allTopics.filter { !$0.hasPrefix(q) && $0.contains(q) }
+        let ranked = (prefix.sorted { $0.count < $1.count } + other.sorted { $0.count < $1.count })
+        topicSuggestions = Array(ranked.prefix(20))
     }
 
     // MARK: - Step 4: intro note
@@ -436,8 +655,50 @@ final class SignUpViewModel {
             tags: tags,
             content: introContent
         ) else { return }
-        _ = await RelayPool.publish(event: event, to: targets, timeout: 6)
         await EventStore.shared.persist([event])
+        Task.detached { [event, targets] in
+            _ = await RelayPool.publish(event: event, to: targets, timeout: 6)
+        }
+    }
+
+    /// Begin the post-now countdown. After `seconds` ticks of 1 Hz the intro
+    /// note is published, then the completion handler runs. Cancellable via
+    /// `cancelPostCountdown` or when the view disappears.
+    func startPostCountdown(seconds: Int = 5, onComplete: @escaping () async -> Void) {
+        cancelPostCountdown()
+        postCountdown = seconds
+        countdownTask = Task { [weak self] in
+            for remaining in stride(from: seconds, through: 1, by: -1) {
+                guard !Task.isCancelled else { return }
+                await MainActor.run { self?.postCountdown = remaining }
+                do {
+                    try await Task.sleep(for: .seconds(1))
+                } catch {
+                    return
+                }
+            }
+            guard !Task.isCancelled else { return }
+            await self?.publishIntroNote()
+            await MainActor.run {
+                self?.postCountdown = nil
+                self?.countdownTask = nil
+            }
+            await onComplete()
+        }
+    }
+
+    func cancelPostCountdown() {
+        countdownTask?.cancel()
+        countdownTask = nil
+        postCountdown = nil
+    }
+
+    func postIntroNow(onComplete: @escaping () async -> Void) {
+        cancelPostCountdown()
+        Task {
+            await publishIntroNote()
+            await onComplete()
+        }
     }
 
     // MARK: - Completion

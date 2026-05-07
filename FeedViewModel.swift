@@ -147,7 +147,10 @@ final class FeedViewModel {
         // 2. Calculate since timestamp for incremental sync
         let follows = FollowsCache.shared.follows(for: keypair.pubkey)
         let scoreBoard = RelayScoreBoard.load(pubkey: keypair.pubkey)
-        let newestStored = await eventStore.newestTimestamp()
+        // Exclude our own pubkey: if the only stored kind-1 is the user's
+        // freshly-published intro note, `since` would clamp to "intro_ts - 5m"
+        // and hide every older note from follows on the first feed load.
+        let newestStored = await eventStore.newestTimestamp(excludingPubkey: keypair.pubkey)
         let since = calculateSince(newestStored: newestStored, followCount: follows.count)
 
         // 3. Open relay sockets immediately, then fetch profiles concurrently.
@@ -177,7 +180,7 @@ final class FeedViewModel {
         if let newest = events.first {
             since = newest.createdAt - 60
         } else {
-            since = await eventStore.newestTimestamp()
+            since = await eventStore.newestTimestamp(excludingPubkey: keypair.pubkey)
         }
 
         loadFeed(follows: follows, scoreBoard: scoreBoard, since: since)

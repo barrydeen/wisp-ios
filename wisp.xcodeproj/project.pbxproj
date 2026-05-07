@@ -61,6 +61,7 @@
 		4CDA88FB2F9C540000000004 /* RelayProber.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA88FA2F9C540000000004 /* RelayProber.swift */; };
 		4CDA88FB2F9C540000000005 /* SignUpFlowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA88FA2F9C540000000005 /* SignUpFlowView.swift */; };
 		4CDA88FB2F9C540000000006 /* SignUpViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA88FA2F9C540000000006 /* SignUpViewModel.swift */; };
+		4CDA88FB2F9C540000001100 /* OnboardingComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA88FA2F9C540000001100 /* OnboardingComponents.swift */; };
 		4CDD000100000000000000B1 /* P256K in Frameworks */ = {isa = PBXBuildFile; productRef = 4CDD000000000000000000B1 /* P256K */; };
 		4CDFAB0000000000000DF101 /* Nip37.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDFAB0000000000000DF001 /* Nip37.swift */; };
 		4CDFAB0000000000000DF102 /* Nip09.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDFAB0000000000000DF002 /* Nip09.swift */; };
@@ -194,6 +195,7 @@
 		4CFFA20100000000000A0001 /* RelayProber.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFFA20000000000000A0001 /* RelayProber.swift */; };
 		4CFFA20100000000000A0002 /* SignUpViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFFA20000000000000A0002 /* SignUpViewModel.swift */; };
 		4CFFA20100000000000A0003 /* SignUpFlowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFFA20000000000000A0003 /* SignUpFlowView.swift */; };
+		4CFFA20100000000000A1100 /* OnboardingComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFFA20000000000000A1100 /* OnboardingComponents.swift */; };
 		4CFFA20100000000000A0004 /* AppDataWipe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFFA20000000000000A0004 /* AppDataWipe.swift */; };
 		4CFFAA0100000000000A0001 /* NotificationSounds.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFFAA0000000000000A0001 /* NotificationSounds.swift */; };
 		4CFFAA0100000000000A0002 /* Haptics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFFAA0000000000000A0002 /* Haptics.swift */; };
@@ -338,6 +340,7 @@
 		4CDA88FA2F9C540000000004 /* RelayProber.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayProber.swift; sourceTree = "<group>"; };
 		4CDA88FA2F9C540000000005 /* SignUpFlowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignUpFlowView.swift; sourceTree = "<group>"; };
 		4CDA88FA2F9C540000000006 /* SignUpViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignUpViewModel.swift; sourceTree = "<group>"; };
+		4CDA88FA2F9C540000001100 /* OnboardingComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingComponents.swift; sourceTree = "<group>"; };
 		4CDFAB0000000000000DF001 /* Nip37.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Nip37.swift; sourceTree = "<group>"; };
 		4CDFAB0000000000000DF002 /* Nip09.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Nip09.swift; sourceTree = "<group>"; };
 		4CDFAB0000000000000DF003 /* DraftsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftsViewModel.swift; sourceTree = "<group>"; };
@@ -468,6 +471,7 @@
 		4CFFA20000000000000A0001 /* RelayProber.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayProber.swift; sourceTree = "<group>"; };
 		4CFFA20000000000000A0002 /* SignUpViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignUpViewModel.swift; sourceTree = "<group>"; };
 		4CFFA20000000000000A0003 /* SignUpFlowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignUpFlowView.swift; sourceTree = "<group>"; };
+		4CFFA20000000000000A1100 /* OnboardingComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingComponents.swift; sourceTree = "<group>"; };
 		4CFFA20000000000000A0004 /* AppDataWipe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDataWipe.swift; sourceTree = "<group>"; };
 		4CFFAA0000000000000A0001 /* NotificationSounds.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationSounds.swift; sourceTree = "<group>"; };
 		4CFFAA0000000000000A0002 /* Haptics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Haptics.swift; sourceTree = "<group>"; };
@@ -609,6 +613,7 @@
 				4CDA88FA2F9C540000000004 /* RelayProber.swift */,
 				4CDA88FA2F9C540000000005 /* SignUpFlowView.swift */,
 				4CDA88FA2F9C540000000006 /* SignUpViewModel.swift */,
+				4CDA88FA2F9C540000001100 /* OnboardingComponents.swift */,
 				4CDA87E72F9C54B70079A1BA /* LoginView.swift */,
 				4CDA87E92F9C54B80079A1BA /* OnboardingViewModel.swift */,
 				4CDA87EB2F9C54DE0079A1BA /* OnboardingView.swift */,
@@ -746,6 +751,7 @@
 				4CFFA20000000000000A0001 /* RelayProber.swift */,
 				4CFFA20000000000000A0002 /* SignUpViewModel.swift */,
 				4CFFA20000000000000A0003 /* SignUpFlowView.swift */,
+				4CFFA20000000000000A1100 /* OnboardingComponents.swift */,
 				4CFFA20000000000000A0004 /* AppDataWipe.swift */,
 				4CFFB10000000000000A0001 /* HashtagSet.swift */,
 				4CFFB10000000000000A0002 /* Nip51Hashtags.swift */,
@@ -1019,6 +1025,7 @@
 				4CDA88FB2F9C540000000004 /* RelayProber.swift in Sources */,
 				4CDA88FB2F9C540000000005 /* SignUpFlowView.swift in Sources */,
 				4CDA88FB2F9C540000000006 /* SignUpViewModel.swift in Sources */,
+				4CDA88FB2F9C540000001100 /* OnboardingComponents.swift in Sources */,
 				4CDA87DA2F9C546F0079A1BA /* Hex.swift in Sources */,
 				4CDA88022F9C6B720079A1BA /* EventEntity.swift in Sources */,
 				4CDA87F62F9C5CC70079A1BA /* MainView.swift in Sources */,
@@ -1164,6 +1171,7 @@
 				4CFFA20100000000000A0001 /* RelayProber.swift in Sources */,
 				4CFFA20100000000000A0002 /* SignUpViewModel.swift in Sources */,
 				4CFFA20100000000000A0003 /* SignUpFlowView.swift in Sources */,
+				4CFFA20100000000000A1100 /* OnboardingComponents.swift in Sources */,
 				4CFFA20100000000000A0004 /* AppDataWipe.swift in Sources */,
 				4CFFB10100000000000A0001 /* HashtagSet.swift in Sources */,
 				4CFFB10100000000000A0002 /* Nip51Hashtags.swift in Sources */,

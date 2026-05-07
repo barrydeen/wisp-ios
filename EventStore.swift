@@ -80,9 +80,23 @@ actor EventStore {
         }
     }
 
-    func newestTimestamp() -> Int? {
+    /// Newest stored feed event timestamp. When `excludingPubkey` is set, the
+    /// query skips that author so freshly-published own posts (e.g. a brand-new
+    /// user's intro note) don't bias the `since` filter to "now - 5min" and
+    /// hide every older follow note from the first feed load.
+    func newestTimestamp(excludingPubkey: String? = nil) -> Int? {
         guard let box = ensureBox() else { return nil }
         do {
+            if let exclude = excludingPubkey {
+                let query = try box.query {
+                    (EventEntity.kind == 1 || EventEntity.kind == 6 || EventEntity.kind == 20
+                        || EventEntity.kind == Nip88.kindPoll || EventEntity.kind == Nip69.kindZapPoll)
+                        && EventEntity.pubkey != exclude
+                }
+                .ordered(by: EventEntity.createdAt, flags: .descending)
+                .build()
+                return try query.findFirst()?.createdAt
+            }
             let query = try box.query {
                 EventEntity.kind == 1 || EventEntity.kind == 6 || EventEntity.kind == 20
                     || EventEntity.kind == Nip88.kindPoll || EventEntity.kind == Nip69.kindZapPoll

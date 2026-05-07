@@ -2,7 +2,9 @@ import SwiftUI
 import PhotosUI
 
 /// Four-step new-user sign-up wizard. Distinct from the returning-user
-/// `OnboardingView` (which only runs the outbox builder).
+/// `OnboardingView` (which only runs the outbox builder). Layout mirrors the
+/// Android wisp `OnboardingScreen`/`OnboardingSuggestionsScreen`/
+/// `OnboardingTopicsScreen`/`OnboardingFirstPostScreen` 1:1.
 struct SignUpFlowView: View {
     var onComplete: (Keypair) -> Void
 
@@ -22,16 +24,11 @@ struct SignUpFlowView: View {
             case 1:
                 SuggestionsStep(viewModel: viewModel, onNext: { advance() })
             case 2:
-                HashtagsStep(viewModel: viewModel, onNext: { advance() }, onSkip: { advance() })
+                TopicsStep(viewModel: viewModel, onNext: { advance() }, onSkip: { advance() })
             default:
                 IntroNoteStep(
                     viewModel: viewModel,
-                    onPost: {
-                        Task {
-                            await viewModel.publishIntroNote()
-                            finish()
-                        }
-                    },
+                    onPosted: { finish() },
                     onSkip: { finish() }
                 )
             }
@@ -40,9 +37,6 @@ struct SignUpFlowView: View {
             insertion: .move(edge: .trailing),
             removal: .move(edge: .leading)
         ))
-        // Bleed the bg color into the safe area so the screen stays uniform
-        // edge-to-edge, but keep step content inside the safe area so titles
-        // don't sit under the dynamic island / home indicator.
         .background(Color.wispBackground.ignoresSafeArea())
         .task {
             viewModel.registerAccount()
@@ -52,12 +46,23 @@ struct SignUpFlowView: View {
 
     private func advance() {
         withAnimation { step += 1 }
-        if step == 1 { viewModel.loadSuggestions() }
+        switch step {
+        case 1: viewModel.loadSuggestions()
+        case 2: viewModel.loadTopics()
+        default: break
+        }
     }
 
     private func finish() {
-        viewModel.markComplete()
-        onComplete(viewModel.keypair)
+        // Wait for the outbox builder kicked off in `finishFollowsStep` to
+        // populate per-author write relays before handing off to `MainView`,
+        // otherwise the first feed query has no scoreboard mappings for the
+        // just-followed users and comes back empty.
+        Task {
+            await viewModel.awaitOutboxReady()
+            viewModel.markComplete()
+            onComplete(viewModel.keypair)
+        }
     }
 }
 
@@ -72,37 +77,37 @@ private struct ProfileStep: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 20) {
+            VStack(spacing: 16) {
                 Spacer().frame(height: 40)
-
-                Text("Create your profile")
-                    .font(.system(size: 28, weight: .bold))
-                    .foregroundStyle(.white)
-
-                Text("You can change this later")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
 
                 avatarPicker
 
+                Text("Add photo")
+                    .font(.caption)
+                    .foregroundStyle(Color.wispOnSurfaceVariant)
+
+                Spacer().frame(height: 8)
+
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Name").font(.caption).foregroundStyle(.secondary)
-                    TextField("Your name", text: $viewModel.name)
+                    Text("Display name")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    TextField("Display name", text: $viewModel.name)
                         .textFieldStyle(.roundedBorder)
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.words)
                 }
 
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Bio").font(.caption).foregroundStyle(.secondary)
-                    TextField("A short bio", text: $viewModel.about, axis: .vertical)
-                        .lineLimit(3...6)
+                    Text("About")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    TextField("About", text: $viewModel.about, axis: .vertical)
+                        .lineLimit(3...3)
                         .textFieldStyle(.roundedBorder)
                 }
 
-                relayStatus
-
-                Spacer(minLength: 24)
+                Spacer().frame(height: 8)
 
                 Button {
                     Task {
@@ -110,26 +115,41 @@ private struct ProfileStep: View {
                         onNext()
                     }
                 } label: {
-                    if viewModel.publishingProfile {
-                        ProgressView().frame(maxWidth: .infinity)
-                    } else {
-                        Text("Continue").frame(maxWidth: .infinity)
-                    }
+                    Text(continueLabel).frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.wispPrimary)
                 .controlSize(.large)
                 .disabled(!continueEnabled)
 
+                relayStatus
+
                 Spacer().frame(height: 32)
             }
             .padding(.horizontal, 32)
         }
+        .scrollDismissesKeyboard(.interactively)
+        .simultaneousGesture(
+            TapGesture().onEnded {
+                UIApplication.shared.sendAction(
+                    #selector(UIResponder.resignFirstResponder),
+                    to: nil, from: nil, for: nil
+                )
+            }
+        )
     }
 
     private var continueEnabled: Bool {
         let phaseReady = viewModel.relayPhase == .ready || viewModel.relayPhase == .failed
-        return phaseReady && !viewModel.publishingProfile && !viewModel.uploading
+        let hasName = !viewModel.name.trimmingCharacters(in: .whitespaces).isEmpty
+        return phaseReady && !viewModel.publishingProfile && !viewModel.uploading && hasName
+    }
+
+    private var continueLabel: String {
+        if viewModel.publishingProfile { return "Publishing\u{2026}" }
+        let phaseReady = viewModel.relayPhase == .ready || viewModel.relayPhase == .failed
+        if !phaseReady { return "Please wait\u{2026}" }
+        return "Continue"
     }
 
     private var avatarPicker: some View {
@@ -137,24 +157,24 @@ private struct ProfileStep: View {
             ZStack {
                 Circle()
                     .fill(Color.wispSurfaceVariant)
-                    .frame(width: 120, height: 120)
+                    .frame(width: 96, height: 96)
 
                 if let image = pickedImage {
                     Image(uiImage: image)
                         .resizable()
                         .scaledToFill()
-                        .frame(width: 120, height: 120)
+                        .frame(width: 96, height: 96)
                         .clipShape(Circle())
                 } else {
                     Image(systemName: "camera.fill")
-                        .font(.title)
+                        .font(.title2)
                         .foregroundStyle(Color.wispOnSurfaceVariant)
                 }
 
                 if viewModel.uploading {
                     Circle()
                         .fill(Color.black.opacity(0.4))
-                        .frame(width: 120, height: 120)
+                        .frame(width: 96, height: 96)
                     ProgressView().tint(.white)
                 }
             }
@@ -174,24 +194,28 @@ private struct ProfileStep: View {
     @ViewBuilder
     private var relayStatus: some View {
         let phase = viewModel.relayPhase
+        let phaseReady = phase == .ready || phase == .failed
         HStack(spacing: 10) {
-            switch phase {
-            case .ready:
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-                Text("Found \(viewModel.discoveredRelays.count) relays")
-                    .foregroundStyle(.secondary)
-            case .failed:
-                Image(systemName: "exclamationmark.circle.fill")
-                    .foregroundStyle(.orange)
-                Text(phase.displayText).foregroundStyle(.secondary)
-            default:
+            if !phaseReady {
                 ProgressView().controlSize(.small)
-                Text(phase.displayText).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(phase.displayText)
+                        .foregroundStyle(.secondary)
+                    if phase == .testing, let url = viewModel.probingUrl {
+                        Text(url.replacingOccurrences(of: "wss://", with: ""))
+                            .font(.caption)
+                            .foregroundStyle(Color.wispOnSurfaceVariant.opacity(0.7))
+                    }
+                }
+            } else {
+                Text(phase.displayText)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color.wispPrimary)
+                    .frame(maxWidth: .infinity, alignment: .center)
             }
         }
         .font(.subheadline)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: phaseReady ? .center : .leading)
         .padding(.top, 8)
     }
 }
@@ -202,23 +226,37 @@ private struct SuggestionsStep: View {
     @Bindable var viewModel: SignUpViewModel
     var onNext: () -> Void
 
+    private static let creatorRoles: [String: String] = [
+        "3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d": "Creator of Nostr",
+        "e2ccf7cf20403f3f2a4a55b328f0de3be38558a7d5f33632fdaaefc726c1c8eb": "Creator of Wisp"
+    ]
+
+    private var totalSelected: Int { viewModel.selectedFollows.count }
+
     var body: some View {
         VStack(spacing: 0) {
             ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 24) {
                     Spacer().frame(height: 24)
 
-                    Text("Find your people")
-                        .font(.system(size: 28, weight: .bold))
-                        .foregroundStyle(.white)
+                    HStack {
+                        Text("Find people to follow")
+                            .font(.system(size: 28, weight: .bold))
+                            .foregroundStyle(Color.wispOnSurface)
+                        Spacer()
+                        #if DEBUG
+                        Button("Skip", action: onNext)
+                            .font(.callout)
+                        #endif
+                    }
 
-                    Text("Follow a few accounts to fill your feed")
+                    Text("Follow at least 5 accounts to build your feed")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
 
-                    suggestionSection(.creators, suggestions: viewModel.creators)
-                    suggestionSection(.activeNow, suggestions: viewModel.activeNow)
-                    suggestionSection(.news, suggestions: viewModel.news)
+                    creatorsSection
+                    activeNowSection
+                    newsSection
 
                     Spacer().frame(height: 16)
                 }
@@ -226,128 +264,159 @@ private struct SuggestionsStep: View {
             }
 
             Button {
-                // Fire-and-forget: kind-3 publish takes up to ~6s waiting on
-                // relay acks. Advancing immediately keeps the flow snappy;
-                // the Task captures `viewModel`, so it survives the view's
-                // unmount and finishes in the background.
                 Task { await viewModel.finishFollowsStep() }
                 onNext()
             } label: {
-                Text("Continue (\(viewModel.selectedFollows.count) selected)")
-                    .frame(maxWidth: .infinity)
+                Text(continueLabel).frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
             .tint(.wispPrimary)
             .controlSize(.large)
-            .padding(.horizontal, 32)
-            .padding(.bottom, 32)
-            .disabled(viewModel.selectedFollows.isEmpty)
+            .disabled(totalSelected < 5)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+        }
+    }
+
+    private var continueLabel: String {
+        totalSelected >= 5
+            ? "Follow \(totalSelected) accounts"
+            : "Select at least 5 (\(totalSelected)/5)"
+    }
+
+    @ViewBuilder
+    private var creatorsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Meet the creators")
+                .font(.headline)
+                .foregroundStyle(Color.wispOnSurface)
+
+            if viewModel.creators.loading {
+                loadingRow(height: 80)
+            } else if viewModel.creators.profiles.isEmpty {
+                emptyRow("No creators right now")
+            } else {
+                HStack(spacing: 12) {
+                    ForEach(viewModel.creators.profiles, id: \.pubkey) { profile in
+                        CreatorCard(
+                            profile: profile,
+                            role: Self.creatorRoles[profile.pubkey] ?? "",
+                            selected: viewModel.selectedFollows.contains(profile.pubkey),
+                            onToggle: { viewModel.togglePubkey(profile.pubkey) }
+                        )
+                    }
+                }
+            }
         }
     }
 
     @ViewBuilder
-    private func suggestionSection(_ section: SignUpViewModel.SuggestionSection,
-                                   suggestions: SignUpViewModel.Suggestions) -> some View {
+    private var activeNowSection: some View {
+        let profiles = viewModel.activeNow.profiles
+        let allSelected = !profiles.isEmpty && profiles.allSatisfy { viewModel.selectedFollows.contains($0.pubkey) }
+
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text(section.title)
-                    .font(.headline)
-                    .foregroundStyle(.white)
+            HStack(alignment: .center) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Active right now")
+                        .font(.headline)
+                        .foregroundStyle(Color.wispOnSurface)
+                    if !profiles.isEmpty {
+                        Text("\(profiles.count) people posting right now")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
                 Spacer()
-                if !suggestions.profiles.isEmpty {
-                    Button("Follow all") { viewModel.toggleFollowAll(section) }
-                        .font(.caption)
-                        .foregroundStyle(Color.wispPrimary)
+                if !profiles.isEmpty {
+                    Button {
+                        viewModel.toggleFollowAll(.activeNow)
+                    } label: {
+                        Text(allSelected ? "Unfollow All" : "Follow All")
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 6)
+                            .background(
+                                Capsule().fill(allSelected
+                                               ? Color.wispSurfaceVariant
+                                               : Color.wispPrimary)
+                            )
+                            .foregroundStyle(allSelected ? Color.wispOnSurface : Color.white)
+                    }
+                    .buttonStyle(.plain)
                 }
             }
 
-            if suggestions.loading {
-                HStack {
-                    ProgressView().controlSize(.small)
-                    Text("Loading\u{2026}").font(.caption).foregroundStyle(.secondary)
-                }
-                .frame(height: 60)
-            } else if suggestions.profiles.isEmpty {
-                Text("No suggestions right now")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(height: 60)
+            if viewModel.activeNow.loading {
+                loadingRow(height: 60)
+            } else if profiles.isEmpty {
+                emptyRow("No active users found")
+            } else {
+                StackedAvatars(
+                    profiles: profiles,
+                    selected: viewModel.selectedFollows,
+                    onToggle: { viewModel.togglePubkey($0) }
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var newsSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("News sources")
+                .font(.headline)
+                .foregroundStyle(Color.wispOnSurface)
+            Text("Pick the news sources you want to follow")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Spacer().frame(height: 4)
+
+            if viewModel.news.loading {
+                loadingRow(height: 60)
+            } else if viewModel.news.profiles.isEmpty {
+                emptyRow("No news sources found")
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 12) {
-                        ForEach(suggestions.profiles, id: \.pubkey) { profile in
-                            SuggestedAccountCell(
+                        ForEach(viewModel.news.profiles, id: \.pubkey) { profile in
+                            NewsCard(
                                 profile: profile,
                                 selected: viewModel.selectedFollows.contains(profile.pubkey),
                                 onToggle: { viewModel.togglePubkey(profile.pubkey) }
                             )
                         }
                     }
+                    .padding(.vertical, 4)
                 }
             }
         }
     }
-}
 
-private struct SuggestedAccountCell: View {
-    let profile: ProfileData
-    let selected: Bool
-    var onToggle: () -> Void
-
-    var body: some View {
-        Button(action: onToggle) {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .top, spacing: 8) {
-                    AsyncImage(url: profile.picture.flatMap(URL.init(string:))) { phase in
-                        switch phase {
-                        case .success(let image):
-                            image.resizable().scaledToFill()
-                        default:
-                            Circle().fill(Color.wispSurfaceVariant)
-                        }
-                    }
-                    .frame(width: 44, height: 44)
-                    .clipShape(Circle())
-
-                    Spacer()
-
-                    Image(systemName: selected ? "checkmark.circle.fill" : "plus.circle")
-                        .font(.title3)
-                        .foregroundStyle(selected ? Color.wispPrimary : Color.secondary)
-                }
-
-                Text(profile.displayString)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-
-                Text(profile.about ?? "")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(3)
-            }
-            .padding(12)
-            .frame(width: 200, height: 150, alignment: .topLeading)
-            .background(Color.wispSurface, in: RoundedRectangle(cornerRadius: 12))
-            .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(selected ? Color.wispPrimary : Color.clear, lineWidth: 2)
-            )
+    private func loadingRow(height: CGFloat) -> some View {
+        HStack {
+            ProgressView().controlSize(.small)
         }
-        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity)
+        .frame(height: height)
+    }
+
+    private func emptyRow(_ message: String) -> some View {
+        Text(message)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 8)
     }
 }
 
-// MARK: - Step 3: hashtags
+// MARK: - Step 3: topics (was hashtags)
 
-private struct HashtagsStep: View {
+private struct TopicsStep: View {
     @Bindable var viewModel: SignUpViewModel
     var onNext: () -> Void
     var onSkip: () -> Void
-
-    @State private var customInput = ""
-
-    private let columns = [GridItem(.adaptive(minimum: 100), spacing: 8)]
 
     var body: some View {
         VStack(spacing: 0) {
@@ -355,80 +424,180 @@ private struct HashtagsStep: View {
                 VStack(alignment: .leading, spacing: 16) {
                     Spacer().frame(height: 24)
 
-                    Text("Pick your interests")
-                        .font(.system(size: 28, weight: .bold))
-                        .foregroundStyle(.white)
+                    HStack {
+                        Text("Follow topics")
+                            .font(.system(size: 28, weight: .bold))
+                            .foregroundStyle(Color.wispOnSurface)
+                        Spacer()
+                        Button("Skip", action: onSkip).font(.callout)
+                    }
 
-                    Text("Hashtags you follow appear as feeds in your sidebar")
+                    Text("Pick a few hashtags so your feed has more to show")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
 
-                    LazyVGrid(columns: columns, alignment: .leading, spacing: 8) {
-                        ForEach(SignUpViewModel.popularHashtags, id: \.self) { tag in
-                            chip(for: tag)
-                        }
-                        ForEach(customTags, id: \.self) { tag in
-                            chip(for: tag)
-                        }
+                    searchField
+
+                    if !viewModel.topicQuery.isEmpty {
+                        suggestionsDropdown
                     }
 
-                    HStack {
-                        TextField("Add a hashtag", text: $customInput)
-                            .textFieldStyle(.roundedBorder)
-                            .autocorrectionDisabled()
-                            .textInputAutocapitalization(.never)
-                        Button("Add") {
-                            viewModel.toggleHashtag(customInput)
-                            customInput = ""
-                        }
-                        .disabled(customInput.trimmingCharacters(in: .whitespaces).isEmpty)
+                    if !viewModel.selectedHashtags.isEmpty {
+                        selectedSection
                     }
+
+                    popularSection
+
+                    Spacer().frame(height: 24)
                 }
-                .padding(.horizontal, 32)
+                .padding(.horizontal, 16)
             }
 
-            HStack(spacing: 12) {
-                Button("Skip", action: onSkip)
-                    .buttonStyle(.bordered)
-                    .controlSize(.large)
-                    .frame(maxWidth: .infinity)
-
-                Button {
-                    viewModel.finishHashtagsStep()
-                    onNext()
-                } label: {
-                    Text("Continue").frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.wispPrimary)
-                .controlSize(.large)
-                .disabled(viewModel.selectedHashtags.isEmpty)
+            Button {
+                viewModel.finishHashtagsStep()
+                onNext()
+            } label: {
+                Text(continueLabel).frame(maxWidth: .infinity)
             }
-            .padding(.horizontal, 32)
-            .padding(.bottom, 32)
+            .buttonStyle(.borderedProminent)
+            .tint(.wispPrimary)
+            .controlSize(.large)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
         }
+        .scrollDismissesKeyboard(.interactively)
+        .simultaneousGesture(
+            TapGesture().onEnded {
+                UIApplication.shared.sendAction(
+                    #selector(UIResponder.resignFirstResponder),
+                    to: nil, from: nil, for: nil
+                )
+            }
+        )
     }
 
-    private var customTags: [String] {
-        let popular = Set(SignUpViewModel.popularHashtags)
-        return viewModel.selectedHashtags.subtracting(popular).sorted()
+    private var continueLabel: String {
+        let n = viewModel.selectedHashtags.count
+        if n == 0 { return "Continue without topics" }
+        return n == 1 ? "Follow 1 topic" : "Follow \(n) topics"
     }
 
     @ViewBuilder
-    private func chip(for tag: String) -> some View {
-        let selected = viewModel.selectedHashtags.contains(tag)
-        Button {
-            viewModel.toggleHashtag(tag)
-        } label: {
-            Text("#\(tag)")
-                .font(.subheadline)
-                .foregroundStyle(selected ? Color.white : Color.wispOnSurface)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(selected ? Color.wispPrimary : Color.wispSurface,
-                            in: Capsule())
+    private var searchField: some View {
+        HStack(spacing: 8) {
+            TextField("Search topics", text: $viewModel.topicQuery)
+                .textFieldStyle(.roundedBorder)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+
+            if !viewModel.topicQuery.isEmpty {
+                if viewModel.topicSuggestions.isEmpty {
+                    Button {
+                        viewModel.addCustomTopic()
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.title3)
+                            .foregroundStyle(Color.wispPrimary)
+                    }
+                } else {
+                    Button {
+                        viewModel.topicQuery = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title3)
+                            .foregroundStyle(Color.wispOnSurfaceVariant)
+                    }
+                }
+            }
         }
-        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private var suggestionsDropdown: some View {
+        if !viewModel.topicSuggestions.isEmpty {
+            VStack(alignment: .leading, spacing: 0) {
+                ScrollView {
+                    VStack(spacing: 0) {
+                        ForEach(viewModel.topicSuggestions, id: \.self) { topic in
+                            Button {
+                                viewModel.toggleHashtag(topic)
+                                viewModel.topicQuery = ""
+                            } label: {
+                                HStack {
+                                    Text("#\(topic)")
+                                        .foregroundStyle(Color.wispOnSurface)
+                                    Spacer()
+                                    Image(systemName: "plus")
+                                        .font(.callout)
+                                        .foregroundStyle(Color.wispPrimary)
+                                }
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 10)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                .frame(maxHeight: 240)
+            }
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color.wispSurfaceVariant.opacity(0.5))
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var selectedSection: some View {
+        let sorted = viewModel.selectedHashtags.sorted()
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Your topics (\(sorted.count))")
+                .font(.headline)
+                .foregroundStyle(Color.wispOnSurface)
+
+            FlowLayout {
+                ForEach(sorted, id: \.self) { topic in
+                    OnboardingFilterChip(
+                        label: "#\(topic)",
+                        selected: true,
+                        leadingCheck: true,
+                        action: { viewModel.toggleHashtag(topic) }
+                    )
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var popularSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Popular topics")
+                .font(.headline)
+                .foregroundStyle(Color.wispOnSurface)
+
+            if viewModel.loadingPopular {
+                HStack {
+                    ProgressView().controlSize(.small)
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 120)
+            } else if viewModel.popularTopics.isEmpty {
+                Text("Couldn't load trending topics — you can still search above.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                FlowLayout {
+                    ForEach(viewModel.popularTopics.prefix(40), id: \.self) { topic in
+                        OnboardingFilterChip(
+                            label: "#\(topic)",
+                            selected: viewModel.selectedHashtags.contains(topic),
+                            leadingCheck: false,
+                            action: { viewModel.toggleHashtag(topic) }
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -436,57 +605,92 @@ private struct HashtagsStep: View {
 
 private struct IntroNoteStep: View {
     @Bindable var viewModel: SignUpViewModel
-    var onPost: () -> Void
+    var onPosted: () -> Void
     var onSkip: () -> Void
 
     var body: some View {
-        VStack(spacing: 16) {
-            Spacer().frame(height: 24)
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Spacer().frame(height: 24)
 
-            Text("Say hello")
-                .font(.system(size: 28, weight: .bold))
-                .foregroundStyle(.white)
-
-            Text("Introduce yourself with #introductions and people in the network can find you")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 32)
-
-            TextEditor(text: $viewModel.introContent)
-                .frame(minHeight: 220)
-                .padding(8)
-                .background(Color.wispSurface, in: RoundedRectangle(cornerRadius: 12))
-                .padding(.horizontal, 16)
-                .scrollContentBackground(.hidden)
-
-            Spacer()
-
-            HStack(spacing: 12) {
-                Button("Skip", action: onSkip)
-                    .buttonStyle(.bordered)
-                    .controlSize(.large)
-                    .frame(maxWidth: .infinity)
-
-                Button(action: onPost) {
-                    if viewModel.publishingIntro {
-                        ProgressView().frame(maxWidth: .infinity)
-                    } else {
-                        Text("Post").frame(maxWidth: .infinity)
+                    HStack {
+                        Text("Say hello to nostr")
+                            .font(.system(size: 28, weight: .bold))
+                            .foregroundStyle(Color.wispOnSurface)
+                        Spacer()
+                        Button("Skip", action: onSkip)
+                            .font(.callout)
+                            .disabled(viewModel.publishingIntro || viewModel.postCountdown != nil)
                     }
+
+                    Text("Post a short introduction with the #introductions hashtag — a few words about you and how you found wisp is plenty.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+
+                    TextEditor(text: $viewModel.introContent)
+                        .frame(minHeight: 220)
+                        .padding(8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12).fill(Color.wispSurface)
+                        )
+                        .scrollContentBackground(.hidden)
+                        .disabled(viewModel.publishingIntro || viewModel.postCountdown != nil)
+
+                    Spacer().frame(height: 24)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(.wispPrimary)
-                .controlSize(.large)
-                .disabled(viewModel.publishingIntro || introIsEmpty)
+                .padding(.horizontal, 16)
             }
-            .padding(.horizontal, 32)
-            .padding(.bottom, 32)
+
+            bottomBar
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
         }
+        .scrollDismissesKeyboard(.interactively)
+        .simultaneousGesture(
+            TapGesture().onEnded {
+                UIApplication.shared.sendAction(
+                    #selector(UIResponder.resignFirstResponder),
+                    to: nil, from: nil, for: nil
+                )
+            }
+        )
+        .onDisappear { viewModel.cancelPostCountdown() }
     }
 
     private var introIsEmpty: Bool {
         let trimmed = viewModel.introContent.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty || trimmed.lowercased() == "#introductions"
+    }
+
+    @ViewBuilder
+    private var bottomBar: some View {
+        if let countdown = viewModel.postCountdown {
+            IntroPostCountdownBar(
+                countdown: countdown,
+                onUndo: { viewModel.cancelPostCountdown() },
+                onPostNow: {
+                    viewModel.postIntroNow {
+                        await MainActor.run { onPosted() }
+                    }
+                }
+            )
+        } else {
+            Button {
+                viewModel.startPostCountdown {
+                    await MainActor.run { onPosted() }
+                }
+            } label: {
+                if viewModel.publishingIntro {
+                    ProgressView().frame(maxWidth: .infinity)
+                } else {
+                    Text("Post introduction").frame(maxWidth: .infinity)
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.wispPrimary)
+            .controlSize(.large)
+            .disabled(viewModel.publishingIntro || introIsEmpty)
+        }
     }
 }
