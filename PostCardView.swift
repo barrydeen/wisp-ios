@@ -102,15 +102,16 @@ struct PostCardView: View {
     @State private var engagementRepo = EngagementRepository.shared
     @State private var zapStore = ZapAnimationStore.shared
 
-    /// Threshold above which a kind-1 body gets a "Show more" toggle. Tuned for
-    /// roughly the height of a 12-line post — anything longer dominates the feed.
-    private static let longPostCharThreshold = 600
-    /// Cap on a long-text body before "Show more" kicks in. Sized to ~66%
-    /// of the screen so collapsed text still has enough room to set context
-    /// without dominating the feed.
+    /// Height at which a post body is collapsed. ~66% of screen height gives
+    /// enough context without dominating the feed.
     private static var longPostCollapsedHeight: CGFloat {
         UIScreen.main.bounds.height * 0.66
     }
+    /// Minimum overflow required before "Show more" appears. Posts that
+    /// exceed the collapsed cap by less than this render at full height
+    /// instead of being clipped for a trivial amount of hidden content.
+    /// ~5 lines of body text — meaningful enough to be worth a tap.
+    private static let longPostMinOverflow: CGFloat = 72
 
     private struct ActionAlert: Identifiable {
         let id = UUID()
@@ -277,8 +278,7 @@ struct PostCardView: View {
             VStack(alignment: .leading, spacing: 8) {
                 if !displayEvent.content.isEmpty || !displayEvent.tags.isEmpty {
                     let cap = Self.longPostCollapsedHeight
-                    let isLong = displayEvent.content.count > Self.longPostCharThreshold
-                                 || naturalContentHeight > cap
+                    let isLong = naturalContentHeight > cap + Self.longPostMinOverflow
                     let collapsed = isLong && !contentExpanded
                     VStack(alignment: .leading, spacing: 6) {
                         RichContentView(
