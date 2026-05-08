@@ -36,6 +36,10 @@ struct OnboardingView: View {
             insertion: .move(edge: .trailing),
             removal: .move(edge: .leading)
         ))
+        // Force the step content to fill the screen so the background covers
+        // every edge — the waiting step's VStack would otherwise size to its
+        // widest text and let the system black show through on the sides.
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.wispBackground)
         .ignoresSafeArea()
         .task { await viewModel.startOutboxBuilding() }
@@ -200,6 +204,13 @@ private struct WaitingStep: View {
     @State private var messageIndex = 0
     @State private var rotation: Double = 0
     @State private var profile: ProfileData?
+    /// Staged entrance flags. The ring draws itself in first; the avatar
+    /// fades in once the ring has settled. Without the stage, the avatar
+    /// painted alongside the slide-in transition before the ring was
+    /// visually "in place," so for a frame it looked like a bare profile
+    /// picture floating without its loading affordance.
+    @State private var ringDrawn: CGFloat = 0
+    @State private var avatarRevealed = false
 
     /// Spinner ring sized to match the success checkmark so the
     /// transition reads as the same widget swapping its content,
@@ -221,8 +232,9 @@ private struct WaitingStep: View {
             } else {
                 ZStack {
                     CachedAvatarView(url: profile?.picture, size: avatarSize)
+                        .opacity(avatarRevealed ? 1 : 0)
                     Circle()
-                        .trim(from: 0, to: 0.7)
+                        .trim(from: 0, to: ringDrawn)
                         .stroke(Color.wispPrimary, lineWidth: 4)
                         .frame(width: spinnerSize, height: spinnerSize)
                         .rotationEffect(.degrees(rotation))
@@ -268,10 +280,16 @@ private struct WaitingStep: View {
         }
         .animation(.easeInOut, value: viewModel.isReady)
         .onAppear {
-            withAnimation(.linear(duration: 1).repeatForever(autoreverses: false)) {
-                rotation = 360
-            }
             profile = ProfileRepository.shared.get(keypair.pubkey)
+            // Stage 1: ring draws itself in. Stage 2: rotation kicks off
+            // and the avatar fades in inside the now-visible ring.
+            withAnimation(.easeOut(duration: 0.45)) { ringDrawn = 0.7 }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                withAnimation(.linear(duration: 1).repeatForever(autoreverses: false)) {
+                    rotation = 360
+                }
+                withAnimation(.easeIn(duration: 0.25)) { avatarRevealed = true }
+            }
             Task {
                 while !viewModel.isReady {
                     try? await Task.sleep(for: .seconds(2.5))

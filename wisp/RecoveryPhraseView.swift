@@ -12,23 +12,38 @@ struct RecoveryPhraseView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 24) {
-                warningCard
-                phraseSection
-                if revealed {
-                    actionButtons
+        VStack(spacing: 0) {
+            header
+            Divider().overlay(Color.wispSurfaceVariant.opacity(0.5))
+            ScrollView {
+                VStack(spacing: 24) {
+                    warningCard
+                    phraseSection
+                    if revealed {
+                        actionButtons
+                    }
+                    if !store.seedBackupAcknowledged {
+                        acknowledgeButton
+                    }
                 }
-                if !store.seedBackupAcknowledged {
-                    acknowledgeButton
-                }
+                .padding(20)
             }
-            .padding(20)
         }
         .background(Color.wispBackground.ignoresSafeArea())
-        .navigationTitle("Recovery Phrase")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar(.visible, for: .navigationBar)
+        .toolbar(.hidden, for: .navigationBar)
+    }
+
+    private var header: some View {
+        ZStack {
+            Text("Recovery Phrase")
+                .font(.subheadline.weight(.semibold))
+            HStack {
+                BackChevronButton { dismiss() }
+                Spacer()
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
     }
 
     // MARK: - Warning card

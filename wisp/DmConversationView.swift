@@ -7,6 +7,7 @@ struct DmConversationView: View {
     @State private var viewModel: DmConversationViewModel
     @State private var profiles: [String: ProfileData] = [:]
     @FocusState private var composerFocused: Bool
+    @Environment(\.dismiss) private var dismiss
 
     init(keypair: Keypair, participants: [String]) {
         self.keypair = keypair
@@ -16,13 +17,14 @@ struct DmConversationView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            header
+            Divider().overlay(Color.wispSurfaceVariant.opacity(0.5))
             messageList
             Divider().overlay(Color.wispSurfaceVariant.opacity(0.5))
             composer
         }
         .background(Color.wispBackground)
-        .navigationTitle(title)
-        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .navigationBar)
         .onAppear {
             viewModel.refresh()
             loadProfiles()
@@ -37,6 +39,21 @@ struct DmConversationView: View {
             return profiles[p]?.displayString ?? shortPubkey(p)
         }
         return "Group (\(participants.count))"
+    }
+
+    private var header: some View {
+        ZStack {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+                .padding(.horizontal, 60)
+            HStack {
+                BackChevronButton { dismiss() }
+                Spacer()
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
     }
 
     private var messageList: some View {

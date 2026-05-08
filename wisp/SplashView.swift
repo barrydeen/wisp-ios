@@ -5,14 +5,27 @@ private let avatarGap: CGFloat = 4
 
 struct SplashView: View {
     @State private var viewModel = SplashViewModel()
+    /// The bottom action buttons fade in after the splash has had a moment
+    /// to settle. Without the delay the layout visibly twitches while the
+    /// home indicator's safe-area inset stabilises during the initial
+    /// presentation, jumping the buttons before the background is in place.
+    @State private var actionsVisible = false
+    /// Captured *once* on first layout and held constant thereafter. Using
+    /// `UIScreen.main.bounds.height` directly is unreliable across split
+    /// screen / iPad multitasking, but freezing the first GeometryReader
+    /// reading gives a stable anchor that doesn't react to mid-transition
+    /// safe-area inset changes — the cause of the buttons jumping during
+    /// launch and sheet animations.
+    @State private var lockedHeight: CGFloat?
 
     var onSignUp: () -> Void = {}
     var onLogIn: () -> Void = {}
 
     var body: some View {
         GeometryReader { geo in
+            let height = lockedHeight ?? geo.size.height
             let cols = max(1, Int((geo.size.width + avatarGap) / (avatarSize + avatarGap)))
-            let maxVisibleRows = Int((geo.size.height + avatarGap) / (avatarSize + avatarGap)) + 1
+            let maxVisibleRows = Int((height + avatarGap) / (avatarSize + avatarGap)) + 1
             let maxVisibleCount = maxVisibleRows * cols
             let pics: [String] = {
                 if viewModel.profilePictures.isEmpty {
@@ -46,7 +59,15 @@ struct SplashView: View {
                     endPoint: UnitPoint(x: 0.5, y: 0.72)
                 )
 
-                // Logo, title, and action buttons pinned to bottom
+                // Logo, title, and action buttons pinned to bottom.
+                //
+                // The whole stack is held hidden until `actionsVisible`
+                // flips. The home indicator's safe-area inset settles
+                // during the first ~400ms of the launch / presentation
+                // animation, shifting whatever is anchored to the bottom
+                // edge as it does. Hiding everything (not just the
+                // buttons) means the user never sees the in-flight shift
+                // — only the final, stable layout.
                 VStack(spacing: 0) {
                     Spacer()
 
@@ -63,30 +84,48 @@ struct SplashView: View {
 
                     Spacer().frame(height: 32)
 
-                    Button(action: onSignUp) {
-                        Text("Create Account")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.wispPrimary)
-                    .controlSize(.large)
+                    VStack(spacing: 8) {
+                        Button(action: onSignUp) {
+                            Text("Create Account")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.wispPrimary)
+                        .controlSize(.large)
 
-                    Spacer().frame(height: 8)
-
-                    Button(action: onLogIn) {
-                        Text("Log In")
-                            .frame(maxWidth: .infinity)
+                        Button(action: onLogIn) {
+                            Text("Log In")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(.wispPrimary)
+                        .controlSize(.large)
                     }
-                    .buttonStyle(.bordered)
-                    .tint(.wispPrimary)
-                    .controlSize(.large)
                 }
                 .padding(.horizontal, 32)
                 .padding(.bottom, 48)
+                .opacity(actionsVisible ? 1 : 0)
+                .allowsHitTesting(actionsVisible)
+            }
+            // Lock the inner content to the height observed on first
+            // layout. After that point, safe-area inset transitions can no
+            // longer change the inner frame's bottom edge, so the
+            // bottom-anchored content stays put.
+            .frame(width: geo.size.width, height: height)
+            .onAppear {
+                if lockedHeight == nil { lockedHeight = geo.size.height }
             }
         }
         .background(Color.wispBackground)
         .ignoresSafeArea()
+        .task {
+            // Hold the bottom stack hidden until the screen has fully
+            // settled. 1.8s covers the launch animation, the home
+            // indicator inset stabilising, and any subsequent safe-area
+            // transitions — every shift happens behind a 0-opacity curtain.
+            try? await Task.sleep(for: .milliseconds(1800))
+            withAnimation(.easeOut(duration: 0.35)) { actionsVisible = true }
+        }
         .onDisappear { viewModel.cancel() }
     }
 }

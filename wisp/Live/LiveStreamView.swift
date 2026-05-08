@@ -12,6 +12,7 @@ struct LiveStreamView: View {
     @State private var profileRepo = ProfileRepository.shared
     @State private var showStreamZapSheet = false
     @State private var chatZapTarget: LiveChatMessage?
+    @Environment(\.dismiss) private var dismiss
 
     init(route: LiveStreamRoute, keypair: Keypair) {
         self.route = route
@@ -27,6 +28,8 @@ struct LiveStreamView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            header
+            Divider().overlay(Color.wispSurfaceVariant.opacity(0.5))
             VStack(spacing: 0) {
                 StreamPlayer(url: vm.activity?.streamingUrl)
                 StreamInfoBar(
@@ -56,8 +59,7 @@ struct LiveStreamView: View {
             }
             LiveChatInputBar(vm: vm)
         }
-        .navigationTitle(vm.activity?.title ?? "Live Stream")
-        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .navigationBar)
         .task { await vm.start() }
         .onDisappear {
             vm.cleanup()
@@ -87,6 +89,21 @@ struct LiveStreamView: View {
                 dismiss: { chatZapTarget = nil }
             )
         }
+    }
+
+    private var header: some View {
+        ZStack {
+            Text(vm.activity?.title ?? "Live Stream")
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+                .padding(.horizontal, 60)
+            HStack {
+                BackChevronButton { dismiss() }
+                Spacer()
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
     }
 }
 
