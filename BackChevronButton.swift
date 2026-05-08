@@ -15,9 +15,9 @@ struct BackChevronButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: "chevron.left")
-                .font(.system(size: 16, weight: .semibold))
+                .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(Color.primary)
-                .frame(width: 36, height: 36)
+                .frame(width: 44, height: 44)
                 .background(.regularMaterial, in: Circle())
                 .overlay(
                     Circle().stroke(Color.primary.opacity(0.06), lineWidth: 0.5)

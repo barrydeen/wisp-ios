@@ -6,6 +6,7 @@ struct ThreadView: View {
     @State private var showHiddenSpam: Bool = false
     @State private var showReplyCompose: Bool = false
     @State private var didScrollToFocal: Bool = false
+    @Environment(\.dismiss) private var dismiss
 
     /// The active tab's NavigationStack path. Mutated directly by smart-pop so a
     /// tap on an ancestor that's already in the back stack pops to it instead of
@@ -29,6 +30,8 @@ struct ThreadView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            header
+            Divider().overlay(Color.wispSurfaceVariant.opacity(0.5))
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 0) {
@@ -50,12 +53,6 @@ struct ThreadView: View {
                                 .id(focal.id)
                         } else if viewModel.isLoading {
                             loadingHeader
-                        }
-
-                        // Section header for replies — replaces the previous
-                        // "X replies" caption tucked under the focal card.
-                        if !viewModel.nestedReplies.isEmpty {
-                            repliesSectionHeader
                         }
 
                         // Replies — full descendant tree of the focal, rendered
@@ -88,8 +85,7 @@ struct ThreadView: View {
             composer
         }
         .background(Color.wispBackground)
-        .navigationTitle("Thread")
-        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .navigationBar)
         .task {
             // Register this thread on the side-channel chain so deeper
             // ThreadViews can smart-pop back to it. The contains-guard keeps
@@ -123,6 +119,19 @@ struct ThreadView: View {
     }
 
     // MARK: - Subviews
+
+    private var header: some View {
+        ZStack {
+            Text("Thread")
+                .font(.subheadline.weight(.semibold))
+            HStack {
+                BackChevronButton { dismiss() }
+                Spacer()
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+    }
 
     private var loadingHeader: some View {
         VStack(spacing: 12) {
@@ -237,26 +246,6 @@ struct ThreadView: View {
             Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
         }
         .background(Color.wispSurfaceVariant.opacity(0.25))
-    }
-
-    /// Section header above the replies list. Replaces the previous "X replies"
-    /// caption stuffed under the focal card so the boundary between focal and
-    /// replies reads as a real section break instead of orphan meta text.
-    private var repliesSectionHeader: some View {
-        HStack(spacing: 6) {
-            Text("REPLIES")
-                .font(.caption2.weight(.semibold))
-                .tracking(0.6)
-                .foregroundStyle(.secondary)
-            Text("·")
-                .foregroundStyle(.secondary)
-            Text("\(viewModel.nestedReplies.count)")
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.secondary)
-            Spacer()
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
     }
 
     /// Wrap a reply row with depth-based leading indentation and a thin

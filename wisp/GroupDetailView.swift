@@ -16,6 +16,65 @@ struct GroupDetailView: View {
     }
 
     var body: some View {
+        VStack(spacing: 0) {
+            header
+            Divider().overlay(Color.wispSurfaceVariant.opacity(0.5))
+            list
+        }
+        .background(Color.wispBackground)
+        .toolbar(.hidden, for: .navigationBar)
+        .task(id: room?.members) {
+            // Batch-fetch any missing profiles for the member + admin lists.
+            guard let listVM = GroupListViewModelRegistry.shared else { return }
+            let pubkeys = Set((room?.members ?? []) + (room?.admins ?? []))
+            await withTaskGroup(of: Void.self) { group in
+                for pk in pubkeys where ProfileRepository.shared.get(pk) == nil {
+                    group.addTask { await listVM.requestProfileIfNeeded(pk) }
+                }
+            }
+        }
+        .confirmationDialog("Leave \(room?.metadata?.name ?? "this group")?",
+                            isPresented: $showLeaveConfirm, titleVisibility: .visible) {
+            Button("Leave", role: .destructive) {
+                Task {
+                    await leaveGroup()
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+        .confirmationDialog("Delete this group?", isPresented: $showDeleteConfirm, titleVisibility: .visible) {
+            Button("Delete", role: .destructive) {
+                Task {
+                    await deleteGroup()
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    private var header: some View {
+        ZStack {
+            Text("Room info")
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+                .padding(.horizontal, 60)
+            HStack {
+                BackChevronButton { dismiss() }
+                Spacer()
+                ShareLink(item: Nip29.buildInviteLink(relayUrl: viewModel.relayUrl, groupId: viewModel.groupId)) {
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(Color.wispPrimary)
+                        .frame(width: 32, height: 32)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+    }
+
+    private var list: some View {
         List {
             Section {
                 HStack(spacing: 12) {
@@ -79,42 +138,6 @@ struct GroupDetailView: View {
             if let s = statusMessage {
                 Section { Text(s).font(.caption).foregroundStyle(.secondary) }
             }
-        }
-        .navigationTitle("Room info")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                ShareLink(item: Nip29.buildInviteLink(relayUrl: viewModel.relayUrl, groupId: viewModel.groupId)) {
-                    Image(systemName: "square.and.arrow.up")
-                }
-            }
-        }
-        .task(id: room?.members) {
-            // Batch-fetch any missing profiles for the member + admin lists.
-            guard let listVM = GroupListViewModelRegistry.shared else { return }
-            let pubkeys = Set((room?.members ?? []) + (room?.admins ?? []))
-            await withTaskGroup(of: Void.self) { group in
-                for pk in pubkeys where ProfileRepository.shared.get(pk) == nil {
-                    group.addTask { await listVM.requestProfileIfNeeded(pk) }
-                }
-            }
-        }
-        .confirmationDialog("Leave \(room?.metadata?.name ?? "this group")?",
-                            isPresented: $showLeaveConfirm, titleVisibility: .visible) {
-            Button("Leave", role: .destructive) {
-                Task {
-                    await leaveGroup()
-                }
-            }
-            Button("Cancel", role: .cancel) {}
-        }
-        .confirmationDialog("Delete this group?", isPresented: $showDeleteConfirm, titleVisibility: .visible) {
-            Button("Delete", role: .destructive) {
-                Task {
-                    await deleteGroup()
-                }
-            }
-            Button("Cancel", role: .cancel) {}
         }
     }
 

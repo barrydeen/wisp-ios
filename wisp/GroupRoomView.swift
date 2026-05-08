@@ -3,9 +3,12 @@ import SwiftUI
 struct GroupRoomView: View {
     @Bindable var viewModel: GroupRoomViewModel
     @State private var showDetail = false
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         VStack(spacing: 0) {
+            header
+            Divider().overlay(Color.wispSurfaceVariant.opacity(0.5))
             messageList
 
             if let reply = viewModel.replyTarget {
@@ -22,21 +25,35 @@ struct GroupRoomView: View {
             composer
         }
         .background(Color.wispBackground)
-        .navigationTitle(viewModel.room?.metadata?.name ?? viewModel.groupId)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button { showDetail = true } label: {
-                    Image(systemName: "info.circle")
-                }
-            }
-        }
+        .toolbar(.hidden, for: .navigationBar)
         .navigationDestination(isPresented: $showDetail) {
             GroupDetailView(viewModel: viewModel)
         }
         .onAppear {
             viewModel.repository.markRead(relayUrl: viewModel.relayUrl, groupId: viewModel.groupId)
         }
+    }
+
+    private var header: some View {
+        ZStack {
+            Text(viewModel.room?.metadata?.name ?? viewModel.groupId)
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+                .padding(.horizontal, 60)
+            HStack {
+                BackChevronButton { dismiss() }
+                Spacer()
+                Button { showDetail = true } label: {
+                    Image(systemName: "info.circle")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(Color.wispPrimary)
+                        .frame(width: 32, height: 32)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
     }
 
     private var messageList: some View {
