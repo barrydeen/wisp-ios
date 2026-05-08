@@ -36,6 +36,11 @@ final class FeedViewModel {
     var userProfile: ProfileData?
     var currentKind: FeedKind = .follows
     var relayFeedStatus: RelayFeedStatus = .idle
+    /// Live events buffered while the user is scrolled away from the top.
+    /// Drives the "N new posts" pill — counted live so the pill grows as
+    /// new events arrive. Stays at zero while the feed is parked at top
+    /// (events flush straight into `events` so the user always sees them).
+    private(set) var pendingNewCount: Int = 0
 
     @ObservationIgnored private var seenIds = Set<String>()
     @ObservationIgnored private var metricsTask: Task<Void, Never>?
@@ -53,6 +58,11 @@ final class FeedViewModel {
     @ObservationIgnored private var pendingInserts: [NostrEvent] = []
     @ObservationIgnored private var isFlushScheduled = false
     @ObservationIgnored private static let liveFlushDelayMs: UInt64 = 60
+    /// When true, debounced flushes promote the buffer to `pendingNewCount`
+    /// instead of merging into `events`, so the user's scroll position
+    /// doesn't shift under them. Tapping the new-posts pill (or scrolling
+    /// back to the top) clears the hold and applies the buffer in one merge.
+    @ObservationIgnored private var holdNewPosts: Bool = false
     @ObservationIgnored private var followsCache: Set<String> = []
     @ObservationIgnored private let eventStore = EventStore.shared
     @ObservationIgnored private let profileRepo = ProfileRepository.shared
@@ -340,14 +350,34 @@ final class FeedViewModel {
     /// Drain the live-event buffer in a single sorted-merge pass and republish
     /// `events` once. Persistence + referenced-profile fetches run as
     /// fire-and-forget tasks against the merged batch.
+    ///
+    /// When `holdNewPosts` is set, the buffer is left intact and only the
+    /// observable `pendingNewCount` is updated — the new-posts pill in the
+    /// view layer reads this to decide whether to show. Persistence + profile
+    /// hydration still run against the held batch so the events are warm in
+    /// the cache and their authors resolve before the user opts to apply.
     private func flushPendingInserts() {
         isFlushScheduled = false
+        guard !pendingInserts.isEmpty else { return }
+
+        if holdNewPosts {
+            pendingNewCount = pendingInserts.count
+            // Side-effects we still want even while the buffer is held:
+            // persisting the events and resolving any unknown profiles so
+            // that when the user finally taps the pill, the merge into
+            // `events` is fully populated.
+            Task { await EventPersistQueue.shared.enqueue(pendingInserts) }
+            MissingProfileWatcher.shared.observe(pendingInserts)
+            if relayFeedStatus != .streaming { relayFeedStatus = .streaming }
+            return
+        }
+
         let batch = pendingInserts
         pendingInserts.removeAll(keepingCapacity: true)
-        guard !batch.isEmpty else { return }
 
         let sortedBatch = batch.sorted { $0.createdAt > $1.createdAt }
         events = Self.consolidateReposts(Self.mergeSortedDesc(events, sortedBatch))
+        pendingNewCount = 0
 
         if relayFeedStatus != .streaming {
             relayFeedStatus = .streaming
@@ -360,6 +390,53 @@ final class FeedViewModel {
         // pubkeys, and yields back through `updates` so our `profiles` dict
         // hydrates as profiles land. Replaces the per-VM batched fetcher.
         MissingProfileWatcher.shared.observe(batch)
+    }
+
+    /// Toggle the hold-new-posts flag from the view layer. Set true while
+    /// the user is scrolled away from the top so live events accumulate in
+    /// the pill instead of shoving the visible rows downward; set false
+    /// once the user is back at the top, which immediately drains anything
+    /// the buffer accumulated.
+    func setHoldNewPosts(_ hold: Bool) {
+        guard hold != holdNewPosts else { return }
+        holdNewPosts = hold
+        if !hold {
+            // Apply anything that accumulated while held. Re-uses the same
+            // flush pathway so persistence / profile hydration paths stay
+            // identical between the held-then-applied and at-top-merge
+            // cases.
+            flushPendingInserts()
+        }
+    }
+
+    /// Apply the held buffer immediately. Called when the user taps the
+    /// "N new posts" pill — pairs with a view-side scroll-to-top so the
+    /// freshly merged rows land in view. Returning the count lets the
+    /// caller decide whether to play the scroll animation.
+    @discardableResult
+    func applyPendingNewPosts() -> Int {
+        let count = pendingInserts.count
+        guard count > 0 else { return 0 }
+        holdNewPosts = false
+        flushPendingInserts()
+        return count
+    }
+
+    /// Drain the held buffer without scrolling. The new posts merge silently
+    /// into `events` — they'll be there next time the user scrolls up — and
+    /// the pill goes away. Used for the pill's dismiss button.
+    func dismissPendingNewPosts() {
+        guard !pendingInserts.isEmpty else {
+            pendingNewCount = 0
+            return
+        }
+        let wasHolding = holdNewPosts
+        holdNewPosts = false
+        flushPendingInserts()
+        // Restore the hold so any *future* live events stay buffered
+        // (the user is presumably still scrolled away). The view will
+        // clear the hold when they reach the top.
+        holdNewPosts = wasHolding
     }
 
     /// Merge two arrays already sorted by `createdAt` desc into a single
