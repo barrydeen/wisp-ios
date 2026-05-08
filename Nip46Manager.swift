@@ -159,10 +159,17 @@ final class Nip46Manager {
     /// Default relay set for nostrconnect URIs. Order matters — `relay.primal.net`
     /// is placed first because Primal iOS subscribes to whichever relay appears
     /// first in the URI for the inbound `connect` request, and putting it later
-    /// makes the handshake slower or hang. Compatible signers we test against
-    /// today: Clave, Primal iOS, Amber.
+    /// makes the handshake slower or hang. `relay.powr.build` is included because
+    /// Clave's notification proxy maintains an always-on subscription to it
+    /// ("PRIMARY" path) — listing it in the URI puts Clave's connect-ack publish
+    /// on a hot socket and bypasses per-pair secondary-pool setup, which is
+    /// otherwise the dominant source of nostrconnect handshake flakiness against
+    /// Clave. Other signers ignore relays they don't recognize, so this is a
+    /// strict reliability win. Compatible signers we test against today: Clave,
+    /// Primal iOS, Amber.
     static let defaultNostrConnectRelays: [String] = [
         "wss://relay.primal.net",
+        "wss://relay.powr.build",
         "wss://relay.damus.io",
         "wss://nos.lol"
     ]
