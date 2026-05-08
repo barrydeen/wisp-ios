@@ -155,6 +155,78 @@ nonisolated enum Nip17 {
         return wrap
     }
 
+    // MARK: - Build / send via Signer
+
+    /// Async variant of `createGiftWrap` that routes the seal's encryption + signing through
+    /// `Signer`, so remote-signer (NIP-46) accounts can send DMs. The gift wrap layer keeps
+    /// using a freshly generated ephemeral key per NIP-59 spec — no Signer needed for that
+    /// step. For local accounts the result is byte-equivalent to `createGiftWrap`.
+    static func createGiftWrapWithSigner(keypair: Keypair,
+                                         recipientPubkey: String,
+                                         message: String,
+                                         rumorKind: Int = Kind.chatMessage,
+                                         extraRumorTags: [[String]] = [],
+                                         rumorCreatedAt: Int,
+                                         powTargetBits: Int? = nil,
+                                         onPowProgress: ((Int) -> Void)? = nil) async throws -> NostrEvent {
+        // 1. Build rumor.
+        let rumor = buildRumor(senderPubkey: keypair.pubkey,
+                               recipientPubkey: recipientPubkey,
+                               content: message,
+                               kind: rumorKind,
+                               extraTags: extraRumorTags,
+                               createdAt: rumorCreatedAt)
+
+        // 2. Seal: encrypt + sign via Signer (dispatches to NIP-46 for remote accounts,
+        //    in-process Schnorr/NIP-44 for local).
+        let sealContent = try await Signer.nip44Encrypt(
+            keypair: keypair,
+            peerPubkey: recipientPubkey,
+            plaintext: rumorJSON(rumor)
+        )
+        let sealCreatedAt = randomizeTimestamp(Int(Date().timeIntervalSince1970))
+        let seal = try await Signer.sign(
+            keypair: keypair,
+            kind: Kind.seal,
+            tags: [],
+            content: sealContent,
+            createdAt: sealCreatedAt
+        )
+
+        // 3. Gift wrap with a fresh ephemeral key (NIP-59 spec — never the user's identity
+        //    key, even when the user has a remote signer).
+        let ephemeralPriv = Schnorr.randomPrivkey()
+        let ephemeralPub = try Schnorr.xonlyPubkey(privkey32: ephemeralPriv)
+        let ephemeralPubHex = Hex.encode(ephemeralPub)
+        let wrapConvKey = try Nip44.getConversationKey(privkey32: ephemeralPriv, peerXonlyPubkey32: hexToData(recipientPubkey))
+        let wrapContent = try Nip44.encrypt(plaintext: seal.toJSON(), conversationKey: wrapConvKey)
+        let wrapCreatedAt = randomizeTimestamp(Int(Date().timeIntervalSince1970))
+        var wrapTags: [[String]] = [["p", recipientPubkey]]
+        var wrapFinalCreatedAt = wrapCreatedAt
+        if let bits = powTargetBits, bits > 0 {
+            guard let mined = Nip13.mine(
+                pubkey: ephemeralPubHex,
+                kind: Kind.giftWrap,
+                createdAt: wrapCreatedAt,
+                tags: wrapTags,
+                content: wrapContent,
+                targetBits: bits,
+                onProgress: onPowProgress
+            ) else {
+                throw Error.decryptFailed
+            }
+            wrapTags = mined.tags
+            wrapFinalCreatedAt = mined.createdAt
+        }
+        let wrap = try NostrEvent.sign(privkey32: ephemeralPriv,
+                                       pubkey: ephemeralPubHex,
+                                       kind: Kind.giftWrap,
+                                       createdAt: wrapFinalCreatedAt,
+                                       tags: wrapTags,
+                                       content: wrapContent)
+        return wrap
+    }
+
     // MARK: - Receive / unwrap
 
     /// Unwrap an incoming kind-1059 gift wrap addressed to `recipientPrivkey32`'s pubkey.
@@ -176,6 +248,41 @@ nonisolated enum Nip17 {
         let rumorJSON: String
         do { rumorJSON = try Nip44.decrypt(payload: seal.content, conversationKey: sealConvKey) }
         catch { throw Error.decryptFailed }
+
+        guard let rumor = parseRumor(rumorJSON) else { throw Error.parseFailed }
+
+        // Anti-impersonation check (NIP-59): seal author must match the rumor author.
+        guard rumor.pubkey == seal.pubkey else { throw Error.impersonation }
+        return rumor
+    }
+
+    /// Async variant of `unwrapGiftWrap` that routes both NIP-44 decrypts through `Signer`,
+    /// so remote-signer (NIP-46) accounts can read DMs. Two RPC round-trips per gift wrap
+    /// for remote accounts (one to peel each layer); local accounts are equivalent to the
+    /// sync version with one extra `await`.
+    static func unwrapGiftWrapWithSigner(keypair: Keypair, giftWrap: NostrEvent) async throws -> Rumor {
+        guard giftWrap.kind == Kind.giftWrap else { throw Error.wrongKind }
+
+        // Layer 1: decrypt the gift wrap. Peer is the wrap's ephemeral pubkey.
+        let sealJSON: String
+        do {
+            sealJSON = try await Signer.nip44Decrypt(
+                keypair: keypair,
+                peerPubkey: giftWrap.pubkey,
+                payload: giftWrap.content
+            )
+        } catch { throw Error.decryptFailed }
+
+        // Layer 2: parse the seal, decrypt with the seal's pubkey (real sender).
+        guard let seal = NostrEvent.fromJSON(sealJSON), seal.kind == Kind.seal else { throw Error.parseFailed }
+        let rumorJSON: String
+        do {
+            rumorJSON = try await Signer.nip44Decrypt(
+                keypair: keypair,
+                peerPubkey: seal.pubkey,
+                payload: seal.content
+            )
+        } catch { throw Error.decryptFailed }
 
         guard let rumor = parseRumor(rumorJSON) else { throw Error.parseFailed }
 

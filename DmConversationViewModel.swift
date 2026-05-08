@@ -96,11 +96,16 @@ final class DmConversationViewModel {
                     isMiningPow = true
                     miningAttempts = 0
                 }
+                // Route the seal's encrypt + sign through `Signer` so remote (NIP-46)
+                // accounts dispatch to their signer. The gift wrap's ephemeral key path
+                // and PoW mining still run inside the detached task to keep the main
+                // actor responsive; Swift hops to MainActor for the Signer calls and
+                // back automatically.
+                let kp = keypair
                 let result: Result<NostrEvent, Swift.Error> = await Task.detached(priority: .userInitiated) {
                     do {
-                        let event = try Nip17.createGiftWrap(
-                            senderPrivkey32: senderPriv,
-                            senderPubkey: senderPub,
+                        let event = try await Nip17.createGiftWrapWithSigner(
+                            keypair: kp,
                             recipientPubkey: wrapRecipient,
                             message: text,
                             rumorKind: Nip17.Kind.chatMessage,
