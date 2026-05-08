@@ -22,7 +22,11 @@ struct LoginView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 20) {
-                Spacer()
+                // Bounded top spacer — keeps content anchored to a stable
+                // top offset. A flexible Spacer() here would redistribute
+                // every time the home indicator's safe-area inset changes
+                // during sheet presentation, jumping every form element.
+                Spacer().frame(maxHeight: 60)
 
                 Image("WispLogo")
                     .resizable()
@@ -105,7 +109,9 @@ struct LoginView: View {
                 Spacer()
             }
             .padding(.horizontal, 32)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color.wispBackground)
+            .ignoresSafeArea(.keyboard, edges: .bottom)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -120,6 +126,11 @@ struct LoginView: View {
             }
         }
         .presentationDetents([.large])
+        // Paint the sheet's container background so the wisp color is in
+        // place from frame one — without this the sheet renders the system
+        // default behind the still-laying-out VStack and the buttons appear
+        // to jump as the background settles in around them.
+        .presentationBackground(Color.wispBackground)
     }
 
     /// Avatar + name pulled from the pubkey the user is typing. Renders a
