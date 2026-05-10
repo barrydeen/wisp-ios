@@ -69,9 +69,6 @@ struct ThreadView: View {
                         ForEach(viewModel.nestedReplies) { item in
                             nestedReplyRow(item)
                                 .id(item.row.id)
-                            Divider()
-                                .overlay(Color.wispSurfaceVariant.opacity(0.3))
-                                .padding(.leading, indentationWidth(for: item.depth))
                         }
 
                         if !viewModel.hiddenSpamReplies.isEmpty {
@@ -255,33 +252,33 @@ struct ThreadView: View {
         .background(Color.wispSurfaceVariant.opacity(0.25))
     }
 
-    /// Wrap a reply row with depth-based leading indentation and a thin
-    /// vertical guide so the parent-child relationship reads at a glance
-    /// without having to count avatar offsets. Indent caps at depth 5 to
-    /// keep deep chains from sliding off the right edge.
-    ///
-    /// TODO (future UX): replace the plain `Rectangle` connector with a
-    /// rounded path that curves from the parent avatar into the child — similar
-    /// to the arc connector used by Threads/Bluesky. Requires knowing the
-    /// avatar Y-offset of both rows, so it likely needs a `GeometryReader` or
-    /// preference-key approach to capture anchor frames.
+    /// Wrap a reply row with depth-based leading indentation. The connector
+    /// shape draws both the gutter vertical AND the bottom divider as one
+    /// continuous stroke so their line weights match exactly, with a rounded
+    /// inside fillet at the bottom-left where they meet. Top-left stays a
+    /// sharp continuation of the vertical above.
     @ViewBuilder
     private func nestedReplyRow(_ item: NestedReplyRow) -> some View {
         ZStack(alignment: .leading) {
-            if item.depth > 0 {
-                Rectangle()
-                    .fill(Color.wispSurfaceVariant.opacity(0.6))
-                    .frame(width: 1.5)
-                    .padding(.leading, indentationWidth(for: item.depth) - 8)
-                    .padding(.vertical, 6)
-            }
+            ReplyConnectorShape(
+                cornerRadius: 8,
+                showVertical: item.depth > 0
+            )
+            .stroke(
+                Color.wispSurfaceVariant.opacity(0.5),
+                style: StrokeStyle(lineWidth: 1, lineCap: .butt, lineJoin: .round)
+            )
+            .padding(.leading, item.depth > 0 ? indentationWidth(for: item.depth) - 8 : indentationWidth(for: item.depth))
+
             replyRow(item.row)
                 .padding(.leading, indentationWidth(for: item.depth))
         }
     }
 
+    /// Per-level indent. Smaller step + cap of 5 keeps deep chains readable
+    /// on phones without compressing the post body.
     private func indentationWidth(for depth: Int) -> CGFloat {
-        CGFloat(min(depth, 5)) * 14
+        CGFloat(min(depth, 5)) * 12
     }
 
     @ViewBuilder
@@ -463,5 +460,38 @@ struct ThreadView: View {
             .padding(.vertical, 8)
         }
         .background(Color.wispBackground)
+    }
+}
+
+/// Connector + bottom divider for a nested reply row, drawn as one
+/// continuous stroke so the line weights match. Top-left is sharp
+/// (the vertical continues from the previous row); bottom-left is
+/// a rounded inside fillet where the vertical meets the horizontal.
+/// At the root depth, only the horizontal divider is drawn.
+private struct ReplyConnectorShape: Shape {
+    var cornerRadius: CGFloat = 8
+    var showVertical: Bool = true
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        if showVertical {
+            // Continuous vertical down the gutter, full row height. Adjacent
+            // rows' verticals butt together for a seamless chain.
+            path.move(to: CGPoint(x: 1, y: 0))
+            path.addLine(to: CGPoint(x: 1, y: rect.height - cornerRadius))
+            // Rounded inside fillet from vertical → horizontal.
+            path.addQuadCurve(
+                to: CGPoint(x: 1 + cornerRadius, y: rect.height),
+                control: CGPoint(x: 1, y: rect.height)
+            )
+            // Horizontal across to the right edge.
+            path.addLine(to: CGPoint(x: rect.width, y: rect.height))
+        } else {
+            // Just the horizontal divider — used at the root depth where
+            // there's no parent column to connect to.
+            path.move(to: CGPoint(x: 0, y: rect.height))
+            path.addLine(to: CGPoint(x: rect.width, y: rect.height))
+        }
+        return path
     }
 }
