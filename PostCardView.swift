@@ -34,6 +34,10 @@ struct PostCardView: View {
     /// count so the bubble matches the visible REPLIES list — without it
     /// the engagement repo / network total would still show blocked authors.
     var forcedReplyCount: Int? = nil
+    /// When false, the "Replying to @user" row is suppressed even if the event
+    /// is a reply. Used for stacked nested replies in ThreadView where the
+    /// visual indentation already communicates the reply relationship.
+    var showReplyContext: Bool = true
     var onProfileTap: ((String) -> Void)? = nil
     var onNoteTap: ((String) -> Void)? = nil
     var onHashtagTap: ((String) -> Void)? = nil
@@ -185,6 +189,10 @@ struct PostCardView: View {
         VStack(alignment: .leading, spacing: 0) {
             if resolved.isRepost {
                 repostBanner
+            }
+
+            if showReplyContext {
+                replyingToRow(for: displayEvent)
             }
 
             // Header row — avatar + name + nip05 + badges/time. Indented to
@@ -531,6 +539,45 @@ struct PostCardView: View {
     /// (populated by `EngagementRepository`'s engagement subscription
     /// against the inner kind-1 id) and stacks up to 5 overlapping
     /// avatars with a count-aware label.
+    @ViewBuilder
+    private func replyingToRow(for displayEvent: NostrEvent) -> some View {
+        if !ancestorCompact,
+           Nip10.replyTarget(of: displayEvent) != nil,
+           let label = replyingToLabel(for: displayEvent) {
+            HStack(spacing: 4) {
+                Image(systemName: "arrowshape.turn.up.left.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                Text(label)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 8)
+            .padding(.bottom, 2)
+        }
+    }
+
+    private func replyingToLabel(for displayEvent: NostrEvent) -> String? {
+        var seen = Set<String>()
+        let unique = displayEvent.tags
+            .filter { $0.count >= 2 && $0[0] == "p" && $0[1] != displayEvent.pubkey }
+            .map { $0[1] }
+            .filter { seen.insert($0).inserted }
+        guard !unique.isEmpty else { return nil }
+        let shown = unique.prefix(2).map { pk in
+            profiles[pk]?.displayString
+                ?? ProfileRepository.shared.get(pk)?.displayString
+                ?? npubShort(pk)
+        }
+        let remainder = unique.count - shown.count
+        if remainder > 0 {
+            return "Replying to \(shown.joined(separator: ", ")) and \(remainder) other\(remainder == 1 ? "" : "s")"
+        }
+        return "Replying to \(shown.joined(separator: ", "))"
+    }
+
     private var repostBanner: some View {
         // Seed the wrapper's pubkey so the row paints with at least one
         // avatar before the engagement query returns. The wrapper itself

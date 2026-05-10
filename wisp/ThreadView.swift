@@ -38,6 +38,13 @@ struct ThreadView: View {
                         // Ancestors — chain from root → focal-1, each tappable to push
                         // a new ThreadView focused on that ancestor. Plain divider
                         // separation between rows; no connector line.
+                        if viewModel.isSearchingAncestors {
+                            searchingAncestorRow
+                            Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
+                        } else if let missingId = viewModel.missingAncestorId {
+                            missingAncestorPlaceholder(eventId: missingId)
+                            Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
+                        }
                         if !viewModel.ancestors.isEmpty {
                             ForEach(viewModel.ancestors) { row in
                                 ancestorRow(row)
@@ -252,6 +259,12 @@ struct ThreadView: View {
     /// vertical guide so the parent-child relationship reads at a glance
     /// without having to count avatar offsets. Indent caps at depth 5 to
     /// keep deep chains from sliding off the right edge.
+    ///
+    /// TODO (future UX): replace the plain `Rectangle` connector with a
+    /// rounded path that curves from the parent avatar into the child — similar
+    /// to the arc connector used by Threads/Bluesky. Requires knowing the
+    /// avatar Y-offset of both rows, so it likely needs a `GeometryReader` or
+    /// preference-key approach to capture anchor frames.
     @ViewBuilder
     private func nestedReplyRow(_ item: NestedReplyRow) -> some View {
         ZStack(alignment: .leading) {
@@ -290,6 +303,7 @@ struct ThreadView: View {
                 profile: viewModel.profiles[row.event.pubkey],
                 profiles: viewModel.profiles,
                 engagement: engagement(for: row.event.id),
+                showReplyContext: false,
                 onProfileTap: { pk in path.append(ProfileRoute(pubkey: pk)) },
                 // Tap on an embedded quoted note pushes that note as
                 // its own focal. SwiftUI's nested-Button hit-testing
@@ -355,6 +369,50 @@ struct ThreadView: View {
                 .font(.subheadline)
                 .foregroundStyle(.tertiary)
             Spacer()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var searchingAncestorRow: some View {
+        HStack(spacing: 10) {
+            ProgressView()
+                .tint(.secondary)
+                .scaleEffect(0.8)
+            Text("Looking for parent note…")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func missingAncestorPlaceholder(eventId: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.bubble")
+                .font(.system(size: 15))
+                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Note not found")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Text("The parent note could not be loaded")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+            Spacer()
+            Button {
+                viewModel.retryMissingAncestor()
+            } label: {
+                Image(systemName: "arrow.clockwise")
+                    .font(.subheadline)
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(.secondary)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)

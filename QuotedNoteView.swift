@@ -19,6 +19,10 @@ final class QuotedNoteCache {
         cache[event.id] = event
     }
 
+    func evict(eventId: String) {
+        cache.removeValue(forKey: eventId)
+    }
+
     func fetch(eventId: String, relayHints: [String]) async -> NostrEvent? {
         if let cached = cache[eventId] { return cached }
         if let existing = inflight[eventId] { return await existing.value }
@@ -26,14 +30,16 @@ final class QuotedNoteCache {
         let task = Task<NostrEvent?, Never> { [weak self] in
             guard let self else { return nil }
             let relays = self.relayList(hints: relayHints)
-            let filter = NostrFilter(kinds: nil, authors: nil, limit: 1)
-            // Pass id-filter via raw json — NostrFilter doesn't expose ids; query and filter client-side
-            let events = await RelayPool.query(
-                relays: relays,
-                filter: filterByIds(eventId: eventId),
-                timeout: 6
-            )
-            return events.first(where: { $0.id == eventId })
+            let filter = self.filterByIds(eventId: eventId)
+
+            let first = await RelayPool.query(relays: relays, filter: filter, timeout: 6)
+            if let found = first.first(where: { $0.id == eventId }) { return found }
+
+            // One automatic retry to handle relay race conditions or slow relays.
+            try? await Task.sleep(for: .milliseconds(1500))
+            if Task.isCancelled { return nil }
+            let second = await RelayPool.query(relays: relays, filter: filter, timeout: 6)
+            return second.first(where: { $0.id == eventId })
         }
         inflight[eventId] = task
         let result = await task.value
@@ -73,6 +79,7 @@ struct QuotedNoteView: View {
     @State private var loaded = false
     @State private var profile: ProfileData?
     @State private var contentExpanded = false
+    @State private var retryCount: Int = 0
 
     /// Mirror PostCardView's long-post threshold so a quoted long note collapses
     /// to the same height with a "Show more" toggle instead of pushing the
@@ -90,7 +97,7 @@ struct QuotedNoteView: View {
                 loadingCard
             }
         }
-        .task(id: eventId) { await load() }
+        .task(id: "\(eventId)-\(retryCount)") { await load() }
     }
 
     private var loadingCard: some View {
@@ -118,6 +125,17 @@ struct QuotedNoteView: View {
             Text("Quoted note not found")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            Spacer()
+            Button {
+                QuotedNoteCache.shared.evict(eventId: eventId)
+                loaded = false
+                retryCount += 1
+            } label: {
+                Image(systemName: "arrow.clockwise")
+                    .font(.caption)
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(.secondary)
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
