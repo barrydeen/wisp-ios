@@ -57,6 +57,31 @@ final class Nip05Verifier: ObservableObject {
 
     // MARK: - Network
 
+    /// Resolve a NIP-05 identifier to a hex pubkey without requiring a known pubkey.
+    /// Returns `nil` on network error, malformed identifier, or name not found.
+    static func lookup(identifier: String) async -> String? {
+        let parts = identifier.split(separator: "@", maxSplits: 1, omittingEmptySubsequences: false)
+        guard parts.count == 2,
+              let local = parts.first.map(String.init),
+              let domain = parts.last.map(String.init),
+              !local.isEmpty, !domain.isEmpty else { return nil }
+        guard let encodedLocal = local.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let url = URL(string: "https://\(domain)/.well-known/nostr.json?name=\(encodedLocal)") else { return nil }
+
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 6
+        request.setValue("Mozilla/5.0 (compatible; Wisp/1.0)", forHTTPHeaderField: "User-Agent")
+
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              (response as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) != false,
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let names = obj["names"] as? [String: Any]
+        else { return nil }
+
+        if let exact = names[local] as? String { return exact.lowercased() }
+        return (names.first { $0.key.caseInsensitiveCompare(local) == .orderedSame }?.value as? String)?.lowercased()
+    }
+
     private static func verify(identifier: String, pubkeyHex: String) async -> Nip05Status {
         let parts = identifier.split(separator: "@", maxSplits: 1, omittingEmptySubsequences: false)
         guard parts.count == 2,
