@@ -88,27 +88,32 @@ final class ComposeViewModel {
     init(keypair: Keypair, mode: ComposeMode = .new) {
         self.keypair = keypair
         self.mode = mode
-        switch mode {
-        case .new:
-            loadLocalAutosave()
-        default:
-            // .quote: the quote URI is spliced at publish time so it stays out of the editor.
-            // .reply: parent context lives in tags, not body content.
-            break
-        }
+        // Reply / quote drafts are keyed per-parent so closing a half-typed reply
+        // and reopening the same parent restores the body. The quote URI is still
+        // spliced at publish time, and reply context still lives in tags — only
+        // the editor body is restored.
+        loadLocalAutosave()
     }
 
     // MARK: - Local autosave (instant restore on reopen)
 
-    /// Per-pubkey, per-mode UserDefaults bucket. Only `.new` composers autosave —
-    /// reply/quote contexts depend on parent events that aren't trivially restored.
-    private var autosaveKey: String { "compose_autosave_new_\(keypair.pubkey)" }
+    /// Per-pubkey, per-mode UserDefaults bucket. Reply and quote drafts are keyed
+    /// by the parent / quoted event id so each conversation has its own slot.
+    private var autosaveKey: String {
+        switch mode {
+        case .new:
+            return "compose_autosave_new_\(keypair.pubkey)"
+        case .reply(let parent, _):
+            return "compose_autosave_reply_\(keypair.pubkey)_\(parent.id)"
+        case .quote(let event):
+            return "compose_autosave_quote_\(keypair.pubkey)_\(event.id)"
+        }
+    }
 
     func writeLocalAutosave() {
-        guard case .new = mode else { return }
         // Don't autosave when editing a saved draft — the draft is the source of truth
         // and writes go through `saveDraft()`. Otherwise opening a draft would clobber
-        // the .new composer's autosave with the draft's content.
+        // the composer's autosave with the draft's content.
         guard currentDraftId == nil else { return }
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
