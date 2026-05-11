@@ -37,6 +37,15 @@ struct PostCardView: View {
     var onProfileTap: ((String) -> Void)? = nil
     var onNoteTap: ((String) -> Void)? = nil
     var onHashtagTap: ((String) -> Void)? = nil
+    /// Optional escape hatch for the reaction-picker `+` button. When set, the
+    /// parent view is responsible for presenting `EmojiLibrarySheet` from a
+    /// stable anchor and invoking the supplied callback with the user's pick.
+    /// Lets surfaces that render `PostCardView` inside a `LazyVStack` (e.g.
+    /// `ThreadView`) host the sheet outside the lazy row — anchoring it to
+    /// the card itself causes the keyboard-driven lazy-row recycle to tear
+    /// down and re-present the sheet in a loop. Surfaces that don't supply
+    /// this fall back to PostCardView's own `.sheet(item:)` route.
+    var onOpenEmojiLibrary: ((@escaping (PickedEmoji) -> Void) -> Void)? = nil
     @Environment(WalletStore.self) private var walletStore: WalletStore?
     @Environment(AppSettings.self) private var settings
     @State private var expanded = false
@@ -893,7 +902,11 @@ struct PostCardView: View {
                 },
                 onPlus: {
                     showReactionPicker = false
-                    activeSheet = .emojiLibrary
+                    if let route = onOpenEmojiLibrary {
+                        route { picked in sendReaction(picked) }
+                    } else {
+                        activeSheet = .emojiLibrary
+                    }
                 }
             )
             .presentationCompactAdaptation(.popover)

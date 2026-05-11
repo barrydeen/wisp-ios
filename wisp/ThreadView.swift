@@ -6,6 +6,13 @@ struct ThreadView: View {
     @State private var showHiddenSpam: Bool = false
     @State private var showReplyCompose: Bool = false
     @State private var didScrollToFocal: Bool = false
+    /// Hosts `EmojiLibrarySheet` at the ThreadView level (outside the
+    /// `LazyVStack`) so its presentation isn't recycled when the keyboard
+    /// shrinks the visible area and the focal row gets re-windowed by the
+    /// lazy stack. The callback is captured at `+`-tap time so any row's
+    /// reaction picker can route through this single sheet anchor.
+    @State private var showEmojiLibrary: Bool = false
+    @State private var emojiPickCallback: ((PickedEmoji) -> Void)?
     @Environment(\.dismiss) private var dismiss
 
     /// The active tab's NavigationStack path. Mutated directly by smart-pop so a
@@ -116,6 +123,18 @@ struct ThreadView: View {
                 )
             }
         }
+        .sheet(isPresented: $showEmojiLibrary) {
+            EmojiLibrarySheet(mode: .pickForReaction { picked in
+                emojiPickCallback?(picked)
+                emojiPickCallback = nil
+                showEmojiLibrary = false
+            })
+        }
+    }
+
+    private func openEmojiLibrary(callback: @escaping (PickedEmoji) -> Void) {
+        emojiPickCallback = callback
+        showEmojiLibrary = true
     }
 
     // MARK: - Subviews
@@ -212,7 +231,8 @@ struct ThreadView: View {
                 ancestorCompact: true,
                 onProfileTap: { _ in },
                 onNoteTap: { _ in },
-                onHashtagTap: { _ in }
+                onHashtagTap: { _ in },
+                onOpenEmojiLibrary: openEmojiLibrary
             )
             .contentShape(Rectangle())
             .onTapGesture {
@@ -240,7 +260,8 @@ struct ThreadView: View {
                     onNoteTap: { quotedId in
                         navigateToThread(eventId: quotedId, authorPubkey: row.event.pubkey)
                     },
-                    onHashtagTap: { tag in path.append(HashtagFeedRoute(tag: tag)) }
+                    onHashtagTap: { tag in path.append(HashtagFeedRoute(tag: tag)) },
+                    onOpenEmojiLibrary: openEmojiLibrary
                 )
             }
             Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
@@ -298,7 +319,8 @@ struct ThreadView: View {
                 onNoteTap: { quotedId in
                     navigateToThread(eventId: quotedId, authorPubkey: row.event.pubkey)
                 },
-                onHashtagTap: { tag in path.append(HashtagFeedRoute(tag: tag)) }
+                onHashtagTap: { tag in path.append(HashtagFeedRoute(tag: tag)) },
+                onOpenEmojiLibrary: openEmojiLibrary
             )
             .contentShape(Rectangle())
             .onTapGesture {
