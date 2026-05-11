@@ -77,6 +77,13 @@ struct InlineImageView: View {
         .fullScreenCover(isPresented: $showFullScreen) {
             FullScreenImageView(url: meta.url, mime: meta.mime)
         }
+        .contextMenu {
+            Button {
+                UIPasteboard.general.string = meta.url
+            } label: {
+                Label("Copy Image URL", systemImage: "doc.on.doc")
+            }
+        }
     }
 
     /// Placeholder rendered while the image is loading or on failure. When the
@@ -147,6 +154,9 @@ struct FullScreenImageView: View {
     /// the pinch, instead of being gated off because `scale` was still at
     /// 1.0 in the first frames.
     @State private var pinching = false
+    /// "URL copied" toast trigger. Flipped on by the long-press handler;
+    /// auto-dismisses after a short window.
+    @State private var copiedToastVisible = false
 
     /// True when this view runs standalone (handles its own dismiss) vs
     /// embedded inside `FullScreenMediaPager` (forwards drags to the pager).
@@ -204,8 +214,20 @@ struct FullScreenImageView: View {
                     onPinchEnded: { pinchScale in
                         handlePinchEnd(magValue: pinchScale, in: geo.size)
                     },
-                    onDoubleTap: { toggleZoom() }
+                    onDoubleTap: { toggleZoom() },
+                    onLongPress: { copyURLToPasteboard() }
                 )
+
+                if copiedToastVisible {
+                    Text("Image URL copied")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(.black.opacity(0.7), in: Capsule())
+                        .transition(.opacity)
+                        .allowsHitTesting(false)
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -239,6 +261,20 @@ struct FullScreenImageView: View {
     /// Single-finger pan handler. Driven by `UIPanGestureRecognizer` in
     /// `ImageGesturesView` (max 1 touch). Branches on whether the image is
     /// zoomed, standalone, or embedded in the pager.
+    private func copyURLToPasteboard() {
+        UIPasteboard.general.string = url
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        withAnimation(.easeInOut(duration: 0.2)) {
+            copiedToastVisible = true
+        }
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1.4))
+            withAnimation(.easeInOut(duration: 0.25)) {
+                copiedToastVisible = false
+            }
+        }
+    }
+
     private func handlePanChange(_ translation: CGSize, in screenSize: CGSize) {
         if scale > 1.01 || pinching {
             let proposed = CGSize(
@@ -412,6 +448,7 @@ struct ImageGesturesView: UIViewRepresentable {
     let onPinchChanged: (CGFloat, CGSize) -> Void
     let onPinchEnded: (CGFloat) -> Void
     let onDoubleTap: () -> Void
+    let onLongPress: () -> Void
 
     func makeUIView(context: Context) -> UIView {
         let view = UIView()
@@ -442,6 +479,15 @@ struct ImageGesturesView: UIViewRepresentable {
         doubleTap.delegate = context.coordinator
         view.addGestureRecognizer(doubleTap)
 
+        let longPress = UILongPressGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handleLongPress(_:))
+        )
+        // Use the system default minimum press duration so the long-press
+        // doesn't clash with the existing pan threshold.
+        longPress.delegate = context.coordinator
+        view.addGestureRecognizer(longPress)
+
         return view
     }
 
@@ -451,6 +497,7 @@ struct ImageGesturesView: UIViewRepresentable {
         context.coordinator.onPinchChanged = onPinchChanged
         context.coordinator.onPinchEnded = onPinchEnded
         context.coordinator.onDoubleTap = onDoubleTap
+        context.coordinator.onLongPress = onLongPress
     }
 
     func makeCoordinator() -> Coordinator {
@@ -459,7 +506,8 @@ struct ImageGesturesView: UIViewRepresentable {
             onPanEnded: onPanEnded,
             onPinchChanged: onPinchChanged,
             onPinchEnded: onPinchEnded,
-            onDoubleTap: onDoubleTap
+            onDoubleTap: onDoubleTap,
+            onLongPress: onLongPress
         )
     }
 
@@ -469,6 +517,7 @@ struct ImageGesturesView: UIViewRepresentable {
         var onPinchChanged: (CGFloat, CGSize) -> Void
         var onPinchEnded: (CGFloat) -> Void
         var onDoubleTap: () -> Void
+        var onLongPress: () -> Void
 
         private var pinchStartCentroid: CGPoint = .zero
 
@@ -477,13 +526,15 @@ struct ImageGesturesView: UIViewRepresentable {
             onPanEnded: @escaping (CGSize) -> Void,
             onPinchChanged: @escaping (CGFloat, CGSize) -> Void,
             onPinchEnded: @escaping (CGFloat) -> Void,
-            onDoubleTap: @escaping () -> Void
+            onDoubleTap: @escaping () -> Void,
+            onLongPress: @escaping () -> Void
         ) {
             self.onPanChanged = onPanChanged
             self.onPanEnded = onPanEnded
             self.onPinchChanged = onPinchChanged
             self.onPinchEnded = onPinchEnded
             self.onDoubleTap = onDoubleTap
+            self.onLongPress = onLongPress
         }
 
         @objc func handlePan(_ g: UIPanGestureRecognizer) {
@@ -523,6 +574,16 @@ struct ImageGesturesView: UIViewRepresentable {
         @objc func handleDoubleTap(_ g: UITapGestureRecognizer) {
             if g.state == .ended {
                 onDoubleTap()
+            }
+        }
+
+        @objc func handleLongPress(_ g: UILongPressGestureRecognizer) {
+            // Fire once when the press first crosses the time threshold.
+            // `.began` fires after `minimumPressDuration` with the finger
+            // still down; subsequent phases (.changed / .ended) shouldn't
+            // re-trigger the action.
+            if g.state == .began {
+                onLongPress()
             }
         }
 
