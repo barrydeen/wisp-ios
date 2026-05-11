@@ -478,26 +478,28 @@ struct WalletSettingsView: View {
             }
             .buttonStyle(.plain)
 
-            Divider().opacity(0.25).padding(.leading, 50)
+            if store.isRelayBackupSupported {
+                Divider().opacity(0.25).padding(.leading, 50)
 
-            // Relay backup
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 12) {
-                    Image(systemName: "icloud.and.arrow.up")
-                        .font(.system(size: 15))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 22)
-                    Text("Relay backup")
-                        .font(.subheadline)
-                        .foregroundStyle(.primary)
-                    Spacer()
+                // Relay backup
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 12) {
+                        Image(systemName: "icloud.and.arrow.up")
+                            .font(.system(size: 15))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 22)
+                        Text("Relay backup")
+                            .font(.subheadline)
+                            .foregroundStyle(.primary)
+                        Spacer()
+                    }
+
+                    relayBackupContent
+                        .padding(.leading, 34)
                 }
-
-                relayBackupContent
-                    .padding(.leading, 34)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 14)
         }
     }
 
