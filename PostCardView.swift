@@ -789,7 +789,7 @@ struct PostCardView: View {
             Button {
                 copyNoteId(target)
             } label: {
-                Label("Copy Note ID", systemImage: "doc.on.doc")
+                Label("Copy Note ID", systemImage: "lanyardcard")
             }
 
             Button {
