@@ -6,6 +6,7 @@ struct ThreadView: View {
     @State private var showHiddenSpam: Bool = false
     @State private var showReplyCompose: Bool = false
     @State private var didScrollToFocal: Bool = false
+    @State private var suppressNextDisappearChainRemoval: Bool = false
     @Environment(\.dismiss) private var dismiss
 
     /// The active tab's NavigationStack path. Mutated directly by smart-pop so a
@@ -86,7 +87,12 @@ struct ThreadView: View {
         }
         .background(Color.wispBackground)
         .toolbar(.hidden, for: .navigationBar)
-        .swipeBackFromLeftEdge()
+        .swipeBackFromLeftEdge {
+            popCurrentThread()
+        }
+        .onAppear {
+            suppressNextDisappearChainRemoval = false
+        }
         .task {
             // Register this thread on the side-channel chain so deeper
             // ThreadViews can smart-pop back to it. The contains-guard keeps
@@ -98,6 +104,10 @@ struct ThreadView: View {
         }
         .onDisappear {
             viewModel.stop()
+            if suppressNextDisappearChainRemoval {
+                suppressNextDisappearChainRemoval = false
+                return
+            }
             // Pop our entry off the tail. This handles natural back / swipe-back
             // and the cascading disappears that follow a smart-pop's
             // `path.removeLast(N)`.
@@ -235,13 +245,13 @@ struct ThreadView: View {
                     profiles: viewModel.profiles,
                     engagement: engagement(for: row.event.id),
                     forcedReplyCount: viewModel.visibleRepliesCount,
-                    onProfileTap: { pk in path.append(ProfileRoute(pubkey: pk)) },
+                    onProfileTap: { pk in push(ProfileRoute(pubkey: pk)) },
                     // Tapping a quoted note inside the focal pushes that
                     // note as its own focal, same as tapping a reply row.
                     onNoteTap: { quotedId in
                         navigateToThread(eventId: quotedId, authorPubkey: row.event.pubkey)
                     },
-                    onHashtagTap: { tag in path.append(HashtagFeedRoute(tag: tag)) }
+                    onHashtagTap: { tag in push(HashtagFeedRoute(tag: tag)) }
                 )
             }
             Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
@@ -291,7 +301,7 @@ struct ThreadView: View {
                 profile: viewModel.profiles[row.event.pubkey],
                 profiles: viewModel.profiles,
                 engagement: engagement(for: row.event.id),
-                onProfileTap: { pk in path.append(ProfileRoute(pubkey: pk)) },
+                onProfileTap: { pk in push(ProfileRoute(pubkey: pk)) },
                 // Tap on an embedded quoted note pushes that note as
                 // its own focal. SwiftUI's nested-Button hit-testing
                 // gives the inner QuotedNoteView's tap area priority,
@@ -299,7 +309,7 @@ struct ThreadView: View {
                 onNoteTap: { quotedId in
                     navigateToThread(eventId: quotedId, authorPubkey: row.event.pubkey)
                 },
-                onHashtagTap: { tag in path.append(HashtagFeedRoute(tag: tag)) }
+                onHashtagTap: { tag in push(HashtagFeedRoute(tag: tag)) }
             )
             .contentShape(Rectangle())
             .onTapGesture {
@@ -317,10 +327,34 @@ struct ThreadView: View {
             // Pop every level between the current tail and the target's level.
             // Clamp to `path.count` defensively in case the path and chain
             // ever drift out of sync (e.g. profile routes interleaved).
-            let popLevels = min(chain.count - idx - 1, path.count)
+            let threadPopLevels = chain.count - idx - 1
+            if threadPopLevels > 0 {
+                chain.removeLast(threadPopLevels)
+            }
+            let popLevels = min(threadPopLevels, path.count)
             path.removeLast(popLevels)
         } else {
-            path.append(ThreadRoute(eventId: eventId, authorPubkey: authorPubkey))
+            chain.append(eventId)
+            push(ThreadRoute(eventId: eventId, authorPubkey: authorPubkey))
+        }
+    }
+
+    private func push<Route: Hashable>(_ route: Route) {
+        suppressNextDisappearChainRemoval = true
+        path.append(route)
+    }
+
+    private func popCurrentThread() {
+        if chain.last == viewModel.seedEventId {
+            chain.removeLast()
+        } else if let idx = chain.lastIndex(of: viewModel.seedEventId) {
+            chain.removeSubrange(idx..<chain.endIndex)
+        }
+
+        if path.count > 0 {
+            path.removeLast()
+        } else {
+            dismiss()
         }
     }
 

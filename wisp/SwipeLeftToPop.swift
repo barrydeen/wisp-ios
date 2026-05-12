@@ -21,6 +21,8 @@ struct SwipeBackFromLeftEdgeModifier: ViewModifier {
     @State private var isActive = false
     @State private var previousSnapshot: UIImage?
 
+    let onCommit: (() -> Void)?
+
     private static let activationZoneFraction: CGFloat = 1.0 / 3.0
     private static let commitFraction: CGFloat = 0.35
 
@@ -97,7 +99,13 @@ struct SwipeBackFromLeftEdgeModifier: ViewModifier {
             DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
                 var transaction = Transaction()
                 transaction.disablesAnimations = true
-                withTransaction(transaction) { dismiss() }
+                withTransaction(transaction) {
+                    if let onCommit {
+                        onCommit()
+                    } else {
+                        dismiss()
+                    }
+                }
             }
         } else {
             withAnimation(.easeOut(duration: 0.22)) { dragX = 0 }
@@ -124,7 +132,14 @@ extension View {
     /// view so the transition matches the feel of the native interactive
     /// pop.
     func swipeBackFromLeftEdge() -> some View {
-        modifier(SwipeBackFromLeftEdgeModifier())
+        modifier(SwipeBackFromLeftEdgeModifier(onCommit: nil))
+    }
+
+    /// Adds the swipe-back gesture with a custom commit action. Use this for
+    /// destinations that own a `NavigationPath` binding and can pop it directly,
+    /// which avoids SwiftUI replaying an inferred dismiss transition.
+    func swipeBackFromLeftEdge(onCommit: @escaping () -> Void) -> some View {
+        modifier(SwipeBackFromLeftEdgeModifier(onCommit: onCommit))
     }
 }
 
@@ -142,9 +157,22 @@ private enum SwipeBackSnapshot {
         let prev = nav.viewControllers[nav.viewControllers.count - 2]
         let target = prev.view ?? nav.view
         guard let view = target, view.bounds.width > 0, view.bounds.height > 0 else { return nil }
-        let renderer = UIGraphicsImageRenderer(size: view.bounds.size)
-        return renderer.image { _ in
-            view.drawHierarchy(in: view.bounds, afterScreenUpdates: true)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = view.window?.screen.scale ?? UIScreen.main.scale
+        format.opaque = view.isOpaque
+        let renderer = UIGraphicsImageRenderer(bounds: view.bounds, format: format)
+        return renderer.image { context in
+            // `drawHierarchy(afterScreenUpdates:)` asks UIKit/SwiftUI to perform
+            // a fresh render pass. When the previous destination is a covered
+            // SwiftUI host, that can re-evaluate views outside the environment
+            // they were originally built under and crash on missing environment
+            // values. Rendering the existing layer tree snapshots what is
+            // already on screen without forcing SwiftUI body evaluation.
+            if let presentation = view.layer.presentation() {
+                presentation.render(in: context.cgContext)
+            } else {
+                view.layer.render(in: context.cgContext)
+            }
         }
     }
 
