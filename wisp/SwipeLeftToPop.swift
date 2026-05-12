@@ -1,0 +1,348 @@
+import SwiftUI
+import UIKit
+
+/// Interactive left-edge swipe-rightward back gesture, restoring the iOS
+/// interactive pop on destinations whose `.toolbar(.hidden, for: .navigationBar)`
+/// disables the system one. The hit region is the left third of the screen
+/// (matching the feel of common social apps), the view tracks the finger
+/// live during the drag, and releasing past ~35% of the screen width commits
+/// the pop. A short drag springs back.
+///
+/// During the swipe we render a snapshot of the previous navigation
+/// destination behind the current view, so the user sees the timeline (or
+/// whichever screen they came from) slide back into place under their
+/// finger — the same visual the native interactive pop provides.
+///
+/// Apply via `.swipeBackFromLeftEdge()` on any pushed `NavigationStack`
+/// destination that hides the nav bar.
+struct SwipeBackFromLeftEdgeModifier: ViewModifier {
+    @Environment(\.dismiss) private var dismiss
+    @State private var dragX: CGFloat = 0
+    @State private var isActive = false
+    @State private var previousSnapshot: UIImage?
+
+    private static let activationZoneFraction: CGFloat = 1.0 / 3.0
+    private static let commitFraction: CGFloat = 0.35
+
+    func body(content: Content) -> some View {
+        content
+            .offset(x: dragX)
+            // Soft shadow along the leading edge of the foreground while
+            // the swipe is in progress — gives the impression of a card
+            // lifting off the underlying view, the way the system pop does.
+            .shadow(
+                color: Color.black.opacity(dragX > 0 ? 0.28 : 0),
+                radius: 12,
+                x: -4,
+                y: 0
+            )
+            // Snapshot + dimming go in `.background` rather than a ZStack so
+            // the content's own layout doesn't shift the first time the
+            // snapshot becomes non-nil (the ZStack conditional was causing
+            // a visible vertical jump at swipe onset).
+            .background {
+                if let snap = previousSnapshot {
+                    GeometryReader { geo in
+                        Image(uiImage: snap)
+                            .resizable()
+                            .frame(width: geo.size.width, height: geo.size.height)
+                            .offset(x: -((geo.size.width - dragX) / 3.0))
+                            .overlay(
+                                Color.black.opacity(
+                                    0.25 * (1 - min(1, dragX / geo.size.width))
+                                )
+                            )
+                    }
+                    .ignoresSafeArea()
+                }
+            }
+            .background(
+                SwipeBackGestureInstaller(
+                    activationZoneFraction: Self.activationZoneFraction,
+                    onBegan: { startSwipe() },
+                    onChanged: { translation in dragX = max(0, translation) },
+                    onEnded: { translation in finishSwipe(translation: translation) },
+                    onCancelled: { cancelSwipe() }
+                )
+            )
+    }
+
+    private func startSwipe() {
+        isActive = true
+        previousSnapshot = SwipeBackSnapshot.capturePreviousNavigationView()
+    }
+
+    private func finishSwipe(translation: CGFloat) {
+        guard isActive else { return }
+        isActive = false
+        let screenWidth = UIScreen.main.bounds.width
+        let threshold = screenWidth * Self.commitFraction
+        if translation > threshold {
+            // Finish the slide-out ourselves so the snapshot parallax stays
+            // synced with the foreground. Then pop via UIKit's
+            // `popViewController(animated: false)` so SwiftUI's
+            // NavigationStack doesn't run its own pop animation on top of
+            // ours — that double animation was what you saw as "it happens
+            // twice".
+            let remaining = max(0, screenWidth - translation)
+            let duration = 0.18 + Double(remaining / screenWidth) * 0.12
+            withAnimation(.easeOut(duration: duration)) {
+                dragX = screenWidth
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
+                if let nav = SwipeBackSnapshot.activeNavigationController(),
+                   nav.viewControllers.count >= 2 {
+                    nav.popViewController(animated: false)
+                } else {
+                    // Defensive fallback for any nav surface we don't reach
+                    // through the responder walk.
+                    dismiss()
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    previousSnapshot = nil
+                    dragX = 0
+                }
+            }
+        } else {
+            withAnimation(.easeOut(duration: 0.22)) { dragX = 0 }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.24) {
+                if !isActive { previousSnapshot = nil }
+            }
+        }
+    }
+
+    private func cancelSwipe() {
+        guard isActive else { return }
+        isActive = false
+        withAnimation(.easeOut(duration: 0.18)) { dragX = 0 }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            if !isActive { previousSnapshot = nil }
+        }
+    }
+}
+
+extension View {
+    /// Adds an interactive left-edge swipe-right back gesture that tracks
+    /// the finger and pops when released past the commit threshold. The
+    /// previous navigation destination is rendered behind the dragging
+    /// view so the transition matches the feel of the native interactive
+    /// pop.
+    func swipeBackFromLeftEdge() -> some View {
+        modifier(SwipeBackFromLeftEdgeModifier())
+    }
+}
+
+// MARK: - Snapshot helper
+
+private enum SwipeBackSnapshot {
+    /// Walk from the active window scene's key window down to the
+    /// frontmost `UINavigationController` (through tab controllers and
+    /// presented modals) and render a snapshot of its previous view
+    /// controller — the view the user is about to pop back to.
+    @MainActor
+    static func capturePreviousNavigationView() -> UIImage? {
+        guard let nav = activeNavigationController(),
+              nav.viewControllers.count >= 2 else { return nil }
+        let prev = nav.viewControllers[nav.viewControllers.count - 2]
+        let target = prev.view ?? nav.view
+        guard let view = target, view.bounds.width > 0, view.bounds.height > 0 else { return nil }
+        let renderer = UIGraphicsImageRenderer(size: view.bounds.size)
+        return renderer.image { _ in
+            view.drawHierarchy(in: view.bounds, afterScreenUpdates: true)
+        }
+    }
+
+    @MainActor
+    static func activeNavigationController() -> UINavigationController? {
+        for scene in UIApplication.shared.connectedScenes {
+            guard let windowScene = scene as? UIWindowScene,
+                  windowScene.activationState == .foregroundActive else { continue }
+            for window in windowScene.windows where window.isKeyWindow {
+                if let nav = topNavigationController(in: window.rootViewController) {
+                    return nav
+                }
+            }
+        }
+        return nil
+    }
+
+    @MainActor
+    private static func topNavigationController(in vc: UIViewController?) -> UINavigationController? {
+        guard let vc else { return nil }
+        if let presented = vc.presentedViewController,
+           let found = topNavigationController(in: presented) { return found }
+        if let tab = vc as? UITabBarController {
+            return topNavigationController(in: tab.selectedViewController)
+        }
+        if let nav = vc as? UINavigationController { return nav }
+        for child in vc.children.reversed() {
+            if let found = topNavigationController(in: child) { return found }
+        }
+        return nil
+    }
+}
+
+// MARK: - UIKit pan recognizer installer
+
+/// Installs a `UIPanGestureRecognizer` directly on the host SwiftUI view's
+/// parent view controller's view. Going through a `UIViewControllerRepresentable`
+/// (rather than `.background(UIViewRepresentable)`) is what makes the
+/// recognizer sit in the responder chain ABOVE the SwiftUI content — without
+/// that, `.background` sits as a sibling and never sees touches the content
+/// consumes.
+///
+/// Direction-locks via the delegate so vertical scrolling inside the
+/// destination's ScrollView stays unaffected: the recognizer fails itself
+/// when motion is dominantly vertical, letting the ScrollView take over
+/// cleanly. Once horizontal motion is locked in, `cancelsTouchesInView`
+/// flips so the scroll view sees the touches as cancelled and stops fighting
+/// the drag.
+private struct SwipeBackGestureInstaller: UIViewControllerRepresentable {
+    let activationZoneFraction: CGFloat
+    let onBegan: () -> Void
+    let onChanged: (CGFloat) -> Void
+    let onEnded: (CGFloat) -> Void
+    let onCancelled: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(
+            activationZoneFraction: activationZoneFraction,
+            onBegan: onBegan,
+            onChanged: onChanged,
+            onEnded: onEnded,
+            onCancelled: onCancelled
+        )
+    }
+
+    func makeUIViewController(context: Context) -> InstallerVC {
+        InstallerVC(coordinator: context.coordinator)
+    }
+
+    func updateUIViewController(_ vc: InstallerVC, context: Context) {
+        context.coordinator.activationZoneFraction = activationZoneFraction
+        context.coordinator.onBegan = onBegan
+        context.coordinator.onChanged = onChanged
+        context.coordinator.onEnded = onEnded
+        context.coordinator.onCancelled = onCancelled
+    }
+
+    final class InstallerVC: UIViewController {
+        let coordinator: Coordinator
+        private weak var installedOn: UIView?
+        private var recognizer: UIPanGestureRecognizer?
+
+        init(coordinator: Coordinator) {
+            self.coordinator = coordinator
+            super.init(nibName: nil, bundle: nil)
+            view = UIView()
+            view.backgroundColor = .clear
+            view.isUserInteractionEnabled = false
+        }
+        required init?(coder: NSCoder) { fatalError() }
+
+        override func didMove(toParent parent: UIViewController?) {
+            super.didMove(toParent: parent)
+            guard let parent = parent else {
+                if let rec = recognizer { installedOn?.removeGestureRecognizer(rec) }
+                recognizer = nil
+                installedOn = nil
+                return
+            }
+            installRecognizer(on: parent.view)
+        }
+
+        private func installRecognizer(on target: UIView) {
+            let pan = UIPanGestureRecognizer(
+                target: coordinator,
+                action: #selector(Coordinator.handle(_:))
+            )
+            pan.delegate = coordinator
+            pan.cancelsTouchesInView = false
+            target.addGestureRecognizer(pan)
+            recognizer = pan
+            installedOn = target
+        }
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var activationZoneFraction: CGFloat
+        var onBegan: () -> Void
+        var onChanged: (CGFloat) -> Void
+        var onEnded: (CGFloat) -> Void
+        var onCancelled: () -> Void
+        private var activated = false
+
+        init(activationZoneFraction: CGFloat,
+             onBegan: @escaping () -> Void,
+             onChanged: @escaping (CGFloat) -> Void,
+             onEnded: @escaping (CGFloat) -> Void,
+             onCancelled: @escaping () -> Void) {
+            self.activationZoneFraction = activationZoneFraction
+            self.onBegan = onBegan
+            self.onChanged = onChanged
+            self.onEnded = onEnded
+            self.onCancelled = onCancelled
+        }
+
+        @objc func handle(_ recognizer: UIPanGestureRecognizer) {
+            guard let view = recognizer.view else { return }
+            let translation = recognizer.translation(in: view)
+            switch recognizer.state {
+            case .began:
+                activated = true
+                onBegan()
+                onChanged(translation.x)
+            case .changed:
+                guard activated else { return }
+                onChanged(max(0, translation.x))
+            case .ended:
+                if activated {
+                    activated = false
+                    onEnded(translation.x)
+                }
+            case .cancelled, .failed:
+                if activated {
+                    activated = false
+                    onCancelled()
+                }
+            default:
+                break
+            }
+        }
+
+        // Direction-lock at the gate. The recognizer is asked this once before
+        // its first .began transition; returning false makes it fail, which
+        // releases the touch to the underlying ScrollView so vertical scrolls
+        // proceed cleanly. Returning true commits to the swipe-back.
+        //
+        // The horizontal/vertical comparison uses a 0.6x multiplier on
+        // vertical velocity so the gate doesn't reject clean rightward
+        // swipes that happen to start with a few pixels of vertical noise
+        // — that strict check was reading "user wants to scroll" on every
+        // first-frame jitter and yielding the rest of the swipe to the
+        // ScrollView (visible as a brief vertical shift before the
+        // foreground started moving).
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            guard let pan = gestureRecognizer as? UIPanGestureRecognizer,
+                  let view = pan.view else { return false }
+            let velocity = pan.velocity(in: view)
+            let location = pan.location(in: view)
+            let activationZone = view.bounds.width * activationZoneFraction
+            let startedInZone = location.x <= activationZone
+            guard startedInZone, velocity.x > 0 else { return false }
+            // Either a clearly fast horizontal pull, or horizontal motion
+            // that beats vertical by more than the noise floor.
+            return abs(velocity.x) >= 120 || abs(velocity.x) > abs(velocity.y) * 0.6
+        }
+
+        // Force every other gesture recognizer (including the ScrollView's
+        // own pan) to wait for ours to decide whether to recognize or fail.
+        // Without this they'd recognize in parallel and the ScrollView would
+        // scroll a few pixels before our gate above flips. That parallel
+        // motion is what showed up as the foreground "jumping" mid-swipe.
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
+            return true
+        }
+    }
+}

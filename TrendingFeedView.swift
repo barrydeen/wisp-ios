@@ -37,6 +37,7 @@ struct TrendingFeedView: View {
         }
         .background(Color.wispBackground)
         .toolbar(.hidden, for: .navigationBar)
+        .swipeBackFromLeftEdge()
         .task { await viewModel.start() }
     }
 

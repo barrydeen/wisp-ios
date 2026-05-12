@@ -86,6 +86,7 @@ struct ThreadView: View {
         }
         .background(Color.wispBackground)
         .toolbar(.hidden, for: .navigationBar)
+        .swipeBackFromLeftEdge()
         .task {
             // Register this thread on the side-channel chain so deeper
             // ThreadViews can smart-pop back to it. The contains-guard keeps

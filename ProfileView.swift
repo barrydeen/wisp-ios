@@ -62,6 +62,7 @@ struct ProfileView: View {
         // backdrop layers (nav-bar material + bar-button capsule blur + tab-strip
         // material).
         .toolbar(.hidden, for: .navigationBar)
+        .swipeBackFromLeftEdge()
         .safeAreaInset(edge: .top, spacing: 0) {
             unifiedHeader
         }
