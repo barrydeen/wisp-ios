@@ -302,18 +302,36 @@ final class EngagementRepository {
         let sub = RelayPool.subscribe(relays: [relay], filter: filter, id: subId)
         liveSubs.append(sub)
 
+        // NIP-18 quote reposts are kind-1 events that reference the quoted note via
+        // a `q` tag and (per NIP-18) SHOULD NOT include an `e` tag for that id —
+        // so the e-tag-only filter above misses them. Run a parallel #q filter so
+        // the details drawer can populate a "Quoted by" section.
+        let quoteSubId = "feed-engagement-q-\(UUID().uuidString.prefix(6))"
+        let quoteFilter = NostrFilter(kinds: [1], qTags: eventIds, limit: 200)
+        let quoteSub = RelayPool.subscribe(relays: [relay], filter: quoteFilter, id: quoteSubId)
+        liveSubs.append(quoteSub)
+
         let consumer = Task { [weak self] in
             for await (event, relayUrl) in sub.events {
+                self?.ingest(event, relayUrl: relayUrl)
+            }
+        }
+        let quoteConsumer = Task { [weak self] in
+            for await (event, relayUrl) in quoteSub.events {
                 self?.ingest(event, relayUrl: relayUrl)
             }
         }
         let watchdog = Task { [weak self] in
             try? await Task.sleep(for: .seconds(12))
             sub.cancel()
+            quoteSub.cancel()
             consumer.cancel()
+            quoteConsumer.cancel()
             self?.prune(sub: sub)
+            self?.prune(sub: quoteSub)
         }
         liveTasks.append(consumer)
+        liveTasks.append(quoteConsumer)
         liveTasks.append(watchdog)
     }
 
@@ -325,6 +343,39 @@ final class EngagementRepository {
 
     private func ingest(_ event: NostrEvent, relayUrl: String) {
         guard seenEngagementIds.insert(event.id).inserted else { return }
+
+        // Quote reposts (NIP-18) come in on the parallel `#q` subscription and
+        // by convention SHOULD NOT carry an `e` tag for the quoted id — so the
+        // generic e-tag path below would skip them. Handle them up front: any
+        // kind-1 whose `q` tag points at a queried note becomes a `Quoter`
+        // entry for that note. A given quote can reference multiple of our
+        // tracked notes, so iterate all q-target matches.
+        if event.kind == 1 {
+            let qTargets = event.tags.compactMap { tag -> String? in
+                guard tag.count >= 2, tag[0] == "q" else { return nil }
+                return tag[1]
+            }
+            let quotedNotes = qTargets.filter { queriedIds.contains($0) }
+            if !quotedNotes.isEmpty {
+                for quotedId in Set(quotedNotes) {
+                    let qb = box(for: quotedId)
+                    var qCurrent = qb.counts
+                    qCurrent.seenRelays.insert(relayUrl)
+                    if !qCurrent.quoters.contains(where: { $0.eventId == event.id }) {
+                        qCurrent.quoters.append(Quoter(
+                            eventId: event.id,
+                            pubkey: event.pubkey,
+                            createdAt: event.createdAt
+                        ))
+                    }
+                    qb.counts = qCurrent
+                }
+                MissingProfileWatcher.shared.observePubkeys([event.pubkey])
+                // A quote event with both `q` and stray `e` tags shouldn't also
+                // bump the quoted note's reply count.
+                return
+            }
+        }
 
         // Aggregate against the most-specific (last) e-tag, ignoring `mention` markers — same
         // rule as ThreadViewModel.ingestEngagement.

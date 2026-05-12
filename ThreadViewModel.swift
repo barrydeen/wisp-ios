@@ -743,8 +743,21 @@ final class ThreadViewModel {
             let subId = "thread-engagement-\(UUID().uuidString.prefix(6))"
             let filter = NostrFilter(kinds: [1, 6, 7, 9735], eTags: chunk, limit: 500, since: since)
             let sub = RelayPool.subscribe(relays: relays, filter: filter, id: subId)
+            // NIP-18 quote reposts only carry a `q` tag (no `e`), so the
+            // primary `#e` subscription misses them. Run a parallel `#q`
+            // filter against the same chunk so the focal note's drawer
+            // populates with a "Quoted by" row.
+            let quoteSubId = "thread-engagement-q-\(UUID().uuidString.prefix(6))"
+            let quoteFilter = NostrFilter(kinds: [1], qTags: chunk, limit: 200, since: since)
+            let quoteSub = RelayPool.subscribe(relays: relays, filter: quoteFilter, id: quoteSubId)
             let consumer = Task { [weak self] in
                 for await (event, _) in sub.events {
+                    if SafetyFilter.shared.shouldDrop(event: event, context: .thread(rootId: rootIdLocal)) { continue }
+                    self?.ingestEngagement([event])
+                }
+            }
+            let quoteConsumer = Task { [weak self] in
+                for await (event, _) in quoteSub.events {
                     if SafetyFilter.shared.shouldDrop(event: event, context: .thread(rootId: rootIdLocal)) { continue }
                     self?.ingestEngagement([event])
                 }
@@ -752,9 +765,12 @@ final class ThreadViewModel {
             let watchdog = Task {
                 try? await Task.sleep(for: .seconds(12))
                 sub.cancel()
+                quoteSub.cancel()
                 consumer.cancel()
+                quoteConsumer.cancel()
             }
             streamTasks.append(consumer)
+            streamTasks.append(quoteConsumer)
             streamTasks.append(watchdog)
         }
     }
@@ -765,6 +781,34 @@ final class ThreadViewModel {
             // can otherwise double-count the same id). `seenEngagementIds`
             // is shared across both pathways.
             guard seenEngagementIds.insert(event.id).inserted else { continue }
+
+            // NIP-18 quote reposts arrive via the parallel `#q` subscription
+            // and (per spec) carry only a `q` tag for the quoted id. Handle
+            // them up front so they populate the "Quoted by" row instead of
+            // falling through to the reply path on the off chance the quote
+            // event also stamps an `e` tag for backward compatibility.
+            if event.kind == 1 {
+                let qTargets = event.tags.compactMap { tag -> String? in
+                    guard tag.count >= 2, tag[0] == "q" else { return nil }
+                    return tag[1]
+                }
+                let quotedHere = qTargets.filter { engagedIds.contains($0) }
+                if !quotedHere.isEmpty {
+                    for quotedId in Set(quotedHere) {
+                        var qCurrent = engagement[quotedId] ?? EngagementCounts()
+                        if !qCurrent.quoters.contains(where: { $0.eventId == event.id }) {
+                            qCurrent.quoters.append(Quoter(
+                                eventId: event.id,
+                                pubkey: event.pubkey,
+                                createdAt: event.createdAt
+                            ))
+                        }
+                        engagement[quotedId] = qCurrent
+                    }
+                    continue
+                }
+            }
+
             // Aggregate against every e-tag the engagement event references so the count attaches to
             // both the direct parent and (where applicable) the root.
             let targets = event.tags.compactMap { tag -> String? in

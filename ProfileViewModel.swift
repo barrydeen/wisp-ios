@@ -823,6 +823,11 @@ struct EngagementCounts: Equatable {
     var reactors: [Reactor] = []
     var reposters: [String] = []
     var zappers: [Zapper] = []
+    /// Kind-1 events that reference this note via a NIP-18 `q` tag — i.e.
+    /// posts that quoted it. Each row knows the quote event's id so the
+    /// note-details drawer can navigate to the quote post itself, not just
+    /// to the quoter's profile.
+    var quoters: [Quoter] = []
     var seenRelays: Set<String> = []
 }
 
@@ -848,6 +853,14 @@ struct Zapper: Equatable, Hashable {
     let pubkey: String
     let sats: Int64
     let message: String
+}
+
+struct Quoter: Equatable, Hashable {
+    /// The quote post's own event id — used to navigate to it on tap.
+    let eventId: String
+    /// Author of the quote post (avatar in the details drawer).
+    let pubkey: String
+    let createdAt: Int
 }
 
 struct MediaItem: Hashable {
