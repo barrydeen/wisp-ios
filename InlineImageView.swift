@@ -6,6 +6,13 @@ struct InlineImageView: View {
     @State private var showFullScreen = false
     @State private var manualLoad = false
 
+    /// Single corner radius used by every state of the inline image —
+    /// placeholder background, blurhash overlay, loaded image, failure
+    /// view. Defined once and applied at the outermost `Group` so all
+    /// states share the exact same geometry and the placeholder → loaded
+    /// transition has no perceptible corner jump.
+    private static let cornerRadius: CGFloat = 12
+
     var body: some View {
         let aspect = ContentParser.parseAspectRatio(meta.dimension)
         let height = aspect.map { width(for: $0) } ?? 200
@@ -25,7 +32,6 @@ struct InlineImageView: View {
                             placeholder(systemName: "photo", height: 200)
                         }
                     )
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
                     .contentShape(Rectangle())
                     .onTapGesture { showFullScreen = true }
                 } else {
@@ -35,7 +41,6 @@ struct InlineImageView: View {
                             image.resizable()
                                 .aspectRatio(contentMode: .fit)
                                 .frame(maxWidth: .infinity)
-                                .clipShape(RoundedRectangle(cornerRadius: 12))
                                 .onTapGesture { showFullScreen = true }
                         },
                         loading: {
@@ -74,6 +79,7 @@ struct InlineImageView: View {
                 .buttonStyle(.plain)
             }
         }
+        .clipShape(RoundedRectangle(cornerRadius: Self.cornerRadius))
         .fullScreenCover(isPresented: $showFullScreen) {
             FullScreenImageView(url: meta.url, mime: meta.mime)
         }
@@ -89,7 +95,9 @@ struct InlineImageView: View {
     /// Placeholder rendered while the image is loading or on failure. When the
     /// imeta tag carries dimension metadata the slot uses `aspectRatio(.fit)` so
     /// it occupies exactly the same height as the loaded image — no layout shift.
-    /// Falls back to a fixed height when no dimension is available.
+    /// Falls back to a fixed height when no dimension is available. Corners are
+    /// applied by the outer `body`'s `clipShape`, so this view stays a plain
+    /// rectangle internally.
     @ViewBuilder
     private func placeholder(systemName: String?, height: CGFloat) -> some View {
         let blurImage = BlurHash.decode(meta.blurhash, width: 32, height: 32)
@@ -97,12 +105,10 @@ struct InlineImageView: View {
         Group {
             if let a = inferredAspect {
                 Color.wispSurfaceVariant
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
                     .aspectRatio(a, contentMode: .fit)
                     .frame(maxWidth: .infinity)
             } else {
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(Color.wispSurfaceVariant)
+                Color.wispSurfaceVariant
                     .frame(maxWidth: .infinity)
                     .frame(height: height)
             }
@@ -112,7 +118,6 @@ struct InlineImageView: View {
                 Image(uiImage: blurImage)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
                     .allowsHitTesting(false)
             }
         }
