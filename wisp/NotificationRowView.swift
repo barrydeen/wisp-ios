@@ -39,6 +39,7 @@ struct NotificationRowView: View {
 
             CachedAvatarView(url: profiles[item.actorPubkey]?.picture, size: 32)
                 .onTapGesture { onPeerTap(item.actorPubkey) }
+                .quickFollowOnLongPress(pubkey: item.actorPubkey)
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {

@@ -179,6 +179,7 @@ struct MainView: View {
             .gesture(drawerDragGesture)
         }
         .background(Color.wispBackground)
+        .overlay(QuickFollowToastOverlay())
         .environment(walletStore)
         .onReceive(NotificationCenter.default.publisher(for: .openWalletTab)) { _ in
             // PostCardView posts this when the user tries to zap without

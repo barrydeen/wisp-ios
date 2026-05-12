@@ -266,6 +266,7 @@ private struct ProfileHeaderView: View {
             HStack(alignment: .bottom, spacing: 12) {
                 CachedAvatarView(url: viewModel.profile?.picture, size: 84)
                     .overlay(Circle().stroke(Color.wispBackground, lineWidth: 4))
+                    .quickFollowOnLongPress(pubkey: viewModel.pubkey)
                     .offset(y: -28)
 
                 Spacer()
