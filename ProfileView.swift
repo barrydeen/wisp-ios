@@ -42,7 +42,7 @@ struct ProfileView: View {
 
     var body: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
+            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
                 ProfileHeaderView(
                     viewModel: viewModel,
                     isMe: isMe,
@@ -51,16 +51,15 @@ struct ProfileView: View {
                     onNoteTap: onNoteTap,
                     onHashtagTap: onHashtagTap
                 )
-                tabBody
+                Section {
+                    tabBody
+                } header: {
+                    ProfileTabBar(selected: $selectedTab)
+                        .background(Color.wispBackground)
+                }
             }
         }
         .background(Color.wispBackground)
-        // The whole top section (back/title/QR/ellipsis row + tab strip) lives in
-        // a single `.safeAreaInset` view with one `.regularMaterial` backdrop, so
-        // every control reads as one continuous unit and scrolling content blurs
-        // uniformly behind the entire header instead of through two stacked
-        // backdrop layers (nav-bar material + bar-button capsule blur + tab-strip
-        // material).
         .toolbar(.hidden, for: .navigationBar)
         .safeAreaInset(edge: .top, spacing: 0) {
             unifiedHeader
@@ -97,73 +96,69 @@ struct ProfileView: View {
     }
 
     private var unifiedHeader: some View {
-        VStack(spacing: 8) {
-            HStack(spacing: 8) {
-                BackChevronButton { dismiss() }
+        HStack(spacing: 8) {
+            BackChevronButton { dismiss() }
 
-                Spacer(minLength: 0)
+            Spacer(minLength: 0)
 
-                EmojiText(
-                    viewModel.profile?.displayString ?? shortKey(pubkey),
-                    emojiMap: viewModel.profile?.emojiMap ?? [:],
-                    textStyle: .subheadline,
-                    weight: .semibold,
-                    color: .label,
-                    lineLimit: 1
-                )
+            EmojiText(
+                viewModel.profile?.displayString ?? shortKey(pubkey),
+                emojiMap: viewModel.profile?.emojiMap ?? [:],
+                textStyle: .subheadline,
+                weight: .semibold,
+                color: .label,
+                lineLimit: 1
+            )
 
-                Spacer(minLength: 0)
+            Spacer(minLength: 0)
 
-                Button {
-                    showQrSheet = true
-                } label: {
-                    Image(systemName: "qrcode")
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(Color.wispOnSurface)
-                        .frame(width: 36, height: 36)
-                        .contentShape(Rectangle())
-                }
-
-                Menu {
-                    ShareLink(item: shareURL) {
-                        Label("Share Profile", systemImage: "square.and.arrow.up")
-                    }
-                    Button {
-                        if let npub { UIPasteboard.general.string = npub }
-                    } label: {
-                        Label("Copy npub", systemImage: "person.text.rectangle")
-                    }
-                    Button {
-                        showAddToList = true
-                    } label: {
-                        Label("Add to List", systemImage: "text.badge.plus")
-                    }
-                    if !isMe {
-                        let blocked = muteRepo.isBlocked(pubkey)
-                        Button(role: blocked ? nil : .destructive) {
-                            if blocked {
-                                muteRepo.unblockUser(pubkey)
-                            } else {
-                                muteRepo.blockUser(pubkey)
-                            }
-                        } label: {
-                            Label(blocked ? "Unblock User" : "Block User",
-                                  systemImage: blocked ? "person.crop.circle.badge.checkmark" : "person.crop.circle.badge.xmark")
-                        }
-                    }
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(Color.wispOnSurface)
-                        .frame(width: 36, height: 36)
-                        .contentShape(Rectangle())
-                }
+            Button {
+                showQrSheet = true
+            } label: {
+                Image(systemName: "qrcode")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(Color.wispOnSurface)
+                    .frame(width: 36, height: 36)
+                    .contentShape(Rectangle())
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
 
-            ProfileTabBar(selected: $selectedTab)
+            Menu {
+                ShareLink(item: shareURL) {
+                    Label("Share Profile", systemImage: "square.and.arrow.up")
+                }
+                Button {
+                    if let npub { UIPasteboard.general.string = npub }
+                } label: {
+                    Label("Copy npub", systemImage: "person.text.rectangle")
+                }
+                Button {
+                    showAddToList = true
+                } label: {
+                    Label("Add to List", systemImage: "text.badge.plus")
+                }
+                if !isMe {
+                    let blocked = muteRepo.isBlocked(pubkey)
+                    Button(role: blocked ? nil : .destructive) {
+                        if blocked {
+                            muteRepo.unblockUser(pubkey)
+                        } else {
+                            muteRepo.blockUser(pubkey)
+                        }
+                    } label: {
+                        Label(blocked ? "Unblock User" : "Block User",
+                              systemImage: blocked ? "person.crop.circle.badge.checkmark" : "person.crop.circle.badge.xmark")
+                    }
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(Color.wispOnSurface)
+                    .frame(width: 36, height: 36)
+                    .contentShape(Rectangle())
+            }
         }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
         .background(
             LinearGradient(
                 colors: [
