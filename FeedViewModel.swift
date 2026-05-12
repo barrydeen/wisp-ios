@@ -250,9 +250,10 @@ final class FeedViewModel {
             let (reFiltered, reIds) = await Task.detached(priority: .userInitiated) {
                 var result: [NostrEvent] = []
                 var seen: Set<String> = []
-                for event in cached
-                    where FeedViewModel.isFeedRenderable(event) &&
-                          (event.pubkey == myPubkey || fc.contains(event.pubkey)) {
+                for event in cached {
+                    if SafetyFilter.shared.shouldDrop(event: event, context: .feed) { continue }
+                    guard FeedViewModel.isFeedRenderable(event),
+                          event.pubkey == myPubkey || fc.contains(event.pubkey) else { continue }
                     if seen.insert(event.id).inserted { result.append(event) }
                 }
                 result.sort { $0.createdAt > $1.createdAt }
@@ -498,6 +499,10 @@ final class FeedViewModel {
             guard let self else { return }
             var added: [NostrEvent] = []
             for event in results where Self.relayFeedKinds.contains(event.kind) {
+                // Mirror the safety gate applied at initial load + live subscription
+                // so paginated pages can't leak muted authors (e.g. a kind-6 repost
+                // whose inner author is on the user's mute list).
+                if SafetyFilter.shared.shouldDrop(event: event, context: .feed) { continue }
                 if self.seenIds.insert(event.id).inserted {
                     added.append(event)
                 }
