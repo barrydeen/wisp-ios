@@ -79,29 +79,25 @@ struct SwipeBackFromLeftEdgeModifier: ViewModifier {
         let threshold = screenWidth * Self.commitFraction
         if translation > threshold {
             // Finish the slide-out ourselves so the snapshot parallax stays
-            // synced with the foreground. Then pop via UIKit's
-            // `popViewController(animated: false)` so SwiftUI's
-            // NavigationStack doesn't run its own pop animation on top of
-            // ours — that double animation was what you saw as "it happens
-            // twice".
+            // synced with the foreground. Then pop via SwiftUI's `dismiss()`
+            // inside a transaction that suppresses the implicit NavigationStack
+            // pop animation, so it doesn't run on top of our slide-out (which
+            // is what made the transition look like "it happens twice"). Going
+            // through `dismiss()` instead of UIKit's `popViewController` keeps
+            // SwiftUI's `NavigationStack` in charge of the `path` binding —
+            // calling `popViewController` directly leaves SwiftUI to back-sync
+            // its path, and any side-channel tied to that path (e.g. the
+            // `chain` mirror in ThreadView used for smart-pop) desyncs when
+            // the popped destination isn't at the top of the SwiftUI hierarchy.
             let remaining = max(0, screenWidth - translation)
             let duration = 0.18 + Double(remaining / screenWidth) * 0.12
             withAnimation(.easeOut(duration: duration)) {
                 dragX = screenWidth
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
-                if let nav = SwipeBackSnapshot.activeNavigationController(),
-                   nav.viewControllers.count >= 2 {
-                    nav.popViewController(animated: false)
-                } else {
-                    // Defensive fallback for any nav surface we don't reach
-                    // through the responder walk.
-                    dismiss()
-                }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                    previousSnapshot = nil
-                    dragX = 0
-                }
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) { dismiss() }
             }
         } else {
             withAnimation(.easeOut(duration: 0.22)) { dragX = 0 }
