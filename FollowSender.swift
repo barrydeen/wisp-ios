@@ -40,8 +40,6 @@ final class FollowSender {
     }
 
     private func publish(follows: Set<String>, keypair: Keypair) async throws {
-        guard let privkey32 = Hex.decode(keypair.privkey) else { throw SendError.missingKey }
-
         // Always include self — matches Android + Wisp's onboarding behavior.
         var withSelf = follows
         withSelf.insert(keypair.pubkey)
@@ -51,11 +49,12 @@ final class FollowSender {
             tags.append(clientTag)
         }
 
-        let event = try NostrEvent.sign(
-            privkey32: privkey32,
-            pubkey: keypair.pubkey,
+        // Route through `Signer.sign` so NIP-46 remote-signer accounts work —
+        // the old direct call to `NostrEvent.sign(privkey32:)` required a
+        // local private key and threw `missingKey` for every bunker user.
+        let event = try await Signer.sign(
+            keypair: keypair,
             kind: 3,
-            createdAt: Int(Date().timeIntervalSince1970),
             tags: tags,
             content: ""
         )

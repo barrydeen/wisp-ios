@@ -6,9 +6,11 @@ extension View {
     /// unfollow"). Apply at every avatar render site that displays another
     /// user; self-presses and missing-keypair cases short-circuit silently.
     ///
-    /// Uses `simultaneousGesture` so callers that wrap the avatar in a
-    /// `NavigationLink` or `Button` (tap-to-open-profile) keep their normal
-    /// tap behavior — only a deliberate hold routes here.
+    /// `highPriorityGesture` so a deliberate hold runs the follow toggle
+    /// *and* suppresses the wrapping `NavigationLink` / `Button` tap that
+    /// would otherwise also fire on finger lift and push the profile. A
+    /// quick tap shorter than the recognizer's `minimumDuration` still
+    /// falls through to the tap target unchanged.
     func quickFollowOnLongPress(pubkey: String) -> some View {
         modifier(QuickFollowLongPressModifier(pubkey: pubkey))
     }
@@ -19,7 +21,7 @@ private struct QuickFollowLongPressModifier: ViewModifier {
     @State private var busy = false
 
     func body(content: Content) -> some View {
-        content.simultaneousGesture(
+        content.highPriorityGesture(
             LongPressGesture(minimumDuration: 0.5)
                 .onEnded { _ in toggle() }
         )
@@ -45,8 +47,22 @@ private struct QuickFollowLongPressModifier: ViewModifier {
                     QuickFollowToast.shared.show("Followed")
                 }
             } catch {
-                QuickFollowToast.shared.show("Couldn't update follow")
+                NSLog("[QuickFollow] toggle failed: %@", String(describing: error))
+                QuickFollowToast.shared.show(QuickFollowLongPressModifier.message(for: error))
             }
         }
+    }
+
+    /// Surface a concise reason for the toast so the user can tell whether
+    /// the publish was rejected by relays, the key wasn't usable, etc.
+    private static func message(for error: Error) -> String {
+        if let send = error as? FollowSender.SendError {
+            switch send {
+            case .missingKey: return "Couldn't sign — key unavailable"
+            case .noRelays: return "No write relays configured"
+            case .publishFailed: return "Relays rejected the update"
+            }
+        }
+        return "Couldn't update follow"
     }
 }
