@@ -325,10 +325,44 @@ struct NotificationRowView: View {
             return nil
         }
         return raw.map {
-            resolveNostrMentions($0)
+            replaceMediaUrls(in: resolveNostrMentions($0))
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .replacingOccurrences(of: "\n", with: " ")
         }
+    }
+
+    /// Replaces inline media URLs in `content` with a short `[image]` /
+    /// `[video]` / `[audio]` placeholder so notification snippets read as
+    /// text instead of pasting a multi-line CDN URL into the row. Matches
+    /// `http(s)://…` URLs ending in a known media extension; Blossom-style
+    /// extension-less URLs are left alone because the snippet has no imeta
+    /// tags to classify them with.
+    private func replaceMediaUrls(in content: String) -> String {
+        let pattern = #"https?://\S+\.(?:jpg|jpeg|png|gif|webp|heic|heif|avif|svg|mp4|mov|webm|m3u8|mp3|wav|ogg|m4a|flac|aac)(?:\?\S*)?"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return content }
+        let ns = content as NSString
+        let matches = regex.matches(in: content, range: NSRange(location: 0, length: ns.length))
+        guard !matches.isEmpty else { return content }
+        var out = ""
+        var lastEnd = 0
+        for match in matches {
+            out += ns.substring(with: NSRange(location: lastEnd, length: match.range.location - lastEnd))
+            let url = ns.substring(with: match.range).lowercased()
+            // Strip any query string off the matched URL before classifying.
+            let path = url.split(separator: "?").first.map(String.init) ?? url
+            let ext = (path as NSString).pathExtension
+            switch ext {
+            case "mp4", "mov", "webm", "m3u8":
+                out += "[video]"
+            case "mp3", "wav", "ogg", "m4a", "flac", "aac":
+                out += "[audio]"
+            default:
+                out += "[image]"
+            }
+            lastEnd = match.range.upperBound
+        }
+        out += ns.substring(from: lastEnd)
+        return out
     }
 
     /// Replaces `nostr:` bech32 references in `content` with short human-readable
