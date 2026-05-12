@@ -7,10 +7,11 @@ struct ComposeView: View {
     @Environment(\.dismiss) private var dismiss
 
     @FocusState private var contentFocused: Bool
-    @State private var pickerItems: [PhotosPickerItem] = []
     @State private var showScheduleSheet = false
     @State private var showCancelConfirm = false
     @State private var showGifPicker = false
+    @State private var showPhotosPicker = false
+    @State private var photosPickerMaxCount: Int = 8
 
     /// Draft to load on first appear. Nil for `.new` and `.reply`/`.quote` composers.
     /// Loaded from `.task` rather than `init` to defeat SwiftUI's State preservation
@@ -135,12 +136,6 @@ struct ComposeView: View {
             await viewModel.start()
             contentFocused = true
         }
-        .onChange(of: pickerItems) { _, items in
-            guard !items.isEmpty else { return }
-            let captured = items
-            pickerItems = []
-            Task { await viewModel.addMedia(items: captured) }
-        }
         .interactiveDismissDisabled(viewModel.isPublishing || viewModel.countdownSeconds != nil)
         .sheet(isPresented: $showScheduleSheet) {
             ScheduleSheet(
@@ -158,6 +153,18 @@ struct ComposeView: View {
         .background(
             GifPickerPresenter(isPresented: $showGifPicker) { gifUrl in
                 appendGifUrl(gifUrl)
+            }
+        )
+        // Photos picker presented as a real UIKit modal via PHPickerViewController.
+        // SwiftUI's `.photosPicker(...)` modifier and inline `PhotosPicker` were
+        // both observed to dismiss the compose sheet mid-scroll or right after
+        // selection on iOS 26 — the UIKit bridge avoids that coordination path.
+        .background(
+            PhotosPickerPresenter(
+                isPresented: $showPhotosPicker,
+                maxCount: photosPickerMaxCount
+            ) { providers in
+                Task { await viewModel.addMediaProviders(providers) }
             }
         )
         .confirmationDialog(
@@ -349,7 +356,10 @@ struct ComposeView: View {
     private var galleryArea: some View {
         VStack(spacing: 8) {
             if viewModel.attachments.isEmpty {
-                PhotosPicker(selection: $pickerItems, maxSelectionCount: 8, matching: .any(of: [.images, .videos])) {
+                Button {
+                    photosPickerMaxCount = 8
+                    showPhotosPicker = true
+                } label: {
                     VStack(spacing: 6) {
                         Image(systemName: "photo.on.rectangle.angled")
                             .font(.system(size: 28))
@@ -372,7 +382,10 @@ struct ComposeView: View {
                         ForEach(viewModel.attachments) { attachment in
                             attachmentThumb(attachment, size: 140)
                         }
-                        PhotosPicker(selection: $pickerItems, maxSelectionCount: 8, matching: .any(of: [.images, .videos])) {
+                        Button {
+                            photosPickerMaxCount = 8
+                            showPhotosPicker = true
+                        } label: {
                             VStack(spacing: 4) {
                                 Image(systemName: "plus")
                                     .font(.system(size: 22, weight: .semibold))
@@ -538,7 +551,10 @@ struct ComposeView: View {
     private var actionsRow: some View {
         HStack(spacing: 22) {
             if !viewModel.galleryMode, !viewModel.pollEnabled {
-                PhotosPicker(selection: $pickerItems, maxSelectionCount: 4, matching: .any(of: [.images, .videos])) {
+                Button {
+                    photosPickerMaxCount = 4
+                    showPhotosPicker = true
+                } label: {
                     Image(systemName: "photo.on.rectangle")
                         .font(.system(size: 22))
                         .foregroundStyle(.secondary)
