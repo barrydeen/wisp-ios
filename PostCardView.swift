@@ -41,6 +41,17 @@ struct PostCardView: View {
     var onProfileTap: ((String) -> Void)? = nil
     var onNoteTap: ((String) -> Void)? = nil
     var onHashtagTap: ((String) -> Void)? = nil
+    /// Optional escape hatches for sheets whose content raises the keyboard
+    /// (emoji library's search field, ComposeView's text editor). When set,
+    /// the parent view is responsible for presenting the sheet from a stable
+    /// anchor — anchoring keyboard-using sheets to `PostCardView` itself
+    /// causes the lazy-row recycle (triggered by the keyboard's safe-area
+    /// change) to tear down and re-present the sheet in a loop on real
+    /// devices. Surfaces that don't supply these fall back to PostCardView's
+    /// own `.sheet(item:)` route.
+    var onOpenEmojiLibrary: ((@escaping (PickedEmoji) -> Void) -> Void)? = nil
+    var onOpenReplyCompose: ((_ parent: NostrEvent, _ root: NostrEvent?) -> Void)? = nil
+    var onOpenQuoteCompose: ((NostrEvent) -> Void)? = nil
     @Environment(WalletStore.self) private var walletStore: WalletStore?
     @Environment(AppSettings.self) private var settings
     @State private var expanded = false
@@ -54,7 +65,6 @@ struct PostCardView: View {
     /// quoted note with media, image grid, etc.) triggers via this.
     @State private var naturalContentHeight: CGFloat = 0
     @State private var showReactionPicker = false
-    @State private var showEmojiLibrary = false
     /// Cached global frame of the heart button, used to flip the popover
     /// arrow edge so the picker never opens off-screen. When the heart sits
     /// in the lower half of the screen the popover anchors above it
@@ -90,6 +100,7 @@ struct PostCardView: View {
         case addToList
         case quoteCompose
         case replyCompose
+        case emojiLibrary
 
         var id: Int {
             switch self {
@@ -97,6 +108,7 @@ struct PostCardView: View {
             case .addToList: return 1
             case .quoteCompose: return 2
             case .replyCompose: return 3
+            case .emojiLibrary: return 4
             }
         }
     }
@@ -481,6 +493,11 @@ struct PostCardView: View {
                     let target = resolveRepost().event
                     ComposeView(keypair: keypair, mode: .reply(parent: target, root: replyRootStub(for: target)))
                 }
+            case .emojiLibrary:
+                EmojiLibrarySheet(mode: .pickForReaction { picked in
+                    activeSheet = nil
+                    sendReaction(picked)
+                })
             }
         }
         .confirmationDialog(
@@ -662,7 +679,12 @@ struct PostCardView: View {
     private var actionBar: some View {
         HStack(spacing: 0) {
             Button {
-                activeSheet = .replyCompose
+                if let route = onOpenReplyCompose {
+                    let target = resolveRepost().event
+                    route(target, replyRootStub(for: target))
+                } else {
+                    activeSheet = .replyCompose
+                }
             } label: {
                 // Display the highest count we know about across the three
                 // sources so cold opens get a count from the engagement
@@ -763,7 +785,11 @@ struct PostCardView: View {
             .disabled(iReposted)
 
             Button {
-                activeSheet = .quoteCompose
+                if let route = onOpenQuoteCompose {
+                    route(resolveRepost().event)
+                } else {
+                    activeSheet = .quoteCompose
+                }
             } label: {
                 Label("Quote", systemImage: "quote.bubble")
             }
@@ -945,16 +971,14 @@ struct PostCardView: View {
                 },
                 onPlus: {
                     showReactionPicker = false
-                    showEmojiLibrary = true
+                    if let route = onOpenEmojiLibrary {
+                        route { picked in sendReaction(picked) }
+                    } else {
+                        activeSheet = .emojiLibrary
+                    }
                 }
             )
             .presentationCompactAdaptation(.popover)
-        }
-        .sheet(isPresented: $showEmojiLibrary) {
-            EmojiLibrarySheet(mode: .pickForReaction { picked in
-                showEmojiLibrary = false
-                sendReaction(picked)
-            })
         }
     }
 
