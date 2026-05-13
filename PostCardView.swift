@@ -34,9 +34,24 @@ struct PostCardView: View {
     /// count so the bubble matches the visible REPLIES list — without it
     /// the engagement repo / network total would still show blocked authors.
     var forcedReplyCount: Int? = nil
+    /// When false, the "Replying to @user" row is suppressed even if the event
+    /// is a reply. Used for stacked nested replies in ThreadView where the
+    /// visual indentation already communicates the reply relationship.
+    var showReplyContext: Bool = true
     var onProfileTap: ((String) -> Void)? = nil
     var onNoteTap: ((String) -> Void)? = nil
     var onHashtagTap: ((String) -> Void)? = nil
+    /// Optional escape hatches for sheets whose content raises the keyboard
+    /// (emoji library's search field, ComposeView's text editor). When set,
+    /// the parent view is responsible for presenting the sheet from a stable
+    /// anchor — anchoring keyboard-using sheets to `PostCardView` itself
+    /// causes the lazy-row recycle (triggered by the keyboard's safe-area
+    /// change) to tear down and re-present the sheet in a loop on real
+    /// devices. Surfaces that don't supply these fall back to PostCardView's
+    /// own `.sheet(item:)` route.
+    var onOpenEmojiLibrary: ((@escaping (PickedEmoji) -> Void) -> Void)? = nil
+    var onOpenReplyCompose: ((_ parent: NostrEvent, _ root: NostrEvent?) -> Void)? = nil
+    var onOpenQuoteCompose: ((NostrEvent) -> Void)? = nil
     @Environment(WalletStore.self) private var walletStore: WalletStore?
     @Environment(AppSettings.self) private var settings
     @State private var expanded = false
@@ -50,7 +65,6 @@ struct PostCardView: View {
     /// quoted note with media, image grid, etc.) triggers via this.
     @State private var naturalContentHeight: CGFloat = 0
     @State private var showReactionPicker = false
-    @State private var showEmojiLibrary = false
     /// Cached global frame of the heart button, used to flip the popover
     /// arrow edge so the picker never opens off-screen. When the heart sits
     /// in the lower half of the screen the popover anchors above it
@@ -86,6 +100,7 @@ struct PostCardView: View {
         case addToList
         case quoteCompose
         case replyCompose
+        case emojiLibrary
 
         var id: Int {
             switch self {
@@ -93,6 +108,7 @@ struct PostCardView: View {
             case .addToList: return 1
             case .quoteCompose: return 2
             case .replyCompose: return 3
+            case .emojiLibrary: return 4
             }
         }
     }
@@ -187,17 +203,23 @@ struct PostCardView: View {
                 repostBanner
             }
 
+            if showReplyContext {
+                replyingToRow(for: displayEvent)
+            }
+
             // Header row — avatar + name + nip05 + badges/time. Indented to
             // align with the avatar. In ancestor-compact mode the inner profile
             // links are dropped so the outer ThreadRoute link owns every tap.
             HStack(alignment: .top, spacing: 12) {
                 if ancestorCompact {
                     CachedAvatarView(url: displayProfile?.picture, size: 24)
+                        .quickFollowOnLongPress(pubkey: displayEvent.pubkey)
                 } else {
                     NavigationLink(value: ProfileRoute(pubkey: displayEvent.pubkey)) {
                         avatar(picture: displayProfile?.picture)
                     }
                     .buttonStyle(.plain)
+                    .quickFollowOnLongPress(pubkey: displayEvent.pubkey)
                 }
 
                 VStack(alignment: .leading, spacing: 2) {
@@ -239,6 +261,10 @@ struct PostCardView: View {
                              : relativeTime(from: displayEvent.createdAt))
                             .font(.caption)
                             .foregroundStyle(.secondary)
+
+                        if !ancestorCompact {
+                            overflowMenu
+                        }
                     }
 
                     if !ancestorCompact, let nip05 = displayProfile?.nip05, !nip05.isEmpty {
@@ -289,6 +315,7 @@ struct PostCardView: View {
                             onProfileTap: onProfileTap,
                             onNoteTap: onNoteTap,
                             onHashtagTap: onHashtagTap,
+                            onPlainTextTap: { onNoteTap?(displayEvent.id) },
                             linksEnabled: true
                         )
                         // `.fixedSize(vertical: true)` so inline media render
@@ -468,6 +495,11 @@ struct PostCardView: View {
                     let target = resolveRepost().event
                     ComposeView(keypair: keypair, mode: .reply(parent: target, root: replyRootStub(for: target)))
                 }
+            case .emojiLibrary:
+                EmojiLibrarySheet(mode: .pickForReaction { picked in
+                    activeSheet = nil
+                    sendReaction(picked)
+                })
             }
         }
         .confirmationDialog(
@@ -531,6 +563,45 @@ struct PostCardView: View {
     /// (populated by `EngagementRepository`'s engagement subscription
     /// against the inner kind-1 id) and stacks up to 5 overlapping
     /// avatars with a count-aware label.
+    @ViewBuilder
+    private func replyingToRow(for displayEvent: NostrEvent) -> some View {
+        if !ancestorCompact,
+           Nip10.replyTarget(of: displayEvent) != nil,
+           let label = replyingToLabel(for: displayEvent) {
+            HStack(spacing: 4) {
+                Image(systemName: "arrowshape.turn.up.left.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                Text(label)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 8)
+            .padding(.bottom, 2)
+        }
+    }
+
+    private func replyingToLabel(for displayEvent: NostrEvent) -> String? {
+        var seen = Set<String>()
+        let unique = displayEvent.tags
+            .filter { $0.count >= 2 && $0[0] == "p" && $0[1] != displayEvent.pubkey }
+            .map { $0[1] }
+            .filter { seen.insert($0).inserted }
+        guard !unique.isEmpty else { return nil }
+        let shown = unique.prefix(2).map { pk in
+            profiles[pk]?.displayString
+                ?? ProfileRepository.shared.get(pk)?.displayString
+                ?? npubShort(pk)
+        }
+        let remainder = unique.count - shown.count
+        if remainder > 0 {
+            return "Replying to \(shown.joined(separator: ", ")) and \(remainder) other\(remainder == 1 ? "" : "s")"
+        }
+        return "Replying to \(shown.joined(separator: ", "))"
+    }
+
     private var repostBanner: some View {
         // Seed the wrapper's pubkey so the row paints with at least one
         // avatar before the engagement query returns. The wrapper itself
@@ -574,6 +645,7 @@ struct PostCardView: View {
                             )
                     }
                     .buttonStyle(.plain)
+                    .quickFollowOnLongPress(pubkey: pk)
                     .offset(x: CGFloat(index) * stackOffset)
                 }
             }
@@ -610,7 +682,12 @@ struct PostCardView: View {
     private var actionBar: some View {
         HStack(spacing: 0) {
             Button {
-                activeSheet = .replyCompose
+                if let route = onOpenReplyCompose {
+                    let target = resolveRepost().event
+                    route(target, replyRootStub(for: target))
+                } else {
+                    activeSheet = .replyCompose
+                }
             } label: {
                 // Display the highest count we know about across the three
                 // sources so cold opens get a count from the engagement
@@ -645,8 +722,6 @@ struct PostCardView: View {
                 )
             }
             .buttonStyle(.plain)
-            Spacer()
-            overflowMenu
             Spacer()
             Button {
                 withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
@@ -713,7 +788,11 @@ struct PostCardView: View {
             .disabled(iReposted)
 
             Button {
-                activeSheet = .quoteCompose
+                if let route = onOpenQuoteCompose {
+                    route(resolveRepost().event)
+                } else {
+                    activeSheet = .quoteCompose
+                }
             } label: {
                 Label("Quote", systemImage: "quote.bubble")
             }
@@ -777,9 +856,16 @@ struct PostCardView: View {
             }
 
             Button {
+                copyNoteText(target)
+            } label: {
+                Label("Copy Note Text", systemImage: "doc.on.doc")
+            }
+            .disabled(target.content.isEmpty)
+
+            Button {
                 copyNoteId(target)
             } label: {
-                Label("Copy Note ID", systemImage: "doc.on.doc")
+                Label("Copy Note ID", systemImage: "lanyardcard")
             }
 
             Button {
@@ -809,8 +895,9 @@ struct PostCardView: View {
             }
         } label: {
             Image(systemName: "ellipsis")
-                .font(.system(size: 15))
-                .frame(width: 24, height: 28)
+                .font(.system(size: 13))
+                .rotationEffect(.degrees(90))
+                .frame(width: 22, height: 22)
                 .contentShape(Rectangle())
         }
         .menuStyle(.borderlessButton)
@@ -887,16 +974,14 @@ struct PostCardView: View {
                 },
                 onPlus: {
                     showReactionPicker = false
-                    showEmojiLibrary = true
+                    if let route = onOpenEmojiLibrary {
+                        route { picked in sendReaction(picked) }
+                    } else {
+                        activeSheet = .emojiLibrary
+                    }
                 }
             )
             .presentationCompactAdaptation(.popover)
-        }
-        .sheet(isPresented: $showEmojiLibrary) {
-            EmojiLibrarySheet(mode: .pickForReaction { picked in
-                showEmojiLibrary = false
-                sendReaction(picked)
-            })
         }
     }
 
@@ -988,6 +1073,10 @@ struct PostCardView: View {
 
     private func copyNoteJson(_ target: NostrEvent) {
         UIPasteboard.general.string = target.toJSON()
+    }
+
+    private func copyNoteText(_ target: NostrEvent) {
+        UIPasteboard.general.string = target.content
     }
 
     /// Resolve the thread root for a reply to `target`. If `target` is itself a reply,
@@ -1532,4 +1621,5 @@ func relativeTime(from timestamp: Int) -> String {
     formatter.dateFormat = "MMM d"
     return formatter.string(from: Date(timeIntervalSince1970: Double(timestamp)))
 }
+
 

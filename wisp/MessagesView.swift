@@ -69,7 +69,46 @@ struct MessagesView: View {
             // Idempotent — start() guards on `subscription == nil`, so this only does work
             // after MainView.onDisappear has torn the subscription down.
             Task { await viewModel.start() }
+            // A deep link tap that flipped the tab to messages while this view
+            // wasn't mounted lands here on first appear — `.onChange` won't
+            // fire for state set before the observer existed.
+            handlePendingDeepLink()
         }
+        .onChange(of: groupListVM.pendingChatDeepLink) { _, _ in
+            handlePendingDeepLink()
+        }
+    }
+
+    /// Consume `groupListVM.pendingChatDeepLink`: switch to the rooms sub-tab,
+    /// send a (idempotent) join request if not already a member, and push the
+    /// `GroupRoom` onto this tab's NavigationPath.
+    private func handlePendingDeepLink() {
+        guard let dl = groupListVM.pendingChatDeepLink else { return }
+        tab = .rooms
+        Task { @MainActor in
+            // joinGroup is idempotent when the room is already populated;
+            // for fresh joins it sends kind-9021 and adds the optimistic
+            // room to the repository.
+            _ = await groupListVM.joinGroup(
+                relayUrl: dl.relayUrl, groupId: dl.groupId, code: dl.code
+            )
+            // The relay-side normalization in joinGroup lowercases + strips
+            // trailing slashes, so look up the room by the same key shape.
+            let normalized = normalizeRelay(dl.relayUrl)
+            if let room = groupListVM.repository.getRoom(
+                relayUrl: normalized, groupId: dl.groupId
+            ) {
+                navPath.append(room)
+            }
+            groupListVM.pendingChatDeepLink = nil
+        }
+    }
+
+    private func normalizeRelay(_ url: String) -> String {
+        var s = url.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        while s.hasSuffix("/") { s.removeLast() }
+        if !s.hasPrefix("wss://") && !s.hasPrefix("ws://") { s = "wss://" + s }
+        return s
     }
 
     @ViewBuilder
