@@ -109,10 +109,9 @@ final class SearchViewModel {
     func updateQuery(_ text: String) {
         query = text
         debounceTask?.cancel()
-        let trimmed = preprocess(text)
-        guard trimmed.count >= 2 else {
-            // Clear results once query becomes too short
-            if trimmed.isEmpty {
+        let intent = preprocessQuery(text)
+        guard isQueryActionable(intent) else {
+            if case .text(let s) = intent, s.isEmpty {
                 notes = []
                 people = []
                 noteProfiles = [:]
@@ -131,10 +130,7 @@ final class SearchViewModel {
     func setMode(_ newMode: Mode) {
         guard mode != newMode else { return }
         mode = newMode
-        // Re-run if there's an active query
-        if preprocess(query).count >= 2 {
-            runSearch()
-        }
+        if isQueryActionable(preprocessQuery(query)) { runSearch() }
     }
 
     func setRelayOption(_ option: RelayOption, url: String? = nil) {
@@ -143,9 +139,7 @@ final class SearchViewModel {
             selectedRelayUrl = url ?? selectedRelayUrl
         }
         savePreferences()
-        if preprocess(query).count >= 2 {
-            runSearch()
-        }
+        if isQueryActionable(preprocessQuery(query)) { runSearch() }
     }
 
     func addCustomRelay(_ url: String) {
@@ -172,7 +166,7 @@ final class SearchViewModel {
         authorFilter = profile
         authorResults = []
         authorQuery = ""
-        if mode == .notes, preprocess(query).count >= 2 {
+        if mode == .notes, isQueryActionable(preprocessQuery(query)) {
             runSearch()
         }
     }
@@ -180,8 +174,7 @@ final class SearchViewModel {
     func updateAuthorQuery(_ text: String) {
         authorQuery = text
         authorDebounceTask?.cancel()
-        let trimmed = preprocess(text)
-        guard trimmed.count >= 2 else {
+        guard case .text(let trimmed) = preprocessQuery(text), trimmed.count >= 2 else {
             authorResults = []
             return
         }
@@ -195,18 +188,12 @@ final class SearchViewModel {
     // MARK: - Search
 
     func runSearch() {
-        let trimmed = preprocess(query)
-        guard !trimmed.isEmpty else { return }
+        let intent = preprocessQuery(query)
+        guard isQueryActionable(intent) else { return }
 
         searchCounter += 1
         let myCounter = searchCounter
-        let relays = relaysToQuery()
-        guard !relays.isEmpty else {
-            isSearching = false
-            return
-        }
         let mode = self.mode
-        let authorPubkey = (mode == .notes) ? authorFilter?.pubkey : nil
 
         searchTask?.cancel()
         isSearching = true
@@ -219,31 +206,88 @@ final class SearchViewModel {
             people = []
         }
 
-        let filter: NostrFilter
-        switch mode {
-        case .people:
-            filter = NostrFilter(kinds: [0], limit: 20, search: trimmed)
-        case .notes:
-            filter = NostrFilter(
-                kinds: [1],
-                authors: authorPubkey.map { [$0] },
-                limit: 50,
-                search: trimmed
-            )
-        }
-
         let timeout = searchTimeout
         searchTask = Task { [weak self] in
-            let events = await RelayPool.query(relays: relays, filter: filter, timeout: timeout)
             guard let self else { return }
+
+            // For people search, NIP-05 identifiers need an async HTTP lookup
+            // before we can build the relay filter.
+            if mode == .people, case .nip05(let identifier) = intent {
+                let pubkey = await Nip05Verifier.lookup(identifier: identifier)
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    guard myCounter == self.searchCounter else { return }
+                    if let pubkey {
+                        self.runPubkeyFetch(pubkey: pubkey, counter: myCounter, timeout: timeout)
+                    } else {
+                        // NIP-05 lookup failed — nothing to show
+                        self.people = []
+                        self.isSearching = false
+                    }
+                }
+                return
+            }
+
+            let relays = self.relaysToQuery()
+            guard !relays.isEmpty else {
+                await MainActor.run { self.isSearching = false }
+                return
+            }
+
+            let filter: NostrFilter
+            let queryRelays: [String]
+            switch mode {
+            case .people:
+                switch intent {
+                case .pubkey(let pubkey):
+                    filter = NostrFilter(kinds: [0], authors: [pubkey], limit: 1)
+                    let combined = ([Self.defaultSearchRelay] + Array(RelayDefaults.indexers))
+                        .reduce(into: [String]()) { acc, url in if !acc.contains(url) { acc.append(url) } }
+                    queryRelays = combined
+                case .text(let trimmed):
+                    filter = NostrFilter(kinds: [0], limit: 20, search: trimmed)
+                    queryRelays = relays
+                case .nip05:
+                    // Handled above via the early-return path
+                    return
+                }
+            case .notes:
+                let authorPubkey = self.authorFilter?.pubkey
+                guard case .text(let trimmed) = intent else { return }
+                filter = NostrFilter(
+                    kinds: [1],
+                    authors: authorPubkey.map { [$0] },
+                    limit: 50,
+                    search: trimmed
+                )
+                queryRelays = relays
+            }
+
+            let events = await RelayPool.query(relays: queryRelays, filter: filter, timeout: timeout)
+            guard !Task.isCancelled else { return }
             await MainActor.run {
                 guard myCounter == self.searchCounter else { return }
                 switch mode {
-                case .people:
-                    self.handlePeopleResults(events)
-                case .notes:
-                    self.handleNoteResults(events)
+                case .people: self.handlePeopleResults(events)
+                case .notes:  self.handleNoteResults(events)
                 }
+                self.isSearching = false
+            }
+        }
+    }
+
+    /// Fetch a single kind-0 by pubkey after a NIP-05 lookup resolved the pubkey.
+    /// Runs a new sub-task so the NIP-05 path can return early from its task.
+    private func runPubkeyFetch(pubkey: String, counter: Int, timeout: TimeInterval) {
+        let filter = NostrFilter(kinds: [0], authors: [pubkey], limit: 1)
+        let combined = ([Self.defaultSearchRelay] + Array(RelayDefaults.indexers))
+            .reduce(into: [String]()) { acc, url in if !acc.contains(url) { acc.append(url) } }
+        searchTask = Task { [weak self] in
+            let events = await RelayPool.query(relays: combined, filter: filter, timeout: timeout)
+            guard let self else { return }
+            await MainActor.run {
+                guard counter == self.searchCounter else { return }
+                self.handlePeopleResults(events)
                 self.isSearching = false
             }
         }
@@ -392,6 +436,14 @@ final class SearchViewModel {
         }
     }
 
+    // MARK: - Search intent
+
+    enum SearchIntent {
+        case text(String)     // full-text search via NIP-50
+        case pubkey(String)   // resolved hex pubkey → authors: filter
+        case nip05(String)    // name@domain → async HTTP lookup → authors: filter
+    }
+
     // MARK: - Helpers
 
     private func relaysToQuery() -> [String] {
@@ -417,10 +469,40 @@ final class SearchViewModel {
         return Self.engagementFallbackRelays
     }
 
-    private func preprocess(_ text: String) -> String {
+    private func preprocessQuery(_ text: String) -> SearchIntent {
         var s = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if s.lowercased().hasPrefix("nostr:") { s = String(s.dropFirst("nostr:".count)) }
-        return s
+
+        let lower = s.lowercased()
+
+        // npub / nprofile → decode to hex pubkey
+        if lower.hasPrefix("npub1") || lower.hasPrefix("nprofile1") {
+            if let data = Nip19.decodeNostrUri(s), case .profileRef(let pubkey, _) = data {
+                return .pubkey(pubkey)
+            }
+        }
+
+        // Bare 64-char hex pubkey
+        if s.count == 64, s.allSatisfy({ $0.isHexDigit }) {
+            return .pubkey(s.lowercased())
+        }
+
+        // NIP-05 identifier: name@domain or _@domain
+        if s.contains("@") {
+            let parts = s.split(separator: "@", maxSplits: 1, omittingEmptySubsequences: false)
+            if parts.count == 2, !parts[0].isEmpty, parts[1].contains(".") {
+                return .nip05(s)
+            }
+        }
+
+        return .text(s)
+    }
+
+    private func isQueryActionable(_ intent: SearchIntent) -> Bool {
+        switch intent {
+        case .text(let s): return s.count >= 2
+        case .pubkey, .nip05: return true
+        }
     }
 
     private func normalizeRelayUrl(_ url: String) -> String {
