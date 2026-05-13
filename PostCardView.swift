@@ -239,6 +239,10 @@ struct PostCardView: View {
                              : relativeTime(from: displayEvent.createdAt))
                             .font(.caption)
                             .foregroundStyle(.secondary)
+
+                        if !ancestorCompact {
+                            overflowMenu
+                        }
                     }
 
                     if !ancestorCompact, let nip05 = displayProfile?.nip05, !nip05.isEmpty {
@@ -289,6 +293,7 @@ struct PostCardView: View {
                             onProfileTap: onProfileTap,
                             onNoteTap: onNoteTap,
                             onHashtagTap: onHashtagTap,
+                            onPlainTextTap: { onNoteTap?(displayEvent.id) },
                             linksEnabled: true
                         )
                         // `.fixedSize(vertical: true)` so inline media render
@@ -646,8 +651,6 @@ struct PostCardView: View {
             }
             .buttonStyle(.plain)
             Spacer()
-            overflowMenu
-            Spacer()
             Button {
                 withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
             } label: {
@@ -777,9 +780,16 @@ struct PostCardView: View {
             }
 
             Button {
+                copyNoteText(target)
+            } label: {
+                Label("Copy Note Text", systemImage: "doc.on.doc")
+            }
+            .disabled(target.content.isEmpty)
+
+            Button {
                 copyNoteId(target)
             } label: {
-                Label("Copy Note ID", systemImage: "doc.on.doc")
+                Label("Copy Note ID", systemImage: "lanyardcard")
             }
 
             Button {
@@ -809,8 +819,9 @@ struct PostCardView: View {
             }
         } label: {
             Image(systemName: "ellipsis")
-                .font(.system(size: 15))
-                .frame(width: 24, height: 28)
+                .font(.system(size: 13))
+                .rotationEffect(.degrees(90))
+                .frame(width: 22, height: 22)
                 .contentShape(Rectangle())
         }
         .menuStyle(.borderlessButton)
@@ -988,6 +999,10 @@ struct PostCardView: View {
 
     private func copyNoteJson(_ target: NostrEvent) {
         UIPasteboard.general.string = target.toJSON()
+    }
+
+    private func copyNoteText(_ target: NostrEvent) {
+        UIPasteboard.general.string = target.content
     }
 
     /// Resolve the thread root for a reply to `target`. If `target` is itself a reply,
@@ -1532,4 +1547,5 @@ func relativeTime(from timestamp: Int) -> String {
     formatter.dateFormat = "MMM d"
     return formatter.string(from: Date(timeIntervalSince1970: Double(timestamp)))
 }
+
 

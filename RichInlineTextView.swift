@@ -26,6 +26,7 @@ struct RichInlineTextView: UIViewRepresentable {
     var onProfileTap: ((String) -> Void)? = nil
     var onNoteTap: ((String) -> Void)? = nil
     var onHashtagTap: ((String) -> Void)? = nil
+    var onPlainTextTap: (() -> Void)? = nil
 
     @ObservedObject private var emojiCache = EmojiImageCache.shared
 
@@ -88,13 +89,12 @@ struct RichInlineTextView: UIViewRepresentable {
         tv.backgroundColor = .clear
         tv.isEditable = false
         tv.isScrollEnabled = false
-        // UIKit's built-in link tap requires `isSelectable = true`, which
-        // wires up a long-press selection recognizer that competes with
-        // single-tap delivery and made short `@mention` links feel sluggish
-        // or unresponsive on real devices. We bypass it with our own tap
-        // recognizer in `ContentSizingTextView` so selection /
-        // `shouldInteractWith` stay off.
-        tv.isSelectable = false
+        // Selection is on so long-press places a cursor and brings up the
+        // standard Copy menu. Single-tap routing for `@mention` / inline
+        // URLs / hashtags still goes through our custom `linkTapRecognizer`;
+        // UITextView's own link gesture stays off because
+        // `linkTextAttributes` and `dataDetectorTypes` are unset.
+        tv.isSelectable = true
         tv.dataDetectorTypes = []
         tv.textContainerInset = .zero
         tv.textContainer.lineFragmentPadding = 0
@@ -106,6 +106,10 @@ struct RichInlineTextView: UIViewRepresentable {
         tv.onLinkTap = { [weak coordinator] url in
             guard coordinator?.parent.linksEnabled == true else { return }
             coordinator?.dispatchLink(url)
+        }
+        tv.onPlainTextTap = { [weak coordinator] in
+            guard coordinator?.parent.linksEnabled == true else { return }
+            coordinator?.parent.onPlainTextTap?()
         }
         tv.linksEnabled = linksEnabled
         return tv
@@ -374,6 +378,7 @@ final class ContentSizingTextView: UITextView {
         didSet { linkTapRecognizer.isEnabled = linksEnabled }
     }
     var onLinkTap: ((URL) -> Void)?
+    var onPlainTextTap: (() -> Void)?
 
     private lazy var linkTapRecognizer: UITapGestureRecognizer = {
         let r = UITapGestureRecognizer(target: self, action: #selector(handleLinkTap(_:)))
@@ -399,18 +404,21 @@ final class ContentSizingTextView: UITextView {
 
     @objc private func handleLinkTap(_ gesture: UITapGestureRecognizer) {
         let point = gesture.location(in: self)
-        guard let url = nearbyLinkURL(at: point) else { return }
-        onLinkTap?(url)
+        if let url = nearbyLinkURL(at: point) {
+            onLinkTap?(url)
+        } else {
+            onPlainTextTap?()
+        }
     }
 
-    /// Only claim hit-test ownership over points within reach of a `.link`
-    /// character. Plain-text taps fall through to the enclosing
-    /// NavigationLink, which is what made note cards in the feed responsive
-    /// in the first place.
+    /// Claim every in-bounds touch when links are enabled so long-press
+    /// selection (cursor / drag handles / Copy menu) can engage on plain
+    /// text. Single-tap on plain text is intercepted by `linkTapRecognizer`
+    /// and forwarded to the enclosing tap target via `onPlainTextTap`,
+    /// preserving feed tap-to-open-thread.
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
         guard super.point(inside: point, with: event) else { return false }
-        guard linksEnabled else { return false }
-        return nearbyLinkURL(at: point) != nil
+        return linksEnabled
     }
 
     /// Resolve a `.link` attribute at or beside the tap point. A short
