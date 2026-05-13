@@ -96,7 +96,15 @@ struct RichInlineTextView: UIViewRepresentable {
         // `linkTextAttributes` and `dataDetectorTypes` are unset.
         tv.isSelectable = true
         tv.dataDetectorTypes = []
-        tv.textContainerInset = .zero
+        // 2pt of bottom inset reserves space for the last line's descender
+        // depth + font leading. With a flat zero inset, posts whose last
+        // line ends in glyphs with deep descenders ("p", "y", "Z") sat
+        // hard against the next sibling in the RichContentView VStack —
+        // typically an inline image — and the descenders visibly clipped
+        // into the top edge of the image's placeholder. The 2pt buffer
+        // lifts the text frame just enough that the 8pt VStack spacing
+        // reads as a real gap regardless of the trailing glyphs.
+        tv.textContainerInset = UIEdgeInsets(top: 0, left: 0, bottom: 2, right: 0)
         tv.textContainer.lineFragmentPadding = 0
         tv.textContainer.lineBreakMode = .byWordWrapping
         tv.adjustsFontForContentSizeCategory = true
