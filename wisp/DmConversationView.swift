@@ -165,6 +165,7 @@ struct DmMessageBubbleView: View {
             if isMine { Spacer(minLength: 40) }
             if !isMine {
                 CachedAvatarView(url: senderProfile?.picture, size: 28)
+                    .quickFollowOnLongPress(pubkey: message.senderPubkey)
             }
             VStack(alignment: isMine ? .trailing : .leading, spacing: 2) {
                 Text(message.content)

@@ -357,12 +357,13 @@ struct FullScreenMediaPager: View {
         }
     }
 
-    /// Receives drag values forwarded from the active inner FullScreenImageView
-    /// when it's not zoomed. Direction-routes between L/R paging and
-    /// vertical-down dismiss; commits on `isEnded == true`.
-    private func handleCarouselDrag(_ value: DragGesture.Value, isEnded: Bool) {
-        let dx = value.translation.width
-        let dy = value.translation.height
+    /// Receives centroid translation forwarded from the active inner
+    /// FullScreenImageView (or video page) when it's not zoomed.
+    /// Direction-routes between L/R paging and vertical-down dismiss;
+    /// commits on `isEnded == true`.
+    private func handleCarouselDrag(_ translation: CGSize, isEnded: Bool) {
+        let dx = translation.width
+        let dy = translation.height
         if !isEnded {
             if abs(dy) > abs(dx) {
                 dismissY = max(0, dy)
@@ -398,17 +399,37 @@ struct FullScreenMediaPager: View {
     @ViewBuilder
     private func pageContent(for item: MediaGridView.MediaItem) -> some View {
         if item.isVideo {
+            // Image pages forward their pan via `onCarouselDrag` from the
+            // inner FullScreenImageView. Video pages can't do the same — the
+            // AVPlayer surface swallows the drag — so we tell InlineVideoView
+            // to passthrough hit tests and attach the matching drag gesture
+            // here at the page level. The mute button on the player is a
+            // sibling in the ZStack, not on the disabled render surface, so
+            // it still receives taps.
             InlineVideoView(meta: MediaMeta(
                 url: item.url,
                 mime: item.mime,
                 dimension: item.dimension
-            ))
+            ), passthroughHitTests: true)
             .padding(.horizontal, 4)
+            .contentShape(Rectangle())
+            .gesture(
+                // Zero minimum distance so the drag engages on the first
+                // pixel of movement — matches UIScrollView paging feel and
+                // avoids the felt lag of the default 10pt threshold.
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        handleCarouselDrag(value.translation, isEnded: false)
+                    }
+                    .onEnded { value in
+                        handleCarouselDrag(value.translation, isEnded: true)
+                    }
+            )
         } else {
             FullScreenImageView(
                 url: item.url,
                 mime: item.mime,
-                onCarouselDrag: { value, ended in handleCarouselDrag(value, isEnded: ended) }
+                onCarouselDrag: { translation, ended in handleCarouselDrag(translation, isEnded: ended) }
             )
         }
     }

@@ -26,6 +26,7 @@ struct RichInlineTextView: UIViewRepresentable {
     var onProfileTap: ((String) -> Void)? = nil
     var onNoteTap: ((String) -> Void)? = nil
     var onHashtagTap: ((String) -> Void)? = nil
+    var onPlainTextTap: (() -> Void)? = nil
 
     @ObservedObject private var emojiCache = EmojiImageCache.shared
 
@@ -88,15 +89,22 @@ struct RichInlineTextView: UIViewRepresentable {
         tv.backgroundColor = .clear
         tv.isEditable = false
         tv.isScrollEnabled = false
-        // UIKit's built-in link tap requires `isSelectable = true`, which
-        // wires up a long-press selection recognizer that competes with
-        // single-tap delivery and made short `@mention` links feel sluggish
-        // or unresponsive on real devices. We bypass it with our own tap
-        // recognizer in `ContentSizingTextView` so selection /
-        // `shouldInteractWith` stay off.
-        tv.isSelectable = false
+        // Selection is on so long-press places a cursor and brings up the
+        // standard Copy menu. Single-tap routing for `@mention` / inline
+        // URLs / hashtags still goes through our custom `linkTapRecognizer`;
+        // UITextView's own link gesture stays off because
+        // `linkTextAttributes` and `dataDetectorTypes` are unset.
+        tv.isSelectable = true
         tv.dataDetectorTypes = []
-        tv.textContainerInset = .zero
+        // 2pt of bottom inset reserves space for the last line's descender
+        // depth + font leading. With a flat zero inset, posts whose last
+        // line ends in glyphs with deep descenders ("p", "y", "Z") sat
+        // hard against the next sibling in the RichContentView VStack —
+        // typically an inline image — and the descenders visibly clipped
+        // into the top edge of the image's placeholder. The 2pt buffer
+        // lifts the text frame just enough that the 8pt VStack spacing
+        // reads as a real gap regardless of the trailing glyphs.
+        tv.textContainerInset = UIEdgeInsets(top: 0, left: 0, bottom: 2, right: 0)
         tv.textContainer.lineFragmentPadding = 0
         tv.textContainer.lineBreakMode = .byWordWrapping
         tv.adjustsFontForContentSizeCategory = true
@@ -106,6 +114,10 @@ struct RichInlineTextView: UIViewRepresentable {
         tv.onLinkTap = { [weak coordinator] url in
             guard coordinator?.parent.linksEnabled == true else { return }
             coordinator?.dispatchLink(url)
+        }
+        tv.onPlainTextTap = { [weak coordinator] in
+            guard coordinator?.parent.linksEnabled == true else { return }
+            coordinator?.parent.onPlainTextTap?()
         }
         tv.linksEnabled = linksEnabled
         return tv
@@ -230,7 +242,21 @@ struct RichInlineTextView: UIViewRepresentable {
                 // it as a tappable inline URL just like `.inlineLink`.
                 var attrs = baseAttrs
                 attrs[.foregroundColor] = linkColor
-                if let u = URL(string: url) {
+                // NIP-29 invite links (`wss://host'<groupid>`) get routed
+                // through the internal `wisp-group://` scheme so the tap
+                // opens the chat room in-app instead of falling through to
+                // `UIApplication.shared.open` (which would hand a WebSocket
+                // URL to Safari, where nothing useful happens).
+                let lower = url.lowercased()
+                if (lower.hasPrefix("wss://") || lower.hasPrefix("ws://")),
+                   let parsed = Nip29.parseInviteLink(url),
+                   let internalUrl = Nip29.buildInternalUrl(
+                       relayUrl: parsed.relayUrl,
+                       groupId: parsed.groupId,
+                       code: parsed.code
+                   ) {
+                    attrs[.wispLinkURL] = internalUrl
+                } else if let u = URL(string: url) {
                     attrs[.wispLinkURL] = u
                 }
                 combined.append(NSAttributedString(string: shortenUrl(url), attributes: attrs))
@@ -350,6 +376,16 @@ struct RichInlineTextView: UIViewRepresentable {
                 let raw = url.host ?? url.absoluteString.replacingOccurrences(of: "wisp-hashtag://", with: "")
                 let tag = raw.removingPercentEncoding ?? raw
                 parent.onHashtagTap?(tag)
+            case Nip29.internalScheme:
+                guard let parsed = Nip29.parseInternalUrl(url) else { return }
+                var info: [String: Any] = [
+                    "relay": parsed.relayUrl,
+                    "group": parsed.groupId
+                ]
+                if let code = parsed.code { info["code"] = code }
+                NotificationCenter.default.post(
+                    name: .openWispChatLink, object: nil, userInfo: info
+                )
             default:
                 UIApplication.shared.open(url)
             }
@@ -374,6 +410,7 @@ final class ContentSizingTextView: UITextView {
         didSet { linkTapRecognizer.isEnabled = linksEnabled }
     }
     var onLinkTap: ((URL) -> Void)?
+    var onPlainTextTap: (() -> Void)?
 
     private lazy var linkTapRecognizer: UITapGestureRecognizer = {
         let r = UITapGestureRecognizer(target: self, action: #selector(handleLinkTap(_:)))
@@ -399,18 +436,21 @@ final class ContentSizingTextView: UITextView {
 
     @objc private func handleLinkTap(_ gesture: UITapGestureRecognizer) {
         let point = gesture.location(in: self)
-        guard let url = nearbyLinkURL(at: point) else { return }
-        onLinkTap?(url)
+        if let url = nearbyLinkURL(at: point) {
+            onLinkTap?(url)
+        } else {
+            onPlainTextTap?()
+        }
     }
 
-    /// Only claim hit-test ownership over points within reach of a `.link`
-    /// character. Plain-text taps fall through to the enclosing
-    /// NavigationLink, which is what made note cards in the feed responsive
-    /// in the first place.
+    /// Claim every in-bounds touch when links are enabled so long-press
+    /// selection (cursor / drag handles / Copy menu) can engage on plain
+    /// text. Single-tap on plain text is intercepted by `linkTapRecognizer`
+    /// and forwarded to the enclosing tap target via `onPlainTextTap`,
+    /// preserving feed tap-to-open-thread.
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
         guard super.point(inside: point, with: event) else { return false }
-        guard linksEnabled else { return false }
-        return nearbyLinkURL(at: point) != nil
+        return linksEnabled
     }
 
     /// Resolve a `.link` attribute at or beside the tap point. A short

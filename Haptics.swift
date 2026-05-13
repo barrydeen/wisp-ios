@@ -41,6 +41,25 @@ final class Haptics {
         #endif
     }
 
+    /// Discrete "operation succeeded" tap — softer than `pulse` so it reads
+    /// as a confirmation, not a separate action. Used after follow / unfollow
+    /// publishes settle.
+    func success() {
+        #if canImport(UIKit) && !os(tvOS)
+        successGen.prepare()
+        successGen.notificationOccurred(.success)
+        #endif
+    }
+
+    /// Discrete "operation failed" buzz. Pairs with `success` so the user
+    /// gets unambiguous feedback either way.
+    func fail() {
+        #if canImport(UIKit) && !os(tvOS)
+        successGen.prepare()
+        successGen.notificationOccurred(.error)
+        #endif
+    }
+
     func zapBuzz() {
         #if canImport(CoreHaptics) && canImport(UIKit) && !os(tvOS)
         guard supportsCoreHaptics else {

@@ -39,6 +39,7 @@ struct NotificationRowView: View {
 
             CachedAvatarView(url: profiles[item.actorPubkey]?.picture, size: 32)
                 .onTapGesture { onPeerTap(item.actorPubkey) }
+                .quickFollowOnLongPress(pubkey: item.actorPubkey)
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
@@ -152,16 +153,15 @@ struct NotificationRowView: View {
             .padding(.trailing, 12)
         }
         if let actorEvent = repo.event(forId: item.id) {
-            Button {
+            PostCardView(
+                event: actorEvent,
+                profile: profiles[actorEvent.pubkey],
+                profiles: profiles
+            )
+            .contentShape(Rectangle())
+            .onTapGesture {
                 onNoteTap?(actorEvent.id, actorEvent.pubkey)
-            } label: {
-                PostCardView(
-                    event: actorEvent,
-                    profile: profiles[actorEvent.pubkey],
-                    profiles: profiles
-                )
             }
-            .buttonStyle(.plain)
         }
         inlineReplyList(targetId: item.id)
         if let actorEvent = repo.event(forId: item.id) {
@@ -178,16 +178,15 @@ struct NotificationRowView: View {
     private var quoteExpansion: some View {
         let actorId = item.actorEventId ?? item.id
         if let actor = repo.event(forId: actorId) {
-            Button {
+            PostCardView(
+                event: actor,
+                profile: profiles[actor.pubkey],
+                profiles: profiles
+            )
+            .contentShape(Rectangle())
+            .onTapGesture {
                 onNoteTap?(actor.id, actor.pubkey)
-            } label: {
-                PostCardView(
-                    event: actor,
-                    profile: profiles[actor.pubkey],
-                    profiles: profiles
-                )
             }
-            .buttonStyle(.plain)
         }
         if let qid = item.quoteEventId, !qid.isEmpty {
             VStack(alignment: .leading, spacing: 6) {
@@ -219,16 +218,15 @@ struct NotificationRowView: View {
     @ViewBuilder
     private var mentionExpansion: some View {
         if let actor = repo.event(forId: item.id) {
-            Button {
+            PostCardView(
+                event: actor,
+                profile: profiles[actor.pubkey],
+                profiles: profiles
+            )
+            .contentShape(Rectangle())
+            .onTapGesture {
                 onNoteTap?(actor.id, actor.pubkey)
-            } label: {
-                PostCardView(
-                    event: actor,
-                    profile: profiles[actor.pubkey],
-                    profiles: profiles
-                )
             }
-            .buttonStyle(.plain)
             inlineReplyList(targetId: item.id)
             NotificationComposer(
                 targetEvent: actor,
@@ -283,16 +281,15 @@ struct NotificationRowView: View {
         if !optimistic.isEmpty {
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(optimistic, id: \.id) { e in
-                    Button {
+                    PostCardView(
+                        event: e,
+                        profile: profiles[e.pubkey] ?? ProfileRepository.shared.get(e.pubkey),
+                        profiles: profiles
+                    )
+                    .contentShape(Rectangle())
+                    .onTapGesture {
                         onNoteTap?(e.id, e.pubkey)
-                    } label: {
-                        PostCardView(
-                            event: e,
-                            profile: profiles[e.pubkey] ?? ProfileRepository.shared.get(e.pubkey),
-                            profiles: profiles
-                        )
                     }
-                    .buttonStyle(.plain)
                 }
             }
         }

@@ -18,6 +18,12 @@ final class GlobalVideoMute {
 
 struct InlineVideoView: View {
     let meta: MediaMeta
+    /// When true the AVPlayer's render surface ignores hit tests so swipes
+    /// pass through to a parent gesture, and the inline tap-to-fullscreen +
+    /// corner expand affordances are dropped. Used inside
+    /// `FullScreenMediaPager` where the player would otherwise swallow the
+    /// page-swipe and pull-to-dismiss gestures across the video bounds.
+    var passthroughHitTests: Bool = false
     @Environment(AppSettings.self) private var settings
     @State private var loaded = false
     @State private var player: AVPlayer?
@@ -94,9 +100,14 @@ struct InlineVideoView: View {
                         // mute / expand buttons (rendered after this in
                         // the ZStack) take SwiftUI hit-test priority over
                         // an `onTapGesture`, so their actions still fire.
+                        // Skipped in passthrough mode — the parent pager is
+                        // already a fullscreen presentation and we want the
+                        // tap surface available for its own gestures.
+                        guard !passthroughHitTests else { return }
                         player.pause()
                         showFullScreen = true
                     }
+                    .allowsHitTesting(!passthroughHitTests)
                     .onAppear {
                         // Pin the shared AVAudioSession to mixed mode so
                         // silent (muted) playback coexists with whatever
@@ -150,20 +161,22 @@ struct InlineVideoView: View {
                                 .background(Color.black.opacity(0.55), in: Circle())
                         }
 
-                        Button {
-                            // Pause the inline player before the fullscreen
-                            // cover takes over. SwiftUI keeps the underlying
-                            // view alive when a fullScreenCover presents, so
-                            // the inline `onDisappear` doesn't fire and both
-                            // players would otherwise emit audio at once.
-                            player.pause()
-                            showFullScreen = true
-                        } label: {
-                            Image(systemName: "arrow.up.left.and.arrow.down.right")
-                                .font(.system(size: 14))
-                                .foregroundStyle(.white)
-                                .padding(8)
-                                .background(Color.black.opacity(0.55), in: Circle())
+                        if !passthroughHitTests {
+                            Button {
+                                // Pause the inline player before the fullscreen
+                                // cover takes over. SwiftUI keeps the underlying
+                                // view alive when a fullScreenCover presents, so
+                                // the inline `onDisappear` doesn't fire and both
+                                // players would otherwise emit audio at once.
+                                player.pause()
+                                showFullScreen = true
+                            } label: {
+                                Image(systemName: "arrow.up.left.and.arrow.down.right")
+                                    .font(.system(size: 14))
+                                    .foregroundStyle(.white)
+                                    .padding(8)
+                                    .background(Color.black.opacity(0.55), in: Circle())
+                            }
                         }
                     }
                     .padding(8)

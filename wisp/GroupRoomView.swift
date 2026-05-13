@@ -154,6 +154,7 @@ private struct GroupMessageBubble: View {
             if isMine { Spacer(minLength: 40) }
             if !isMine {
                 CachedAvatarView(url: profile?.picture, size: 32)
+                    .quickFollowOnLongPress(pubkey: message.senderPubkey)
                     .padding(.top, 14)
             }
 

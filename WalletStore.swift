@@ -545,9 +545,20 @@ final class WalletStore {
         relayBackupSearchState = .idle
     }
 
+    /// False for NIP-46 remote-signer accounts. Relay backup writes are gated
+    /// off as a precaution until cross-client backup decryption is verified for
+    /// every remote-signer path the app might be used with. Restore stays
+    /// enabled — legacy backups that already decrypt remain usable.
+    var isRelayBackupSupported: Bool { !keypair.isRemote }
+
     /// Encrypt the active Spark mnemonic and publish a kind 30078 backup event.
+    /// Disabled for remote-signer (NIP-46) accounts — see `isRelayBackupSupported`.
     func publishRelayBackup() async {
         relayBackupPublishState = .publishing
+        guard !keypair.isRemote else {
+            relayBackupPublishState = .error("Cloud backup is disabled for remote-signer accounts. Write down your recovery phrase instead.")
+            return
+        }
         guard let spark = wallet as? SparkWallet, let mnemonic = spark.loadMnemonic() else {
             relayBackupPublishState = .error("No Spark wallet to back up")
             return
