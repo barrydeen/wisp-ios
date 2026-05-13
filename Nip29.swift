@@ -104,6 +104,46 @@ nonisolated enum Nip29 {
         return "\(url)'\(groupId)"
     }
 
+    // MARK: - Internal `wisp-group://` URL (for in-app link tap routing)
+
+    /// Internal scheme used by `RichInlineTextView` to make NIP-29 invite
+    /// links tappable in note content. The original `wss://host'<groupid>`
+    /// form contains an apostrophe in the host component, which Foundation's
+    /// `URL(string:)` parses inconsistently across iOS versions; routing taps
+    /// through a vanilla `wisp-group://` URL sidesteps that and matches the
+    /// pattern used for `wisp-profile://`, `wisp-note://`, and
+    /// `wisp-hashtag://`.
+    static let internalScheme = "wisp-group"
+
+    /// Build `wisp-group://join?r=<relay>&g=<groupId>&c=<code>`. Returns nil
+    /// only if URLComponents fails, which it won't for any well-formed input.
+    static func buildInternalUrl(relayUrl: String, groupId: String, code: String? = nil) -> URL? {
+        var comps = URLComponents()
+        comps.scheme = internalScheme
+        comps.host = "join"
+        var items: [URLQueryItem] = [
+            URLQueryItem(name: "r", value: relayUrl),
+            URLQueryItem(name: "g", value: groupId)
+        ]
+        if let code, !code.isEmpty {
+            items.append(URLQueryItem(name: "c", value: code))
+        }
+        comps.queryItems = items
+        return comps.url
+    }
+
+    /// Inverse of `buildInternalUrl`. Used by `RichInlineTextView.Coordinator`
+    /// when dispatching a tap on a `wisp-group://` URL.
+    static func parseInternalUrl(_ url: URL) -> (relayUrl: String, groupId: String, code: String?)? {
+        guard url.scheme?.lowercased() == internalScheme else { return nil }
+        guard let comps = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
+        let items = comps.queryItems ?? []
+        guard let relay = items.first(where: { $0.name == "r" })?.value, !relay.isEmpty else { return nil }
+        guard let group = items.first(where: { $0.name == "g" })?.value, !group.isEmpty else { return nil }
+        let code = items.first(where: { $0.name == "c" })?.value
+        return (relay, group, code?.isEmpty == true ? nil : code)
+    }
+
     // MARK: - Builders (sign + return a NostrEvent)
 
     static func buildChatMessage(privkey32: Data, pubkey: String, groupId: String, relayUrl: String,

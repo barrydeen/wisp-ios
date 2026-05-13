@@ -1,6 +1,20 @@
 import SwiftUI
 import PhotosUI
 import UniformTypeIdentifiers
+import Observation
+
+/// Shared one-shot "Draft saved" pill state. `ComposeView` writes to this
+/// from its autosave-on-dismiss path; `MainView` renders the pill from it.
+/// Lives outside the View so reply / quote composers presented from
+/// `PostCardView` or `NotificationComposer` light up the same pill without
+/// each entry point needing to thread a callback up to the tab root.
+@MainActor
+@Observable
+final class DraftSavedToastStore {
+    static let shared = DraftSavedToastStore()
+    var pendingDraft: Nip37.Draft? = nil
+    private init() {}
+}
 
 struct ComposeView: View {
     @State var viewModel: ComposeViewModel
@@ -141,7 +155,13 @@ struct ComposeView: View {
             pickerItems = []
             Task { await viewModel.addMedia(items: captured) }
         }
-        .interactiveDismissDisabled(viewModel.isPublishing || viewModel.countdownSeconds != nil)
+        .interactiveDismissDisabled(
+            viewModel.isPublishing
+            || viewModel.countdownSeconds != nil
+            // Block swipe-dismiss while an upload is in flight so the draft
+            // autosave on disappear catches the finished URLs.
+            || viewModel.uploadProgress != nil
+        )
         .sheet(isPresented: $showScheduleSheet) {
             ScheduleSheet(
                 initialDate: viewModel.scheduleAt,
@@ -188,6 +208,9 @@ struct ComposeView: View {
         .onChange(of: viewModel.content) { _, _ in
             viewModel.writeLocalAutosave()
         }
+        .onChange(of: viewModel.attachments.map { $0.url ?? "" }) { _, _ in
+            viewModel.writeLocalAutosave()
+        }
         .onChange(of: viewModel.explicit) { _, _ in
             viewModel.writeLocalAutosave()
         }
@@ -199,13 +222,20 @@ struct ComposeView: View {
         }
         .onDisappear {
             // Auto-save on dismiss when the user navigated away without publishing
-            // or explicitly discarding (e.g. swipe-to-dismiss the sheet).
+            // or explicitly discarding (e.g. swipe-to-dismiss the sheet). Fires
+            // for reply / quote / new alike — `saveDraft` builds the appropriate
+            // reply context tags via `buildBaseTags`, so re-opening the draft
+            // restores the parent thread.
             guard viewModel.hasUnsavedContent,
                   viewModel.publishedEventId == nil,
                   !viewModel.explicitlyDiscarded,
                   !viewModel.draftSaved else { return }
             let vm = viewModel
-            Task { await vm.saveDraft() }
+            Task {
+                if let draft = await vm.saveDraft() {
+                    await MainActor.run { DraftSavedToastStore.shared.pendingDraft = draft }
+                }
+            }
         }
     }
 

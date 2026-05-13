@@ -12,6 +12,11 @@ struct RichContentView: View {
     var onProfileTap: ((String) -> Void)? = nil
     var onNoteTap: ((String) -> Void)? = nil
     var onHashtagTap: ((String) -> Void)? = nil
+    /// Fires when the user taps inline plain text (no link / mention /
+    /// hashtag at the tap point). The body's UITextView claims touches so
+    /// long-press selection can engage; without this fallback the parent
+    /// `.onTapGesture` for tap-to-thread fires inconsistently or not at all.
+    var onPlainTextTap: (() -> Void)? = nil
     var showLinkPreviews: Bool = true
     /// When true, inline links / mentions / hashtags inside the rendered text
     /// fire on tap. Default false because feed cards wrap the whole content in a
@@ -294,7 +299,8 @@ struct RichContentView: View {
             linksEnabled: linksEnabled,
             onProfileTap: onProfileTap,
             onNoteTap: onNoteTap,
-            onHashtagTap: onHashtagTap
+            onHashtagTap: onHashtagTap,
+            onPlainTextTap: onPlainTextTap
         )
         .frame(maxWidth: .infinity, alignment: .leading)
     }

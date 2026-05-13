@@ -22,6 +22,12 @@ final class GroupListViewModel {
     var lastAdminError: AdminError?
     var isJoining = false
 
+    /// Set by `MainView` when the user taps a `wss://host'<groupid>` link in
+    /// note content. `MessagesView` observes this, switches to the rooms
+    /// sub-tab, joins (idempotent), pushes the room onto its NavigationPath,
+    /// and clears the value back to nil.
+    var pendingChatDeepLink: ChatDeepLink?
+
     /// Default + indexer relays where we'll look for the user's own kind-10009 list
     /// at startup so other-device joins surface here too.
     private static let listLookupRelays: [String] = [

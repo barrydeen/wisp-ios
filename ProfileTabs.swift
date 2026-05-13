@@ -391,6 +391,7 @@ private struct ProfileRow: View {
         NavigationLink(value: ProfileRoute(pubkey: profile.pubkey)) {
             HStack(spacing: 12) {
                 CachedAvatarView(url: profile.picture, size: 44)
+                    .quickFollowOnLongPress(pubkey: profile.pubkey)
                 VStack(alignment: .leading, spacing: 2) {
                     EmojiText(
                         profile.displayString,
