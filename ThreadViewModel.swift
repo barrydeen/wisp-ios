@@ -768,21 +768,16 @@ final class ThreadViewModel {
             let subId = "thread-engagement-\(UUID().uuidString.prefix(6))"
             let filter = NostrFilter(kinds: [1, 6, 7, 9735], eTags: chunk, limit: 500, since: since)
             let sub = RelayPool.subscribe(relays: relays, filter: filter, id: subId)
-            // NIP-18 quote reposts only carry a `q` tag (no `e`), so the
-            // primary `#e` subscription misses them. Run a parallel `#q`
-            // filter against the same chunk so the focal note's drawer
-            // populates with a "Quoted by" row.
-            let quoteSubId = "thread-engagement-q-\(UUID().uuidString.prefix(6))"
-            let quoteFilter = NostrFilter(kinds: [1], qTags: chunk, limit: 200, since: since)
-            let quoteSub = RelayPool.subscribe(relays: relays, filter: quoteFilter, id: quoteSubId)
+            // NIP-18 quote reposts (kind-1 with only a `q` tag) are not
+            // fetched here. A parallel `#q` subscription roughly doubled
+            // the thread's engagement REQ load on every relay for a row
+            // the user almost never opens. The "Quoted by" drawer instead
+            // lazy-fetches via `EngagementRepository.fetchQuoters(eventId:)`
+            // when the user actually expands the focal note's details
+            // panel. Quote events that *also* carry an `e` tag still
+            // arrive on this stream and are routed into `quoters` below.
             let consumer = Task { [weak self] in
                 for await (event, _) in sub.events {
-                    if SafetyFilter.shared.shouldDrop(event: event, context: .thread(rootId: rootIdLocal)) { continue }
-                    self?.ingestEngagement([event])
-                }
-            }
-            let quoteConsumer = Task { [weak self] in
-                for await (event, _) in quoteSub.events {
                     if SafetyFilter.shared.shouldDrop(event: event, context: .thread(rootId: rootIdLocal)) { continue }
                     self?.ingestEngagement([event])
                 }
@@ -790,12 +785,9 @@ final class ThreadViewModel {
             let watchdog = Task {
                 try? await Task.sleep(for: .seconds(12))
                 sub.cancel()
-                quoteSub.cancel()
                 consumer.cancel()
-                quoteConsumer.cancel()
             }
             streamTasks.append(consumer)
-            streamTasks.append(quoteConsumer)
             streamTasks.append(watchdog)
         }
     }

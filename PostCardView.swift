@@ -428,6 +428,18 @@ struct PostCardView: View {
                         onProfileTap: onProfileTap,
                         onNoteTap: onNoteTap
                     )
+                    // Lazy-fetch NIP-18 quoters on first expand. The feed /
+                    // thread engagement subscriptions deliberately don't
+                    // stream `#q` matches (too heavy for a row almost no one
+                    // opens), so the "Quoted by" data is pulled here
+                    // instead. The repo dedupes per id for the app's
+                    // lifetime, so re-expanding is free.
+                    .task(id: displayEvent.id) {
+                        engagementRepo.fetchQuoters(
+                            eventId: displayEvent.id,
+                            authorPubkey: displayEvent.pubkey
+                        )
+                    }
                     // Pure fade — the prior `.move(edge: .top)` made the
                     // top-of-panel content (the reactor avatar row) settle
                     // into place before the rows below caught up, so the

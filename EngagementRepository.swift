@@ -38,6 +38,9 @@ final class EngagementRepository {
     @ObservationIgnored private var liveTasks: [Task<Void, Never>] = []
     @ObservationIgnored private var liveSubs: [RelaySubscription] = []
     @ObservationIgnored private var seenEngagementIds: Set<String> = []
+    /// Event ids we've already kicked off a lazy `#q` quoter lookup for. One
+    /// per note for the app's lifetime — re-expanding a drawer is free.
+    @ObservationIgnored private var quotersFetched: Set<String> = []
     /// `eventId|pubkey|content` keys for kind-7 reactions already counted (via either an optimistic
     /// `apply...` call or an inbound EVENT). Prevents the round-trip duplicate when an optimistic
     /// reaction streams back from the relays under a fresh event id.
@@ -302,37 +305,103 @@ final class EngagementRepository {
         let sub = RelayPool.subscribe(relays: [relay], filter: filter, id: subId)
         liveSubs.append(sub)
 
-        // NIP-18 quote reposts are kind-1 events that reference the quoted note via
-        // a `q` tag and (per NIP-18) SHOULD NOT include an `e` tag for that id —
-        // so the e-tag-only filter above misses them. Run a parallel #q filter so
-        // the details drawer can populate a "Quoted by" section.
-        let quoteSubId = "feed-engagement-q-\(UUID().uuidString.prefix(6))"
-        let quoteFilter = NostrFilter(kinds: [1], qTags: eventIds, limit: 200)
-        let quoteSub = RelayPool.subscribe(relays: [relay], filter: quoteFilter, id: quoteSubId)
-        liveSubs.append(quoteSub)
-
+        // NIP-18 quote reposts (kind-1 with only a `q` tag) are deliberately
+        // *not* fetched here: doubling every feed/thread engagement REQ to
+        // also stream `#q` matches roughly doubled the relay subscription
+        // load. The "Quoted by" row instead lazy-fetches via
+        // `fetchQuoters(eventId:)` when a user expands a card's details
+        // drawer. Quote events that happen to *also* carry an `e` tag still
+        // arrive on this stream and the ingest path below routes them into
+        // `quoters` correctly.
         let consumer = Task { [weak self] in
             for await (event, relayUrl) in sub.events {
-                self?.ingest(event, relayUrl: relayUrl)
-            }
-        }
-        let quoteConsumer = Task { [weak self] in
-            for await (event, relayUrl) in quoteSub.events {
                 self?.ingest(event, relayUrl: relayUrl)
             }
         }
         let watchdog = Task { [weak self] in
             try? await Task.sleep(for: .seconds(12))
             sub.cancel()
-            quoteSub.cancel()
             consumer.cancel()
-            quoteConsumer.cancel()
             self?.prune(sub: sub)
-            self?.prune(sub: quoteSub)
         }
         liveTasks.append(consumer)
-        liveTasks.append(quoteConsumer)
         liveTasks.append(watchdog)
+    }
+
+    /// Lazy one-shot lookup of NIP-18 quote reposts that reference `eventId`.
+    /// Called by the post-details drawer the first time it expands on a
+    /// given note; results land on the per-event `EngagementBox` so a
+    /// re-open is free and the existing observation path repaints the
+    /// "Quoted by" row.
+    ///
+    /// Returns immediately if a fetch has already been initiated for this
+    /// id (regardless of whether it returned any results), so rapid
+    /// expand/collapse / scroll-back doesn't multiply REQs.
+    func fetchQuoters(eventId: String, authorPubkey: String?) {
+        guard quotersFetched.insert(eventId).inserted else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            let relays = self.quoterFetchRelays(authorPubkey: authorPubkey)
+            guard !relays.isEmpty else { return }
+            let filter = NostrFilter(kinds: [1], qTags: [eventId], limit: 100)
+            let events = await RelayPool.query(relays: relays, filter: filter, timeout: 6)
+            self.applyQuoters(events, target: eventId)
+        }
+    }
+
+    /// Merge a one-shot quote-fetch result onto the target note's box. Writes
+    /// directly to `EngagementBox.counts` so the drawer's `quoters` row
+    /// repaints without depending on `queriedIds` membership (the lazy
+    /// fetch can run for a focal note the feed-engagement subscription
+    /// never registered).
+    private func applyQuoters(_ events: [NostrEvent], target eventId: String) {
+        let box = self.box(for: eventId)
+        var current = box.counts
+        var changed = false
+        for event in events {
+            guard event.kind == 1, seenEngagementIds.insert(event.id).inserted else { continue }
+            let hasMatchingQTag = event.tags.contains { tag in
+                tag.count >= 2 && tag[0] == "q" && tag[1] == eventId
+            }
+            guard hasMatchingQTag else { continue }
+            if !current.quoters.contains(where: { $0.eventId == event.id }) {
+                current.quoters.append(Quoter(
+                    eventId: event.id,
+                    pubkey: event.pubkey,
+                    createdAt: event.createdAt
+                ))
+                changed = true
+            }
+            MissingProfileWatcher.shared.observePubkeys([event.pubkey])
+        }
+        if changed { box.counts = current }
+    }
+
+    /// Outbox-routed relay set for the lazy quoter fetch, mirroring the
+    /// per-author routing in `flushBatch` so the on-demand drawer query
+    /// hits the same relays the live engagement subscription would have:
+    /// the note author's NIP-65 read relays first (where reactions /
+    /// replies / quotes referencing them tend to land), then a tight
+    /// safety net of the user's top-scored relays. Capped because this
+    /// is a single user gesture — we'd rather miss a long-tail quote
+    /// than fan out to a dozen connections.
+    private func quoterFetchRelays(authorPubkey: String?) -> [String] {
+        var seen = Set<String>()
+        var out: [String] = []
+        func append(_ url: String) {
+            guard let canon = RelayUrlValidator.canonicalize(url) else { return }
+            if seen.insert(canon).inserted { out.append(canon) }
+        }
+
+        if let author = authorPubkey,
+           let reads = RelayListRepository.shared.cachedReadRelays(author) {
+            for r in reads.prefix(3) { append(r) }
+        }
+        if let mine = NostrKey.load()?.pubkey,
+           let board = RelayScoreBoard.load(pubkey: mine) {
+            for entry in board.scoredRelays.prefix(3) { append(entry.url) }
+        }
+        return Array(out.prefix(6))
     }
 
     private func prune(sub: RelaySubscription) {
