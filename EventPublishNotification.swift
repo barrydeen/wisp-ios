@@ -14,4 +14,11 @@ extension Notification.Name {
     /// wallet tab — typically the "Set Up Wallet" affordance shown when
     /// the user tries to zap without a configured wallet.
     static let openWalletTab = Notification.Name("WispOpenWalletTab")
+
+    /// Posted when the user taps a NIP-29 chat invite link (e.g.
+    /// `wss://chat.wisp.talk'<groupid>`) embedded in note content. Carries
+    /// `userInfo["relay"]`, `["group"]`, and optionally `["code"]`.
+    /// `MainView` switches to the messages tab and `MessagesView` joins
+    /// the group + navigates to the chat room.
+    static let openWispChatLink = Notification.Name("WispOpenChatLink")
 }

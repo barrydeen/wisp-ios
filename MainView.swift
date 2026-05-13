@@ -187,6 +187,21 @@ struct MainView: View {
             // the setup UI directly.
             selectedTab = .wallet
         }
+        .onReceive(NotificationCenter.default.publisher(for: .openWispChatLink)) { note in
+            // RichInlineTextView posts this when the user taps a
+            // `wss://host'<groupid>` link in a note. Stash the parsed
+            // invite on the shared GroupListViewModel and switch tabs;
+            // MessagesView observes `pendingChatDeepLink` and handles
+            // the join + push.
+            guard let info = note.userInfo,
+                  let relay = info["relay"] as? String,
+                  let group = info["group"] as? String else { return }
+            let code = info["code"] as? String
+            groupListVM.pendingChatDeepLink = ChatDeepLink(
+                relayUrl: relay, groupId: group, code: code
+            )
+            selectedTab = .messages
+        }
         .task {
             GroupListViewModelRegistry.register(groupListVM)
 
