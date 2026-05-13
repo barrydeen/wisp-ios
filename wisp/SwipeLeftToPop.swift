@@ -427,24 +427,53 @@ private struct SwipeBackGestureInstaller: UIViewControllerRepresentable {
             return other is UILongPressGestureRecognizer
         }
 
-        /// True when `point` (in `host`'s coordinate space) is inside or
-        /// within 22pt of a selectable `UITextView` that has a non-empty
-        /// selection. 22pt is roughly the radius of a selection drag
-        /// handle's hit target, so a touch grabbing the handle from
-        /// flush against the text view's leading or trailing edge still
-        /// reads as "selection adjustment" rather than "swipe-back."
-        private static let selectionSlop: CGFloat = 22
+        /// Radius (in points) around either selection handle's resolved
+        /// position that counts as "the user is grabbing the handle". A
+        /// handle's drawn circle is ~11pt; this is a fingertip-friendly
+        /// buffer on top.
+        private static let handleHitRadius: CGFloat = 22
 
+        /// True when `point` (in `host`'s coordinate space) is inside a
+        /// selectable `UITextView` with a non-empty selection, or within
+        /// `handleHitRadius` of one of that selection's drag handles —
+        /// whose actual positions we resolve via `selectionRects(for:)`
+        /// rather than slop-expanding the bounds. Earlier drafts inset
+        /// the bounds by 22pt on every side, which on the leading side
+        /// swallowed the avatar gutter and blocked swipe-back any time a
+        /// selection was visible on screen.
         private static func touchIsNearActiveSelection(point: CGPoint, in host: UIView) -> Bool {
             guard let window = host.window else { return false }
             return scanForNearbySelection(in: window, point: point, host: host)
         }
 
         private static func scanForNearbySelection(in view: UIView, point: CGPoint, host: UIView) -> Bool {
-            if let tv = view as? UITextView, tv.isSelectable, tv.selectedRange.length > 0 {
+            if let tv = view as? UITextView,
+               tv.isSelectable,
+               tv.selectedRange.length > 0 {
                 let local = tv.convert(point, from: host)
-                let expanded = tv.bounds.insetBy(dx: -selectionSlop, dy: -selectionSlop)
-                if expanded.contains(local) { return true }
+                // Direct hit inside the text view → user is touching the
+                // selected text itself.
+                if tv.bounds.contains(local) { return true }
+                // Otherwise check proximity to either drag handle. The
+                // handles sit at the start/end of the selection's first
+                // and last line rects, slightly outside the text view's
+                // bounds on whichever edge they hug.
+                if let range = tv.selectedTextRange {
+                    for rect in tv.selectionRects(for: range) {
+                        if rect.containsStart {
+                            let handle = CGPoint(x: rect.rect.minX, y: rect.rect.midY)
+                            if hypot(local.x - handle.x, local.y - handle.y) <= handleHitRadius {
+                                return true
+                            }
+                        }
+                        if rect.containsEnd {
+                            let handle = CGPoint(x: rect.rect.maxX, y: rect.rect.midY)
+                            if hypot(local.x - handle.x, local.y - handle.y) <= handleHitRadius {
+                                return true
+                            }
+                        }
+                    }
+                }
             }
             for sub in view.subviews where !sub.isHidden && sub.alpha > 0 {
                 if scanForNearbySelection(in: sub, point: point, host: host) { return true }
