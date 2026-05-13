@@ -49,6 +49,12 @@ struct MainView: View {
     /// to the top anchor. Tap-on-active-tab clears the nav stack first; on a
     /// subsequent tap (when the stack is already empty) it animates to the top.
     @State private var feedScrollToTopTrigger: Int = 0
+    /// Tracks whether the feed is parked at the top. While false, live events
+    /// are held in the view model's `pendingNewCount` so the new-posts pill
+    /// has something to surface. Treats anything within 8pt of zero as "at
+    /// top" because rubber-banding can briefly leave the offset slightly
+    /// positive even when the user is visually parked at the top.
+    @State private var feedAtTop: Bool = true
 
     private let drawerWidth: CGFloat = 320
 
@@ -976,11 +982,52 @@ struct MainView: View {
                         feedFabOpacity = 1.0
                     }
                 }
+                // Drive the new-posts hold flag from the live scroll offset.
+                // 8pt slop covers rubber-band overshoot at the top so we
+                // don't flicker the pill on/off while the user is parked
+                // there.
+                .onScrollGeometryChange(for: Bool.self) { geo in
+                    geo.contentOffset.y <= 8
+                } action: { _, atTop in
+                    feedAtTop = atTop
+                    viewModel.setHoldNewPosts(!atTop)
+                }
                 .onChange(of: feedScrollToTopTrigger) { _, _ in
                     withAnimation(.easeInOut(duration: 0.3)) {
                         feedProxy.scrollTo("feedTop", anchor: .top)
                     }
                 }
+                .overlay(alignment: .top) {
+                    if viewModel.pendingNewCount > 0 && !feedAtTop {
+                        NewPostsPill(
+                            count: viewModel.pendingNewCount,
+                            onTap: {
+                                viewModel.applyPendingNewPosts()
+                                // Defer to the next runloop so the LazyVStack
+                                // has a chance to lay out the prepended rows
+                                // before we resolve `feedTop`. Without this,
+                                // `scrollTo` runs against the pre-merge
+                                // layout and only nudges the offset by a
+                                // single row's height.
+                                DispatchQueue.main.async {
+                                    withAnimation(.easeInOut(duration: 0.35)) {
+                                        feedProxy.scrollTo("feedTop", anchor: .top)
+                                    }
+                                }
+                            },
+                            onDismiss: {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    viewModel.dismissPendingNewPosts()
+                                }
+                            }
+                        )
+                        .padding(.top, 8)
+                        .opacity(feedFabOpacity)
+                        .animation(.easeInOut(duration: 0.2), value: feedFabOpacity)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                    }
+                }
+                .animation(.easeInOut(duration: 0.25), value: viewModel.pendingNewCount > 0)
                 }
             }
         }

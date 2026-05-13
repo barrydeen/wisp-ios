@@ -14,6 +14,7 @@
 		4CABCD010000000000030000 /* RetryingAsyncImage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000030000 /* RetryingAsyncImage.swift */; };
 		4CABCD010000000000040000 /* DecodedImageCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000040000 /* DecodedImageCache.swift */; };
 		4CABCD010000000000050000 /* BackChevronButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000050000 /* BackChevronButton.swift */; };
+		4CABCD010000000000F2010 /* NewPostsPill.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F2010 /* NewPostsPill.swift */; };
 		4CABCD010000000000060000 /* ProfileEditViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000060000 /* ProfileEditViewModel.swift */; };
 		4CABCD010000000000070000 /* ProfileEditView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000070000 /* ProfileEditView.swift */; };
 		4CABCD010000000000080000 /* FollowSender.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000080000 /* FollowSender.swift */; };
@@ -290,6 +291,7 @@
 		4CABCD000000000000030000 /* RetryingAsyncImage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RetryingAsyncImage.swift; sourceTree = "<group>"; };
 		4CABCD000000000000040000 /* DecodedImageCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DecodedImageCache.swift; sourceTree = "<group>"; };
 		4CABCD000000000000050000 /* BackChevronButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackChevronButton.swift; sourceTree = "<group>"; };
+		4CABCD000000000000F2010 /* NewPostsPill.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewPostsPill.swift; sourceTree = "<group>"; };
 		4CABCD000000000000060000 /* ProfileEditViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileEditViewModel.swift; sourceTree = "<group>"; };
 		4CABCD000000000000070000 /* ProfileEditView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileEditView.swift; sourceTree = "<group>"; };
 		4CABCD000000000000080000 /* FollowSender.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowSender.swift; sourceTree = "<group>"; };
@@ -843,6 +845,7 @@
 				4CABCD000000000000070000 /* ProfileEditView.swift */,
 				4CABCD000000000000080000 /* FollowSender.swift */,
 				4CABCD000000000000050000 /* BackChevronButton.swift */,
+				4CABCD000000000000F2010 /* NewPostsPill.swift */,
 				4CABCE0000000000000F4601 /* Nip46.swift */,
 				4CABCE0000000000000F4602 /* Nip46Client.swift */,
 				4CABCE0000000000000F4603 /* Nip46Session.swift */,
@@ -1262,6 +1265,7 @@
 				4CABCD010000000000070000 /* ProfileEditView.swift in Sources */,
 				4CABCD010000000000080000 /* FollowSender.swift in Sources */,
 				4CABCD010000000000050000 /* BackChevronButton.swift in Sources */,
+				4CABCD010000000000F2010 /* NewPostsPill.swift in Sources */,
 				4CABCE0100000000000F4601 /* Nip46.swift in Sources */,
 				4CABCE0100000000000F4602 /* Nip46Client.swift in Sources */,
 				4CABCE0100000000000F4603 /* Nip46Session.swift in Sources */,
