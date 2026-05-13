@@ -35,9 +35,11 @@ final class QRCodeScannerViewController: UIViewController, AVCaptureMetadataOutp
         guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
               let input = try? AVCaptureDeviceInput(device: device),
               session.canAddInput(input) else {
+            print("[QRScanner] viewDidLoad: camera/input unavailable")
             showCameraUnavailable()
             return
         }
+        print("[QRScanner] viewDidLoad: input ready")
 
         // Prefer the highest quality preset that the device supports — faster
         // decode on the full sensor image vs the default 640×480 preview.
@@ -46,6 +48,7 @@ final class QRCodeScannerViewController: UIViewController, AVCaptureMetadataOutp
 
         let output = AVCaptureMetadataOutput()
         guard session.canAddOutput(output) else {
+            print("[QRScanner] viewDidLoad: cannot add output")
             showCameraUnavailable()
             return
         }
@@ -55,6 +58,7 @@ final class QRCodeScannerViewController: UIViewController, AVCaptureMetadataOutp
         output.setMetadataObjectsDelegate(self, queue: captureQueue)
         output.metadataObjectTypes = [.qr]
         metadataOutput = output
+        print("[QRScanner] viewDidLoad: setup complete, metadataTypes=\(output.metadataObjectTypes)")
 
         let layer = AVCaptureVideoPreviewLayer(session: session)
         layer.videoGravity = .resizeAspectFill
@@ -68,18 +72,20 @@ final class QRCodeScannerViewController: UIViewController, AVCaptureMetadataOutp
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         preview?.frame = view.layer.bounds
-        // After layout we know the guide box size — set rectOfInterest so
-        // AVFoundation only scans pixels inside the viewfinder square, which
-        // significantly reduces latency vs scanning the full frame.
-        updateRectOfInterest()
     }
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        print("[QRScanner] viewDidAppear")
         // Start on the capture queue (required; startRunning() blocks until ready).
         captureQueue.async { [session] in
-            guard !session.isRunning else { return }
+            guard !session.isRunning else {
+                print("[QRScanner] session already running")
+                return
+            }
+            print("[QRScanner] starting session")
             session.startRunning()
+            print("[QRScanner] session isRunning=\(session.isRunning)")
         }
     }
 
@@ -90,29 +96,16 @@ final class QRCodeScannerViewController: UIViewController, AVCaptureMetadataOutp
         }
     }
 
-    // MARK: - Rect of interest
-
-    private func updateRectOfInterest() {
-        guard let preview, let metadataOutput else { return }
-        // Mirror the guide square: 70% of view width, centered.
-        let side = view.bounds.width * 0.7
-        let x = (view.bounds.width - side) / 2
-        let y = (view.bounds.height - side) / 2
-        let guideRect = CGRect(x: x, y: y, width: side, height: side)
-        // Convert from preview-layer coordinates to the video frame's
-        // normalized coordinate space that AVCaptureMetadataOutput expects.
-        let converted = preview.metadataOutputRectConverted(fromLayerRect: guideRect)
-        metadataOutput.rectOfInterest = converted
-    }
-
     // MARK: - AVCaptureMetadataOutputObjectsDelegate
 
     func metadataOutput(_ output: AVCaptureMetadataOutput,
                         didOutput metadataObjects: [AVMetadataObject],
                         from connection: AVCaptureConnection) {
+        print("[QRScanner] metadata callback: \(metadataObjects.count) objects, hasReported=\(hasReported)")
         guard !hasReported,
               let obj = metadataObjects.first as? AVMetadataMachineReadableCodeObject,
               let value = obj.stringValue else { return }
+        print("[QRScanner] scanned value: \(value)")
         hasReported = true
         captureQueue.async { [session] in session.stopRunning() }
         DispatchQueue.main.async { [weak self] in
