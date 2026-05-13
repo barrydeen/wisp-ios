@@ -20,6 +20,11 @@ struct SwipeBackFromLeftEdgeModifier: ViewModifier {
     @State private var dragX: CGFloat = 0
     @State private var isActive = false
     @State private var previousSnapshot: UIImage?
+    /// Width of the host view at swipe-start. Captured here rather than read
+    /// from `UIScreen.main.bounds` so the commit threshold + slide-out target
+    /// stay correct under iPad split view / Stage Manager, where the screen
+    /// is wider than the destination.
+    @State private var hostWidth: CGFloat = 0
 
     let onCommit: (() -> Void)?
 
@@ -61,7 +66,7 @@ struct SwipeBackFromLeftEdgeModifier: ViewModifier {
             .background(
                 SwipeBackGestureInstaller(
                     activationZoneFraction: Self.activationZoneFraction,
-                    onBegan: { startSwipe() },
+                    onBegan: { width in startSwipe(width: width) },
                     onChanged: { translation in dragX = max(0, translation) },
                     onEnded: { translation in finishSwipe(translation: translation) },
                     onCancelled: { cancelSwipe() }
@@ -69,15 +74,16 @@ struct SwipeBackFromLeftEdgeModifier: ViewModifier {
             )
     }
 
-    private func startSwipe() {
+    private func startSwipe(width: CGFloat) {
         isActive = true
+        hostWidth = width > 0 ? width : UIScreen.main.bounds.width
         previousSnapshot = SwipeBackSnapshot.capturePreviousNavigationView()
     }
 
     private func finishSwipe(translation: CGFloat) {
         guard isActive else { return }
         isActive = false
-        let screenWidth = UIScreen.main.bounds.width
+        let screenWidth = hostWidth > 0 ? hostWidth : UIScreen.main.bounds.width
         let threshold = screenWidth * Self.commitFraction
         if translation > threshold {
             // Finish the slide-out ourselves so the snapshot parallax stays
@@ -223,7 +229,7 @@ private enum SwipeBackSnapshot {
 /// the drag.
 private struct SwipeBackGestureInstaller: UIViewControllerRepresentable {
     let activationZoneFraction: CGFloat
-    let onBegan: () -> Void
+    let onBegan: (CGFloat) -> Void
     let onChanged: (CGFloat) -> Void
     let onEnded: (CGFloat) -> Void
     let onCancelled: () -> Void
@@ -290,14 +296,14 @@ private struct SwipeBackGestureInstaller: UIViewControllerRepresentable {
 
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var activationZoneFraction: CGFloat
-        var onBegan: () -> Void
+        var onBegan: (CGFloat) -> Void
         var onChanged: (CGFloat) -> Void
         var onEnded: (CGFloat) -> Void
         var onCancelled: () -> Void
         private var activated = false
 
         init(activationZoneFraction: CGFloat,
-             onBegan: @escaping () -> Void,
+             onBegan: @escaping (CGFloat) -> Void,
              onChanged: @escaping (CGFloat) -> Void,
              onEnded: @escaping (CGFloat) -> Void,
              onCancelled: @escaping () -> Void) {
@@ -314,7 +320,7 @@ private struct SwipeBackGestureInstaller: UIViewControllerRepresentable {
             switch recognizer.state {
             case .began:
                 activated = true
-                onBegan()
+                onBegan(view.bounds.width)
                 onChanged(translation.x)
             case .changed:
                 guard activated else { return }
@@ -354,19 +360,66 @@ private struct SwipeBackGestureInstaller: UIViewControllerRepresentable {
             let activationZone = view.bounds.width * activationZoneFraction
             let startedInZone = location.x <= activationZone
             guard startedInZone, velocity.x > 0 else { return false }
+            // Nothing to pop back to — skip activation so a root destination
+            // doesn't slide partially off-screen and then no-op on dismiss.
+            if let nav = SwipeBackSnapshot.activeNavigationController(),
+               nav.viewControllers.count < 2 {
+                return false
+            }
+            // Yield only while a UITextView's long-press recognizer at the
+            // touch point is actively recognizing (engaging selection). A
+            // bail on `isFirstResponder` / non-empty `selectedRange` was
+            // overzealous: after the user copied text and dismissed the
+            // menu, UITextView often keeps both pieces of state alive for
+            // a while, which locked swipe-back out of the focal body
+            // indefinitely. `shouldRequireFailureOf` below handles the
+            // racing long-press case.
+            if let hit = view.hitTest(location, with: nil),
+               let tv = Self.enclosingSelectableTextView(hit) {
+                for gr in tv.gestureRecognizers ?? [] {
+                    if gr is UILongPressGestureRecognizer,
+                       gr.state == .began || gr.state == .changed {
+                        return false
+                    }
+                }
+            }
             // Either a clearly fast horizontal pull, or horizontal motion
             // that beats vertical by more than the noise floor.
             return abs(velocity.x) >= 120 || abs(velocity.x) > abs(velocity.y) * 0.6
         }
 
-        // Force every other gesture recognizer (including the ScrollView's
-        // own pan) to wait for ours to decide whether to recognize or fail.
-        // Without this they'd recognize in parallel and the ScrollView would
-        // scroll a few pixels before our gate above flips. That parallel
-        // motion is what showed up as the foreground "jumping" mid-swipe.
+        // Make the enclosing ScrollView's pan wait for ours to commit or
+        // fail. Scoped to `UIPanGestureRecognizer` so taps, long-presses,
+        // and UITextView's selection recognizers still fire normally in the
+        // activation zone — blanket-requiring failure across every gesture
+        // type stalled button taps and long-press-to-select until our pan
+        // resolved.
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                                shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
-            return true
+            return other is UIPanGestureRecognizer
+        }
+
+        // Defer specifically to a selectable UITextView's long-press
+        // recognizer so a stationary long-press can engage selection
+        // before our pan claims the touch. Scoped to `UILongPressGestureRecognizer`
+        // only — UITextView also owns pan / tap recognizers that stay
+        // `.possible` for the full touch, and waiting on all of them
+        // starved our pan of the chance to recognize on note bodies.
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldRequireFailureOf other: UIGestureRecognizer) -> Bool {
+            guard let tv = other.view as? UITextView, tv.isSelectable else { return false }
+            return other is UILongPressGestureRecognizer
+        }
+
+        private static func enclosingSelectableTextView(_ view: UIView) -> UITextView? {
+            var current: UIView? = view
+            while let v = current {
+                if let tv = v as? UITextView, tv.isSelectable {
+                    return tv
+                }
+                current = v.superview
+            }
+            return nil
         }
     }
 }
