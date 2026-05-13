@@ -42,7 +42,7 @@ struct ProfileView: View {
 
     var body: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
+            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
                 ProfileHeaderView(
                     viewModel: viewModel,
                     isMe: isMe,
@@ -51,16 +51,20 @@ struct ProfileView: View {
                     onNoteTap: onNoteTap,
                     onHashtagTap: onHashtagTap
                 )
-                tabBody
+                Section {
+                    tabBody
+                } header: {
+                    ProfileTabBar(selected: $selectedTab)
+                        // Matches `unifiedHeader`'s solid-opacity background
+                        // exactly so the pinned tab strip reads as one
+                        // continuous bar with the title above it (the prior
+                        // gradient produced a visible seam where the header
+                        // faded to 0.65 and the tab bar restarted at 0.92).
+                        .background(Color.wispBackground.opacity(0.92))
+                }
             }
         }
         .background(Color.wispBackground)
-        // The whole top section (back/title/QR/ellipsis row + tab strip) lives in
-        // a single `.safeAreaInset` view with one `.regularMaterial` backdrop, so
-        // every control reads as one continuous unit and scrolling content blurs
-        // uniformly behind the entire header instead of through two stacked
-        // backdrop layers (nav-bar material + bar-button capsule blur + tab-strip
-        // material).
         .toolbar(.hidden, for: .navigationBar)
         .swipeBackFromLeftEdge()
         .safeAreaInset(edge: .top, spacing: 0) {
@@ -98,83 +102,70 @@ struct ProfileView: View {
     }
 
     private var unifiedHeader: some View {
-        VStack(spacing: 8) {
-            HStack(spacing: 8) {
-                BackChevronButton { dismiss() }
+        HStack(spacing: 8) {
+            BackChevronButton { dismiss() }
 
-                Spacer(minLength: 0)
+            Spacer(minLength: 0)
 
-                EmojiText(
-                    viewModel.profile?.displayString ?? shortKey(pubkey),
-                    emojiMap: viewModel.profile?.emojiMap ?? [:],
-                    textStyle: .subheadline,
-                    weight: .semibold,
-                    color: .label,
-                    lineLimit: 1
-                )
-
-                Spacer(minLength: 0)
-
-                Button {
-                    showQrSheet = true
-                } label: {
-                    Image(systemName: "qrcode")
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(Color.wispOnSurface)
-                        .frame(width: 36, height: 36)
-                        .contentShape(Rectangle())
-                }
-
-                Menu {
-                    ShareLink(item: shareURL) {
-                        Label("Share Profile", systemImage: "square.and.arrow.up")
-                    }
-                    Button {
-                        if let npub { UIPasteboard.general.string = npub }
-                    } label: {
-                        Label("Copy npub", systemImage: "person.text.rectangle")
-                    }
-                    Button {
-                        showAddToList = true
-                    } label: {
-                        Label("Add to List", systemImage: "text.badge.plus")
-                    }
-                    if !isMe {
-                        let blocked = muteRepo.isBlocked(pubkey)
-                        Button(role: blocked ? nil : .destructive) {
-                            if blocked {
-                                muteRepo.unblockUser(pubkey)
-                            } else {
-                                muteRepo.blockUser(pubkey)
-                            }
-                        } label: {
-                            Label(blocked ? "Unblock User" : "Block User",
-                                  systemImage: blocked ? "person.crop.circle.badge.checkmark" : "person.crop.circle.badge.xmark")
-                        }
-                    }
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(Color.wispOnSurface)
-                        .frame(width: 36, height: 36)
-                        .contentShape(Rectangle())
-                }
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-
-            ProfileTabBar(selected: $selectedTab)
-        }
-        .background(
-            LinearGradient(
-                colors: [
-                    Color.wispBackground.opacity(0.92),
-                    Color.wispBackground.opacity(0.65)
-                ],
-                startPoint: .top,
-                endPoint: .bottom
+            EmojiText(
+                viewModel.profile?.displayString ?? shortKey(pubkey),
+                emojiMap: viewModel.profile?.emojiMap ?? [:],
+                textStyle: .subheadline,
+                weight: .semibold,
+                color: .label,
+                lineLimit: 1
             )
-        )
+
+            Spacer(minLength: 0)
+
+            Button {
+                showQrSheet = true
+            } label: {
+                Image(systemName: "qrcode")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(Color.wispOnSurface)
+                    .frame(width: 36, height: 36)
+                    .contentShape(Rectangle())
+            }
+
+            Menu {
+                ShareLink(item: shareURL) {
+                    Label("Share Profile", systemImage: "square.and.arrow.up")
+                }
+                Button {
+                    if let npub { UIPasteboard.general.string = npub }
+                } label: {
+                    Label("Copy npub", systemImage: "person.text.rectangle")
+                }
+                Button {
+                    showAddToList = true
+                } label: {
+                    Label("Add to List", systemImage: "text.badge.plus")
+                }
+                if !isMe {
+                    let blocked = muteRepo.isBlocked(pubkey)
+                    Button(role: blocked ? nil : .destructive) {
+                        if blocked {
+                            muteRepo.unblockUser(pubkey)
+                        } else {
+                            muteRepo.blockUser(pubkey)
+                        }
+                    } label: {
+                        Label(blocked ? "Unblock User" : "Block User",
+                              systemImage: blocked ? "person.crop.circle.badge.checkmark" : "person.crop.circle.badge.xmark")
+                    }
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(Color.wispOnSurface)
+                    .frame(width: 36, height: 36)
+                    .contentShape(Rectangle())
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Color.wispBackground.opacity(0.92))
     }
 
     @ViewBuilder
@@ -249,6 +240,17 @@ struct ProfileView: View {
 
 // MARK: - Header
 
+/// Reports the intrinsic body height of the bio's `RichContentView` to the
+/// owning `ProfileHeaderView` via SwiftUI preferences. `max`-reducer so a tall
+/// inline image inside the bio (rare but possible — npub mention with a
+/// thumbnail, etc.) wins over a short sibling.
+private struct ProfileBioHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 private struct ProfileHeaderView: View {
     @Bindable var viewModel: ProfileViewModel
     var isMe: Bool = false
@@ -259,6 +261,29 @@ private struct ProfileHeaderView: View {
 
     @State private var muteRepo = MuteRepository.shared
     @State private var followBusy = false
+    /// Whether the bio is currently shown in full or capped to the
+    /// collapsed height. Long bios start collapsed so the lightning
+    /// address, follow stats, and tab bar stay above the fold; the
+    /// user pulls down a "Read more" to read the rest.
+    @State private var bioExpanded = false
+    /// Latched-largest intrinsic height of the bio's `RichContentView`,
+    /// measured via a `GeometryReader` background. `bioIsLong` reads from
+    /// this to decide whether to apply the collapse — only grows, so
+    /// sub-pixel relayouts don't cause the cap to flicker on and off.
+    @State private var naturalBioHeight: CGFloat = 0
+
+    /// Height cap applied to the bio while collapsed. ~6 lines of body
+    /// text — enough to glean the gist while keeping the lud16 + stat
+    /// row visible without scrolling.
+    private static let collapsedBioHeight: CGFloat = 132
+    /// Minimum overflow required before "Read more" appears. Small spills
+    /// render at full height instead of getting clipped for a few points
+    /// of hidden content.
+    private static let bioMinOverflow: CGFloat = 24
+
+    private var bioIsLong: Bool {
+        naturalBioHeight > Self.collapsedBioHeight + Self.bioMinOverflow
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -267,6 +292,7 @@ private struct ProfileHeaderView: View {
             HStack(alignment: .bottom, spacing: 12) {
                 CachedAvatarView(url: viewModel.profile?.picture, size: 84)
                     .overlay(Circle().stroke(Color.wispBackground, lineWidth: 4))
+                    .quickFollowOnLongPress(pubkey: viewModel.pubkey)
                     .offset(y: -28)
 
                 Spacer()
@@ -319,18 +345,8 @@ private struct ProfileHeaderView: View {
                 }
 
                 if let about = viewModel.profile?.about, !about.isEmpty {
-                    RichContentView(
-                        content: about,
-                        tags: [],
-                        profiles: viewModel.profiles,
-                        authorPubkey: viewModel.pubkey,
-                        onProfileTap: onProfileTap,
-                        onNoteTap: onNoteTap,
-                        onHashtagTap: onHashtagTap,
-                        showLinkPreviews: false,
-                        linksEnabled: true
-                    )
-                    .padding(.top, 2)
+                    bioBlock(about: about)
+                        .padding(.top, 2)
                 }
 
                 if let lud16 = viewModel.profile?.lud16, !lud16.isEmpty {
@@ -351,8 +367,78 @@ private struct ProfileHeaderView: View {
                     .padding(.top, 6)
             }
             .padding(.horizontal, 16)
-            .padding(.top, 16)
+            .padding(.top, 6)
             .padding(.bottom, 16)
+        }
+    }
+
+    @ViewBuilder
+    private func bioBlock(about: String) -> some View {
+        let collapsed = bioIsLong && !bioExpanded
+        VStack(alignment: .leading, spacing: 6) {
+            RichContentView(
+                content: about,
+                tags: [],
+                profiles: viewModel.profiles,
+                authorPubkey: viewModel.pubkey,
+                onProfileTap: onProfileTap,
+                onNoteTap: onNoteTap,
+                onHashtagTap: onHashtagTap,
+                showLinkPreviews: false,
+                linksEnabled: true
+            )
+            // Match the long-post pattern in `PostCardView`: let the body
+            // size to its intrinsic height, measure it via a
+            // `GeometryReader` background, then cap via `.frame(maxHeight:)`
+            // + `.clipped()` when collapsed. The cap is only applied once
+            // we know the bio overflows it by more than the minimum spill,
+            // so short bios render naturally with no toggle.
+            .fixedSize(horizontal: false, vertical: true)
+            .background(
+                GeometryReader { proxy in
+                    Color.clear.preference(
+                        key: ProfileBioHeightKey.self,
+                        value: proxy.size.height
+                    )
+                }
+            )
+            .frame(
+                maxHeight: collapsed ? Self.collapsedBioHeight : .infinity,
+                alignment: .top
+            )
+            .clipped()
+            .onPreferenceChange(ProfileBioHeightKey.self) { h in
+                if h > naturalBioHeight + 0.5 {
+                    naturalBioHeight = h
+                }
+            }
+            .overlay(alignment: .bottom) {
+                if collapsed {
+                    LinearGradient(
+                        colors: [Color.wispBackground.opacity(0), Color.wispBackground],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .frame(height: 40)
+                    .allowsHitTesting(false)
+                }
+            }
+            if bioIsLong {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        bioExpanded.toggle()
+                    }
+                } label: {
+                    Text(bioExpanded ? "Show less" : "Read more")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.wispPrimary)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 5)
+                        .background(Color.wispSurfaceVariant.opacity(0.6), in: Capsule())
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+            }
         }
     }
 
@@ -531,6 +617,21 @@ private struct ProfileTabBar: View {
                     }
                 }
             }
+            // Fades the trailing edge so the user can tell the strip
+            // scrolls horizontally past the visible tabs. `.mask` keeps the
+            // strip's own background intact and just feathers the alpha at
+            // the right ~24pt.
+            .mask(
+                LinearGradient(
+                    stops: [
+                        .init(color: .black, location: 0.0),
+                        .init(color: .black, location: 0.9),
+                        .init(color: .clear, location: 1.0)
+                    ],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            )
             .overlay(alignment: .bottom) {
                 Rectangle()
                     .fill(Color.wispSurfaceVariant.opacity(0.4))

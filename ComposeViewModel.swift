@@ -65,8 +65,11 @@ final class ComposeViewModel {
 
     var scheduleEnabled: Bool { scheduleAt != nil }
     /// True when there is text/content the user might lose if the sheet is dismissed.
+    /// Counts uploaded attachments too — picking an image and swipe-dismissing should
+    /// still autosave the draft even if the user hasn't typed anything yet.
     var hasUnsavedContent: Bool {
-        !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
+        return attachments.contains { $0.url != nil }
     }
 
     // MARK: - Private
@@ -88,30 +91,36 @@ final class ComposeViewModel {
     init(keypair: Keypair, mode: ComposeMode = .new) {
         self.keypair = keypair
         self.mode = mode
-        switch mode {
-        case .new:
-            loadLocalAutosave()
-        default:
-            // .quote: the quote URI is spliced at publish time so it stays out of the editor.
-            // .reply: parent context lives in tags, not body content.
-            break
-        }
+        // Reply / quote drafts are keyed per-parent so closing a half-typed reply
+        // and reopening the same parent restores the body. The quote URI is still
+        // spliced at publish time, and reply context still lives in tags — only
+        // the editor body is restored.
+        loadLocalAutosave()
     }
 
     // MARK: - Local autosave (instant restore on reopen)
 
-    /// Per-pubkey, per-mode UserDefaults bucket. Only `.new` composers autosave —
-    /// reply/quote contexts depend on parent events that aren't trivially restored.
-    private var autosaveKey: String { "compose_autosave_new_\(keypair.pubkey)" }
+    /// Per-pubkey, per-mode UserDefaults bucket. Reply and quote drafts are keyed
+    /// by the parent / quoted event id so each conversation has its own slot.
+    private var autosaveKey: String {
+        switch mode {
+        case .new:
+            return "compose_autosave_new_\(keypair.pubkey)"
+        case .reply(let parent, _):
+            return "compose_autosave_reply_\(keypair.pubkey)_\(parent.id)"
+        case .quote(let event):
+            return "compose_autosave_quote_\(keypair.pubkey)_\(event.id)"
+        }
+    }
 
     func writeLocalAutosave() {
-        guard case .new = mode else { return }
         // Don't autosave when editing a saved draft — the draft is the source of truth
         // and writes go through `saveDraft()`. Otherwise opening a draft would clobber
-        // the .new composer's autosave with the draft's content.
+        // the composer's autosave with the draft's content.
         guard currentDraftId == nil else { return }
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
+        let uploaded = attachments.filter { $0.url != nil }
+        guard !trimmed.isEmpty || !uploaded.isEmpty else {
             UserDefaults.standard.removeObject(forKey: autosaveKey)
             return
         }
@@ -123,6 +132,20 @@ final class ComposeViewModel {
         if let ts = scheduleAt?.timeIntervalSince1970 {
             payload["scheduleAt"] = ts
         }
+        let attachmentDicts: [[String: Any]] = uploaded.map { a in
+            var d: [String: Any] = [
+                "url": a.url ?? "",
+                "mime": a.mime,
+                "dimW": a.dim.width,
+                "dimH": a.dim.height
+            ]
+            if let h = a.sha256Hex { d["sha256"] = h }
+            if let s = a.durationSec { d["duration"] = s }
+            return d
+        }
+        if !attachmentDicts.isEmpty {
+            payload["attachments"] = attachmentDicts
+        }
         UserDefaults.standard.set(payload, forKey: autosaveKey)
     }
 
@@ -131,10 +154,26 @@ final class ComposeViewModel {
     }
 
     private func loadLocalAutosave() {
-        guard let payload = UserDefaults.standard.dictionary(forKey: autosaveKey),
-              let saved = payload["content"] as? String,
-              !saved.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        guard let payload = UserDefaults.standard.dictionary(forKey: autosaveKey) else { return }
+        let saved = payload["content"] as? String ?? ""
+        let restored: [ComposeAttachment] = (payload["attachments"] as? [[String: Any]] ?? []).compactMap { d in
+            guard let url = d["url"] as? String, !url.isEmpty else { return nil }
+            let mime = d["mime"] as? String ?? "image/jpeg"
+            let w = d["dimW"] as? Double ?? 0
+            let h = d["dimH"] as? Double ?? 0
+            return ComposeAttachment(
+                id: UUID(),
+                url: url,
+                mime: mime,
+                dim: CGSize(width: w, height: h),
+                durationSec: d["duration"] as? Int,
+                sha256Hex: d["sha256"] as? String,
+                localBytes: nil
+            )
+        }
+        guard !saved.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !restored.isEmpty else { return }
         content = saved
+        attachments = restored
         explicit = payload["explicit"] as? Bool ?? false
         powEnabled = payload["powEnabled"] as? Bool ?? powEnabled
         if let ts = payload["scheduleAt"] as? TimeInterval {
@@ -602,7 +641,19 @@ final class ComposeViewModel {
     /// matching the Android client's behavior.
     func loadDraft(_ draft: Nip37.Draft) {
         currentDraftId = draft.dTag
-        content = draft.content
+        let imetaAttachments = Self.parseImetaAttachments(tags: draft.tags)
+        if !imetaAttachments.isEmpty {
+            // Imeta tags carry full attachment metadata (mime, dim, hash), so the
+            // round-trip is exact; the body stays as the user typed it.
+            content = draft.content
+            attachments = imetaAttachments
+        } else {
+            // Legacy drafts (saved before the imeta round-trip landed, or by other
+            // clients) put the URLs at the end of the body — peel them back off.
+            let (body, restoredAttachments) = Self.splitDraftBody(draft.content)
+            content = body
+            attachments = restoredAttachments
+        }
         recomputeHashtags()
 
         // Mentions in the text are already materialized as `nostr:nprofile1...`
@@ -649,9 +700,14 @@ final class ComposeViewModel {
     /// Save the current buffer as a NIP-37 draft. Idempotent for a given
     /// `currentDraftId` — calling repeatedly updates the same `d` tag.
     /// Sets `draftSaved = true` on success so the view can dismiss.
-    func saveDraft() async {
+    /// Returns the persisted `Nip37.Draft` on success, or nil when nothing was
+    /// saved (empty buffer) or a relay error occurred. Callers use the returned
+    /// draft to wire a "Draft saved → tap to reopen" toast.
+    @discardableResult
+    func saveDraft() async -> Nip37.Draft? {
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        let uploaded = attachments.filter { $0.url != nil }
+        guard !trimmed.isEmpty || !uploaded.isEmpty else { return nil }
 
         let dTag = currentDraftId ?? Nip37.newDraftId()
         currentDraftId = dTag
@@ -661,10 +717,22 @@ final class ComposeViewModel {
         // matches Android).
         let innerKind = 1
         var innerTags: [[String]] = buildBaseTags(kind: innerKind, materializedContent: materialized)
-        // Drop client/imeta we don't want in drafts.
+        // Strip `client` and the publish-time `imeta`; we rebuild `imeta` below from the
+        // composer's `attachments` so reopening the draft restores the thumbnail row.
         innerTags = innerTags.filter { tag in
             guard let key = tag.first else { return false }
             return key != "client" && key != "imeta"
+        }
+        for attachment in uploaded {
+            guard let url = attachment.url else { continue }
+            var imeta: [String] = ["imeta", "url \(url)"]
+            imeta.append("m \(attachment.mime)")
+            if attachment.dim != .zero {
+                imeta.append("dim \(Int(attachment.dim.width))x\(Int(attachment.dim.height))")
+            }
+            if let hash = attachment.sha256Hex { imeta.append("x \(hash)") }
+            if let d = attachment.durationSec { imeta.append("duration \(d)") }
+            innerTags.append(imeta)
         }
 
         let now = Int(Date().timeIntervalSince1970)
@@ -684,7 +752,7 @@ final class ComposeViewModel {
             )
         } catch {
             lastError = "Failed to encrypt draft."
-            return
+            return nil
         }
         let wrapperTags = Nip37.wrapperTags(dTag: dTag, innerKind: innerKind)
         let wrapper: NostrEvent
@@ -698,16 +766,24 @@ final class ComposeViewModel {
             )
         } catch {
             lastError = "Failed to sign draft."
-            return
+            return nil
         }
 
         let relays = topWriteRelays()
         let succeeded = await RelayPool.publish(event: wrapper, to: relays, timeout: 8)
-        if !succeeded.isEmpty {
-            draftSaved = true
-        } else {
+        guard !succeeded.isEmpty else {
             lastError = "Couldn't reach a relay to save the draft."
+            return nil
         }
+        draftSaved = true
+        return Nip37.Draft(
+            dTag: dTag,
+            innerKind: innerKind,
+            content: materialized,
+            tags: innerTags,
+            createdAt: now,
+            wrapperEventId: wrapper.id
+        )
     }
 
     /// Mark the active draft as deleted by publishing an empty-content NIP-37
@@ -893,7 +969,10 @@ final class ComposeViewModel {
     }
 
     private func appendAttachmentUrls(to body: String) -> String {
-        let urls = attachments.compactMap { $0.url }
+        appendUrls(to: body, urls: attachments.compactMap { $0.url })
+    }
+
+    private func appendUrls(to body: String, urls: [String]) -> String {
         guard !urls.isEmpty else { return body }
         var out = body
         for url in urls {
@@ -901,6 +980,88 @@ final class ComposeViewModel {
             out += url
         }
         return out
+    }
+
+    /// Parse `imeta` tags from a draft into `ComposeAttachment` entries. Mirror of the
+    /// imeta builder in `saveDraft`: each tag's `url`, `m`, `dim`, `x`, `duration`
+    /// sub-entries become attachment fields.
+    static func parseImetaAttachments(tags: [[String]]) -> [ComposeAttachment] {
+        tags.compactMap { tag in
+            guard tag.first == "imeta", tag.count > 1 else { return nil }
+            var url: String? = nil
+            var mime: String? = nil
+            var dim: CGSize = .zero
+            var hash: String? = nil
+            var durationSec: Int? = nil
+            for entry in tag.dropFirst() {
+                if let value = entry.split(separator: " ", maxSplits: 1).last.map(String.init) {
+                    if entry.hasPrefix("url ") { url = value }
+                    else if entry.hasPrefix("m ") { mime = value }
+                    else if entry.hasPrefix("dim ") {
+                        let parts = value.split(separator: "x")
+                        if parts.count == 2, let w = Double(parts[0]), let h = Double(parts[1]) {
+                            dim = CGSize(width: w, height: h)
+                        }
+                    }
+                    else if entry.hasPrefix("x ") { hash = value }
+                    else if entry.hasPrefix("duration ") { durationSec = Int(value) }
+                }
+            }
+            guard let url else { return nil }
+            return ComposeAttachment(
+                id: UUID(),
+                url: url,
+                mime: mime ?? "image/jpeg",
+                dim: dim,
+                durationSec: durationSec,
+                sha256Hex: hash,
+                localBytes: nil
+            )
+        }
+    }
+
+    /// Inverse of `appendUrls` for legacy drafts whose attachments were spliced into
+    /// the body as trailing URLs. Drafts written by the current code path use imeta
+    /// tags instead, but this fallback keeps older drafts (and any cross-client
+    /// drafts that put media URLs at the end of the body) loading correctly.
+    static func splitDraftBody(_ source: String) -> (body: String, attachments: [ComposeAttachment]) {
+        let imageExts: Set<String> = ["jpg", "jpeg", "png", "gif", "webp", "heic", "heif", "avif", "svg"]
+        let videoExts: Set<String> = ["mp4", "mov", "webm", "m3u8"]
+        var lines = source.components(separatedBy: "\n")
+        var trailing: [(url: String, isVideo: Bool)] = []
+        while let last = lines.last {
+            let trimmed = last.trimmingCharacters(in: .whitespaces)
+            guard let url = URL(string: trimmed),
+                  let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
+                break
+            }
+            let ext = url.pathExtension.lowercased()
+            if imageExts.contains(ext) {
+                trailing.insert((trimmed, false), at: 0)
+                lines.removeLast()
+            } else if videoExts.contains(ext) {
+                trailing.insert((trimmed, true), at: 0)
+                lines.removeLast()
+            } else {
+                break
+            }
+        }
+        let attachments: [ComposeAttachment] = trailing.map { entry in
+            ComposeAttachment(
+                id: UUID(),
+                url: entry.url,
+                mime: entry.isVideo ? "video/mp4" : "image/jpeg",
+                dim: .zero,
+                durationSec: nil,
+                sha256Hex: nil,
+                localBytes: nil
+            )
+        }
+        // Drop trailing blank lines left behind once URLs are removed.
+        while lines.last?.trimmingCharacters(in: .whitespaces).isEmpty == true {
+            lines.removeLast()
+        }
+        return (lines.joined(separator: "\n"), attachments)
     }
 
     /// In `.quote` mode the embedded `nostr:nevent…` reference is hidden from the

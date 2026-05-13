@@ -15,6 +15,7 @@ struct SocialGraphNodeDetailSheet: View {
     var body: some View {
         VStack(spacing: 16) {
             CachedAvatarView(url: profile?.picture, size: 72)
+                .quickFollowOnLongPress(pubkey: node.pubkey)
                 .padding(.top, 8)
 
             VStack(spacing: 4) {
@@ -42,6 +43,7 @@ struct SocialGraphNodeDetailSheet: View {
                                     .overlay(Circle().stroke(Color.wispBackground, lineWidth: 2))
                             }
                             .buttonStyle(.plain)
+                            .quickFollowOnLongPress(pubkey: pk)
                         }
                     }
                     .padding(.horizontal, 16)
