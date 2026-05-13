@@ -242,7 +242,21 @@ struct RichInlineTextView: UIViewRepresentable {
                 // it as a tappable inline URL just like `.inlineLink`.
                 var attrs = baseAttrs
                 attrs[.foregroundColor] = linkColor
-                if let u = URL(string: url) {
+                // NIP-29 invite links (`wss://host'<groupid>`) get routed
+                // through the internal `wisp-group://` scheme so the tap
+                // opens the chat room in-app instead of falling through to
+                // `UIApplication.shared.open` (which would hand a WebSocket
+                // URL to Safari, where nothing useful happens).
+                let lower = url.lowercased()
+                if (lower.hasPrefix("wss://") || lower.hasPrefix("ws://")),
+                   let parsed = Nip29.parseInviteLink(url),
+                   let internalUrl = Nip29.buildInternalUrl(
+                       relayUrl: parsed.relayUrl,
+                       groupId: parsed.groupId,
+                       code: parsed.code
+                   ) {
+                    attrs[.wispLinkURL] = internalUrl
+                } else if let u = URL(string: url) {
                     attrs[.wispLinkURL] = u
                 }
                 combined.append(NSAttributedString(string: shortenUrl(url), attributes: attrs))
@@ -362,6 +376,16 @@ struct RichInlineTextView: UIViewRepresentable {
                 let raw = url.host ?? url.absoluteString.replacingOccurrences(of: "wisp-hashtag://", with: "")
                 let tag = raw.removingPercentEncoding ?? raw
                 parent.onHashtagTap?(tag)
+            case Nip29.internalScheme:
+                guard let parsed = Nip29.parseInternalUrl(url) else { return }
+                var info: [String: Any] = [
+                    "relay": parsed.relayUrl,
+                    "group": parsed.groupId
+                ]
+                if let code = parsed.code { info["code"] = code }
+                NotificationCenter.default.post(
+                    name: .openWispChatLink, object: nil, userInfo: info
+                )
             default:
                 UIApplication.shared.open(url)
             }
