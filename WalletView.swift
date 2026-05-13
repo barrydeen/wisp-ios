@@ -533,6 +533,10 @@ struct SendInvoiceSheet: View {
     @Bindable var store: WalletStore
     @Environment(AppSettings.self) private var settings
     var dismiss: () -> Void
+    /// Optional pre-filled invoice. Used when opened from a tap on an
+    /// inline Lightning invoice card so the user lands on a sheet that
+    /// already has the invoice in the editor and detection in progress.
+    var initialInvoice: String? = nil
     @State private var invoice: String = ""
     @State private var amountText: String = ""
     @State private var inputType: WalletInputType = .unknown
@@ -797,6 +801,14 @@ struct SendInvoiceSheet: View {
                 onCancel: { showScanner = false }
             )
             .ignoresSafeArea()
+        }
+        .task {
+            // Pre-fill from `initialInvoice` exactly once on appear. Assigning
+            // to `invoice` triggers the existing `.onChange` -> `scheduleDetect`
+            // pipeline, so the user lands on a sheet that's already validated.
+            if let initial = initialInvoice, invoice.isEmpty {
+                invoice = initial
+            }
         }
     }
 
