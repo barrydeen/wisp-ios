@@ -395,6 +395,7 @@ struct SearchView: View {
                 HStack(alignment: .top, spacing: 12) {
                     CachedAvatarView(url: profile.picture, size: 44)
                         .clipShape(Circle())
+                        .quickFollowOnLongPress(pubkey: profile.pubkey)
                     VStack(alignment: .leading, spacing: 4) {
                         HStack(spacing: 6) {
                             EmojiText(

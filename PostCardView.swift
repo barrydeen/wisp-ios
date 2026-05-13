@@ -213,11 +213,13 @@ struct PostCardView: View {
             HStack(alignment: .top, spacing: 12) {
                 if ancestorCompact {
                     CachedAvatarView(url: displayProfile?.picture, size: 24)
+                        .quickFollowOnLongPress(pubkey: displayEvent.pubkey)
                 } else {
                     NavigationLink(value: ProfileRoute(pubkey: displayEvent.pubkey)) {
                         avatar(picture: displayProfile?.picture)
                     }
                     .buttonStyle(.plain)
+                    .quickFollowOnLongPress(pubkey: displayEvent.pubkey)
                 }
 
                 VStack(alignment: .leading, spacing: 2) {
@@ -643,6 +645,7 @@ struct PostCardView: View {
                             )
                     }
                     .buttonStyle(.plain)
+                    .quickFollowOnLongPress(pubkey: pk)
                     .offset(x: CGFloat(index) * stackOffset)
                 }
             }
