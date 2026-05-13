@@ -51,12 +51,22 @@ struct PostCardView: View {
     @State private var naturalContentHeight: CGFloat = 0
     @State private var showReactionPicker = false
     @State private var showEmojiLibrary = false
-    /// Cached global frame of the heart button, used to flip the popover
-    /// arrow edge so the picker never opens off-screen. When the heart sits
-    /// in the lower half of the screen the popover anchors above it
-    /// (`arrowEdge: .bottom`); otherwise it anchors below (`.top`).
-    @State private var heartButtonFrame: CGRect = .zero
+    /// Reference-type frame tracker for the heart button. The GeometryReader
+    /// background writes the heart's current global frame here on every layout
+    /// pass without triggering a SwiftUI re-render of the card — `@State` only
+    /// tracks the wrapper's reference identity, not mutations to its stored
+    /// property. The button's tap handler reads `.frame` to decide where to
+    /// anchor the reaction popover, so the value is always fresh for the
+    /// heart's current scroll position.
+    @State private var heartFrameTracker = HeartFrameTracker()
     @State private var reactionArrowEdge: Edge = .top
+    /// Cap passed to the reaction picker's inner scroll view so the popover
+    /// shrinks to whatever vertical space is actually available between the
+    /// heart button and the screen edge it's anchored against. Without this,
+    /// a heart placed near both top and bottom edges (notification rows, a
+    /// short note pinned near a tab bar) ended up clipping the picker
+    /// because the popover gave it less space than the picker's natural size.
+    @State private var reactionPickerMaxHeight: CGFloat = 192
     @State private var showDeleteConfirm = false
     @State private var showMuteUserConfirm = false
     /// True when the user tapped Zap but no wallet is configured. Surfaces a
@@ -821,12 +831,23 @@ struct PostCardView: View {
         let displayed = displayReactedEmoji
         let custom = displayReactedCustomEmoji
         return Button {
-            // Flip the popover above the heart when it sits below the
-            // vertical midpoint of the screen — keeps the picker on-screen
-            // for posts near the bottom of the feed (or in modal sheets where
-            // the action bar is closer to the bottom edge).
+            // Pick whichever side of the heart has more usable vertical
+            // space, then size the picker to fit that space so it scrolls
+            // internally instead of getting clipped by the popover. Reserve
+            // small margins for the status bar above and the home indicator
+            // / tab bar below. Frame is read live from the tracker so the
+            // anchor is correct for the heart's current scroll position.
+            let frame = heartFrameTracker.frame
             let screenHeight = UIScreen.main.bounds.height
-            reactionArrowEdge = heartButtonFrame.midY > screenHeight * 0.5 ? .bottom : .top
+            let topReserve: CGFloat = 60
+            let bottomReserve: CGFloat = 80
+            let popoverChrome: CGFloat = 32
+            let availableBelow = max(0, screenHeight - bottomReserve - frame.maxY - popoverChrome)
+            let availableAbove = max(0, frame.minY - topReserve - popoverChrome)
+            let preferBelow = availableBelow >= availableAbove
+            reactionArrowEdge = preferBelow ? .top : .bottom
+            let chosenSpace = preferBelow ? availableBelow : availableAbove
+            reactionPickerMaxHeight = min(192, max(80, chosenSpace))
             showReactionPicker = true
         } label: {
             if let emoji = displayed {
@@ -865,18 +886,18 @@ struct PostCardView: View {
             }
         }
         .buttonStyle(.plain)
-        // Capture the heart button's global frame on first appearance only.
-        // Reading it on every scroll-frame `onChange` writes to `@State` and
-        // triggers a re-render of every visible PostCardView — devastating
-        // for scroll smoothness. The cached frame is good enough for the
-        // popover's binary above-or-below decision.
+        // Continuously track the heart's global frame in a reference-type
+        // box so the popover anchor stays correct as the user scrolls. The
+        // write goes to a class property, not `@State` — so it doesn't
+        // trigger a card re-render and keeps scroll smooth even with many
+        // visible cards.
         .background(
             GeometryReader { geo in
-                Color.clear.onAppear {
-                    if heartButtonFrame == .zero {
-                        heartButtonFrame = geo.frame(in: .global)
+                Color.clear
+                    .onAppear { heartFrameTracker.frame = geo.frame(in: .global) }
+                    .onChange(of: geo.frame(in: .global)) { _, newFrame in
+                        heartFrameTracker.frame = newFrame
                     }
-                }
             }
         )
         .popover(isPresented: $showReactionPicker, arrowEdge: reactionArrowEdge) {
@@ -888,7 +909,8 @@ struct PostCardView: View {
                 onPlus: {
                     showReactionPicker = false
                     showEmojiLibrary = true
-                }
+                },
+                maxGridHeight: reactionPickerMaxHeight
             )
             .presentationCompactAdaptation(.popover)
         }
@@ -1440,6 +1462,16 @@ private struct StackedAvatarRow: View {
             }
         }
     }
+}
+
+/// Reference-type frame box used by `PostCardView` to read the heart
+/// button's current global frame at tap time without re-rendering the card
+/// on every scroll-frame layout pass. Writes to `frame` from the
+/// GeometryReader background are pure property mutations on a class
+/// instance — SwiftUI's `@State` tracks the reference identity, not the
+/// stored property, so re-renders don't fire.
+private final class HeartFrameTracker {
+    var frame: CGRect = .zero
 }
 
 // MARK: - Simple wrapping row of small text chips (for relay hostnames)

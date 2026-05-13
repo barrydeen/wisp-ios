@@ -14,6 +14,13 @@ struct EmojiReactionPicker: View {
 
     let onSelect: (PickedEmoji) -> Void
     let onPlus: () -> Void
+    /// Maximum height the inner scrolling grid is allowed to occupy.
+    /// Provided by the caller because the available space depends on
+    /// where the heart button sits relative to the screen edges —
+    /// passing it in lets `PostCardView` shrink the picker to whatever
+    /// fits and rely on internal scrolling for overflow instead of the
+    /// popover clipping content. Default is generous for the common case.
+    var maxGridHeight: CGFloat = 192
 
     private let cellSize: CGFloat = 36
     private let columns: Int = 6
@@ -22,13 +29,16 @@ struct EmojiReactionPicker: View {
         let entries = emojiRepo.sortedQuickReactions
         let grid = Array(repeating: GridItem(.fixed(cellSize), spacing: 8), count: columns)
         VStack(alignment: .leading, spacing: 0) {
-            LazyVGrid(columns: grid, spacing: 8) {
-                ForEach(entries, id: \.self) { key in
-                    cell(for: key)
+            ScrollView(.vertical, showsIndicators: false) {
+                LazyVGrid(columns: grid, spacing: 8) {
+                    ForEach(entries, id: \.self) { key in
+                        cell(for: key)
+                    }
+                    plusCell
                 }
-                plusCell
+                .padding(12)
             }
-            .padding(12)
+            .frame(maxHeight: maxGridHeight)
         }
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
         .overlay(
