@@ -38,6 +38,13 @@ struct ThreadView: View {
                         // Ancestors — chain from root → focal-1, each tappable to push
                         // a new ThreadView focused on that ancestor. Plain divider
                         // separation between rows; no connector line.
+                        if viewModel.isSearchingAncestors {
+                            searchingAncestorRow
+                            Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
+                        } else if let missingId = viewModel.missingAncestorId {
+                            missingAncestorPlaceholder(eventId: missingId)
+                            Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
+                        }
                         if !viewModel.ancestors.isEmpty {
                             ForEach(viewModel.ancestors) { row in
                                 ancestorRow(row)
@@ -62,9 +69,6 @@ struct ThreadView: View {
                         ForEach(viewModel.nestedReplies) { item in
                             nestedReplyRow(item)
                                 .id(item.row.id)
-                            Divider()
-                                .overlay(Color.wispSurfaceVariant.opacity(0.3))
-                                .padding(.leading, indentationWidth(for: item.depth))
                         }
 
                         if !viewModel.hiddenSpamReplies.isEmpty {
@@ -248,27 +252,33 @@ struct ThreadView: View {
         .background(Color.wispSurfaceVariant.opacity(0.25))
     }
 
-    /// Wrap a reply row with depth-based leading indentation and a thin
-    /// vertical guide so the parent-child relationship reads at a glance
-    /// without having to count avatar offsets. Indent caps at depth 5 to
-    /// keep deep chains from sliding off the right edge.
+    /// Wrap a reply row with depth-based leading indentation. The connector
+    /// shape draws both the gutter vertical AND the bottom divider as one
+    /// continuous stroke so their line weights match exactly, with a rounded
+    /// inside fillet at the bottom-left where they meet. Top-left stays a
+    /// sharp continuation of the vertical above.
     @ViewBuilder
     private func nestedReplyRow(_ item: NestedReplyRow) -> some View {
         ZStack(alignment: .leading) {
-            if item.depth > 0 {
-                Rectangle()
-                    .fill(Color.wispSurfaceVariant.opacity(0.6))
-                    .frame(width: 1.5)
-                    .padding(.leading, indentationWidth(for: item.depth) - 8)
-                    .padding(.vertical, 6)
-            }
+            ReplyConnectorShape(
+                cornerRadius: 8,
+                showVertical: item.depth > 0
+            )
+            .stroke(
+                Color.wispSurfaceVariant.opacity(0.5),
+                style: StrokeStyle(lineWidth: 1, lineCap: .butt, lineJoin: .round)
+            )
+            .padding(.leading, item.depth > 0 ? indentationWidth(for: item.depth) - 8 : indentationWidth(for: item.depth))
+
             replyRow(item.row)
                 .padding(.leading, indentationWidth(for: item.depth))
         }
     }
 
+    /// Per-level indent. Smaller step + cap of 5 keeps deep chains readable
+    /// on phones without compressing the post body.
     private func indentationWidth(for depth: Int) -> CGFloat {
-        CGFloat(min(depth, 5)) * 14
+        CGFloat(min(depth, 5)) * 12
     }
 
     @ViewBuilder
@@ -290,6 +300,7 @@ struct ThreadView: View {
                 profile: viewModel.profiles[row.event.pubkey],
                 profiles: viewModel.profiles,
                 engagement: engagement(for: row.event.id),
+                showReplyContext: false,
                 onProfileTap: { pk in path.append(ProfileRoute(pubkey: pk)) },
                 // Tap on an embedded quoted note pushes that note as
                 // its own focal. SwiftUI's nested-Button hit-testing
@@ -361,6 +372,50 @@ struct ThreadView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    private var searchingAncestorRow: some View {
+        HStack(spacing: 10) {
+            ProgressView()
+                .tint(.secondary)
+                .scaleEffect(0.8)
+            Text("Looking for parent note…")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func missingAncestorPlaceholder(eventId: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.bubble")
+                .font(.system(size: 15))
+                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Note not found")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Text("The parent note could not be loaded")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+            Spacer()
+            Button {
+                viewModel.retryMissingAncestor()
+            } label: {
+                Image(systemName: "arrow.clockwise")
+                    .font(.subheadline)
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     /// Scroll the focal post to the top once both it and its ancestors have resolved.
     /// Fires once per ThreadView lifetime so the user can scroll up freely afterward.
     private func scrollToFocalIfNeeded(proxy: ScrollViewProxy) {
@@ -405,5 +460,38 @@ struct ThreadView: View {
             .padding(.vertical, 8)
         }
         .background(Color.wispBackground)
+    }
+}
+
+/// Connector + bottom divider for a nested reply row, drawn as one
+/// continuous stroke so the line weights match. Top-left is sharp
+/// (the vertical continues from the previous row); bottom-left is
+/// a rounded inside fillet where the vertical meets the horizontal.
+/// At the root depth, only the horizontal divider is drawn.
+private struct ReplyConnectorShape: Shape {
+    var cornerRadius: CGFloat = 8
+    var showVertical: Bool = true
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        if showVertical {
+            // Continuous vertical down the gutter, full row height. Adjacent
+            // rows' verticals butt together for a seamless chain.
+            path.move(to: CGPoint(x: 1, y: 0))
+            path.addLine(to: CGPoint(x: 1, y: rect.height - cornerRadius))
+            // Rounded inside fillet from vertical → horizontal.
+            path.addQuadCurve(
+                to: CGPoint(x: 1 + cornerRadius, y: rect.height),
+                control: CGPoint(x: 1, y: rect.height)
+            )
+            // Horizontal across to the right edge.
+            path.addLine(to: CGPoint(x: rect.width, y: rect.height))
+        } else {
+            // Just the horizontal divider — used at the root depth where
+            // there's no parent column to connect to.
+            path.move(to: CGPoint(x: 0, y: rect.height))
+            path.addLine(to: CGPoint(x: rect.width, y: rect.height))
+        }
+        return path
     }
 }
