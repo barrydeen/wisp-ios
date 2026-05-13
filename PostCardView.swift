@@ -1617,6 +1617,7 @@ func relativeTime(from timestamp: Int) -> String {
     if seconds < 3600 { return "\(seconds / 60)m" }
     if seconds < 86400 { return "\(seconds / 3600)h" }
     if seconds < 604_800 { return "\(seconds / 86400)d" }
+    if seconds >= 31_536_000 { return "\(seconds / 31_536_000)y" }
     let formatter = DateFormatter()
     formatter.dateFormat = "MMM d"
     return formatter.string(from: Date(timeIntervalSince1970: Double(timestamp)))
