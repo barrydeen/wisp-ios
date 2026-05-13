@@ -45,6 +45,15 @@ struct MainView: View {
     @State private var showRelaySettings = false
     @State private var pendingAuthRequest: PendingAuthRequest?
     @State private var feedFabOpacity: Double = 1.0
+    /// Shared toast store — written to by every `ComposeView` autosave-on-dismiss
+    /// (new / reply / quote alike). Watched here so the orange pill renders no
+    /// matter which navigation surface presented the composer.
+    @State private var draftToast = DraftSavedToastStore.shared
+    @State private var draftSavedToastTask: Task<Void, Never>?
+    /// Set to reopen the composer pointed at an existing draft (populated by
+    /// the draft-saved toast tap). Separate from `showCompose` so SwiftUI
+    /// mounts a fresh `ComposeView` keyed off the draft's dTag.
+    @State private var reopenDraft: Nip37.Draft?
     /// Bumped from `popToRoot(.home)` so the feed `ScrollViewReader` can scroll
     /// to the top anchor. Tap-on-active-tab clears the nav stack first; on a
     /// subsequent tap (when the stack is already empty) it animates to the top.
@@ -77,6 +86,14 @@ struct MainView: View {
         ZStack(alignment: .leading) {
             mainShell
 
+            if let draft = draftToast.pendingDraft {
+                draftSavedPill(draft: draft)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .frame(maxHeight: .infinity, alignment: .top)
+                    .padding(.top, 8)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .zIndex(2)
+            }
 
             if drawerOpen {
                 Color.black
@@ -368,6 +385,22 @@ struct MainView: View {
         }
         .sheet(isPresented: $showCompose) {
             ComposeView(keypair: keypair, mode: .new)
+        }
+        .sheet(item: $reopenDraft) { draft in
+            ComposeView(keypair: keypair, draft: draft)
+        }
+        .onChange(of: draftToast.pendingDraft?.dTag) { _, dTag in
+            // Auto-dismiss the pill on a timer whenever a new draft arrives.
+            // Reading the dTag (a value type) keeps the watcher cheap.
+            guard dTag != nil else { return }
+            draftSavedToastTask?.cancel()
+            draftSavedToastTask = Task { @MainActor in
+                try? await Task.sleep(for: .seconds(3.5))
+                guard !Task.isCancelled else { return }
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    draftToast.pendingDraft = nil
+                }
+            }
         }
         .sheet(isPresented: $showRelayPicker) {
             RelayPickerSheet(
@@ -772,6 +805,30 @@ struct MainView: View {
             .background(Color.wispSurfaceVariant.opacity(0.5), in: RoundedRectangle(cornerRadius: 20))
             .foregroundStyle(Color.primary)
         }
+    }
+
+    @ViewBuilder
+    private func draftSavedPill(draft: Nip37.Draft) -> some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                draftToast.pendingDraft = nil
+            }
+            draftSavedToastTask?.cancel()
+            reopenDraft = draft
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "tray.and.arrow.down.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                Text("Draft saved")
+                    .font(.caption.weight(.semibold))
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(Color.wispPrimary, in: Capsule())
+            .shadow(color: .black.opacity(0.25), radius: 8, x: 0, y: 2)
+        }
+        .buttonStyle(.plain)
     }
 
     private func statusPill(icon: String, value: String, color: Color) -> some View {
