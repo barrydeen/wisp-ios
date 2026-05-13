@@ -260,19 +260,10 @@ struct LoginView: View {
             return
         }
 
-        // npub1… — watch-only account (browse without signing).
-        if trimmed.lowercased().hasPrefix("npub1"),
-           let bytes = try? Nip19.npubDecode(trimmed) {
-            let pubkeyHex = Hex.encode(Data(bytes))
-            NostrKey.saveRemote(pubkey: pubkeyHex)
-            onLogin(Keypair(privkey: "", pubkey: pubkeyHex))
-            return
-        }
-
-        // nprofile1… — watch-only, same as npub but carries relay hints we ignore here.
-        if trimmed.lowercased().hasPrefix("nprofile1"),
-           let data = try? Nip19.nprofileDecode(trimmed),
-           case .profileRef(let pubkeyHex, _) = data {
+        // npub1, nprofile1 — watch-only account (browse without signing).
+        // decodeNostrUri lowercases internally so case in the QR payload doesn't matter.
+        if let uriData = Nip19.decodeNostrUri(trimmed),
+           case .profileRef(let pubkeyHex, _) = uriData {
             NostrKey.saveRemote(pubkey: pubkeyHex)
             onLogin(Keypair(privkey: "", pubkey: pubkeyHex))
             return
