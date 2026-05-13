@@ -22,6 +22,11 @@ struct MediaGridView: View {
     /// negative trailing padding) overshoots the nested container by
     /// the parent's own padding (~28pt) and bleeds past the screen edge.
     var nested: Bool = false
+    /// When set, tile taps fire this closure instead of presenting the
+    /// pager themselves. Used by `RichContentView` so a single post-wide
+    /// `FullScreenMediaPager` shows every image and video in the post,
+    /// not just the items in this carousel run.
+    var onTileTap: ((Int) -> Void)? = nil
     @State private var openIndex: Int?
     @State private var currentItemId: String?
 
@@ -177,7 +182,12 @@ struct MediaGridView: View {
     @ViewBuilder
     private func tile(_ item: MediaItem, width: CGFloat, height: CGFloat) -> some View {
         Button {
-            openIndex = items.firstIndex(of: item) ?? 0
+            let idx = items.firstIndex(of: item) ?? 0
+            if let onTileTap = onTileTap {
+                onTileTap(idx)
+            } else {
+                openIndex = idx
+            }
         } label: {
             ZStack {
                 MediaTileImage(item: item)

@@ -2,9 +2,19 @@ import SwiftUI
 
 struct InlineImageView: View {
     let meta: MediaMeta
+    /// When set, the inline tap fires this closure instead of presenting
+    /// the single-image `FullScreenImageView`. Used by `RichContentView` to
+    /// route inline image taps through `FullScreenMediaPager` so the user
+    /// can swipe between every image and video in the post.
+    var onTap: (() -> Void)? = nil
     @Environment(AppSettings.self) private var settings
     @State private var showFullScreen = false
     @State private var manualLoad = false
+
+    private func tapped() {
+        if let onTap = onTap { onTap() }
+        else { showFullScreen = true }
+    }
 
     /// Single corner radius used by every state of the inline image —
     /// placeholder background, blurhash overlay, loaded image, failure
@@ -33,7 +43,7 @@ struct InlineImageView: View {
                         }
                     )
                     .contentShape(Rectangle())
-                    .onTapGesture { showFullScreen = true }
+                    .onTapGesture { tapped() }
                 } else {
                     RetryingAsyncImage(
                         url: URL(string: meta.url),
@@ -41,7 +51,7 @@ struct InlineImageView: View {
                             image.resizable()
                                 .aspectRatio(contentMode: .fit)
                                 .frame(maxWidth: .infinity)
-                                .onTapGesture { showFullScreen = true }
+                                .onTapGesture { tapped() }
                         },
                         loading: {
                             placeholder(systemName: nil, height: height)

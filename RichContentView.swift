@@ -32,6 +32,12 @@ struct RichContentView: View {
 
     @Environment(AppSettings.self) private var settings
     @State private var emojiRepo = EmojiRepository.shared
+    /// Index into `allMediaItems` of the currently-presented full-screen
+    /// pager page, or nil when the pager is dismissed. Mirrors Android
+    /// wisp PR #527 — every inline image/video tap in this post routes
+    /// through one post-wide pager so the user can swipe between every
+    /// piece of media regardless of layout style.
+    @State private var fullScreenStart: Int? = nil
 
     /// Process-wide segment cache. `ContentParser.parse` runs an expensive
     /// combined regex over the note's content + reads every imeta tag — at
@@ -78,11 +84,36 @@ struct RichContentView: View {
     var body: some View {
         let segments = memoizedParse()
         let groups = groupSegments(segments, gridLayout: settings.mediaLayoutStyle == .grid)
+        // Post-wide list of every image / video / unknown-media segment, in
+        // document order. Tile taps + inline image taps both translate the
+        // tapped URL to an index in this list, so the pager shows everything
+        // and starts on the right page.
+        let allMediaItems = segments.compactMap(mediaItem(from:))
 
         VStack(alignment: .leading, spacing: 8) {
             ForEach(Array(groups.enumerated()), id: \.offset) { _, group in
-                renderGroup(group)
+                renderGroup(group, allMediaItems: allMediaItems)
             }
+        }
+        .fullScreenCover(item: Binding(
+            get: { fullScreenStart.map { PagerSelection(index: $0) } },
+            set: { fullScreenStart = $0?.index }
+        )) { selection in
+            FullScreenMediaPager(items: allMediaItems, initialIndex: selection.index)
+        }
+    }
+
+    /// Identifiable wrapper required by `fullScreenCover(item:)`. The pager
+    /// itself takes a plain Int, but the cover needs an `Identifiable` to
+    /// trigger presentation when the value changes.
+    private struct PagerSelection: Identifiable, Hashable {
+        let index: Int
+        var id: Int { index }
+    }
+
+    private func openPager(for url: String, in allMediaItems: [MediaGridView.MediaItem]) {
+        if let idx = allMediaItems.firstIndex(where: { $0.url == url }) {
+            fullScreenStart = idx
         }
     }
 
@@ -175,14 +206,24 @@ struct RichContentView: View {
     // MARK: - Group Rendering
 
     @ViewBuilder
-    private func renderGroup(_ group: SegmentGroup) -> some View {
+    private func renderGroup(_ group: SegmentGroup, allMediaItems: [MediaGridView.MediaItem]) -> some View {
         switch group {
         case .inline(let segs):
             inlineText(segs)
         case .block(let seg):
-            renderBlock(seg)
+            renderBlock(seg, allMediaItems: allMediaItems)
         case .mediaGroup(let segs):
-            MediaGridView(items: segs.compactMap(mediaItem(from:)), nested: nested)
+            let runItems = segs.compactMap(mediaItem(from:))
+            MediaGridView(
+                items: runItems,
+                nested: nested,
+                onTileTap: { localIdx in
+                    // The carousel's index is local to this run — translate
+                    // to the post-wide index before opening the pager.
+                    guard localIdx < runItems.count else { return }
+                    openPager(for: runItems[localIdx].url, in: allMediaItems)
+                }
+            )
         }
     }
 
@@ -198,10 +239,12 @@ struct RichContentView: View {
     }
 
     @ViewBuilder
-    private func renderBlock(_ seg: ContentSegment) -> some View {
+    private func renderBlock(_ seg: ContentSegment, allMediaItems: [MediaGridView.MediaItem]) -> some View {
         switch seg {
         case .image(let meta), .unknownMedia(let meta):
-            InlineImageView(meta: meta)
+            InlineImageView(meta: meta, onTap: {
+                openPager(for: meta.url, in: allMediaItems)
+            })
         case .video(let meta):
             InlineVideoView(meta: meta)
         case .audio(let meta):
