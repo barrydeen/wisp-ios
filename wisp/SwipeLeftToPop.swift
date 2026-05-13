@@ -366,14 +366,30 @@ private struct SwipeBackGestureInstaller: UIViewControllerRepresentable {
                nav.viewControllers.count < 2 {
                 return false
             }
-            // Yield only while a UITextView's long-press recognizer at the
-            // touch point is actively recognizing (engaging selection). A
-            // bail on `isFirstResponder` / non-empty `selectedRange` was
-            // overzealous: after the user copied text and dismissed the
-            // menu, UITextView often keeps both pieces of state alive for
-            // a while, which locked swipe-back out of the focal body
-            // indefinitely. `shouldRequireFailureOf` below handles the
-            // racing long-press case.
+            // Bail if the touch is on or near a UITextView that has an
+            // active selection. iOS renders the selection drag handles
+            // in a separate overlay above the text view, so a touch
+            // directly on a handle hit-tests into that overlay rather
+            // than into the UITextView's subtree. Treating "any touch
+            // near the selected text view's bounds" as a yield extends
+            // the handle's effective hit area to the whole text view
+            // plus a small slop margin — enough to catch a handle
+            // sitting flush against the leading edge.
+            //
+            // Tied to proximity rather than "any selection in the window"
+            // so that lifting a finger anywhere outside the text body
+            // (avatar gutter, action bar, surrounding space) still
+            // activates swipe-back even while iOS keeps the selection
+            // visually highlighted. `isFirstResponder` is deliberately
+            // *not* checked because it lingers past the Copy menu and
+            // would block swipe-back indefinitely.
+            if Self.touchIsNearActiveSelection(point: location, in: view) {
+                return false
+            }
+            // Also yield while an attached `UILongPressGestureRecognizer`
+            // on a UITextView at the touch point is mid-recognition —
+            // the user is engaging selection right now and our pan must
+            // not race ahead.
             if let hit = view.hitTest(location, with: nil),
                let tv = Self.enclosingSelectableTextView(hit) {
                 for gr in tv.gestureRecognizers ?? [] {
@@ -409,6 +425,31 @@ private struct SwipeBackGestureInstaller: UIViewControllerRepresentable {
                                shouldRequireFailureOf other: UIGestureRecognizer) -> Bool {
             guard let tv = other.view as? UITextView, tv.isSelectable else { return false }
             return other is UILongPressGestureRecognizer
+        }
+
+        /// True when `point` (in `host`'s coordinate space) is inside or
+        /// within 22pt of a selectable `UITextView` that has a non-empty
+        /// selection. 22pt is roughly the radius of a selection drag
+        /// handle's hit target, so a touch grabbing the handle from
+        /// flush against the text view's leading or trailing edge still
+        /// reads as "selection adjustment" rather than "swipe-back."
+        private static let selectionSlop: CGFloat = 22
+
+        private static func touchIsNearActiveSelection(point: CGPoint, in host: UIView) -> Bool {
+            guard let window = host.window else { return false }
+            return scanForNearbySelection(in: window, point: point, host: host)
+        }
+
+        private static func scanForNearbySelection(in view: UIView, point: CGPoint, host: UIView) -> Bool {
+            if let tv = view as? UITextView, tv.isSelectable, tv.selectedRange.length > 0 {
+                let local = tv.convert(point, from: host)
+                let expanded = tv.bounds.insetBy(dx: -selectionSlop, dy: -selectionSlop)
+                if expanded.contains(local) { return true }
+            }
+            for sub in view.subviews where !sub.isHidden && sub.alpha > 0 {
+                if scanForNearbySelection(in: sub, point: point, host: host) { return true }
+            }
+            return false
         }
 
         private static func enclosingSelectableTextView(_ view: UIView) -> UITextView? {
