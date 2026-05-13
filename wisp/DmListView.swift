@@ -79,6 +79,7 @@ private struct DmListRow: View {
     var body: some View {
         HStack(spacing: 12) {
             CachedAvatarView(url: profile?.picture, size: 48)
+                .quickFollowOnLongPress(pubkey: peerPubkey)
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
                     Text(displayName)

@@ -114,3 +114,12 @@ enum AdminError: Error, Hashable {
 nonisolated func groupRoomKey(ownerPubkey: String, relayUrl: String, groupId: String) -> String {
     "\(ownerPubkey)|\(relayUrl)|\(groupId)"
 }
+
+/// Parsed NIP-29 invite link surfaced from a tap on a `wss://host'<groupid>`
+/// URL in note content. Hashable so SwiftUI `.onChange(of:)` can detect
+/// repeat taps on the same link.
+struct ChatDeepLink: Hashable {
+    let relayUrl: String
+    let groupId: String
+    let code: String?
+}

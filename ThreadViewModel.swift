@@ -23,6 +23,14 @@ final class ThreadViewModel {
 
     var rootId: String
     var rootEvent: NostrEvent?
+    /// First ancestor event ID that could not be fetched from relays.
+    /// Set by `rebuildSlices` via `computeAncestors`; cleared when the event
+    /// arrives (live stream or retry) and the chain resolves fully.
+    var missingAncestorId: String? = nil
+    /// True while `fetchAncestorChain` (initial load or retry) is running.
+    /// Suppresses `missingAncestorId` updates in `rebuildSlices` so a live-stream
+    /// event doesn't surface the "not found" placeholder before retries are exhausted.
+    var isSearchingAncestors: Bool = false
     /// Chain from root → focal-1, in order. Empty when the focal is the root.
     var ancestors: [ThreadRow] = []
     /// The focal event for this screen — usually `events[focalEventId]`.
@@ -581,55 +589,72 @@ final class ThreadViewModel {
         return ordered
     }
 
-    private func fetchRoot(from relays: [String]) async {
+    /// Fetch a single event by ID, with one automatic retry after a short delay
+    /// to handle relay race conditions or slow relays that miss the first query.
+    private func fetchEvent(id: String, from relays: [String]) async -> NostrEvent? {
         var filter = NostrFilter()
-        filter.ids = [rootId]
+        filter.ids = [id]
         filter.limit = 1
-        let results = await RelayPool.query(relays: relays, filter: filter, timeout: 6)
-        if let event = results.first(where: { $0.id == rootId }) {
-            events[event.id] = event
-            rootEvent = event
-            // The root we just fetched may itself be a reply; re-resolve and re-fetch.
-            if let trueRoot = Nip10.rootId(of: event), trueRoot != rootId {
-                rootId = trueRoot
-                rootEvent = events[trueRoot]
-                if rootEvent == nil {
-                    var rootFilter = NostrFilter()
-                    rootFilter.ids = [trueRoot]
-                    rootFilter.limit = 1
-                    let upstream = await RelayPool.query(relays: relays, filter: rootFilter, timeout: 6)
-                    if let upstreamRoot = upstream.first(where: { $0.id == trueRoot }) {
-                        events[upstreamRoot.id] = upstreamRoot
-                        rootEvent = upstreamRoot
-                    }
-                }
+        let first = await RelayPool.query(relays: relays, filter: filter, timeout: 6)
+        if let found = first.first(where: { $0.id == id }) { return found }
+        try? await Task.sleep(for: .milliseconds(1500))
+        if Task.isCancelled { return nil }
+        let second = await RelayPool.query(relays: relays, filter: filter, timeout: 6)
+        return second.first(where: { $0.id == id })
+    }
+
+    private func fetchRoot(from relays: [String]) async {
+        guard let event = await fetchEvent(id: rootId, from: relays) else { return }
+        events[event.id] = event
+        rootEvent = event
+        // The root we just fetched may itself be a reply; re-resolve and re-fetch.
+        if let trueRoot = Nip10.rootId(of: event), trueRoot != rootId {
+            rootId = trueRoot
+            rootEvent = events[trueRoot]
+            if rootEvent == nil, let upstreamRoot = await fetchEvent(id: trueRoot, from: relays) {
+                events[upstreamRoot.id] = upstreamRoot
+                rootEvent = upstreamRoot
             }
-            await eventStore.persist([event])
         }
+        await eventStore.persist([event])
     }
 
     /// Walk `Nip10.replyTarget` upward from the focal, fetching any missing intermediate
     /// ancestors one event at a time so the chain renders without waiting for the broad
     /// `e: [rootId]` replies stream. Bounded at 30 hops as a safety stop.
     private func fetchAncestorChain(from relays: [String]) async {
-        guard var current = events[focalEventId] else { return }
+        isSearchingAncestors = true
+        guard var current = events[focalEventId] else {
+            isSearchingAncestors = false
+            return
+        }
         for _ in 0..<30 {
             guard let parentId = Nip10.replyTarget(of: current) else { break }
             if let parent = events[parentId] {
                 current = parent
                 continue
             }
-            var filter = NostrFilter()
-            filter.ids = [parentId]
-            filter.limit = 1
-            let results = await RelayPool.query(relays: relays, filter: filter, timeout: 6)
-            guard let parent = results.first(where: { $0.id == parentId }) else { break }
+            guard let parent = await fetchEvent(id: parentId, from: relays) else { break }
             events[parent.id] = parent
             await eventStore.persist([parent])
             if parent.id == rootId { rootEvent = parent }
             current = parent
         }
+        isSearchingAncestors = false
         rebuildSlices()
+    }
+
+    /// Re-attempt ancestor chain resolution after a previous `fetchAncestorChain` stopped
+    /// due to a relay miss. Re-uses the full relay set so a relay that was slow or offline
+    /// the first time gets another chance.
+    func retryMissingAncestor() {
+        guard !isSearchingAncestors else { return }
+        missingAncestorId = nil
+        Task { [weak self] in
+            guard let self else { return }
+            let relays = await self.resolveRelays()
+            await self.fetchAncestorChain(from: relays)
+        }
     }
 
     /// Open a live subscription for replies. Events are merged into the UI as each relay sends
@@ -810,7 +835,14 @@ final class ThreadViewModel {
     /// from the current `events` map. Called whenever events change.
     private func rebuildSlices() {
         focal = events[focalEventId].map { ThreadRow(event: $0, isBlocked: blockedEventIds.contains($0.id)) }
-        ancestors = computeAncestors()
+        let (chain, newMissingId) = computeAncestors()
+        ancestors = chain
+        // Only surface the missing-ancestor state after all fetch attempts have
+        // completed. While isSearchingAncestors is true a live-stream rebuild
+        // would otherwise flip the placeholder on before retries are exhausted.
+        if !isSearchingAncestors {
+            missingAncestorId = newMissingId
+        }
 
         // Tally direct children per parent so reply rows can show a
         // "View N replies" hint as soon as any descendants are loaded.
@@ -888,20 +920,24 @@ final class ThreadViewModel {
 
     /// Walk parent-of-parent from focal up to root, returning the chain in root → focal-1 order.
     /// Stops at the first missing event (the live stream / `fetchAncestorChain` will fill in
-    /// gaps and this gets called again).
-    private func computeAncestors() -> [ThreadRow] {
-        guard let focal = events[focalEventId] else { return [] }
+    /// gaps and this gets called again). The second tuple element is the ID of the first
+    /// ancestor that is referenced but not yet in `events` — nil when the chain is complete.
+    private func computeAncestors() -> (chain: [ThreadRow], missingId: String?) {
+        guard let focal = events[focalEventId] else { return ([], nil) }
         var chain: [NostrEvent] = []
         var current = focal
         var seen: Set<String> = [focal.id]
         for _ in 0..<30 {
             guard let parentId = Nip10.replyTarget(of: current),
-                  seen.insert(parentId).inserted,
-                  let parent = events[parentId] else { break }
+                  seen.insert(parentId).inserted else { break }
+            guard let parent = events[parentId] else {
+                let rows = chain.reversed().map { ThreadRow(event: $0, isBlocked: blockedEventIds.contains($0.id)) }
+                return (rows, parentId)
+            }
             chain.append(parent)
             current = parent
         }
-        return chain.reversed().map { ThreadRow(event: $0, isBlocked: blockedEventIds.contains($0.id)) }
+        return (chain.reversed().map { ThreadRow(event: $0, isBlocked: blockedEventIds.contains($0.id)) }, nil)
     }
 
     // MARK: - NSpam
