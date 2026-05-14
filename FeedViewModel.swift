@@ -117,6 +117,13 @@ final class FeedViewModel {
         isLoading = true
 
         reloadFollowsCache()
+
+        // Watch-only accounts bypass onboarding so their follows cache is empty
+        // on first launch. Fetch kind-3 in the background so the feed populates.
+        if followsCache.isEmpty && NostrKey.isWatchOnly(pubkey: keypair.pubkey) {
+            Task { await fetchWatchOnlyFollows() }
+        }
+
         metricsTask = Task { await fetchOnlineCount() }
         startPruneTask()
         startLiveDiscovery()
@@ -754,6 +761,24 @@ final class FeedViewModel {
         followsCache = Set(
             FollowsCache.shared.follows(for: keypair.pubkey)
         )
+    }
+
+    private func fetchWatchOnlyFollows() async {
+        let pubkey = keypair.pubkey
+        let events = await RelayPool.query(
+            relays: Self.indexerRelays,
+            filter: NostrFilter(kinds: [3], authors: [pubkey], limit: 1),
+            timeout: 10
+        )
+        guard let kind3 = events.filter({ $0.kind == 3 })
+            .max(by: { $0.createdAt < $1.createdAt }) else { return }
+        let follows = kind3.tags.compactMap { tag -> String? in
+            tag.count >= 2 && tag[0] == "p" ? tag[1] : nil
+        }
+        FollowsCache.shared.update(pubkey: pubkey, follows: follows)
+        reloadFollowsCache()
+        // Trigger a live relay subscription refresh now that we have follows.
+        await refresh()
     }
 
     /// EventStore caches events from every feed kind (notably the Extended Network

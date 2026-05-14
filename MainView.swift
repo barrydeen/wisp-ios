@@ -3,6 +3,8 @@ import SwiftUI
 struct MainView: View {
     let keypair: Keypair
     let onLogout: () -> Void
+
+    private var isWatchOnly: Bool { NostrKey.isWatchOnly(pubkey: keypair.pubkey) }
     var onSwitchAccount: (Keypair) -> Void = { _ in }
     @State private var viewModel: FeedViewModel
     @State private var messagesVM: MessagesViewModel
@@ -473,7 +475,7 @@ struct MainView: View {
                     NavigationStack(path: $feedPath) {
                         ZStack(alignment: .bottomTrailing) {
                             feedContent
-                            if !drawerOpen {
+                            if !drawerOpen && !isWatchOnly {
                                 ComposeFAB { showCompose = true }
                                     .padding(.trailing, 18)
                                     .padding(.bottom, 32 + (audioPlayer.currentTrack != nil ? MiniAudioPlayerView.collapsedHeight : 0))
@@ -1124,7 +1126,7 @@ struct MainView: View {
 
     private var bottomBar: some View {
         HStack {
-            ForEach(BottomTab.allCases, id: \.self) { tab in
+            ForEach(BottomTab.allCases.filter { !isWatchOnly || $0 != .wallet }, id: \.self) { tab in
                 Button {
                     if selectedTab == tab {
                         popToRoot(tab)

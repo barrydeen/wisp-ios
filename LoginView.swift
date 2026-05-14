@@ -264,7 +264,8 @@ struct LoginView: View {
         // decodeNostrUri lowercases internally so case in the QR payload doesn't matter.
         if let uriData = Nip19.decodeNostrUri(trimmed),
            case .profileRef(let pubkeyHex, _) = uriData {
-            NostrKey.saveRemote(pubkey: pubkeyHex)
+            NostrKey.saveWatchOnly(pubkey: pubkeyHex)
+            NostrKey.markOnboardingComplete(pubkey: pubkeyHex)
             onLogin(Keypair(privkey: "", pubkey: pubkeyHex))
             return
         }

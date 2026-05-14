@@ -136,6 +136,10 @@ struct PostCardView: View {
     }
 
     private var myPubkey: String? { NostrKey.load()?.pubkey }
+    private var activeUserIsWatchOnly: Bool {
+        guard let kp = NostrKey.load() else { return false }
+        return NostrKey.isWatchOnly(pubkey: kp.pubkey)
+    }
 
     /// Event id reactions and reposts target — the inner note for kind-6
     /// reposts, otherwise the post's own id.
@@ -413,7 +417,7 @@ struct PostCardView: View {
                     }
                 }
 
-                actionBar
+                if !activeUserIsWatchOnly { actionBar }
 
                 if expanded {
                     NoteDetailsPanel(
