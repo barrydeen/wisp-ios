@@ -262,10 +262,11 @@ struct LoginView: View {
 
         // npub1, nprofile1 — watch-only account (browse without signing).
         // decodeNostrUri lowercases internally so case in the QR payload doesn't matter.
+        // Onboarding still runs (in its watch-only variant) so the user's kind-10002
+        // gets ingested and the relay scoreboard is built — otherwise the feed is empty.
         if let uriData = Nip19.decodeNostrUri(trimmed),
            case .profileRef(let pubkeyHex, _) = uriData {
             NostrKey.saveWatchOnly(pubkey: pubkeyHex)
-            NostrKey.markOnboardingComplete(pubkey: pubkeyHex)
             onLogin(Keypair(privkey: "", pubkey: pubkeyHex))
             return
         }

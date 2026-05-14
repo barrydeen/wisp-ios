@@ -19,17 +19,25 @@ struct OnboardingView: View {
         // a switch instead so the only way forward is the explicit button
         // each step provides.
         Group {
-            switch currentPage {
-            case 0:
-                WelcomeStep(onNext: { withAnimation { currentPage = 1 } })
-            case 1:
-                OutboxStep(onNext: { withAnimation { currentPage = 2 } })
-            case 2:
-                FollowStep(onNext: { withAnimation { currentPage = 3 } })
-            case 3:
-                ZapStep(onNext: { withAnimation { currentPage = 4 } })
-            default:
-                WaitingStep(viewModel: viewModel, keypair: keypair, onComplete: onComplete)
+            if keypair.isWatchOnly {
+                // Watch-only accounts skip the welcome / follow / zap teaching
+                // since none of those mechanics are usable read-only. We still
+                // need the outbox builder to run so the user's kind-10002 is
+                // ingested and the feed has relays to query.
+                WatchOnlyStep(viewModel: viewModel, keypair: keypair, onComplete: onComplete)
+            } else {
+                switch currentPage {
+                case 0:
+                    WelcomeStep(onNext: { withAnimation { currentPage = 1 } })
+                case 1:
+                    OutboxStep(onNext: { withAnimation { currentPage = 2 } })
+                case 2:
+                    FollowStep(onNext: { withAnimation { currentPage = 3 } })
+                case 3:
+                    ZapStep(onNext: { withAnimation { currentPage = 4 } })
+                default:
+                    WaitingStep(viewModel: viewModel, keypair: keypair, onComplete: onComplete)
+                }
             }
         }
         .transition(.asymmetric(
@@ -342,6 +350,85 @@ private struct StepLayout: View {
                 .padding(.horizontal, 32)
 
             Spacer().frame(height: 48)
+        }
+    }
+}
+
+// MARK: - Watch-Only Step
+
+private struct WatchOnlyStep: View {
+    var viewModel: OnboardingViewModel
+    let keypair: Keypair
+    var onComplete: () -> Void
+
+    @State private var rotation: Double = 0
+    @State private var ringDrawn: CGFloat = 0
+    @State private var avatarRevealed = false
+    @State private var profile: ProfileData?
+
+    private let spinnerSize: CGFloat = 64
+    private let avatarSize: CGFloat = 52
+
+    var body: some View {
+        VStack(spacing: 24) {
+            Spacer()
+
+            if viewModel.isReady {
+                Image(systemName: "checkmark.circle.fill")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: spinnerSize, height: spinnerSize)
+                    .foregroundStyle(.green)
+                    .transition(.scale.combined(with: .opacity))
+            } else {
+                ZStack {
+                    CachedAvatarView(url: profile?.picture, size: avatarSize)
+                        .opacity(avatarRevealed ? 1 : 0)
+                    Circle()
+                        .trim(from: 0, to: ringDrawn)
+                        .stroke(Color.wispPrimary, lineWidth: 4)
+                        .frame(width: spinnerSize, height: spinnerSize)
+                        .rotationEffect(.degrees(rotation))
+                }
+                .frame(width: spinnerSize, height: spinnerSize)
+            }
+
+            VStack(spacing: 8) {
+                Text("Watch-only mode")
+                    .font(.system(size: 28, weight: .bold))
+                    .foregroundStyle(.white)
+
+                Text("You can read but not post — no private key is stored on this device.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 32)
+            }
+
+            Spacer()
+
+            if viewModel.isReady {
+                Button("Let\u{2019}s go", action: onComplete)
+                    .buttonStyle(.borderedProminent)
+                    .tint(.wispPrimary)
+                    .controlSize(.large)
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 32)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+
+            Spacer().frame(height: 48)
+        }
+        .animation(.easeInOut, value: viewModel.isReady)
+        .onAppear {
+            profile = ProfileRepository.shared.get(keypair.pubkey)
+            withAnimation(.easeOut(duration: 0.45)) { ringDrawn = 0.7 }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                withAnimation(.linear(duration: 1).repeatForever(autoreverses: false)) {
+                    rotation = 360
+                }
+                withAnimation(.easeIn(duration: 0.25)) { avatarRevealed = true }
+            }
         }
     }
 }

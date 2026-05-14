@@ -38,7 +38,9 @@ struct KeysSettingsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 publicKeySection
-                if keypair.isRemote {
+                if keypair.isWatchOnly {
+                    watchOnlySection
+                } else if keypair.isRemote {
                     remoteSignerSection
                 } else {
                     privateKeySection
@@ -126,6 +128,33 @@ struct KeysSettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+        }
+    }
+
+    // MARK: - Watch-only
+
+    private var watchOnlySection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Private Key")
+                .font(.subheadline.weight(.semibold))
+
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "eye")
+                    .foregroundStyle(Color.wispPrimary)
+                    .font(.subheadline)
+                    .padding(.top, 2)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Watch-only account")
+                        .font(.subheadline.weight(.semibold))
+                    Text("No private key is stored on this device. You can browse public content but can\u{2019}t post, react, or zap.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.wispSurface, in: RoundedRectangle(cornerRadius: 12))
         }
     }
 

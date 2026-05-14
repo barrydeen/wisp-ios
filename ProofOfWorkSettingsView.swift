@@ -4,50 +4,62 @@ struct ProofOfWorkSettingsView: View {
     @Environment(PowPreferences.self) private var prefs
     @Environment(\.theme) private var theme
 
+    private var isWatchOnly: Bool {
+        guard let kp = NostrKey.load() else { return false }
+        return kp.isWatchOnly
+    }
+
     var body: some View {
         @Bindable var prefs = prefs
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                Text("Proof of Work mines a hash prefix on your events, acting as a spam deterrent. Higher difficulty takes longer but signals more effort.")
-                    .font(.system(size: 13))
-                    .foregroundStyle(theme.palette.onSurfaceVariant)
-                    .padding(.horizontal, 4)
-
-                section(title: "Notes") {
-                    toggleRow(
-                        title: "Enable PoW for notes",
-                        subtitle: "Mine proof of work before publishing notes",
-                        isOn: $prefs.notePowEnabled
-                    )
-                    difficultyRow(
-                        bits: $prefs.noteDifficulty,
-                        enabled: prefs.notePowEnabled
-                    )
+                if isWatchOnly {
+                    watchOnlyBanner
                 }
+                Group {
+                    Text("Proof of Work mines a hash prefix on your events, acting as a spam deterrent. Higher difficulty takes longer but signals more effort.")
+                        .font(.system(size: 13))
+                        .foregroundStyle(theme.palette.onSurfaceVariant)
+                        .padding(.horizontal, 4)
 
-                section(title: "Reactions") {
-                    toggleRow(
-                        title: "Enable PoW for reactions",
-                        subtitle: "Mine proof of work on reactions (sub-second at low difficulty)",
-                        isOn: $prefs.reactionPowEnabled
-                    )
-                    difficultyRow(
-                        bits: $prefs.reactionDifficulty,
-                        enabled: prefs.reactionPowEnabled
-                    )
-                }
+                    section(title: "Notes") {
+                        toggleRow(
+                            title: "Enable PoW for notes",
+                            subtitle: "Mine proof of work before publishing notes",
+                            isOn: $prefs.notePowEnabled
+                        )
+                        difficultyRow(
+                            bits: $prefs.noteDifficulty,
+                            enabled: prefs.notePowEnabled
+                        )
+                    }
 
-                section(title: "DMs") {
-                    toggleRow(
-                        title: "Enable PoW for DMs",
-                        subtitle: "Mine proof of work on gift wraps before sending DMs",
-                        isOn: $prefs.dmPowEnabled
-                    )
-                    difficultyRow(
-                        bits: $prefs.dmDifficulty,
-                        enabled: prefs.dmPowEnabled
-                    )
+                    section(title: "Reactions") {
+                        toggleRow(
+                            title: "Enable PoW for reactions",
+                            subtitle: "Mine proof of work on reactions (sub-second at low difficulty)",
+                            isOn: $prefs.reactionPowEnabled
+                        )
+                        difficultyRow(
+                            bits: $prefs.reactionDifficulty,
+                            enabled: prefs.reactionPowEnabled
+                        )
+                    }
+
+                    section(title: "DMs") {
+                        toggleRow(
+                            title: "Enable PoW for DMs",
+                            subtitle: "Mine proof of work on gift wraps before sending DMs",
+                            isOn: $prefs.dmPowEnabled
+                        )
+                        difficultyRow(
+                            bits: $prefs.dmDifficulty,
+                            enabled: prefs.dmPowEnabled
+                        )
+                    }
                 }
+                .disabled(isWatchOnly)
+                .opacity(isWatchOnly ? 0.4 : 1)
 
                 Spacer(minLength: 40)
             }
@@ -126,5 +138,21 @@ struct ProofOfWorkSettingsView: View {
             .disabled(!enabled || bits.wrappedValue >= PowPreferences.maxDifficulty)
         }
         .opacity(enabled ? 1.0 : 0.5)
+    }
+
+    private var watchOnlyBanner: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "eye")
+                .foregroundStyle(Color.wispPrimary)
+                .font(.subheadline)
+                .padding(.top, 2)
+            Text("Watch-only mode")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(theme.palette.surface, in: RoundedRectangle(cornerRadius: 12))
     }
 }

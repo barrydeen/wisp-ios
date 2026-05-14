@@ -151,7 +151,9 @@ struct SidebarDrawerView: View {
             Button("Cancel", role: .cancel) {}
             Button("Logout", role: .destructive) { onLogout() }
         } message: {
-            if hasEmbeddedWallet {
+            if keypair.isWatchOnly {
+                Text("Sign back in with your npub anytime to resume watching this account.")
+            } else if hasEmbeddedWallet {
                 Text("Back up your private key before logging out. Without it, your Nostr account cannot be recovered.\n\nBack up your wallet recovery phrase. Without it, your funds cannot be recovered.")
             } else {
                 Text("Back up your private key before logging out. Without it, your Nostr account cannot be recovered.")
@@ -253,21 +255,23 @@ struct SidebarDrawerView: View {
                     .lineLimit(1)
             }
 
-            Button {
-                statusDraft = userStatus ?? ""
-                showStatusEditor = true
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "pencil")
-                        .font(.system(size: userStatus == nil ? 14 : 12))
-                        .foregroundStyle(.secondary)
-                    Text(userStatus ?? "Set status\u{2026}")
-                        .font(.system(size: 12).italic())
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+            if !keypair.isWatchOnly {
+                Button {
+                    statusDraft = userStatus ?? ""
+                    showStatusEditor = true
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "pencil")
+                            .font(.system(size: userStatus == nil ? 14 : 12))
+                            .foregroundStyle(.secondary)
+                        Text(userStatus ?? "Set status\u{2026}")
+                            .font(.system(size: 12).italic())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                 }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         }
     }
 
@@ -308,6 +312,11 @@ struct SidebarDrawerView: View {
                             .font(.system(size: 14))
                             .foregroundStyle(.primary)
                         Spacer()
+                        if NostrKey.isWatchOnly(pubkey: acctPubkey) {
+                            Image(systemName: "eye")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                        }
                         if acctPubkey == pubkey {
                             Image(systemName: "checkmark")
                                 .font(.system(size: 12, weight: .semibold))
@@ -357,11 +366,13 @@ struct SidebarDrawerView: View {
             DrawerRow(icon: "magnifyingglass", label: "Search") {
                 onSelectTab(.search)
             }
-            DrawerRow(icon: "envelope", label: "Messages") {
-                onSelectTab(.messages)
-            }
-            DrawerRow(icon: "creditcard", label: "Wallet") {
-                onSelectTab(.wallet)
+            if !keypair.isWatchOnly {
+                DrawerRow(icon: "envelope", label: "Messages") {
+                    onSelectTab(.messages)
+                }
+                DrawerRow(icon: "creditcard", label: "Wallet") {
+                    onSelectTab(.wallet)
+                }
             }
             DrawerRow(icon: "list.bullet", label: "Lists") {
                 onOpenLists()

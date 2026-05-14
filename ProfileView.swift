@@ -137,10 +137,12 @@ struct ProfileView: View {
                 } label: {
                     Label("Copy npub", systemImage: "person.text.rectangle")
                 }
-                Button {
-                    showAddToList = true
-                } label: {
-                    Label("Add to List", systemImage: "text.badge.plus")
+                if !NostrKey.isWatchOnly(pubkey: activeUserPubkey) {
+                    Button {
+                        showAddToList = true
+                    } label: {
+                        Label("Add to List", systemImage: "text.badge.plus")
+                    }
                 }
                 if !isMe {
                     let blocked = muteRepo.isBlocked(pubkey)

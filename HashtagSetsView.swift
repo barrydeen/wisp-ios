@@ -24,15 +24,24 @@ struct HashtagSetsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                if repo.hashtagSets.isEmpty {
-                    emptyState
-                } else {
-                    ForEach(repo.hashtagSets) { set in
-                        setCard(set)
+                if keypair.isWatchOnly {
+                    watchOnlyBanner
+                }
+                Group {
+                    if repo.hashtagSets.isEmpty {
+                        emptyState
+                    } else {
+                        ForEach(repo.hashtagSets) { set in
+                            setCard(set)
+                        }
+                    }
+
+                    if !keypair.isWatchOnly {
+                        createButton
                     }
                 }
-
-                createButton
+                .disabled(keypair.isWatchOnly)
+                .opacity(keypair.isWatchOnly ? 0.4 : 1)
                 Spacer(minLength: 24)
             }
             .padding(20)
@@ -301,6 +310,22 @@ struct HashtagSetsView: View {
             repo.addHashtag(piece, toSet: set.dTag, keypair: keypair)
         }
         newTagInputs[set.dTag] = ""
+    }
+
+    private var watchOnlyBanner: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "eye")
+                .foregroundStyle(Color.wispPrimary)
+                .font(.subheadline)
+                .padding(.top, 2)
+            Text("Watch-only mode")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.wispSurface, in: RoundedRectangle(cornerRadius: 12))
     }
 }
 

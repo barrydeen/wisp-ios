@@ -24,6 +24,14 @@ struct RelaySettingsView: View {
 
     var body: some View {
         List {
+            if keypair.isWatchOnly {
+                Section {
+                    watchOnlyBanner
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                }
+            }
             Section {
                 Picker("Tab", selection: $tab) {
                     ForEach(Tab.allCases) { t in Text(t.rawValue).tag(t) }
@@ -42,6 +50,8 @@ struct RelaySettingsView: View {
                         .listRowSeparator(.hidden)
                         .listRowInsets(EdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 16))
                 }
+                .disabled(keypair.isWatchOnly)
+                .opacity(keypair.isWatchOnly ? 0.4 : 1)
             }
 
             Section {
@@ -50,6 +60,8 @@ struct RelaySettingsView: View {
                     .listRowSeparator(.hidden)
                     .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
             }
+            .disabled(keypair.isWatchOnly)
+            .opacity(keypair.isWatchOnly ? 0.4 : 1)
 
             Section {
                 let urls = currentUrls
@@ -73,22 +85,28 @@ struct RelaySettingsView: View {
                             .listRowSeparator(.hidden)
                             .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
                             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                Button(role: .destructive) {
-                                    deleteCurrent(url: url)
-                                } label: {
-                                    Label("Delete", systemImage: "trash")
+                                if !keypair.isWatchOnly {
+                                    Button(role: .destructive) {
+                                        deleteCurrent(url: url)
+                                    } label: {
+                                        Label("Delete", systemImage: "trash")
+                                    }
                                 }
                             }
                     }
-                    Text("Swipe left to delete")
-                        .font(.system(size: 11))
-                        .foregroundStyle(theme.palette.onSurfaceVariant.opacity(0.5))
-                        .frame(maxWidth: .infinity, alignment: .center)
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
-                        .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 4, trailing: 16))
+                    if !keypair.isWatchOnly {
+                        Text("Swipe left to delete")
+                            .font(.system(size: 11))
+                            .foregroundStyle(theme.palette.onSurfaceVariant.opacity(0.5))
+                            .frame(maxWidth: .infinity, alignment: .center)
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 4, trailing: 16))
+                    }
                 }
             }
+            .disabled(keypair.isWatchOnly)
+            .opacity(keypair.isWatchOnly ? 0.4 : 1)
 
             Section {
                 VStack(spacing: 10) {
@@ -134,6 +152,8 @@ struct RelaySettingsView: View {
                 .listRowSeparator(.hidden)
                 .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 16, trailing: 16))
             }
+            .disabled(keypair.isWatchOnly)
+            .opacity(keypair.isWatchOnly ? 0.4 : 1)
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
@@ -296,5 +316,21 @@ struct RelaySettingsView: View {
             try? await Task.sleep(for: .seconds(2))
             withAnimation { toast = nil }
         }
+    }
+
+    private var watchOnlyBanner: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "eye")
+                .foregroundStyle(Color.wispPrimary)
+                .font(.subheadline)
+                .padding(.top, 2)
+            Text("Watch-only mode")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.wispSurface, in: RoundedRectangle(cornerRadius: 12))
     }
 }
