@@ -50,6 +50,11 @@ struct MainView: View {
     /// matter which navigation surface presented the composer.
     @State private var draftToast = DraftSavedToastStore.shared
     @State private var draftSavedToastTask: Task<Void, Never>?
+    /// Mirror of `draftToast` for the "post published" pill — `ComposeViewModel`
+    /// writes here after a successful immediate publish so the tab root can
+    /// surface an orange link back to the new post.
+    @State private var postPublishedToast = PostPublishedToastStore.shared
+    @State private var postPublishedToastTask: Task<Void, Never>?
     /// Set to reopen the composer pointed at an existing draft (populated by
     /// the draft-saved toast tap). Separate from `showCompose` so SwiftUI
     /// mounts a fresh `ComposeView` keyed off the draft's dTag.
@@ -88,6 +93,15 @@ struct MainView: View {
 
             if let draft = draftToast.pendingDraft {
                 draftSavedPill(draft: draft)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .frame(maxHeight: .infinity, alignment: .top)
+                    .padding(.top, 8)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .zIndex(2)
+            }
+
+            if let toast = postPublishedToast.published {
+                postPublishedPill(toast: toast)
                     .frame(maxWidth: .infinity, alignment: .center)
                     .frame(maxHeight: .infinity, alignment: .top)
                     .padding(.top, 8)
@@ -415,6 +429,17 @@ struct MainView: View {
                 guard !Task.isCancelled else { return }
                 withAnimation(.easeInOut(duration: 0.25)) {
                     draftToast.pendingDraft = nil
+                }
+            }
+        }
+        .onChange(of: postPublishedToast.published?.id) { _, eventId in
+            guard eventId != nil else { return }
+            postPublishedToastTask?.cancel()
+            postPublishedToastTask = Task { @MainActor in
+                try? await Task.sleep(for: .seconds(3.5))
+                guard !Task.isCancelled else { return }
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    postPublishedToast.published = nil
                 }
             }
         }
@@ -842,6 +867,35 @@ struct MainView: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
             .background(Color.wispPrimary, in: Capsule())
+            .shadow(color: .black.opacity(0.25), radius: 8, x: 0, y: 2)
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private func postPublishedPill(toast: PublishedPostToast) -> some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                postPublishedToast.published = nil
+            }
+            postPublishedToastTask?.cancel()
+            selectedTab = .home
+            feedPath.append(ThreadRoute(eventId: toast.id, authorPubkey: toast.pubkey))
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                Text("Post published")
+                    .font(.caption.weight(.semibold))
+                Text("View")
+                    .font(.caption.weight(.semibold))
+                    .underline()
+                    .opacity(0.95)
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(Color.orange, in: Capsule())
             .shadow(color: .black.opacity(0.25), radius: 8, x: 0, y: 2)
         }
         .buttonStyle(.plain)

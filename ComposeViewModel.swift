@@ -937,6 +937,9 @@ final class ComposeViewModel {
                 userInfo: ["event": event]
             )
             publishedEventId = event.id
+            PostPublishedToastStore.shared.published = PublishedPostToast(
+                id: event.id, pubkey: event.pubkey
+            )
             Haptics.shared.pulse()
         }
     }
