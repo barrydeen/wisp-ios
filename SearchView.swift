@@ -38,10 +38,7 @@ struct SearchView: View {
             // claims the full row width — the previous side-by-side
             // layout left the field cramped after both segments + the
             // filters icon ate ~60% of the bar.
-            HStack {
-                modePill
-                Spacer(minLength: 0)
-            }
+            modePill
 
             HStack(spacing: 8) {
                 HStack(spacing: 6) {
@@ -55,7 +52,10 @@ struct SearchView: View {
                     ))
                     .focused($queryFocused)
                     .submitLabel(.search)
-                    .onSubmit { viewModel.runSearch() }
+                    .onSubmit {
+                        queryFocused = false
+                        viewModel.runSearch()
+                    }
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .font(.subheadline)
@@ -111,8 +111,8 @@ struct SearchView: View {
             modeChip(.people, icon: "person.crop.circle", label: "People")
             modeChip(.notes,  icon: "text.bubble",        label: "Notes")
         }
-        .padding(3)
-        .background(Color.wispSurfaceVariant, in: RoundedRectangle(cornerRadius: 20))
+        .padding(4)
+        .background(Color.wispSurfaceVariant, in: RoundedRectangle(cornerRadius: 22))
     }
 
     private func modeChip(_ mode: SearchViewModel.Mode, icon: String, label: String) -> some View {
@@ -120,19 +120,21 @@ struct SearchView: View {
         return Button {
             viewModel.setMode(mode)
         } label: {
-            HStack(spacing: 4) {
+            HStack(spacing: 6) {
                 Image(systemName: icon)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: 14, weight: .semibold))
                 Text(label)
-                    .font(.caption.weight(.semibold))
+                    .font(.subheadline.weight(.semibold))
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
             .background(
-                RoundedRectangle(cornerRadius: 16)
+                RoundedRectangle(cornerRadius: 18)
                     .fill(selected ? Color.wispPrimary : Color.clear)
             )
             .foregroundStyle(selected ? Color.white : Color.wispOnSurface)
+            .contentShape(RoundedRectangle(cornerRadius: 18))
         }
         .buttonStyle(.plain)
     }
@@ -361,7 +363,7 @@ struct SearchView: View {
                     }
                 }
             }
-            .scrollDismissesKeyboard(.interactively)
+            .scrollDismissesKeyboard(.immediately)
         }
     }
 
@@ -374,17 +376,31 @@ struct SearchView: View {
                     profiles: viewModel.noteProfiles,
                     engagement: viewModel.engagement[event.id],
                     onProfileTap: { pubkey in
+                        queryFocused = false
                         path.append(ProfileRoute(pubkey: pubkey))
                     },
                     onNoteTap: { eventId in
+                        queryFocused = false
                         path.append(ThreadRoute(eventId: eventId, authorPubkey: event.pubkey))
                     },
                     onHashtagTap: { tag in
+                        queryFocused = false
                         path.append(HashtagFeedRoute(tag: tag))
+                    },
+                    onOpenReplyCompose: { _, _ in
+                        // Hand off to the thread view so the composer doesn't
+                        // open as a sheet on top of SearchView — otherwise the
+                        // search TextField underneath keeps first responder
+                        // and typed characters append to `viewModel.query`,
+                        // re-triggering the debounce and replacing the result
+                        // the user was trying to comment on.
+                        queryFocused = false
+                        path.append(ThreadRoute(eventId: event.id, authorPubkey: event.pubkey))
                     }
                 )
             }
             .buttonStyle(.plain)
+            .simultaneousGesture(TapGesture().onEnded { queryFocused = false })
             Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
         }
     }
@@ -423,6 +439,7 @@ struct SearchView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .simultaneousGesture(TapGesture().onEnded { queryFocused = false })
             Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
         }
     }
