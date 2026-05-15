@@ -9,6 +9,7 @@ struct LoginView: View {
     @State private var isSecure = true
     @State private var isLoading = false
     @State private var showRemoteSigner = false
+    @State private var showQRScanner = false
     /// Pubkey derived from the current input. Used to look up + display the
     /// matching profile so the user can sanity-check that the key they
     /// pasted is the one they meant. Cleared when input goes invalid.
@@ -56,6 +57,14 @@ struct LoginView: View {
                         isSecure.toggle()
                     } label: {
                         Image(systemName: isSecure ? "eye.slash" : "eye")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
+                        showQRScanner = true
+                    } label: {
+                        Image(systemName: "qrcode.viewfinder")
                             .foregroundStyle(.secondary)
                     }
                     .buttonStyle(.plain)
@@ -123,6 +132,13 @@ struct LoginView: View {
                     showRemoteSigner = false
                     onLogin(kp)
                 }
+            }
+            .fullScreenCover(isPresented: $showQRScanner) {
+                QRCodeScannerView(
+                    onScanned: { value in handleScanned(value) },
+                    onCancel: { showQRScanner = false }
+                )
+                .ignoresSafeArea()
             }
         }
         .presentationDetents([.large])
@@ -231,6 +247,31 @@ struct LoginView: View {
             return String(hex.prefix(8)) + "\u{2026}"
         }
         return "\(full.prefix(9))\u{2026}\(full.suffix(4))"
+    }
+
+    private func handleScanned(_ value: String) {
+        showQRScanner = false
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // nsec1… or 64-char hex private key — reuse existing parse + save path.
+        if let keypair = NostrKey.parseNsec(trimmed) {
+            NostrKey.save(keypair)
+            onLogin(keypair)
+            return
+        }
+
+        // npub1, nprofile1 — watch-only account (browse without signing).
+        // decodeNostrUri lowercases internally so case in the QR payload doesn't matter.
+        // Onboarding still runs (in its watch-only variant) so the user's kind-10002
+        // gets ingested and the relay scoreboard is built — otherwise the feed is empty.
+        if let uriData = Nip19.decodeNostrUri(trimmed),
+           case .profileRef(let pubkeyHex, _) = uriData {
+            NostrKey.saveWatchOnly(pubkey: pubkeyHex)
+            onLogin(Keypair(privkey: "", pubkey: pubkeyHex))
+            return
+        }
+
+        error = "Unrecognized format. Scan an nsec, npub, nprofile, or hex private key."
     }
 
     private func login() {

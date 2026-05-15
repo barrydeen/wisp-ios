@@ -117,6 +117,7 @@ final class FeedViewModel {
         isLoading = true
 
         reloadFollowsCache()
+
         metricsTask = Task { await fetchOnlineCount() }
         startPruneTask()
         startLiveDiscovery()

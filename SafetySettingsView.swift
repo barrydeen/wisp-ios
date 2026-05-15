@@ -38,6 +38,9 @@ struct SafetySettingsView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
+                    if keypair.isWatchOnly {
+                        watchOnlyBanner
+                    }
                     switch selectedTab {
                     case .filters: filtersTab
                     case .words: wordsTab
@@ -172,6 +175,8 @@ struct SafetySettingsView: View {
                     .font(.system(size: 12))
                     .foregroundStyle(theme.palette.onSurfaceVariant)
             }
+            .disabled(keypair.isWatchOnly)
+            .opacity(keypair.isWatchOnly ? 0.4 : 1)
 
             section(title: "Muted words") {
                 if mutes.mutedWords.isEmpty {
@@ -183,13 +188,15 @@ struct SafetySettingsView: View {
                         HStack {
                             Text(word).font(.system(size: 15))
                             Spacer()
-                            Button {
-                                mutes.removeMutedWord(word)
-                            } label: {
-                                Image(systemName: "xmark.circle.fill")
-                                    .foregroundStyle(theme.palette.onSurfaceVariant)
+                            if !keypair.isWatchOnly {
+                                Button {
+                                    mutes.removeMutedWord(word)
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundStyle(theme.palette.onSurfaceVariant)
+                                }
+                                .buttonStyle(.plain)
                             }
-                            .buttonStyle(.plain)
                         }
                         .padding(.vertical, 4)
                     }
@@ -230,11 +237,13 @@ struct SafetySettingsView: View {
                     .lineLimit(1)
             }
             Spacer()
-            Button("Unblock") {
-                mutes.unblockUser(pubkey)
+            if !keypair.isWatchOnly {
+                Button("Unblock") {
+                    mutes.unblockUser(pubkey)
+                }
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(theme.primary)
             }
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(theme.primary)
         }
         .padding(.vertical, 6)
     }
@@ -269,5 +278,21 @@ struct SafetySettingsView: View {
             .background(theme.palette.surface)
             .clipShape(RoundedRectangle(cornerRadius: 12))
         }
+    }
+
+    private var watchOnlyBanner: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "eye")
+                .foregroundStyle(Color.wispPrimary)
+                .font(.subheadline)
+                .padding(.top, 2)
+            Text("Watch-only mode")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(theme.palette.surface, in: RoundedRectangle(cornerRadius: 12))
     }
 }

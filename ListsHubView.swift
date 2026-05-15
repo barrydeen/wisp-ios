@@ -40,11 +40,16 @@ struct ListsHubView: View {
             Divider().overlay(Color.wispSurfaceVariant.opacity(0.5))
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
+                    if keypair.isWatchOnly {
+                        watchOnlyBanner
+                    }
                     switch selectedTab {
                     case .people: peopleSection
                     case .notes: notesSection
                     }
-                    createButton
+                    if !keypair.isWatchOnly {
+                        createButton
+                    }
                     Spacer(minLength: 24)
                 }
                 .padding(20)
@@ -325,6 +330,22 @@ struct ListsHubView: View {
                         in: RoundedRectangle(cornerRadius: 12))
         }
         .buttonStyle(.plain)
+    }
+
+    private var watchOnlyBanner: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "eye")
+                .foregroundStyle(Color.wispPrimary)
+                .font(.subheadline)
+                .padding(.top, 2)
+            Text("Watch-only mode")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.wispSurface, in: RoundedRectangle(cornerRadius: 12))
     }
 }
 

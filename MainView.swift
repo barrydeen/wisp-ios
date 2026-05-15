@@ -3,6 +3,8 @@ import SwiftUI
 struct MainView: View {
     let keypair: Keypair
     let onLogout: () -> Void
+
+    private var isWatchOnly: Bool { NostrKey.isWatchOnly(pubkey: keypair.pubkey) }
     var onSwitchAccount: (Keypair) -> Void = { _ in }
     @State private var viewModel: FeedViewModel
     @State private var messagesVM: MessagesViewModel
@@ -234,6 +236,9 @@ struct MainView: View {
             guard let info = note.userInfo,
                   let relay = info["relay"] as? String,
                   let group = info["group"] as? String else { return }
+            // Watch-only accounts can't participate in group chat — ignore the
+            // deep link rather than landing them on a tab that isn't there.
+            if isWatchOnly { return }
             let code = info["code"] as? String
             groupListVM.pendingChatDeepLink = ChatDeepLink(
                 relayUrl: relay, groupId: group, code: code
@@ -498,7 +503,7 @@ struct MainView: View {
                     NavigationStack(path: $feedPath) {
                         ZStack(alignment: .bottomTrailing) {
                             feedContent
-                            if !drawerOpen {
+                            if !drawerOpen && !isWatchOnly {
                                 ComposeFAB { showCompose = true }
                                     .padding(.trailing, 18)
                                     .padding(.bottom, 32 + (audioPlayer.currentTrack != nil ? MiniAudioPlayerView.collapsedHeight : 0))
@@ -1178,7 +1183,7 @@ struct MainView: View {
 
     private var bottomBar: some View {
         HStack {
-            ForEach(BottomTab.allCases, id: \.self) { tab in
+            ForEach(BottomTab.allCases.filter { !isWatchOnly || ($0 != .wallet && $0 != .messages) }, id: \.self) { tab in
                 Button {
                     if selectedTab == tab {
                         popToRoot(tab)

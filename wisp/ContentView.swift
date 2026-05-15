@@ -32,7 +32,13 @@ struct ContentView: View {
                     LoginView { kp in
                         keypair = kp
                         showLogin = false
-                        currentScreen = .onboarding
+                        // Watch-only accounts skip onboarding (markOnboardingComplete
+                        // is called in LoginView before this closure fires).
+                        if NostrKey.isOnboardingComplete(pubkey: kp.pubkey) {
+                            currentScreen = .loading
+                        } else {
+                            currentScreen = .onboarding
+                        }
                     }
                 }
 
@@ -100,7 +106,7 @@ struct ContentView: View {
                 // before any signing surface is reachable. Restore on a Task
                 // because `Nip46Manager.restoreSession` is async (opens
                 // WebSockets to the signer's relays).
-                if saved.isRemote {
+                if saved.isRemote && !NostrKey.isWatchOnly(pubkey: saved.pubkey) {
                     Task { _ = await Nip46Manager.shared.restoreSession(pubkey: saved.pubkey) }
                 }
                 if NostrKey.isOnboardingComplete(pubkey: saved.pubkey) {

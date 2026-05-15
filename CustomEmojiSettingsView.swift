@@ -31,9 +31,16 @@ struct CustomEmojiSettingsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                quickReactionsSection
-                directEmojisSection
-                emojiPacksSection
+                if keypair.isWatchOnly {
+                    watchOnlyBanner
+                }
+                Group {
+                    quickReactionsSection
+                    directEmojisSection
+                    emojiPacksSection
+                }
+                .disabled(keypair.isWatchOnly)
+                .opacity(keypair.isWatchOnly ? 0.4 : 1)
                 Spacer(minLength: 32)
             }
             .padding(20)
@@ -420,6 +427,22 @@ struct CustomEmojiSettingsView: View {
         guard !s.isEmpty else { return false }
         let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
         return s.unicodeScalars.allSatisfy { allowed.contains($0) }
+    }
+
+    private var watchOnlyBanner: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "eye")
+                .foregroundStyle(Color.wispPrimary)
+                .font(.subheadline)
+                .padding(.top, 2)
+            Text("Watch-only mode")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(theme.palette.surface, in: RoundedRectangle(cornerRadius: 12))
     }
 
     @ViewBuilder

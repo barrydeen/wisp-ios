@@ -18,19 +18,26 @@ struct MediaServersView: View {
         @Bindable var vm = viewModel
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                addServerRow(vm: vm)
-                if let err = viewModel.errorMessage {
-                    Text(err)
-                        .font(.caption)
-                        .foregroundStyle(.red)
+                if keypair.isWatchOnly {
+                    watchOnlyBanner
                 }
-                publishButton
-                if viewModel.servers.count > 1 {
-                    Text("Drag to reorder")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 16) {
+                    addServerRow(vm: vm)
+                    if let err = viewModel.errorMessage {
+                        Text(err)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                    publishButton
+                    if viewModel.servers.count > 1 {
+                        Text("Drag to reorder")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    serverList
                 }
-                serverList
+                .disabled(keypair.isWatchOnly)
+                .opacity(keypair.isWatchOnly ? 0.4 : 1)
             }
             .padding(20)
         }
@@ -208,5 +215,21 @@ struct MediaServersView: View {
                 dragOffsetY = 0
                 dragCorrection = 0
             }
+    }
+
+    private var watchOnlyBanner: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "eye")
+                .foregroundStyle(Color.wispPrimary)
+                .font(.subheadline)
+                .padding(.top, 2)
+            Text("Watch-only mode")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.wispSurface, in: RoundedRectangle(cornerRadius: 12))
     }
 }

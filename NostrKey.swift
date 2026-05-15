@@ -68,6 +68,18 @@ enum NostrKey {
         save(kp)
     }
 
+    /// Save a watch-only account (npub/nprofile scan). Uses the same empty-privkey
+    /// sentinel as NIP-46, but is distinguishable via `isWatchOnly(pubkey:)`.
+    static func saveWatchOnly(pubkey: String) {
+        let kp = Keypair(privkey: "", pubkey: pubkey)
+        save(kp)
+        UserDefaults.standard.set(true, forKey: "watch_only_\(pubkey)")
+    }
+
+    static func isWatchOnly(pubkey: String) -> Bool {
+        UserDefaults.standard.bool(forKey: "watch_only_\(pubkey)")
+    }
+
     static func load() -> Keypair? {
         if let cached = cachedActive() { return cached }
         guard let kp = loadFromKeychain(account: "active") else { return nil }
@@ -106,6 +118,7 @@ enum NostrKey {
         UserDefaults.standard.set(list, forKey: "wisp_accounts")
         let keys = [
             "onboarding_done_\(pubkey)",
+            "watch_only_\(pubkey)",
             "follow_pubkeys_\(pubkey)",
             "relay_scoreboard_v1_\(pubkey)",
             "latest_feed_ts_\(pubkey)",

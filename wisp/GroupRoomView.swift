@@ -11,18 +11,20 @@ struct GroupRoomView: View {
             Divider().overlay(Color.wispSurfaceVariant.opacity(0.5))
             messageList
 
-            if let reply = viewModel.replyTarget {
-                replyBanner(reply)
-            }
-            if let err = viewModel.sendError {
-                Text(err)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 12).padding(.top, 4)
-            }
+            if !viewModel.keypair.isWatchOnly {
+                if let reply = viewModel.replyTarget {
+                    replyBanner(reply)
+                }
+                if let err = viewModel.sendError {
+                    Text(err)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 12).padding(.top, 4)
+                }
 
-            composer
+                composer
+            }
         }
         .background(Color.wispBackground)
         .toolbar(.hidden, for: .navigationBar)

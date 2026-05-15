@@ -108,7 +108,9 @@ struct ThreadView: View {
                 .onChange(of: viewModel.focal?.id) { _, _ in scrollToFocalIfNeeded(proxy: proxy) }
                 .onChange(of: viewModel.ancestors.count) { _, _ in scrollToFocalIfNeeded(proxy: proxy) }
             }
-            composer
+            if !viewModel.keypair.isWatchOnly {
+                composer
+            }
         }
         .background(Color.wispBackground)
         .toolbar(.hidden, for: .navigationBar)

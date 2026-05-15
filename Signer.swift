@@ -104,6 +104,11 @@ enum Signer {
 
 extension Keypair {
     /// True for accounts where signing is delegated to a NIP-46 remote signer.
-    /// Identified by an empty private key string in the persisted record.
-    var isRemote: Bool { privkey.isEmpty }
+    /// Identified by an empty private key string in the persisted record and
+    /// the absence of the watch-only sentinel.
+    var isRemote: Bool { privkey.isEmpty && !isWatchOnly }
+
+    /// True for accounts logged in via npub/nprofile QR scan — read-only, no
+    /// signing capability of any kind.
+    var isWatchOnly: Bool { NostrKey.isWatchOnly(pubkey: pubkey) }
 }

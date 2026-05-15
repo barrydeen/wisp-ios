@@ -46,6 +46,7 @@ struct ProfileView: View {
                 ProfileHeaderView(
                     viewModel: viewModel,
                     isMe: isMe,
+                    isWatchOnly: NostrKey.isWatchOnly(pubkey: activeUserPubkey),
                     onEditProfile: { showEditProfile = true },
                     onProfileTap: onProfileTap,
                     onNoteTap: onNoteTap,
@@ -137,10 +138,12 @@ struct ProfileView: View {
                 } label: {
                     Label("Copy npub", systemImage: "person.text.rectangle")
                 }
-                Button {
-                    showAddToList = true
-                } label: {
-                    Label("Add to List", systemImage: "text.badge.plus")
+                if !NostrKey.isWatchOnly(pubkey: activeUserPubkey) {
+                    Button {
+                        showAddToList = true
+                    } label: {
+                        Label("Add to List", systemImage: "text.badge.plus")
+                    }
                 }
                 if !isMe {
                     let blocked = muteRepo.isBlocked(pubkey)
@@ -254,6 +257,7 @@ private struct ProfileBioHeightKey: PreferenceKey {
 private struct ProfileHeaderView: View {
     @Bindable var viewModel: ProfileViewModel
     var isMe: Bool = false
+    var isWatchOnly: Bool = false
     var onEditProfile: () -> Void = {}
     var onProfileTap: ((String) -> Void)? = nil
     var onNoteTap: ((String) -> Void)? = nil
@@ -297,7 +301,7 @@ private struct ProfileHeaderView: View {
 
                 Spacer()
 
-                if isMe {
+                if isMe && !isWatchOnly {
                     Button(action: onEditProfile) {
                         Text("Edit Profile")
                             .font(.caption.weight(.semibold))
@@ -308,7 +312,7 @@ private struct ProfileHeaderView: View {
                     }
                     .buttonStyle(.plain)
                     .offset(y: -28)
-                } else {
+                } else if !isMe && !isWatchOnly {
                     VStack(alignment: .trailing, spacing: 4) {
                         actionButtons
                         if viewModel.followsYou {
