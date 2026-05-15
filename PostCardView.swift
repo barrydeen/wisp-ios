@@ -70,6 +70,11 @@ struct PostCardView: View {
     /// short note pinned near a tab bar) ended up clipping the picker
     /// because the popover gave it less space than the picker's natural size.
     @State private var reactionPickerMaxHeight: CGFloat = 192
+    /// Suppresses the zap button's Button tap action on the release after a
+    /// long-press completed. SwiftUI's simultaneous gestures both fire by
+    /// default; without this flag a long-press would open the composer AND
+    /// fire the configured quick-zap amount.
+    @State private var zapLongPressFired = false
     @State private var showDeleteConfirm = false
     @State private var showMuteUserConfirm = false
     /// Tap-anchored menus on the action bar. We use `Button` + `.popover`
@@ -811,7 +816,24 @@ struct PostCardView: View {
         let isFlying = zapStore.inFlight.contains(eventId)
         let isBursting = zapStore.bursting.contains(eventId)
         return Button {
-            triggerZapOrWalletSetup()
+            // Tap: fire the configured instant-zap amount when the user has
+            // opted in AND a wallet is set up. In fiat mode the configured
+            // amount is denominated in `fiatCurrency` major units and gets
+            // converted to sats at fire time via the exchange-rate cache.
+            // Falls back to the composer sheet when the rate isn't available
+            // (rare; the cache pre-fetches at app launch) or when quick-zap
+            // is off / no wallet. Long-press always opens the sheet.
+            if zapLongPressFired {
+                zapLongPressFired = false
+                return
+            }
+            if settings.quickZapEnabled,
+               let store = walletStore, store.mode != nil,
+               let amount = resolvedInstantZapSats() {
+                fireQuickZap(amountSats: amount)
+            } else {
+                triggerZapOrWalletSetup()
+            }
         } label: {
             ZStack {
                 if isFlying {
@@ -830,6 +852,15 @@ struct PostCardView: View {
         }
         .buttonStyle(.plain)
         .disabled(isFlying)
+        .simultaneousGesture(
+            // Long-press always opens the composer — escape hatch from
+            // one-tap mode (different amount, different message, anonymous).
+            LongPressGesture(minimumDuration: 0.4).onEnded { _ in
+                zapLongPressFired = true
+                Haptics.shared.blip()
+                triggerZapOrWalletSetup()
+            }
+        )
         .overlay(alignment: .center) {
             ZapBurstView(isActive: isBursting)
                 .frame(width: 160, height: 160)
@@ -1143,6 +1174,58 @@ struct PostCardView: View {
                 NSLog("[Reaction] react failed: %@", String(describing: error))
             }
         }
+    }
+
+    /// Resolve the instant-zap amount in sats, taking fiat mode into account.
+    /// In bitcoin mode this is just `quickZapAmountSats`. In fiat mode the
+    /// configured `quickZapAmountFiat` major-unit value is converted via the
+    /// current exchange rate; returns nil when the rate cache hasn't loaded
+    /// yet, which falls the caller back to the composer sheet.
+    private func resolvedInstantZapSats() -> Int64? {
+        if settings.fiatModeEnabled {
+            guard settings.quickZapAmountFiat > 0 else { return nil }
+            guard let sats = ExchangeRateCache.shared.fiatToSats(
+                settings.quickZapAmountFiat,
+                currency: settings.fiatCurrency
+            ), sats > 0 else { return nil }
+            return sats
+        }
+        return settings.quickZapAmountSats > 0 ? settings.quickZapAmountSats : nil
+    }
+
+    /// Fire a one-tap zap of `amountSats` to the displayed post's author.
+    /// Routed through `ZapAnimationStore` so the in-flight pulse + success
+    /// burst run on the post card exactly as they do from the full composer.
+    private func fireQuickZap(amountSats: Int64) {
+        guard let keypair = NostrKey.load(), let store = walletStore else { return }
+        let target = resolveRepost().event
+        let targetProfile = resolveRepost().profile
+        let pollOptionIdx = zapPollOptionIndex
+        let extraTags: [[String]] = pollOptionIdx.map { [["poll_option", String($0)]] } ?? []
+        ZapAnimationStore.shared.send(
+            keypair: keypair,
+            wallet: store,
+            recipientPubkey: target.pubkey,
+            recipientLud16: targetProfile?.lud16,
+            eventId: target.id,
+            amountSats: amountSats,
+            message: settings.quickZapMessage.trimmingCharacters(in: .whitespacesAndNewlines),
+            relayHints: [],
+            extraTags: extraTags,
+            isAnonymous: false,
+            isPrivate: false,
+            onSuccessSats: { sats in
+                if target.kind == Nip69.kindZapPoll, let idx = pollOptionIdx {
+                    PollTallyRepository.shared.applyOptimisticZapVote(
+                        pollEvent: target,
+                        optionIndex: idx,
+                        voterPubkey: keypair.pubkey,
+                        sats: sats,
+                        ts: Int(Date().timeIntervalSince1970)
+                    )
+                }
+            }
+        )
     }
 
     private func sendRepost() {

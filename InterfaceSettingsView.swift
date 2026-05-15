@@ -162,6 +162,79 @@ struct InterfaceSettingsView: View {
                     }
                 }
 
+                // Label and amount input flip with fiat mode so the user
+                // always configures the value in the denomination they
+                // think in. Both values persist independently — flipping
+                // fiat mode preserves the user's bitcoin amount and vice
+                // versa.
+                section(title: settings.fiatModeEnabled ? "Payments" : "Zaps") {
+                    Toggle(settings.fiatModeEnabled ? "Instant payments" : "Instant zaps",
+                           isOn: $settings.quickZapEnabled)
+                        .toggleStyle(SwitchToggleStyle(tint: theme.primary))
+                    Text(settings.fiatModeEnabled
+                        ? "When on, tapping the pay button on a post immediately sends your chosen amount. Long-press to open the payment composer."
+                        : "When on, tapping the zap button on a post immediately sends your chosen amount. Long-press to open the zap composer.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(theme.palette.onSurfaceVariant)
+                        .padding(.bottom, 4)
+
+                    if settings.quickZapEnabled {
+                        if settings.fiatModeEnabled {
+                            HStack {
+                                Text("Amount (\(settings.fiatCurrency))")
+                                    .foregroundStyle(theme.palette.onSurface)
+                                Spacer()
+                                TextField(
+                                    "0.10",
+                                    value: Binding(
+                                        get: { settings.quickZapAmountFiat },
+                                        set: { settings.quickZapAmountFiat = max(0.01, $0) }
+                                    ),
+                                    format: .number.precision(.fractionLength(2))
+                                )
+                                .keyboardType(.decimalPad)
+                                .multilineTextAlignment(.trailing)
+                                .frame(width: 120)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 6)
+                                .background(theme.palette.surfaceVariant, in: RoundedRectangle(cornerRadius: 8))
+                            }
+                        } else {
+                            HStack {
+                                Text("Amount (sats)")
+                                    .foregroundStyle(theme.palette.onSurface)
+                                Spacer()
+                                TextField(
+                                    "100",
+                                    value: Binding(
+                                        get: { settings.quickZapAmountSats },
+                                        set: { settings.quickZapAmountSats = max(1, $0) }
+                                    ),
+                                    format: .number
+                                )
+                                .keyboardType(.numberPad)
+                                .multilineTextAlignment(.trailing)
+                                .frame(width: 120)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 6)
+                                .background(theme.palette.surfaceVariant, in: RoundedRectangle(cornerRadius: 8))
+                            }
+                        }
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Message (optional)")
+                                .foregroundStyle(theme.palette.onSurface)
+                            TextField("Add a default note…", text: $settings.quickZapMessage, axis: .vertical)
+                                .textFieldStyle(.plain)
+                                .lineLimit(1...3)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 8)
+                                .background(theme.palette.surfaceVariant, in: RoundedRectangle(cornerRadius: 8))
+                        }
+                        .padding(.top, 4)
+                    }
+                }
+
                 section(title: "Currency") {
                     Toggle("Fiat mode", isOn: $settings.fiatModeEnabled)
                         .toggleStyle(SwitchToggleStyle(tint: theme.primary))

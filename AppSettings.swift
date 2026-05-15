@@ -43,6 +43,10 @@ final class AppSettings {
         static let zapIconStyle = "wisp_settings_zap_icon_style"
         static let videoLoop = "wisp_settings_video_loop"
         static let syncSettingsToRelays = "wisp_settings_sync_settings_to_relays"
+        static let quickZapEnabled = "wisp_settings_quick_zap_enabled"
+        static let quickZapAmountSats = "wisp_settings_quick_zap_amount_sats"
+        static let quickZapAmountFiat = "wisp_settings_quick_zap_amount_fiat"
+        static let quickZapMessage = "wisp_settings_quick_zap_message"
     }
 
     /// Allowed durations for the post-undo countdown. Picker shows these as
@@ -164,6 +168,42 @@ final class AppSettings {
     var videoLoop: Bool {
         didSet { UserDefaults.standard.set(videoLoop, forKey: Keys.videoLoop) }
     }
+    /// When true, a single tap of the zap button on a post sends the configured
+    /// amount immediately. Long-press still opens the zap composer. Surfaces in
+    /// settings as "Instant zaps" while in bitcoin mode and "Instant payments"
+    /// while in fiat mode. Disabled by default — the previous behaviour
+    /// (tap → composer) is preserved unless the user opts in.
+    var quickZapEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(quickZapEnabled, forKey: Keys.quickZapEnabled)
+            EmojiRepository.shared.scheduleSettingsSync()
+        }
+    }
+    /// Instant-zap amount in sats, used when `fiatModeEnabled` is false.
+    var quickZapAmountSats: Int64 {
+        didSet {
+            UserDefaults.standard.set(quickZapAmountSats, forKey: Keys.quickZapAmountSats)
+            EmojiRepository.shared.scheduleSettingsSync()
+        }
+    }
+    /// Instant-payment amount in `fiatCurrency` major units (e.g. 1.00 USD),
+    /// used when `fiatModeEnabled` is true. Converted to sats at fire time via
+    /// `ExchangeRateCache.fiatToSats`.
+    var quickZapAmountFiat: Double {
+        didSet {
+            UserDefaults.standard.set(quickZapAmountFiat, forKey: Keys.quickZapAmountFiat)
+            EmojiRepository.shared.scheduleSettingsSync()
+        }
+    }
+    /// Optional default message included on an instant zap / payment. Empty
+    /// string means "no message" — the zap fires with `content: ""` exactly
+    /// as the composer's blank state would produce. Persisted + synced.
+    var quickZapMessage: String {
+        didSet {
+            UserDefaults.standard.set(quickZapMessage, forKey: Keys.quickZapMessage)
+            EmojiRepository.shared.scheduleSettingsSync()
+        }
+    }
 
     private init() {
         let defaults = UserDefaults.standard
@@ -190,6 +230,12 @@ final class AppSettings {
         self.zapIconStyle = ZapIconStyle(rawValue: zapRaw) ?? .bitcoin
         self.videoLoop = defaults.object(forKey: Keys.videoLoop) as? Bool ?? true
         self.syncSettingsToRelays = defaults.object(forKey: Keys.syncSettingsToRelays) as? Bool ?? true
+        self.quickZapEnabled = defaults.object(forKey: Keys.quickZapEnabled) as? Bool ?? false
+        let storedQuickInt = defaults.integer(forKey: Keys.quickZapAmountSats)
+        self.quickZapAmountSats = storedQuickInt > 0 ? Int64(storedQuickInt) : 100
+        let storedQuickFiat = defaults.double(forKey: Keys.quickZapAmountFiat)
+        self.quickZapAmountFiat = storedQuickFiat > 0 ? storedQuickFiat : 0.10
+        self.quickZapMessage = defaults.string(forKey: Keys.quickZapMessage) ?? ""
     }
 
     /// Apply settings restored from a NIP-78 backup. Only non-default keys
@@ -198,6 +244,10 @@ final class AppSettings {
     /// remote fetch — see `Nip78Backup.AppSettingsPayload`.
     func applyRestored(payload: Nip78Backup.AppSettingsPayload) {
         // Currency / zap
+        if let q = payload.quickZapEnabled { quickZapEnabled = q }
+        if let a = payload.quickZapAmountSats, a > 0 { quickZapAmountSats = a }
+        if let f = payload.quickZapAmountFiat, f > 0 { quickZapAmountFiat = f }
+        if let m = payload.quickZapMessage { quickZapMessage = m }
         if let s = payload.zapIconStyle, let style = ZapIconStyle(rawValue: s) {
             zapIconStyle = style
         }
@@ -234,6 +284,10 @@ final class AppSettings {
     func snapshotForBackup() -> Nip78Backup.AppSettingsPayload {
         let presetsRaw = UserDefaults.standard.string(forKey: "zapPresetAmounts")
         return Nip78Backup.AppSettingsPayload(
+            quickZapEnabled: quickZapEnabled,
+            quickZapAmountSats: quickZapAmountSats,
+            quickZapAmountFiat: quickZapAmountFiat,
+            quickZapMessage: quickZapMessage,
             zapIconStyle: zapIconStyle.rawValue,
             fiatModeEnabled: fiatModeEnabled,
             fiatCurrency: fiatCurrency,
