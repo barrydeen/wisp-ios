@@ -322,19 +322,56 @@ struct NotificationRowView: View {
             return nil
         }
         return raw.map {
-            resolveNostrMentions($0)
+            replaceMediaUrls(in: resolveNostrMentions($0))
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .replacingOccurrences(of: "\n", with: " ")
         }
     }
 
-    /// Replaces `nostr:npub1…`, `nostr:nprofile1…`, and bare `npub1…` / `nprofile1…`
-    /// tokens in `content` with `@displayname` using the already-resolved `profiles` dict.
+    /// Replaces inline media URLs in `content` with a short `[image]` /
+    /// `[video]` / `[audio]` placeholder so notification snippets read as
+    /// text instead of pasting a multi-line CDN URL into the row. Matches
+    /// `http(s)://…` URLs ending in a known media extension; Blossom-style
+    /// extension-less URLs are left alone because the snippet has no imeta
+    /// tags to classify them with.
+    private func replaceMediaUrls(in content: String) -> String {
+        let pattern = #"https?://\S+\.(?:jpg|jpeg|png|gif|webp|heic|heif|avif|svg|mp4|mov|webm|m3u8|mp3|wav|ogg|m4a|flac|aac)(?:\?\S*)?"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return content }
+        let ns = content as NSString
+        let matches = regex.matches(in: content, range: NSRange(location: 0, length: ns.length))
+        guard !matches.isEmpty else { return content }
+        var out = ""
+        var lastEnd = 0
+        for match in matches {
+            out += ns.substring(with: NSRange(location: lastEnd, length: match.range.location - lastEnd))
+            let url = ns.substring(with: match.range).lowercased()
+            // Strip any query string off the matched URL before classifying.
+            let path = url.split(separator: "?").first.map(String.init) ?? url
+            let ext = (path as NSString).pathExtension
+            switch ext {
+            case "mp4", "mov", "webm", "m3u8":
+                out += "[video]"
+            case "mp3", "wav", "ogg", "m4a", "flac", "aac":
+                out += "[audio]"
+            default:
+                out += "[image]"
+            }
+            lastEnd = match.range.upperBound
+        }
+        out += ns.substring(from: lastEnd)
+        return out
+    }
+
+    /// Replaces `nostr:` bech32 references in `content` with short human-readable
+    /// forms so notification snippets never expose raw IDs:
+    /// - `npub1…` / `nprofile1…` → `@displayname`
+    /// - `nevent1…` / `note1…` → `@author's note` if the author resolves, else `[note]`
+    /// - `naddr1…` → `@author's post` if the author resolves, else `[post]`
     /// The bare-bech32 alternative excludes URL-context characters from the lookbehind
-    /// (`/`, `:`, `.`, `@`) and rejects matches followed by `.letter` (TLDs) so an
-    /// npub embedded in a URL like `https://npub1xxx.blossom.band/…` is left alone.
+    /// (`/`, `:`, `.`, `@`) and rejects matches followed by `.letter` (TLDs) so a
+    /// bech32 embedded in a URL like `https://npub1xxx.blossom.band/…` is left alone.
     private func resolveNostrMentions(_ content: String) -> String {
-        let pattern = #"nostr:(?:npub1|nprofile1)[a-z0-9]+|(?<![\w/:.@])(?:npub1|nprofile1)[a-z0-9]{50,}(?!\w|\.[a-zA-Z])"#
+        let pattern = #"nostr:(?:npub1|nprofile1|nevent1|note1|naddr1)[a-z0-9]+|(?<![\w/:.@])(?:npub1|nprofile1|nevent1|note1|naddr1)[a-z0-9]{50,}(?!\w|\.[a-zA-Z])"#
         guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return content }
         let ns = content as NSString
         let matches = regex.matches(in: content, range: NSRange(location: 0, length: ns.length))
@@ -345,9 +382,15 @@ struct NotificationRowView: View {
             out += ns.substring(with: NSRange(location: lastEnd, length: match.range.location - lastEnd))
             let token = ns.substring(with: match.range)
             let uri = token.lowercased().hasPrefix("nostr:") ? token : "nostr:\(token)"
-            if case .profileRef(let pk, _)? = Nip19.decodeNostrUri(uri) {
+            switch Nip19.decodeNostrUri(uri) {
+            case .profileRef(let pk, _):
                 out += "@\(displayName(pk))"
-            } else {
+            case .noteRef(let eid, _, let author):
+                let pk = author ?? repo.event(forId: eid)?.pubkey
+                out += pk.map { "@\(displayName($0))'s note" } ?? "[note]"
+            case .addressRef(_, _, let author, _):
+                out += author.map { "@\(displayName($0))'s post" } ?? "[post]"
+            case .none:
                 out += token
             }
             lastEnd = match.range.upperBound
@@ -413,12 +456,13 @@ struct NotificationRowView: View {
         profiles = resolved
     }
 
-    /// Pull `nostr:npub1.../nprofile1...` and bare bech32 pubkey references out
-    /// of an event's body. Mirrors what `ContentParser` recognizes — same
-    /// URL-context exclusions so a pubkey embedded in a URL isn't mistakenly
-    /// hydrated as a mention.
+    /// Pull every pubkey referenced from an event's body — direct profile
+    /// references (`npub1`/`nprofile1`) plus the author fields of any
+    /// `nevent`/`naddr`/`note1` embedded in the content. URL-context
+    /// exclusions in the lookbehind/lookahead keep bech32 inside URLs
+    /// from being mistaken for a mention.
     private func extractPubkeysFromContent(_ content: String) -> [String] {
-        let pattern = #"nostr:(?:npub1|nprofile1)[a-z0-9]+|(?<![\w/:.@])(?:npub1|nprofile1)[a-z0-9]{50,}(?!\w|\.[a-zA-Z])"#
+        let pattern = #"nostr:(?:npub1|nprofile1|nevent1|note1|naddr1)[a-z0-9]+|(?<![\w/:.@])(?:npub1|nprofile1|nevent1|note1|naddr1)[a-z0-9]{50,}(?!\w|\.[a-zA-Z])"#
         guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return [] }
         let ns = content as NSString
         let range = NSRange(location: 0, length: ns.length)
@@ -428,7 +472,14 @@ struct NotificationRowView: View {
             guard let m else { return }
             let token = ns.substring(with: m.range)
             let uri = token.lowercased().hasPrefix("nostr:") ? token : "nostr:\(token)"
-            if case .profileRef(let pk, _)? = Nip19.decodeNostrUri(uri), seen.insert(pk).inserted {
+            let pk: String?
+            switch Nip19.decodeNostrUri(uri) {
+            case .profileRef(let p, _): pk = p
+            case .noteRef(let eid, _, let author): pk = author ?? repo.event(forId: eid)?.pubkey
+            case .addressRef(_, _, let author, _): pk = author
+            case .none: pk = nil
+            }
+            if let pk, seen.insert(pk).inserted {
                 out.append(pk)
             }
         }
