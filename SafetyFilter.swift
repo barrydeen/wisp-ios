@@ -154,15 +154,18 @@ final class SafetyFilter: @unchecked Sendable {
         return false
     }
 
-    /// Pull the original author's pubkey out of a kind-6 repost's JSON body.
-    /// Returns nil if the content isn't a valid embedded event JSON. Static so
-    /// the lockfree hot path can call it without an actor hop.
+    /// Pull the original author's pubkey out of a kind-6 repost. Prefers the
+    /// embedded event JSON in `content`; falls back to the `p` tag when the
+    /// reposter omits the embedded event (common with non-damus clients).
+    /// Static so the lockfree hot path can call it without an actor hop.
     private static func repostInnerPubkey(_ event: NostrEvent) -> String? {
-        guard !event.content.isEmpty,
-              let data = event.content.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return nil }
-        return json["pubkey"] as? String
+        if !event.content.isEmpty,
+           let data = event.content.data(using: .utf8),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let pk = json["pubkey"] as? String, !pk.isEmpty {
+            return pk
+        }
+        return event.tags.first(where: { $0.count >= 2 && $0[0] == "p" })?[1]
     }
 }
 
