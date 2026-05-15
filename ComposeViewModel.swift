@@ -937,9 +937,15 @@ final class ComposeViewModel {
                 userInfo: ["event": event]
             )
             publishedEventId = event.id
-            PostPublishedToastStore.shared.published = PublishedPostToast(
-                id: event.id, pubkey: event.pubkey
-            )
+            // Wrap the toast set in `withAnimation` so the pill's `.move(edge:
+            // .top).combined(with: .opacity)` transition runs as an ease-in
+            // drop-down instead of popping in instantly — matches the new-posts
+            // pill's entrance.
+            withAnimation(.spring(response: 0.55, dampingFraction: 0.82)) {
+                PostPublishedToastStore.shared.published = PublishedPostToast(
+                    id: event.id, pubkey: event.pubkey
+                )
+            }
             Haptics.shared.pulse()
         }
     }
