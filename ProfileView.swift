@@ -66,6 +66,7 @@ struct ProfileView: View {
         }
         .background(Color.wispBackground)
         .toolbar(.hidden, for: .navigationBar)
+        .swipeBackFromLeftEdge()
         .safeAreaInset(edge: .top, spacing: 0) {
             unifiedHeader
         }
