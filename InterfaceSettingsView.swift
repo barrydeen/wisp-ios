@@ -9,6 +9,7 @@ struct InterfaceSettingsView: View {
     @State private var showCurrencyPicker = false
     @State private var rateUpdatedAt: Date? = nil
     @State private var themesExpanded = false
+    @State private var emojiRepo = EmojiRepository.shared
 
     var body: some View {
         @Bindable var settings = settings
@@ -236,6 +237,20 @@ struct InterfaceSettingsView: View {
                     }
                 }
 
+                section(title: "Cross-device sync") {
+                    Toggle("Sync settings via relays", isOn: $settings.syncSettingsToRelays)
+                        .toggleStyle(SwitchToggleStyle(tint: theme.primary))
+                    Text("Publishes an encrypted NIP-78 backup of your \(settings.fiatModeEnabled ? "payment" : "zap") settings and quick reactions so they follow your account to other devices.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(theme.palette.onSurfaceVariant)
+                    if settings.syncSettingsToRelays, let status = syncStatusLine {
+                        Text(status)
+                            .font(.system(size: 11))
+                            .foregroundStyle(theme.palette.onSurfaceVariant)
+                            .padding(.top, 2)
+                    }
+                }
+
                 Spacer(minLength: 40)
             }
             .padding(20)
@@ -282,6 +297,20 @@ struct InterfaceSettingsView: View {
 
     private var currentThemeDisplayName: String {
         Themes.all.first(where: { $0.id == settings.themeName })?.displayName ?? "Custom"
+    }
+
+    /// Passive indicator for the NIP-78 publish lifecycle. Returns nil when
+    /// there's neither a pending publish nor a prior success, so the row
+    /// stays clean on first launch before the user has changed anything.
+    private var syncStatusLine: String? {
+        if emojiRepo.isSettingsSyncPending { return "Sync pending\u{2026}" }
+        guard let at = emojiRepo.lastSettingsSyncAt else { return nil }
+        let seconds = Int(Date().timeIntervalSince(at))
+        if seconds < 5 { return "Last synced just now" }
+        if seconds < 60 { return "Last synced \(seconds)s ago" }
+        if seconds < 3600 { return "Last synced \(seconds / 60)m ago" }
+        if seconds < 86_400 { return "Last synced \(seconds / 3600)h ago" }
+        return "Last synced \(seconds / 86_400)d ago"
     }
 
     @ViewBuilder

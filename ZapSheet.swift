@@ -316,6 +316,7 @@ struct ZapSheet: View {
                                             .sorted()
                                             .map { String($0) }
                                             .joined(separator: ",")
+                                        EmojiRepository.shared.scheduleSettingsSync()
                                     } label: {
                                         Label("Save as Preset", systemImage: "star")
                                             .font(.subheadline.weight(.medium))
@@ -473,6 +474,9 @@ private struct EditPresetsSheet: View {
                         let valid = drafts.compactMap { Int64($0.trimmingCharacters(in: .whitespaces)) }.filter { $0 > 0 }
                         if !valid.isEmpty {
                             presetsRaw = valid.map { String($0) }.joined(separator: ",")
+                            // Round-trip the new presets through the NIP-78
+                            // app-settings backup so other devices pick them up.
+                            EmojiRepository.shared.scheduleSettingsSync()
                         }
                         dismiss()
                     }

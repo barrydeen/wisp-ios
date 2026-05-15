@@ -132,6 +132,112 @@ nonisolated enum Nip78Backup {
     }
 }
 
+// MARK: - App settings backup (kind 30078, d-tag `wisp-app-settings:v1`)
+
+extension Nip78Backup {
+    /// d-tag for the encrypted app-settings payload. Distinct from
+    /// `spark-wallet-backup:...` so the two coexist on the same account.
+    static let appSettingsDTag = "wisp-app-settings:v1"
+
+    /// Versioned JSON blob encrypted to self under NIP-44 and stored as
+    /// kind-30078 `content`. Every field is optional so older / newer clients
+    /// can round-trip a payload without dropping unknown fields they wrote.
+    struct AppSettingsPayload: Codable, Equatable {
+        var defaultReaction: String?
+        var defaultReactionEnabled: Bool?
+        var quickZapEnabled: Bool?
+        var quickZapAmountSats: Int64?
+        var quickZapAmountFiat: Double?
+        var quickZapMessage: String?
+        var zapIconStyle: String?
+        var fiatModeEnabled: Bool?
+        var fiatCurrency: String?
+        var zapPresetsCSV: String?
+        var quickReactions: [String]?
+        var frequency: [String: Int]?
+        // Appearance
+        var largeText: Bool?
+        var themeName: String?
+        var colorScheme: String?
+        var accentColorARGB: Int?
+        // Media
+        var autoLoadMedia: Bool?
+        var videoAutoplay: Bool?
+        var animateAvatars: Bool?
+        var mediaLayoutStyle: String?
+        // Posting
+        var clientTagEnabled: Bool?
+        var postUndoTimerEnabled: Bool?
+        var postUndoTimerSeconds: Int?
+        var postUndoTimerForReplies: Bool?
+        var version: Int? = 1
+    }
+
+    /// Build the kind-30078 app-settings event. NIP-44 encrypts the JSON
+    /// payload to the user's own pubkey so only they can decrypt it on a fresh
+    /// install. Routes through the `Signer` facade so remote (NIP-46)
+    /// accounts dispatch the encrypt + sign over RPC.
+    @MainActor
+    static func createAppSettingsEvent(
+        keypair: Keypair,
+        payload: AppSettingsPayload
+    ) async throws -> NostrEvent {
+        let data = try JSONEncoder().encode(payload)
+        guard let json = String(data: data, encoding: .utf8) else {
+            throw NSError(domain: "Nip78Backup", code: 1, userInfo: [NSLocalizedDescriptionKey: "encode failed"])
+        }
+        let encrypted = try await Signer.nip44Encrypt(
+            keypair: keypair,
+            peerPubkey: keypair.pubkey,
+            plaintext: json
+        )
+        var tags: [[String]] = [
+            ["d", appSettingsDTag],
+            ["encryption", "nip44"]
+        ]
+        if let clientTag = NostrEvent.clientTagIfEnabled() {
+            tags.append(clientTag)
+        }
+        return try await Signer.sign(
+            keypair: keypair,
+            kind: kind,
+            tags: tags,
+            content: encrypted
+        )
+    }
+
+    /// Decrypt a kind-30078 app-settings event and return the parsed payload,
+    /// or nil if the content is empty (tombstoned) or doesn't parse as JSON.
+    @MainActor
+    static func decryptAppSettings(
+        keypair: Keypair,
+        event: NostrEvent
+    ) async -> AppSettingsPayload? {
+        if event.content.isEmpty { return nil }
+        guard let decrypted = try? await Signer.nip44Decrypt(
+            keypair: keypair,
+            peerPubkey: event.pubkey,
+            payload: event.content
+        ) else {
+            backupLog.warning("app-settings decrypt failed for event \(event.id, privacy: .public)")
+            return nil
+        }
+        guard let data = decrypted.data(using: .utf8),
+              let payload = try? JSONDecoder().decode(AppSettingsPayload.self, from: data)
+        else {
+            backupLog.warning("app-settings parse failed for event \(event.id, privacy: .public)")
+            return nil
+        }
+        return payload
+    }
+
+    /// Filter for fetching the user's app-settings backup. `dTags` narrows
+    /// the relay reply to just the one addressable event.
+    static func appSettingsFilter(pubkey: String) -> NostrFilter {
+        NostrFilter(kinds: [kind], authors: [pubkey], dTags: [appSettingsDTag], limit: 1)
+    }
+}
+
 /// Result of searching relays for spark-wallet backups.
 enum BackupSearchResult {
     case notFound

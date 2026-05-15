@@ -73,6 +73,18 @@ final class EmojiRepository {
     /// without re-renders looping on equality of the dict itself.
     private(set) var generation: Int = 0
 
+    /// Bumped on every successful publish so we can rate-limit relay writes —
+    /// see `scheduleSettingsSync`.
+    @ObservationIgnored private var pendingSettingsPublish: Task<Void, Never>? = nil
+
+    /// Last successful kind-30078 publish timestamp. Observed by the Settings
+    /// UI to render a passive "Last synced Xm ago" indicator.
+    private(set) var lastSettingsSyncAt: Date? = nil
+
+    /// True while a settings publish is debounced or in flight. The UI uses
+    /// this to swap the indicator to "Sync pending\u{2026}".
+    private(set) var isSettingsSyncPending: Bool = false
+
     // MARK: - Internal
 
     private var loadedForPubkey: String?
@@ -108,11 +120,16 @@ final class EmojiRepository {
     /// from UserDefaults, seeds in-memory state from the ObjectBox cache, then fetches
     /// kind-10030 + referenced kind-30030 events from relays in the background.
     /// Cheap to call repeatedly — subsequent calls for the same pubkey are no-ops.
+    /// Also kicks off a kind-30078 app-settings restore (NIP-78) so quick-reactions
+    /// and zap presets follow the account across devices.
     func refresh(for pubkey: String) async {
         if loadedForPubkey == pubkey { return }
         loadedForPubkey = pubkey
 
         loadPersisted(pubkey: pubkey)
+        if let keypair = NostrKey.load(), keypair.pubkey == pubkey {
+            await restoreSettingsBackup(for: keypair)
+        }
 
         // Seed from ObjectBox first so the UI sees a populated `resolvedCustomMap`
         // immediately on cold start, before any relay round-trip. The network
@@ -179,6 +196,8 @@ final class EmojiRepository {
         resolvedCustomMap = [:]
         userListCreatedAt = 0
         loadedForPubkey = nil
+        pendingSettingsPublish?.cancel()
+        pendingSettingsPublish = nil
     }
 
     // MARK: - Quick-reactions mutators
@@ -187,23 +206,29 @@ final class EmojiRepository {
         guard !key.isEmpty, !quickReactions.contains(key) else { return }
         quickReactions.append(key)
         persist()
+        scheduleSettingsSync()
     }
 
     func removeFromQuickList(_ key: String) {
         let before = quickReactions.count
         quickReactions.removeAll { $0 == key }
-        if quickReactions.count != before { persist() }
+        if quickReactions.count != before {
+            persist()
+            scheduleSettingsSync()
+        }
     }
 
     func setQuickList(_ keys: [String]) {
         quickReactions = keys
         persist()
+        scheduleSettingsSync()
     }
 
     /// Bump the usage counter for an emoji key (unicode char or `:shortcode:`). Persisted.
     func recordUse(_ key: String) {
         frequency[key, default: 0] += 1
         persist()
+        scheduleSettingsSync()
     }
 
     // MARK: - Direct-emoji mutators (publish kind 10030)
@@ -480,5 +505,105 @@ final class EmojiRepository {
             if !top.isEmpty { return Array(top) }
         }
         return ["wss://relay.damus.io", "wss://relay.primal.net", "wss://nos.lol"]
+    }
+
+    // MARK: - NIP-78 app-settings sync
+
+    /// Fetch the encrypted kind-30078 app-settings blob from the account's
+    /// write relays, decrypt it, and merge in any field that's newer than
+    /// what we have locally. Called from `refresh(for:)` after the emoji
+    /// state seeds.
+    func restoreSettingsBackup(for keypair: Keypair) async {
+        guard AppSettings.shared.syncSettingsToRelays else { return }
+        let relays = topWriteRelays(for: keypair.pubkey)
+        guard !relays.isEmpty else { return }
+        let events = await RelayPool.query(
+            relays: relays,
+            filter: Nip78Backup.appSettingsFilter(pubkey: keypair.pubkey),
+            timeout: 6
+        )
+        guard let latest = events.max(by: { $0.createdAt < $1.createdAt }) else { return }
+        guard let payload = await Nip78Backup.decryptAppSettings(keypair: keypair, event: latest) else { return }
+        applyRestoredPayload(payload, for: keypair.pubkey)
+    }
+
+    private func applyRestoredPayload(_ payload: Nip78Backup.AppSettingsPayload, for pubkey: String) {
+        AppSettings.shared.applyRestored(payload: payload)
+
+        if let remoteFreq = payload.frequency {
+            // Merge keeps the higher of (local, remote) per key so neither
+            // device wipes the other's progress on first sync.
+            for (k, v) in remoteFreq {
+                if v > (frequency[k] ?? 0) { frequency[k] = v }
+            }
+        }
+        if let remoteList = payload.quickReactions, !remoteList.isEmpty {
+            // Replace the quick list if the remote one differs from local
+            // (likely from a fresh install — the local list will be the
+            // hardcoded defaults at this point).
+            let localIsDefault = Set(quickReactions) == Set(EmojiData.defaultQuickReactions)
+            if localIsDefault || quickReactions.isEmpty {
+                quickReactions = remoteList
+            } else {
+                // Already-curated local list: union, preserving local order first.
+                var merged = quickReactions
+                for entry in remoteList where !merged.contains(entry) {
+                    merged.append(entry)
+                }
+                quickReactions = merged
+            }
+        }
+        persist()
+    }
+
+    /// Coalesce multiple `recordUse` / mutator calls into a single relay
+    /// publish. Without this, a user spamming reactions would fan out a
+    /// publish per tap. The 4 s window matches the publish timeout — long
+    /// enough to capture a burst, short enough to feel "live." Also called
+    /// from `AppSettings` property `didSet`s so changes to synced settings
+    /// round-trip through the same backup.
+    func scheduleSettingsSync() {
+        guard AppSettings.shared.syncSettingsToRelays else { return }
+        pendingSettingsPublish?.cancel()
+        isSettingsSyncPending = true
+        pendingSettingsPublish = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(4))
+            guard let self, !Task.isCancelled else { return }
+            await self.publishSettingsBackup()
+        }
+    }
+
+    /// Build and publish the kind-30078 app-settings backup for the active
+    /// keypair. Quietly no-ops if there's no key, no relays, or the publish
+    /// fails — this is best-effort cross-device sync, not durable storage.
+    func publishSettingsBackup() async {
+        guard let keypair = NostrKey.load() else { return }
+        guard keypair.pubkey == loadedForPubkey else { return }
+        guard AppSettings.shared.syncSettingsToRelays else {
+            isSettingsSyncPending = false
+            return
+        }
+        var payload = AppSettings.shared.snapshotForBackup()
+        payload.quickReactions = quickReactions
+        payload.frequency = frequency
+        do {
+            let event = try await Nip78Backup.createAppSettingsEvent(keypair: keypair, payload: payload)
+            let relays = topWriteRelays(for: keypair.pubkey)
+            guard !relays.isEmpty else {
+                isSettingsSyncPending = false
+                return
+            }
+            let accepting = await RelayPool.publish(event: event, to: relays, timeout: 8)
+            // Stamp the success time when at least one relay accepted (the
+            // returned list is the urls that OK'd). An empty result means the
+            // publish quietly dropped; leave the timestamp untouched so the
+            // UI keeps showing the last-known-good time.
+            if !accepting.isEmpty { lastSettingsSyncAt = Date() }
+            isSettingsSyncPending = false
+        } catch {
+            // Best-effort: silent on encrypt/sign failure. The next mutator
+            // call will reschedule a fresh publish attempt.
+            isSettingsSyncPending = false
+        }
     }
 }

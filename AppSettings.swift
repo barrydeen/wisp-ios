@@ -42,6 +42,7 @@ final class AppSettings {
         static let autoApproveRelayAuth = "wisp_settings_auto_approve_relay_auth"
         static let zapIconStyle = "wisp_settings_zap_icon_style"
         static let videoLoop = "wisp_settings_video_loop"
+        static let syncSettingsToRelays = "wisp_settings_sync_settings_to_relays"
     }
 
     /// Allowed durations for the post-undo countdown. Picker shows these as
@@ -51,37 +52,70 @@ final class AppSettings {
     private static let defaultAccentARGB: Int = 0xFFFF9800
 
     var largeText: Bool {
-        didSet { UserDefaults.standard.set(largeText, forKey: Keys.largeText) }
+        didSet {
+            UserDefaults.standard.set(largeText, forKey: Keys.largeText)
+            EmojiRepository.shared.scheduleSettingsSync()
+        }
     }
     var themeName: String {
-        didSet { UserDefaults.standard.set(themeName, forKey: Keys.themeName) }
+        didSet {
+            UserDefaults.standard.set(themeName, forKey: Keys.themeName)
+            EmojiRepository.shared.scheduleSettingsSync()
+        }
     }
     var colorScheme: ColorSchemePreference {
-        didSet { UserDefaults.standard.set(colorScheme.rawValue, forKey: Keys.colorScheme) }
+        didSet {
+            UserDefaults.standard.set(colorScheme.rawValue, forKey: Keys.colorScheme)
+            EmojiRepository.shared.scheduleSettingsSync()
+        }
     }
     var accentColorARGB: Int {
-        didSet { UserDefaults.standard.set(accentColorARGB, forKey: Keys.accentColorARGB) }
+        didSet {
+            UserDefaults.standard.set(accentColorARGB, forKey: Keys.accentColorARGB)
+            EmojiRepository.shared.scheduleSettingsSync()
+        }
     }
     var autoLoadMedia: Bool {
-        didSet { UserDefaults.standard.set(autoLoadMedia, forKey: Keys.autoLoadMedia) }
+        didSet {
+            UserDefaults.standard.set(autoLoadMedia, forKey: Keys.autoLoadMedia)
+            EmojiRepository.shared.scheduleSettingsSync()
+        }
     }
     var videoAutoplay: Bool {
-        didSet { UserDefaults.standard.set(videoAutoplay, forKey: Keys.videoAutoplay) }
+        didSet {
+            UserDefaults.standard.set(videoAutoplay, forKey: Keys.videoAutoplay)
+            EmojiRepository.shared.scheduleSettingsSync()
+        }
     }
     var animateAvatars: Bool {
-        didSet { UserDefaults.standard.set(animateAvatars, forKey: Keys.animateAvatars) }
+        didSet {
+            UserDefaults.standard.set(animateAvatars, forKey: Keys.animateAvatars)
+            EmojiRepository.shared.scheduleSettingsSync()
+        }
     }
     var mediaLayoutStyle: MediaLayoutStyle {
-        didSet { UserDefaults.standard.set(mediaLayoutStyle.rawValue, forKey: Keys.mediaLayoutStyle) }
+        didSet {
+            UserDefaults.standard.set(mediaLayoutStyle.rawValue, forKey: Keys.mediaLayoutStyle)
+            EmojiRepository.shared.scheduleSettingsSync()
+        }
     }
     var clientTagEnabled: Bool {
-        didSet { UserDefaults.standard.set(clientTagEnabled, forKey: Keys.clientTagEnabled) }
+        didSet {
+            UserDefaults.standard.set(clientTagEnabled, forKey: Keys.clientTagEnabled)
+            EmojiRepository.shared.scheduleSettingsSync()
+        }
     }
     var fiatModeEnabled: Bool {
-        didSet { UserDefaults.standard.set(fiatModeEnabled, forKey: Keys.fiatModeEnabled) }
+        didSet {
+            UserDefaults.standard.set(fiatModeEnabled, forKey: Keys.fiatModeEnabled)
+            EmojiRepository.shared.scheduleSettingsSync()
+        }
     }
     var fiatCurrency: String {
-        didSet { UserDefaults.standard.set(fiatCurrency, forKey: Keys.fiatCurrency) }
+        didSet {
+            UserDefaults.standard.set(fiatCurrency, forKey: Keys.fiatCurrency)
+            EmojiRepository.shared.scheduleSettingsSync()
+        }
     }
     var notificationSoundsEnabled: Bool {
         didSet { UserDefaults.standard.set(notificationSoundsEnabled, forKey: Keys.notificationSoundsEnabled) }
@@ -90,15 +124,24 @@ final class AppSettings {
     /// `postUndoTimerForReplies`) waits `postUndoTimerSeconds` before sending,
     /// giving the user a chance to cancel.
     var postUndoTimerEnabled: Bool {
-        didSet { UserDefaults.standard.set(postUndoTimerEnabled, forKey: Keys.postUndoTimerEnabled) }
+        didSet {
+            UserDefaults.standard.set(postUndoTimerEnabled, forKey: Keys.postUndoTimerEnabled)
+            EmojiRepository.shared.scheduleSettingsSync()
+        }
     }
     var postUndoTimerSeconds: Int {
-        didSet { UserDefaults.standard.set(postUndoTimerSeconds, forKey: Keys.postUndoTimerSeconds) }
+        didSet {
+            UserDefaults.standard.set(postUndoTimerSeconds, forKey: Keys.postUndoTimerSeconds)
+            EmojiRepository.shared.scheduleSettingsSync()
+        }
     }
     /// When false, replies skip the undo countdown and publish immediately —
     /// the default. Top-level posts still respect `postUndoTimerEnabled`.
     var postUndoTimerForReplies: Bool {
-        didSet { UserDefaults.standard.set(postUndoTimerForReplies, forKey: Keys.postUndoTimerForReplies) }
+        didSet {
+            UserDefaults.standard.set(postUndoTimerForReplies, forKey: Keys.postUndoTimerForReplies)
+            EmojiRepository.shared.scheduleSettingsSync()
+        }
     }
     /// When true (default), AUTH challenges from relays are signed and sent automatically
     /// without prompting. When false, each relay must be individually approved in relay settings.
@@ -106,7 +149,16 @@ final class AppSettings {
         didSet { UserDefaults.standard.set(autoApproveRelayAuth, forKey: Keys.autoApproveRelayAuth) }
     }
     var zapIconStyle: ZapIconStyle {
-        didSet { UserDefaults.standard.set(zapIconStyle.rawValue, forKey: Keys.zapIconStyle) }
+        didSet {
+            UserDefaults.standard.set(zapIconStyle.rawValue, forKey: Keys.zapIconStyle)
+            EmojiRepository.shared.scheduleSettingsSync()
+        }
+    }
+    /// When true (default), AppSettings + EmojiRepository publish a NIP-78
+    /// kind-30078 backup of the user's preferences and quick-reactions so the
+    /// same setup follows the account across devices/clients.
+    var syncSettingsToRelays: Bool {
+        didSet { UserDefaults.standard.set(syncSettingsToRelays, forKey: Keys.syncSettingsToRelays) }
     }
     // TODO: Persist to NIP78 (kind 30078) when that feature is available.
     var videoLoop: Bool {
@@ -137,6 +189,68 @@ final class AppSettings {
         let zapRaw = defaults.string(forKey: Keys.zapIconStyle) ?? ZapIconStyle.bitcoin.rawValue
         self.zapIconStyle = ZapIconStyle(rawValue: zapRaw) ?? .bitcoin
         self.videoLoop = defaults.object(forKey: Keys.videoLoop) as? Bool ?? true
+        self.syncSettingsToRelays = defaults.object(forKey: Keys.syncSettingsToRelays) as? Bool ?? true
+    }
+
+    /// Apply settings restored from a NIP-78 backup. Only non-default keys
+    /// present in the payload are overwritten; the rest stay as configured
+    /// locally. Called from `EmojiRepository.refresh` after a successful
+    /// remote fetch — see `Nip78Backup.AppSettingsPayload`.
+    func applyRestored(payload: Nip78Backup.AppSettingsPayload) {
+        // Currency / zap
+        if let s = payload.zapIconStyle, let style = ZapIconStyle(rawValue: s) {
+            zapIconStyle = style
+        }
+        if let m = payload.fiatModeEnabled { fiatModeEnabled = m }
+        if let c = payload.fiatCurrency, !c.isEmpty { fiatCurrency = c }
+        if let raw = payload.zapPresetsCSV, !raw.isEmpty {
+            UserDefaults.standard.set(raw, forKey: "zapPresetAmounts")
+        }
+        // Appearance
+        if let b = payload.largeText { largeText = b }
+        if let n = payload.themeName, !n.isEmpty { themeName = n }
+        if let s = payload.colorScheme, let pref = ColorSchemePreference(rawValue: s) {
+            colorScheme = pref
+        }
+        if let a = payload.accentColorARGB { accentColorARGB = a }
+        // Media
+        if let b = payload.autoLoadMedia { autoLoadMedia = b }
+        if let b = payload.videoAutoplay { videoAutoplay = b }
+        if let b = payload.animateAvatars { animateAvatars = b }
+        if let s = payload.mediaLayoutStyle, let style = MediaLayoutStyle(rawValue: s) {
+            mediaLayoutStyle = style
+        }
+        // Posting
+        if let b = payload.clientTagEnabled { clientTagEnabled = b }
+        if let b = payload.postUndoTimerEnabled { postUndoTimerEnabled = b }
+        if let n = payload.postUndoTimerSeconds, Self.postUndoTimerOptions.contains(n) {
+            postUndoTimerSeconds = n
+        }
+        if let b = payload.postUndoTimerForReplies { postUndoTimerForReplies = b }
+    }
+
+    /// Build the payload that gets NIP-44 encrypted and published as kind-30078.
+    /// Mirrors `applyRestored` — every field the backup carries.
+    func snapshotForBackup() -> Nip78Backup.AppSettingsPayload {
+        let presetsRaw = UserDefaults.standard.string(forKey: "zapPresetAmounts")
+        return Nip78Backup.AppSettingsPayload(
+            zapIconStyle: zapIconStyle.rawValue,
+            fiatModeEnabled: fiatModeEnabled,
+            fiatCurrency: fiatCurrency,
+            zapPresetsCSV: presetsRaw,
+            largeText: largeText,
+            themeName: themeName,
+            colorScheme: colorScheme.rawValue,
+            accentColorARGB: accentColorARGB,
+            autoLoadMedia: autoLoadMedia,
+            videoAutoplay: videoAutoplay,
+            animateAvatars: animateAvatars,
+            mediaLayoutStyle: mediaLayoutStyle.rawValue,
+            clientTagEnabled: clientTagEnabled,
+            postUndoTimerEnabled: postUndoTimerEnabled,
+            postUndoTimerSeconds: postUndoTimerSeconds,
+            postUndoTimerForReplies: postUndoTimerForReplies
+        )
     }
 
     /// SF Symbol name for the zap icon. Only valid when `fiatModeEnabled` is false.
