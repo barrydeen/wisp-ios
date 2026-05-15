@@ -2,9 +2,19 @@ import SwiftUI
 
 struct InlineImageView: View {
     let meta: MediaMeta
+    /// When set, the inline tap fires this closure instead of presenting
+    /// the single-image `FullScreenImageView`. Used by `RichContentView` to
+    /// route inline image taps through `FullScreenMediaPager` so the user
+    /// can swipe between every image and video in the post.
+    var onTap: (() -> Void)? = nil
     @Environment(AppSettings.self) private var settings
     @State private var showFullScreen = false
     @State private var manualLoad = false
+
+    private func tapped() {
+        if let onTap = onTap { onTap() }
+        else { showFullScreen = true }
+    }
 
     /// Single corner radius used by every state of the inline image —
     /// placeholder background, blurhash overlay, loaded image, failure
@@ -33,7 +43,7 @@ struct InlineImageView: View {
                         }
                     )
                     .contentShape(Rectangle())
-                    .onTapGesture { showFullScreen = true }
+                    .onTapGesture { tapped() }
                 } else {
                     RetryingAsyncImage(
                         url: URL(string: meta.url),
@@ -41,7 +51,7 @@ struct InlineImageView: View {
                             image.resizable()
                                 .aspectRatio(contentMode: .fit)
                                 .frame(maxWidth: .infinity)
-                                .onTapGesture { showFullScreen = true }
+                                .onTapGesture { tapped() }
                         },
                         loading: {
                             placeholder(systemName: nil, height: height)
@@ -142,9 +152,12 @@ struct FullScreenImageView: View {
     /// Forwarded centroid translation when the image is unzoomed and embedded
     /// in `FullScreenMediaPager`. Fires on every recogniser update and once on
     /// end; `isEnded` distinguishes the two so the carousel can commit on
-    /// release. Nil for the standalone viewer — it handles its own drag
-    /// entirely (swipe-down dismisses, no on-screen close button).
-    var onCarouselDrag: ((CGSize, Bool) -> Void)?
+    /// release. The second `CGSize` is the velocity-projected end translation
+    /// (translation + 0.3·velocity), which the carousel uses to commit on a
+    /// fast flick without requiring a long finger travel. Nil for the
+    /// standalone viewer — it handles its own drag entirely (swipe-down
+    /// dismisses, no on-screen close button).
+    var onCarouselDrag: ((CGSize, CGSize, Bool) -> Void)?
     @Environment(\.dismiss) private var dismiss
 
     @State private var scale: CGFloat = 1.0
@@ -170,7 +183,7 @@ struct FullScreenImageView: View {
     init(
         url: String,
         mime: String? = nil,
-        onCarouselDrag: ((CGSize, Bool) -> Void)? = nil
+        onCarouselDrag: ((CGSize, CGSize, Bool) -> Void)? = nil
     ) {
         self.url = url
         self.mime = mime
@@ -206,8 +219,8 @@ struct FullScreenImageView: View {
                     onPanChanged: { translation in
                         handlePanChange(translation, in: geo.size)
                     },
-                    onPanEnded: { translation in
-                        handlePanEnd(translation, in: geo.size)
+                    onPanEnded: { translation, predictedEnd in
+                        handlePanEnd(translation, predictedEnd: predictedEnd, in: geo.size)
                     },
                     onPinchChanged: { pinchScale, centroidTranslation in
                         handlePinchChange(
@@ -291,11 +304,13 @@ struct FullScreenImageView: View {
             guard abs(translation.height) > abs(translation.width) else { return }
             dismissY = max(0, translation.height)
         } else {
-            onCarouselDrag?(translation, false)
+            // predictedEnd is unused during the drag; pass translation so the
+            // pager's `!isEnded` branch ignores it harmlessly.
+            onCarouselDrag?(translation, translation, false)
         }
     }
 
-    private func handlePanEnd(_ translation: CGSize, in screenSize: CGSize) {
+    private func handlePanEnd(_ translation: CGSize, predictedEnd: CGSize, in screenSize: CGSize) {
         if scale > 1.01 || pinching {
             let settled = clampedOffset(panOffset, scale: scale, in: screenSize)
             withAnimation(.interactiveSpring(response: 0.32, dampingFraction: 0.78)) {
@@ -303,14 +318,14 @@ struct FullScreenImageView: View {
             }
             lastPanOffset = settled
         } else if isStandalone {
-            if translation.height > 120,
-               abs(translation.height) > abs(translation.width) {
+            if abs(translation.height) > abs(translation.width),
+               translation.height > 120 || predictedEnd.height > 220 {
                 dismiss()
             } else {
                 withAnimation(.spring(response: 0.3)) { dismissY = 0 }
             }
         } else {
-            onCarouselDrag?(translation, true)
+            onCarouselDrag?(translation, predictedEnd, true)
         }
     }
 
@@ -449,7 +464,10 @@ struct FullScreenImageView: View {
 /// into SwiftUI through callbacks.
 struct ImageGesturesView: UIViewRepresentable {
     let onPanChanged: (CGSize) -> Void
-    let onPanEnded: (CGSize) -> Void
+    /// Second arg is the velocity-projected end translation
+    /// (`translation + 0.3·velocity`), mirroring UIScrollView's
+    /// deceleration projection so callers can commit on a fast flick.
+    let onPanEnded: (CGSize, CGSize) -> Void
     let onPinchChanged: (CGFloat, CGSize) -> Void
     let onPinchEnded: (CGFloat) -> Void
     let onDoubleTap: () -> Void
@@ -518,7 +536,7 @@ struct ImageGesturesView: UIViewRepresentable {
 
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var onPanChanged: (CGSize) -> Void
-        var onPanEnded: (CGSize) -> Void
+        var onPanEnded: (CGSize, CGSize) -> Void
         var onPinchChanged: (CGFloat, CGSize) -> Void
         var onPinchEnded: (CGFloat) -> Void
         var onDoubleTap: () -> Void
@@ -528,7 +546,7 @@ struct ImageGesturesView: UIViewRepresentable {
 
         init(
             onPanChanged: @escaping (CGSize) -> Void,
-            onPanEnded: @escaping (CGSize) -> Void,
+            onPanEnded: @escaping (CGSize, CGSize) -> Void,
             onPinchChanged: @escaping (CGFloat, CGSize) -> Void,
             onPinchEnded: @escaping (CGFloat) -> Void,
             onDoubleTap: @escaping () -> Void,
@@ -549,7 +567,16 @@ struct ImageGesturesView: UIViewRepresentable {
             case .changed:
                 onPanChanged(translation)
             case .ended, .cancelled, .failed:
-                onPanEnded(translation)
+                // Project end translation forward by ~0.3s of velocity —
+                // this is the same deceleration window UIScrollView uses
+                // when deciding which page to settle on, so a quick flick
+                // commits even when the finger only moved a short distance.
+                let v = g.velocity(in: g.view)
+                let predictedEnd = CGSize(
+                    width: translation.width + 0.3 * v.x,
+                    height: translation.height + 0.3 * v.y
+                )
+                onPanEnded(translation, predictedEnd)
             default:
                 break
             }

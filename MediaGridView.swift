@@ -22,6 +22,11 @@ struct MediaGridView: View {
     /// negative trailing padding) overshoots the nested container by
     /// the parent's own padding (~28pt) and bleeds past the screen edge.
     var nested: Bool = false
+    /// When set, tile taps fire this closure instead of presenting the
+    /// pager themselves. Used by `RichContentView` so a single post-wide
+    /// `FullScreenMediaPager` shows every image and video in the post,
+    /// not just the items in this carousel run.
+    var onTileTap: ((Int) -> Void)? = nil
     @State private var openIndex: Int?
     @State private var currentItemId: String?
 
@@ -177,7 +182,12 @@ struct MediaGridView: View {
     @ViewBuilder
     private func tile(_ item: MediaItem, width: CGFloat, height: CGFloat) -> some View {
         Button {
-            openIndex = items.firstIndex(of: item) ?? 0
+            let idx = items.firstIndex(of: item) ?? 0
+            if let onTileTap = onTileTap {
+                onTileTap(idx)
+            } else {
+                openIndex = idx
+            }
         } label: {
             ZStack {
                 MediaTileImage(item: item)
@@ -360,8 +370,16 @@ struct FullScreenMediaPager: View {
     /// Receives centroid translation forwarded from the active inner
     /// FullScreenImageView (or video page) when it's not zoomed.
     /// Direction-routes between L/R paging and vertical-down dismiss;
-    /// commits on `isEnded == true`.
-    private func handleCarouselDrag(_ translation: CGSize, isEnded: Bool) {
+    /// commits on `isEnded == true`. `predictedEnd` is the
+    /// velocity-projected end translation (UIKit: `translation + 0.3·v`;
+    /// SwiftUI: `value.predictedEndTranslation`) and drives the commit
+    /// decision so a quick flick advances even when the finger only
+    /// travelled a short distance.
+    private func handleCarouselDrag(
+        _ translation: CGSize,
+        predictedEnd: CGSize,
+        isEnded: Bool
+    ) {
         let dx = translation.width
         let dy = translation.height
         if !isEnded {
@@ -378,18 +396,23 @@ struct FullScreenMediaPager: View {
             }
             return
         }
+        let projDx = predictedEnd.width
+        let projDy = predictedEnd.height
         if abs(dy) > abs(dx) {
-            if dy > 120 {
+            if dy > 120 || projDy > 220 {
                 dismiss()
             } else {
                 withAnimation(.spring(response: 0.3)) { dismissY = 0 }
             }
         } else {
-            let threshold = pageWidth * 0.25
+            // UIScrollView-style: commit when the velocity-projected end
+            // clears half the page. A short, fast flick projects past the
+            // midpoint and advances; a long, slow drag must still cross it.
+            let threshold = pageWidth * 0.5
             var newIndex = index
-            if dx < -threshold && index < items.count - 1 { newIndex += 1 }
-            else if dx > threshold && index > 0 { newIndex -= 1 }
-            withAnimation(.easeOut(duration: 0.25)) {
+            if projDx < -threshold && index < items.count - 1 { newIndex += 1 }
+            else if projDx > threshold && index > 0 { newIndex -= 1 }
+            withAnimation(.interactiveSpring(response: 0.32, dampingFraction: 0.86)) {
                 index = newIndex
                 dragOffset = 0
             }
@@ -419,17 +442,27 @@ struct FullScreenMediaPager: View {
                 // avoids the felt lag of the default 10pt threshold.
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
-                        handleCarouselDrag(value.translation, isEnded: false)
+                        handleCarouselDrag(
+                            value.translation,
+                            predictedEnd: value.predictedEndTranslation,
+                            isEnded: false
+                        )
                     }
                     .onEnded { value in
-                        handleCarouselDrag(value.translation, isEnded: true)
+                        handleCarouselDrag(
+                            value.translation,
+                            predictedEnd: value.predictedEndTranslation,
+                            isEnded: true
+                        )
                     }
             )
         } else {
             FullScreenImageView(
                 url: item.url,
                 mime: item.mime,
-                onCarouselDrag: { translation, ended in handleCarouselDrag(translation, isEnded: ended) }
+                onCarouselDrag: { translation, predictedEnd, ended in
+                    handleCarouselDrag(translation, predictedEnd: predictedEnd, isEnded: ended)
+                }
             )
         }
     }
