@@ -46,13 +46,13 @@ struct MainView: View {
     @State private var pendingAuthRequest: PendingAuthRequest?
     @State private var feedFabOpacity: Double = 1.0
     /// Shared toast store — written to by every `ComposeView` autosave-on-dismiss
-    /// (new / reply / quote alike). Watched here so the orange pill renders no
+    /// (new / reply / quote alike). Watched here so the pill renders no
     /// matter which navigation surface presented the composer.
     @State private var draftToast = DraftSavedToastStore.shared
     @State private var draftSavedToastTask: Task<Void, Never>?
     /// Mirror of `draftToast` for the "post published" pill — `ComposeViewModel`
     /// writes here after a successful immediate publish so the tab root can
-    /// surface an orange link back to the new post.
+    /// surface a tappable link back to the new post.
     @State private var postPublishedToast = PostPublishedToastStore.shared
     @State private var postPublishedToastTask: Task<Void, Never>?
     /// Set to reopen the composer pointed at an existing draft (populated by
@@ -895,7 +895,7 @@ struct MainView: View {
             .foregroundStyle(.white)
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
-            .background(Color.orange, in: Capsule())
+            .background(Color.wispPrimary, in: Capsule())
             .shadow(color: .black.opacity(0.25), radius: 8, x: 0, y: 2)
         }
         .buttonStyle(.plain)

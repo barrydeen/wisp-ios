@@ -17,9 +17,9 @@ final class DraftSavedToastStore {
 }
 
 /// Shared one-shot "Post published" pill state. `ComposeViewModel` writes to
-/// this after an immediate publish succeeds; `MainView` renders an orange pill
-/// linking back to the new post — same indirection as the draft toast so
-/// reply / quote composers anywhere in the app light up the same indicator.
+/// this after an immediate publish succeeds; `MainView` renders a themed
+/// pill linking back to the new post — same indirection as the draft toast
+/// so reply / quote composers anywhere in the app light up the same indicator.
 struct PublishedPostToast: Equatable {
     let id: String
     let pubkey: String
