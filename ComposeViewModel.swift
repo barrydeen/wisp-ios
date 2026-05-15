@@ -354,14 +354,26 @@ final class ComposeViewModel {
     /// Updates `attachments` and `uploadProgress` as work proceeds.
     func addMedia(items: [PhotosPickerItem]) async {
         guard !items.isEmpty else { return }
-        // Set progress immediately — the picker bridge can take a few seconds for large
-        // videos and the user shouldn't be looking at a frozen UI.
         uploadProgress = items.count > 1 ? "Loading \(items.count) items…" : "Loading…"
         defer { if uploadProgress != nil { uploadProgress = nil } }
-
         let pickResults = await MediaPicker.loadAll(items)
-        guard !pickResults.isEmpty else { return }
+        await uploadPickedMedia(pickResults)
+    }
 
+    /// Pick from `NSItemProvider` inputs delivered by `PHPickerViewController`.
+    /// Same end-to-end pipeline as `addMedia(items:)`; the only difference is
+    /// the loader path. Used by the UIKit `PhotosPickerPresenter` bridge that
+    /// avoids SwiftUI's sheet-cascade dismissal bug on compose.
+    func addMediaProviders(_ providers: [NSItemProvider]) async {
+        guard !providers.isEmpty else { return }
+        uploadProgress = providers.count > 1 ? "Loading \(providers.count) items…" : "Loading…"
+        defer { if uploadProgress != nil { uploadProgress = nil } }
+        let pickResults = await MediaPicker.loadAll(providers: providers)
+        await uploadPickedMedia(pickResults)
+    }
+
+    private func uploadPickedMedia(_ pickResults: [PickedMedia]) async {
+        guard !pickResults.isEmpty else { return }
         let total = pickResults.count
         var uploaded = 0
         for picked in pickResults {
@@ -369,8 +381,7 @@ final class ComposeViewModel {
             let pendingMime = picked.mime
             let pendingDim = picked.dim
             var pendingDuration = picked.durationSec
-            // For videos `picked.data` is a poster JPEG, not the full clip — perfect for
-            // a thumbnail in the composer without holding the whole video in memory.
+            // For videos `picked.data` is a poster JPEG, not the full clip.
             let thumbBytes: Data? = picked.isVideo ? (picked.data.isEmpty ? nil : picked.data) : picked.data
 
             let pending = ComposeAttachment(

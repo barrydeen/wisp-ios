@@ -127,6 +127,182 @@ enum MediaPicker {
     }
 }
 
+extension MediaPicker {
+    /// Equivalent of `loadAll(_ items: [PhotosPickerItem])` but for `NSItemProvider`
+    /// inputs delivered by `PHPickerViewController`. Used by `PhotosPickerPresenter`
+    /// so the picker can be presented as a real UIKit modal without going through
+    /// SwiftUI's `.photosPicker` modifier (which dismisses its parent sheet on
+    /// some iOS versions when used from a sheet-hosted view).
+    static func loadAll(providers: [NSItemProvider]) async -> [PickedMedia] {
+        var out: [PickedMedia] = []
+        for provider in providers {
+            if let media = await load(provider: provider) {
+                out.append(media)
+            }
+        }
+        return out
+    }
+
+    private static func load(provider: NSItemProvider) async -> PickedMedia? {
+        if provider.hasItemConformingToTypeIdentifier(UTType.movie.identifier) {
+            return await loadVideo(provider: provider)
+        }
+        return await loadImage(provider: provider)
+    }
+
+    private static func loadImage(provider: NSItemProvider) async -> PickedMedia? {
+        let preferredTypes = [
+            UTType.png.identifier,
+            UTType.jpeg.identifier,
+            UTType.heic.identifier,
+            UTType.gif.identifier,
+            UTType.webP.identifier,
+            UTType.image.identifier
+        ]
+        var pickedTypeId: String? = nil
+        for typeId in preferredTypes where provider.hasItemConformingToTypeIdentifier(typeId) {
+            pickedTypeId = typeId
+            break
+        }
+        guard let typeId = pickedTypeId,
+              let data = await loadData(provider: provider, typeIdentifier: typeId) else {
+            return nil
+        }
+        let supportedTypes = provider.registeredTypeIdentifiers.compactMap { UTType($0) }
+        let mime = inferImageMime(data: data, supportedTypes: supportedTypes)
+        let dim = MediaCompressor.imageDimensions(data) ?? .zero
+        return PickedMedia(data: data, sourceURL: nil, mime: mime, dim: dim, durationSec: nil)
+    }
+
+    private static func loadVideo(provider: NSItemProvider) async -> PickedMedia? {
+        guard let sourceURL = await loadFileCopy(provider: provider, typeIdentifier: UTType.movie.identifier) else {
+            return nil
+        }
+        let mime = UTType(filenameExtension: sourceURL.pathExtension)?.preferredMIMEType ?? "video/mp4"
+        let asset = AVURLAsset(url: sourceURL)
+        var dim: CGSize = .zero
+        if let track = try? await asset.loadTracks(withMediaType: .video).first,
+           let size = try? await track.load(.naturalSize) {
+            if let transform = try? await track.load(.preferredTransform) {
+                let t = size.applying(transform)
+                dim = CGSize(width: abs(t.width), height: abs(t.height))
+            } else {
+                dim = size
+            }
+        }
+        var durationSec: Int? = nil
+        if let cm = try? await asset.load(.duration) {
+            let s = Int(CMTimeGetSeconds(cm))
+            if s > 0 { durationSec = s }
+        }
+        let thumbData = await generateThumbnail(asset: asset)
+        return PickedMedia(
+            data: thumbData ?? Data(),
+            sourceURL: sourceURL,
+            mime: mime,
+            dim: dim,
+            durationSec: durationSec
+        )
+    }
+
+    private static func loadData(provider: NSItemProvider, typeIdentifier: String) async -> Data? {
+        await withCheckedContinuation { cont in
+            provider.loadDataRepresentation(forTypeIdentifier: typeIdentifier) { data, _ in
+                cont.resume(returning: data)
+            }
+        }
+    }
+
+    /// `loadFileRepresentation` delivers a security-scoped URL that's deleted as
+    /// soon as the completion handler returns. Copy the bytes to our own temp
+    /// file so AVFoundation / `MediaCompressor` can read them after this method
+    /// resolves.
+    private static func loadFileCopy(provider: NSItemProvider, typeIdentifier: String) async -> URL? {
+        await withCheckedContinuation { cont in
+            provider.loadFileRepresentation(forTypeIdentifier: typeIdentifier) { source, _ in
+                guard let source else {
+                    cont.resume(returning: nil)
+                    return
+                }
+                let copy = URL(fileURLWithPath: NSTemporaryDirectory())
+                    .appendingPathComponent(UUID().uuidString + "-" + source.lastPathComponent)
+                try? FileManager.default.removeItem(at: copy)
+                do {
+                    try FileManager.default.copyItem(at: source, to: copy)
+                    cont.resume(returning: copy)
+                } catch {
+                    cont.resume(returning: nil)
+                }
+            }
+        }
+    }
+}
+
+/// SwiftUI bridge to `PHPickerViewController`.
+///
+/// SwiftUI's `.photosPicker(isPresented:)` modifier and inline `PhotosPicker`
+/// view both go through SwiftUI's sheet machinery to host the picker. When the
+/// caller is already inside a `.sheet` / `.fullScreenCover` (e.g. compose),
+/// iOS sometimes dismisses the host modal mid-scroll or after selection — the
+/// gallery-picker-closes-compose bug we kept fighting. Presenting
+/// `PHPickerViewController` directly through UIKit (`present(_:animated:)` on
+/// a headless host) bypasses SwiftUI modal coordination entirely.
+///
+/// Caller is expected to attach this view as a `.background` of any visible
+/// SwiftUI view in the same window:
+///
+///     .background(
+///         PhotosPickerPresenter(isPresented: $showPicker, maxCount: 8) { providers in … }
+///     )
+struct PhotosPickerPresenter: UIViewControllerRepresentable {
+    @Binding var isPresented: Bool
+    var maxCount: Int
+    var onPick: ([NSItemProvider]) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
+
+    func makeUIViewController(context: Context) -> UIViewController {
+        let host = UIViewController()
+        host.view.backgroundColor = .clear
+        return host
+    }
+
+    func updateUIViewController(_ host: UIViewController, context: Context) {
+        if isPresented {
+            guard host.presentedViewController == nil else { return }
+            var config = PHPickerConfiguration(photoLibrary: .shared())
+            config.selectionLimit = maxCount
+            config.filter = .any(of: [.images, .videos])
+            config.preferredAssetRepresentationMode = .current
+            let picker = PHPickerViewController(configuration: config)
+            picker.delegate = context.coordinator
+            DispatchQueue.main.async {
+                host.present(picker, animated: true)
+            }
+        } else if let presented = host.presentedViewController {
+            presented.dismiss(animated: true)
+        }
+    }
+
+    final class Coordinator: NSObject, PHPickerViewControllerDelegate {
+        var parent: PhotosPickerPresenter
+
+        init(parent: PhotosPickerPresenter) {
+            self.parent = parent
+        }
+
+        func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+            let providers = results.map(\.itemProvider)
+            picker.dismiss(animated: true) {
+                self.parent.isPresented = false
+                if !providers.isEmpty {
+                    self.parent.onPick(providers)
+                }
+            }
+        }
+    }
+}
+
 /// Movie transferable that copies the picked video to a temp file we can pass to AVFoundation.
 struct MovieTransferable: Transferable {
     let url: URL
