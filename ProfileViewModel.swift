@@ -239,7 +239,7 @@ final class ProfileViewModel {
         )
         if gen == notesQueryGen {
             let cachedNotes = cached
-                .filter { isRootOrRepost($0) }
+                .filter { isRootOrRepost($0) && !SafetyFilter.shared.shouldDrop(event: $0, context: .feed) }
                 .sorted { $0.createdAt > $1.createdAt }
                 .prefix(100)
             if !cachedNotes.isEmpty {
@@ -258,6 +258,7 @@ final class ProfileViewModel {
             var seen = Set(self.rootNotes.map(\.id))
             for await (event, _) in RelayPool.stream(queries: queries, timeout: 12) {
                 if Task.isCancelled || cancelGen != self.notesQueryGen { return }
+                if SafetyFilter.shared.shouldDrop(event: event, context: .feed) { continue }
                 guard self.isRootOrRepost(event), seen.insert(event.id).inserted else { continue }
                 self.enqueueNote(event)
             }
@@ -302,7 +303,7 @@ final class ProfileViewModel {
         let cached = await eventStore.loadRecentByAuthor(pubkey: pubkey, kinds: [1], limit: 100)
         if gen == repliesQueryGen {
             let cachedReplies = cached
-                .filter { isReply($0) }
+                .filter { isReply($0) && !SafetyFilter.shared.shouldDrop(event: $0, context: .feed) }
                 .sorted { $0.createdAt > $1.createdAt }
                 .prefix(100)
             if !cachedReplies.isEmpty {
@@ -321,6 +322,7 @@ final class ProfileViewModel {
             var seen = Set(self.replies.map(\.id))
             for await (event, _) in RelayPool.stream(queries: queries, timeout: 12) {
                 if Task.isCancelled || cancelGen != self.repliesQueryGen { return }
+                if SafetyFilter.shared.shouldDrop(event: event, context: .feed) { continue }
                 guard self.isReply(event), seen.insert(event.id).inserted else { continue }
                 self.enqueueReply(event)
             }
@@ -362,7 +364,11 @@ final class ProfileViewModel {
             until: until - 1
         )
         let knownIds = Set(rootNotes.map(\.id))
-        let extra = events.filter { isRootOrRepost($0) && !knownIds.contains($0.id) }
+        let extra = events.filter {
+            isRootOrRepost($0)
+            && !knownIds.contains($0.id)
+            && !SafetyFilter.shared.shouldDrop(event: $0, context: .feed)
+        }
         let merged = (rootNotes + extra).sorted { $0.createdAt > $1.createdAt }
         rootNotes = merged
         oldestNoteTs = merged.last?.createdAt
@@ -374,7 +380,11 @@ final class ProfileViewModel {
         guard repliesSortMode == .recency, let until = oldestReplyTs else { return }
         let events = await fetchAuthorEvents(kinds: [1], limit: 100, until: until - 1)
         let knownIds = Set(replies.map(\.id))
-        let extra = events.filter { isReply($0) && !knownIds.contains($0.id) }
+        let extra = events.filter {
+            isReply($0)
+            && !knownIds.contains($0.id)
+            && !SafetyFilter.shared.shouldDrop(event: $0, context: .feed)
+        }
         let merged = (replies + extra).sorted { $0.createdAt > $1.createdAt }
         replies = merged
         oldestReplyTs = merged.last?.createdAt
@@ -409,6 +419,7 @@ final class ProfileViewModel {
             var seen = Set<String>()
             for await (event, _) in RelayPool.stream(queries: queries, timeout: 12) {
                 guard gen == self.notesQueryGen else { return }
+                if SafetyFilter.shared.shouldDrop(event: event, context: .feed) { continue }
                 guard event.kind == 1 || event.kind == 6, seen.insert(event.id).inserted else { continue }
                 self.sortedNotes.append(event)
                 if self.isLoadingSortedNotes { self.isLoadingSortedNotes = false }
@@ -441,6 +452,7 @@ final class ProfileViewModel {
             var seen = Set<String>()
             for await (event, _) in RelayPool.stream(queries: queries, timeout: 12) {
                 guard gen == self.repliesQueryGen else { return }
+                if SafetyFilter.shared.shouldDrop(event: event, context: .feed) { continue }
                 guard event.kind == 1, seen.insert(event.id).inserted else { continue }
                 self.sortedReplies.append(event)
                 if self.isLoadingSortedReplies { self.isLoadingSortedReplies = false }
@@ -466,6 +478,7 @@ final class ProfileViewModel {
             var seen = Set<String>()
             for await (event, _) in RelayPool.stream(queries: queries, timeout: 12) {
                 if Task.isCancelled { return }
+                if SafetyFilter.shared.shouldDrop(event: event, context: .feed) { continue }
                 guard [20, 21, 22].contains(event.kind), seen.insert(event.id).inserted else { continue }
                 self.enqueueGallery(event)
             }
