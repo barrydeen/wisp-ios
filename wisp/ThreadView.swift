@@ -268,7 +268,9 @@ struct ThreadView: View {
         } else {
             // See `replyRow` for the rationale on `.onTapGesture` vs a
             // wrapping `Button` — same nested-button hit-test issue on
-            // real devices.
+            // real devices. `onNoteTap` is wired so a quoted note embedded
+            // inside an ancestor opens that note's thread; the surrounding
+            // row tap still pushes the ancestor itself.
             PostCardView(
                 event: row.event,
                 profile: viewModel.profiles[row.event.pubkey],
@@ -276,7 +278,9 @@ struct ThreadView: View {
                 engagement: viewModel.engagement[row.event.id],
                 ancestorCompact: true,
                 onProfileTap: { _ in },
-                onNoteTap: { _ in },
+                onNoteTap: { quotedId in
+                    navigateToThread(eventId: quotedId, authorPubkey: row.event.pubkey)
+                },
                 onHashtagTap: { _ in },
                 onOpenEmojiLibrary: openEmojiLibrary,
                 onOpenReplyCompose: openReplyCompose,

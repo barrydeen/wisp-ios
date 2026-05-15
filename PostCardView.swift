@@ -291,8 +291,10 @@ struct PostCardView: View {
             // Ancestor-compact mode still uses RichContentView (so npub
             // mentions resolve and inline images render) but caps the body
             // height with clipping and drops polls, top-zapper, and the
-            // action bar. Tap callbacks are nil because the outer
-            // NavigationLink owns the row-level tap.
+            // action bar. `onNoteTap` is forwarded so a quoted note embedded
+            // inside an ancestor remains tappable — without it the inner
+            // QuotedNoteView Button still consumes the touch, swallowing
+            // both its own navigation AND the outer row tap.
             if ancestorCompact {
                 // No height cap: the cap forced `.aspectRatio(.fit)` images to
                 // shrink, which left InlineImageView's clipShape rounding the
@@ -304,7 +306,7 @@ struct PostCardView: View {
                     profiles: profiles,
                     authorPubkey: displayEvent.pubkey,
                     onProfileTap: nil,
-                    onNoteTap: nil,
+                    onNoteTap: onNoteTap,
                     onHashtagTap: nil
                 )
                 .padding(.horizontal, 16)
