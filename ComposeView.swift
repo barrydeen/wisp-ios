@@ -23,6 +23,11 @@ final class DraftSavedToastStore {
 struct PublishedPostToast: Equatable {
     let id: String
     let pubkey: String
+    /// Set when the published event is a reply. Holds the direct parent's event id
+    /// so the toast can navigate to the parent's thread (showing the reply below it)
+    /// rather than opening the reply itself as the thread focal.
+    let parentEventId: String?
+    let parentAuthorPubkey: String?
 }
 
 @MainActor

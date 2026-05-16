@@ -40,11 +40,13 @@ struct ThreadView: View {
     @Binding var chain: [String]
 
     init(seedEventId: String, authorHint: String?, keypair: Keypair,
-         path: Binding<NavigationPath>, chain: Binding<[String]>) {
+         path: Binding<NavigationPath>, chain: Binding<[String]>,
+         scrollToId: String? = nil) {
         _viewModel = State(initialValue: ThreadViewModel(
             seedEventId: seedEventId,
             authorHint: authorHint,
-            keypair: keypair
+            keypair: keypair,
+            scrollToId: scrollToId
         ))
         _path = path
         _chain = chain
@@ -107,6 +109,13 @@ struct ThreadView: View {
                 .refreshable { await viewModel.refresh() }
                 .onChange(of: viewModel.focal?.id) { _, _ in scrollToFocalIfNeeded(proxy: proxy) }
                 .onChange(of: viewModel.ancestors.count) { _, _ in scrollToFocalIfNeeded(proxy: proxy) }
+                .onChange(of: viewModel.scrollTargetId) { _, targetId in
+                    guard let targetId else { return }
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        proxy.scrollTo(targetId, anchor: .center)
+                    }
+                    viewModel.scrollTargetId = nil
+                }
             }
             if !viewModel.keypair.isWatchOnly {
                 composer

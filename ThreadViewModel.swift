@@ -55,6 +55,10 @@ final class ThreadViewModel {
     var isLoading = false
     var errorMessage: String?
     var isSending = false
+    /// Set when the view should scroll to a specific event — either because a
+    /// fresh navigation specified `scrollToId`, or because the user just posted
+    /// a reply (via `handleExternalPublish`). Cleared by ThreadView after scrolling.
+    var scrollTargetId: String?
     /// Active undo countdown for an unsent reply, mirroring `ComposeViewModel`.
     var replyCountdown: Int?
     /// Buffered text + parent for a reply that's mid-countdown, so `publishNow` /
@@ -92,12 +96,13 @@ final class ThreadViewModel {
 
     private static let fallbackRelays = RelayDefaults.fallbacks
 
-    init(seedEventId: String, authorHint: String?, keypair: Keypair) {
+    init(seedEventId: String, authorHint: String?, keypair: Keypair, scrollToId: String? = nil) {
         self.keypair = keypair
         self.seedEventId = seedEventId
         self.authorHint = authorHint
         self.rootId = seedEventId
         self.focalEventId = seedEventId
+        self.scrollTargetId = scrollToId
         // Catch the user's own freshly-published replies the moment ComposeViewModel
         // broadcasts them — the live relay subscription often doesn't reflect outbound
         // events back, so without this the new reply only shows after a manual refresh.
@@ -158,6 +163,7 @@ final class ThreadViewModel {
         guard known else { return }
         if event.kind == 1 {
             ingestReply(event)
+            scrollTargetId = event.id
         }
     }
 
