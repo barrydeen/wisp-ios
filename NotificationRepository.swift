@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import SwiftUI
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -94,9 +95,15 @@ final class NotificationRepository {
         // out of order — without this, old events get placed at index 0 and
         // push the most recent (in-window) items off the end of the buffer,
         // which silently zeroes out `computeSummary24h`'s last-24h counters.
+        // Apply the array mutation in a non-animating transaction so any
+        // ambient SwiftUI animation in scope (e.g. the audio-player slide on
+        // the parent shell) can't catch a sorted insert and "float" a late-
+        // arriving row down from its insertion index over existing rows.
         let insertIdx = flatItems.firstIndex(where: { $0.timestamp < item.timestamp }) ?? flatItems.count
-        flatItems.insert(item, at: insertIdx)
-        if flatItems.count > Self.flatCap { flatItems.removeLast(flatItems.count - Self.flatCap) }
+        withTransaction(Transaction(animation: nil)) {
+            flatItems.insert(item, at: insertIdx)
+            if flatItems.count > Self.flatCap { flatItems.removeLast(flatItems.count - Self.flatCap) }
+        }
 
         summary = computeSummary24h()
         bumpLatestTimestamp(item.timestamp)
@@ -143,12 +150,14 @@ final class NotificationRepository {
     /// Replace the DM rows in `flatItems` with the latest snapshot from
     /// DmRepository. One FlatNotificationItem per conversation, kind == .dm.
     func upsertDms(_ items: [FlatNotificationItem]) {
-        flatItems.removeAll { $0.kind == .dm }
-        for item in items {
-            let i = flatItems.firstIndex(where: { $0.timestamp < item.timestamp }) ?? flatItems.count
-            flatItems.insert(item, at: i)
+        withTransaction(Transaction(animation: nil)) {
+            flatItems.removeAll { $0.kind == .dm }
+            for item in items {
+                let i = flatItems.firstIndex(where: { $0.timestamp < item.timestamp }) ?? flatItems.count
+                flatItems.insert(item, at: i)
+            }
+            if flatItems.count > Self.flatCap { flatItems.removeLast(flatItems.count - Self.flatCap) }
         }
-        if flatItems.count > Self.flatCap { flatItems.removeLast(flatItems.count - Self.flatCap) }
         summary = computeSummary24h()
     }
 
