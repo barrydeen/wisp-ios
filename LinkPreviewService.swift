@@ -33,6 +33,15 @@ actor LinkPreviewService {
         cache[url]
     }
 
+    /// Fire-and-forget cache warming. The composer calls this for the
+    /// standalone links in a post being written so that by the time the
+    /// note is published and rendered in the feed/thread its preview card
+    /// paints from cache instead of showing a spinner. Concurrency and
+    /// dedup are already handled by `fetch` (in-flight + cache maps).
+    nonisolated func prefetch(_ url: String) {
+        Task { _ = await self.fetch(url) }
+    }
+
     func fetch(_ url: String) async -> OpenGraphData? {
         if let cached = cache[url] { return cached }
         if let existing = inflight[url] { return await existing.value }
