@@ -1106,6 +1106,17 @@ struct MainView: View {
                             Divider()
                                 .overlay(Color.wispSurfaceVariant.opacity(0.3))
                         }
+                        // Defensively strip any ambient animation from row
+                        // diffs so a late-arriving event merged into
+                        // `viewModel.events` can't ride a sibling animation
+                        // transaction (audio-player slide, new-posts-pill
+                        // toggle, etc.) and visibly "float down" from its
+                        // insertion index into its sorted position. The
+                        // upstream `withTransaction(animation: nil)` around
+                        // `events = ...` in `flushPendingInserts` doesn't
+                        // carry across the `@Observable` render-pass
+                        // boundary; this is the last line of defense.
+                        .transaction { $0.animation = nil }
                     }
                 }
                 .refreshable { await viewModel.refresh() }

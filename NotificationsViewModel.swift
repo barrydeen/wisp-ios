@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import SwiftUI
 
 @Observable
 @MainActor
@@ -167,27 +168,41 @@ final class NotificationsViewModel {
 
     // MARK: - Filter API
 
+    /// Animation used for filter-toggle list reflows. Applied at the
+    /// mutation site (rather than as a view-level `.animation(value:)`)
+    /// so it only fires for filter changes — `flatItems` inserts arriving
+    /// in the same render pass can no longer ride this transaction.
+    private static let filterAnimation: Animation = .easeInOut(duration: 0.15)
+
     func toggleType(_ t: NotificationFilter) {
-        if enabledTypes.contains(t) {
-            enabledTypes.remove(t)
-        } else {
-            enabledTypes.insert(t)
+        withTransaction(Transaction(animation: Self.filterAnimation)) {
+            if enabledTypes.contains(t) {
+                enabledTypes.remove(t)
+            } else {
+                enabledTypes.insert(t)
+            }
         }
         persistEnabledTypes()
     }
 
     func isolateType(_ t: NotificationFilter) {
-        enabledTypes = [t]
+        withTransaction(Transaction(animation: Self.filterAnimation)) {
+            enabledTypes = [t]
+        }
         persistEnabledTypes()
     }
 
     func enableAll() {
-        enabledTypes = Set(NotificationFilter.allCases)
+        withTransaction(Transaction(animation: Self.filterAnimation)) {
+            enabledTypes = Set(NotificationFilter.allCases)
+        }
         persistEnabledTypes()
     }
 
     func disableAll() {
-        enabledTypes = []
+        withTransaction(Transaction(animation: Self.filterAnimation)) {
+            enabledTypes = []
+        }
         persistEnabledTypes()
     }
 
