@@ -53,6 +53,7 @@ struct ProfileView: View {
                     viewModel: viewModel,
                     isMe: isMe,
                     isWatchOnly: NostrKey.isWatchOnly(pubkey: activeUserPubkey),
+                    selectedTab: selectedTab,
                     onEditProfile: { showEditProfile = true },
                     onProfileTap: onProfileTap,
                     onNoteTap: onNoteTap,
@@ -271,6 +272,7 @@ private struct ProfileHeaderView: View {
     @Bindable var viewModel: ProfileViewModel
     var isMe: Bool = false
     var isWatchOnly: Bool = false
+    var selectedTab: ProfileTab = .notes
     var onEditProfile: () -> Void = {}
     var onProfileTap: ((String) -> Void)? = nil
     var onNoteTap: ((String) -> Void)? = nil
@@ -486,10 +488,37 @@ private struct ProfileHeaderView: View {
             statBlock(
                 label: "Followers",
                 value: viewModel.followersCountIsApprox && viewModel.followersCount == 0
-                    ? "—"
+                    ? "∞"
                     : formatCount(viewModel.followersCount)
             )
-            Spacer()
+            Spacer(minLength: 12)
+            sortPicker
+        }
+    }
+
+    /// The notes/replies sort control lives here, right-aligned next to the
+    /// follow counts, instead of in its own full-width row below the pinned
+    /// tab bar — collapsing two rows into one saves a band of vertical space.
+    /// Only the sortable tabs surface it; everything else leaves the slot empty.
+    @ViewBuilder
+    private var sortPicker: some View {
+        switch selectedTab {
+        case .notes:
+            ProfileSortPicker(
+                selection: viewModel.notesSortMode,
+                onSelect: { mode in
+                    Task { await viewModel.setNotesSortMode(mode) }
+                }
+            )
+        case .replies:
+            ProfileSortPicker(
+                selection: viewModel.repliesSortMode,
+                onSelect: { mode in
+                    Task { await viewModel.setRepliesSortMode(mode) }
+                }
+            )
+        default:
+            EmptyView()
         }
     }
 

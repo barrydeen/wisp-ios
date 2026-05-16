@@ -36,8 +36,6 @@ struct NotesTabView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            sortRow
-
             if viewModel.notesSortMode == .recency {
                 if viewModel.isLoadingNotes && viewModel.rootNotes.isEmpty {
                     loading("Loading notes…")
@@ -92,17 +90,6 @@ struct NotesTabView: View {
             }
         }
     }
-
-    private var sortRow: some View {
-        ProfileSortPicker(
-            selection: viewModel.notesSortMode,
-            onSelect: { mode in
-                Task { await viewModel.setNotesSortMode(mode) }
-            }
-        )
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-    }
 }
 
 struct RepliesTabView: View {
@@ -113,15 +100,6 @@ struct RepliesTabView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ProfileSortPicker(
-                selection: viewModel.repliesSortMode,
-                onSelect: { mode in
-                    Task { await viewModel.setRepliesSortMode(mode) }
-                }
-            )
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-
             if viewModel.repliesSortMode == .recency {
                 if viewModel.isLoadingReplies && viewModel.replies.isEmpty {
                     loading("Loading replies…")
@@ -213,7 +191,7 @@ struct ConversationTabView: View {
     }
 }
 
-private struct ProfileSortPicker: View {
+struct ProfileSortPicker: View {
     let selection: ProfileSortMode
     let onSelect: (ProfileSortMode) -> Void
 
@@ -228,9 +206,11 @@ private struct ProfileSortPicker: View {
                     .font(.system(size: 13))
                 Text(selection.label)
                     .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
                 Image(systemName: "chevron.down")
                     .font(.system(size: 10, weight: .semibold))
             }
+            .fixedSize(horizontal: true, vertical: false)
             .foregroundStyle(Color.wispPrimary)
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
@@ -273,7 +253,6 @@ private struct ProfileSortPicker: View {
             .background(Color.wispBackground)
             .presentationCompactAdaptation(.popover)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
