@@ -83,6 +83,14 @@ struct PostCardView: View {
     @State private var reactionPickerMaxHeight: CGFloat = 192
     @State private var showDeleteConfirm = false
     @State private var showMuteUserConfirm = false
+    /// Tap-anchored menus on the action bar. We use `Button` + `.popover`
+    /// instead of SwiftUI's `Menu` because `Menu`'s label runs a baked-in
+    /// UIKit press animation that scales/shifts the icon every time it's
+    /// tapped — disable-able only by giving up `Menu` itself. `.popover`
+    /// with `.presentationCompactAdaptation(.popover)` keeps the
+    /// anchored-popup feel without animating the launching icon.
+    @State private var showRepostMenu = false
+    @State private var showOverflowMenu = false
     /// True when the user tapped Zap but no wallet is configured. Surfaces a
     /// confirmation prompt that can launch the Wallet tab to set one up.
     @State private var showWalletSetupPrompt = false
@@ -795,27 +803,65 @@ struct PostCardView: View {
     private var repostAction: some View {
         let count = resolvedRepostCount
         let tint: Color? = iReposted ? Color.wispRepostColor : nil
-        return Menu {
-            Button {
-                sendRepost()
-            } label: {
-                Label(iReposted ? "Reposted" : "Repost", systemImage: "arrow.2.squarepath")
-            }
-            .disabled(iReposted)
-
-            Button {
-                if let route = onOpenQuoteCompose {
-                    route(resolveRepost().event)
-                } else {
-                    activeSheet = .quoteCompose
-                }
-            } label: {
-                Label("Quote", systemImage: "quote.bubble")
-            }
+        return Button {
+            showRepostMenu = true
         } label: {
             actionItem(icon: "arrow.2.squarepath", count: count > 0 ? count : nil, tint: tint)
         }
-        .menuStyle(.borderlessButton)
+        .buttonStyle(.plain)
+        .popover(isPresented: $showRepostMenu) {
+            VStack(alignment: .leading, spacing: 0) {
+                popoverMenuItem(
+                    title: iReposted ? "Reposted" : "Repost",
+                    systemImage: "arrow.2.squarepath",
+                    disabled: iReposted
+                ) {
+                    showRepostMenu = false
+                    sendRepost()
+                }
+                Divider()
+                popoverMenuItem(
+                    title: "Quote",
+                    systemImage: "quote.bubble"
+                ) {
+                    showRepostMenu = false
+                    if let route = onOpenQuoteCompose {
+                        route(resolveRepost().event)
+                    } else {
+                        activeSheet = .quoteCompose
+                    }
+                }
+            }
+            .frame(minWidth: 200)
+            .presentationCompactAdaptation(.popover)
+        }
+    }
+
+    /// Row inside a `.popover`-based action menu. Matches the visual
+    /// rhythm of SwiftUI's `Menu` items (Label-style icon + title, full
+    /// row tap target) but renders inside a regular Button so no system
+    /// press animation runs on the parent action-bar icon.
+    @ViewBuilder
+    private func popoverMenuItem(
+        title: String,
+        systemImage: String,
+        role: ButtonRole? = nil,
+        disabled: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(role: role, action: action) {
+            HStack(spacing: 12) {
+                Text(title)
+                Spacer(minLength: 0)
+                Image(systemName: systemImage)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .foregroundStyle(role == .destructive ? AnyShapeStyle(Color.red) : (disabled ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary)))
     }
 
     private var overflowMenu: some View {
@@ -827,97 +873,130 @@ struct PostCardView: View {
         let userMuted = muteRepo.isBlocked(target.pubkey)
         let threadMuted = muteRepo.isThreadMuted(threadRoot)
 
-        return Menu {
-            Button {
-                activeSheet = .addToList
-            } label: {
-                Label("Add to List", systemImage: "bookmark")
-            }
-
-            if isMine {
-                Button {
-                    pinNote(target)
-                } label: {
-                    Label("Pin to Profile", systemImage: "pin")
-                }
-            }
-
-            if !isMine {
-                Button {
-                    if userMuted {
-                        muteRepo.unblockUser(target.pubkey)
-                    } else {
-                        // Confirmation prompt before muting — direct mute
-                        // can collapse the thread the user is reading
-                        // (per #69) and is hard to discover how to undo.
-                        let displayed = profiles[target.pubkey]?.displayString
-                            ?? profile?.displayString
-                            ?? Nip19.shortNpub(hex: target.pubkey)
-                        muteCandidate = MuteCandidate(pubkey: target.pubkey, displayName: displayed)
-                        showMuteUserConfirm = true
-                    }
-                } label: {
-                    Label(userMuted ? "Unmute User" : "Mute User", systemImage: "speaker.slash")
-                }
-
-                Button {
-                    if threadMuted { muteRepo.unmuteThread(threadRoot) } else { muteRepo.muteThread(threadRoot) }
-                } label: {
-                    Label(threadMuted ? "Unmute Thread" : "Mute Thread", systemImage: "bell.slash")
-                }
-            }
-
-            ShareLink(item: shareItem) {
-                Label("Share", systemImage: "square.and.arrow.up")
-            }
-
-            Button {
-                copyNoteText(target)
-            } label: {
-                Label("Copy Note Text", systemImage: "doc.on.doc")
-            }
-            .disabled(target.content.isEmpty)
-
-            Button {
-                copyNoteId(target)
-            } label: {
-                Label("Copy Note ID", systemImage: "lanyardcard")
-            }
-
-            Button {
-                copyNoteJson(target)
-            } label: {
-                Label("Copy Note JSON", systemImage: "curlybraces")
-            }
-
-            Button {
-                copyNpub(target)
-            } label: {
-                Label("Copy npub", systemImage: "person.text.rectangle")
-            }
-
-            Button {
-                broadcast(target)
-            } label: {
-                Label("Broadcast", systemImage: "antenna.radiowaves.left.and.right")
-            }
-
-            if isMine {
-                Button(role: .destructive) {
-                    showDeleteConfirm = true
-                } label: {
-                    Label("Delete", systemImage: "trash")
-                }
-            }
+        return Button {
+            showOverflowMenu = true
         } label: {
             Image(systemName: "ellipsis")
                 .font(.system(size: 13))
                 .rotationEffect(.degrees(90))
                 .frame(width: 22, height: 22)
                 .contentShape(Rectangle())
+                .foregroundStyle(.secondary)
         }
-        .menuStyle(.borderlessButton)
-        .tint(.secondary)
+        .buttonStyle(.plain)
+        .popover(isPresented: $showOverflowMenu) {
+            VStack(alignment: .leading, spacing: 0) {
+                popoverMenuItem(title: "Add to List", systemImage: "bookmark") {
+                    showOverflowMenu = false
+                    activeSheet = .addToList
+                }
+                Divider()
+
+                if isMine {
+                    popoverMenuItem(title: "Pin to Profile", systemImage: "pin") {
+                        showOverflowMenu = false
+                        pinNote(target)
+                    }
+                    Divider()
+                }
+
+                if !isMine {
+                    popoverMenuItem(
+                        title: userMuted ? "Unmute User" : "Mute User",
+                        systemImage: "speaker.slash"
+                    ) {
+                        showOverflowMenu = false
+                        if userMuted {
+                            muteRepo.unblockUser(target.pubkey)
+                        } else {
+                            // Confirmation prompt before muting — direct
+                            // mute can collapse the thread the user is
+                            // reading (per #69) and is hard to discover
+                            // how to undo.
+                            let displayed = profiles[target.pubkey]?.displayString
+                                ?? profile?.displayString
+                                ?? Nip19.shortNpub(hex: target.pubkey)
+                            muteCandidate = MuteCandidate(pubkey: target.pubkey, displayName: displayed)
+                            showMuteUserConfirm = true
+                        }
+                    }
+                    Divider()
+                    popoverMenuItem(
+                        title: threadMuted ? "Unmute Thread" : "Mute Thread",
+                        systemImage: "bell.slash"
+                    ) {
+                        showOverflowMenu = false
+                        if threadMuted {
+                            muteRepo.unmuteThread(threadRoot)
+                        } else {
+                            muteRepo.muteThread(threadRoot)
+                        }
+                    }
+                    Divider()
+                }
+
+                // ShareLink kept as-is — it opens the system share sheet
+                // and there's no `Menu`-style bouncy parent here, just a
+                // popover row that dismisses naturally when the sheet
+                // takes over.
+                ShareLink(item: shareItem) {
+                    HStack(spacing: 12) {
+                        Text("Share")
+                        Spacer(minLength: 0)
+                        Image(systemName: "square.and.arrow.up")
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .simultaneousGesture(TapGesture().onEnded { showOverflowMenu = false })
+                Divider()
+
+                popoverMenuItem(
+                    title: "Copy Note Text",
+                    systemImage: "doc.on.doc",
+                    disabled: target.content.isEmpty
+                ) {
+                    showOverflowMenu = false
+                    copyNoteText(target)
+                }
+                Divider()
+                popoverMenuItem(title: "Copy Note ID", systemImage: "lanyardcard") {
+                    showOverflowMenu = false
+                    copyNoteId(target)
+                }
+                Divider()
+                popoverMenuItem(title: "Copy Note JSON", systemImage: "curlybraces") {
+                    showOverflowMenu = false
+                    copyNoteJson(target)
+                }
+                Divider()
+                popoverMenuItem(title: "Copy npub", systemImage: "person.text.rectangle") {
+                    showOverflowMenu = false
+                    copyNpub(target)
+                }
+                Divider()
+                popoverMenuItem(title: "Broadcast", systemImage: "antenna.radiowaves.left.and.right") {
+                    showOverflowMenu = false
+                    broadcast(target)
+                }
+
+                if isMine {
+                    Divider()
+                    popoverMenuItem(
+                        title: "Delete",
+                        systemImage: "trash",
+                        role: .destructive
+                    ) {
+                        showOverflowMenu = false
+                        showDeleteConfirm = true
+                    }
+                }
+            }
+            .frame(minWidth: 240)
+            .presentationCompactAdaptation(.popover)
+        }
     }
 
     private var heartAction: some View {
