@@ -3,6 +3,7 @@ import SwiftUI
 enum ProfileTab: String, CaseIterable, Hashable {
     case notes
     case replies
+    case conversation
     case gallery
     case media
     case following
@@ -14,6 +15,7 @@ enum ProfileTab: String, CaseIterable, Hashable {
         switch self {
         case .notes: return "Notes"
         case .replies: return "Replies"
+        case .conversation: return "Conversation"
         case .gallery: return "Gallery"
         case .media: return "Media"
         case .following: return "Following"
@@ -169,6 +171,41 @@ struct RepliesTabView: View {
                             .buttonStyle(.plain)
                             Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct ConversationTabView: View {
+    @Bindable var viewModel: ProfileViewModel
+    var onProfileTap: ((String) -> Void)? = nil
+    var onNoteTap: ((String) -> Void)? = nil
+    var onHashtagTap: ((String) -> Void)? = nil
+
+    var body: some View {
+        Group {
+            if viewModel.isLoadingConversation && viewModel.conversationNotes.isEmpty {
+                loading("Loading conversation…")
+            } else if viewModel.conversationNotes.isEmpty {
+                emptyState("No public conversation with this user yet")
+            } else {
+                LazyVStack(spacing: 0) {
+                    ForEach(viewModel.conversationNotes, id: \.id) { event in
+                        NavigationLink(value: ThreadRoute(eventId: event.id, authorPubkey: event.pubkey)) {
+                            PostCardView(
+                                event: event,
+                                profile: viewModel.profiles[event.pubkey],
+                                profiles: viewModel.profiles,
+                                engagement: viewModel.engagement[event.id],
+                                onProfileTap: onProfileTap,
+                                onNoteTap: onNoteTap,
+                                onHashtagTap: onHashtagTap
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
                     }
                 }
             }

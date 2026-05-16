@@ -34,6 +34,12 @@ struct ProfileView: View {
     }
 
     private var isMe: Bool { pubkey == activeUserPubkey }
+    /// The "Conversation" tab shows the public back-and-forth between the
+    /// active user and this profile — meaningless on the own profile, so it's
+    /// dropped from the tab strip there.
+    private var visibleTabs: [ProfileTab] {
+        isMe ? ProfileTab.allCases.filter { $0 != .conversation } : ProfileTab.allCases
+    }
     private var shareURL: String { "https://wisp.talk/profile/\(pubkey)" }
     private var npub: String? {
         guard let bytes = Hex.decode(pubkey) else { return nil }
@@ -55,7 +61,7 @@ struct ProfileView: View {
                 Section {
                     tabBody
                 } header: {
-                    ProfileTabBar(selected: $selectedTab)
+                    ProfileTabBar(selected: $selectedTab, tabs: visibleTabs)
                         // Matches `unifiedHeader`'s solid-opacity background
                         // exactly so the pinned tab strip reads as one
                         // continuous bar with the title above it (the prior
@@ -186,6 +192,13 @@ struct ProfileView: View {
                 )
             case .replies:
                 RepliesTabView(
+                    viewModel: viewModel,
+                    onProfileTap: onProfileTap,
+                    onNoteTap: onNoteTap,
+                    onHashtagTap: onHashtagTap
+                )
+            case .conversation:
+                ConversationTabView(
                     viewModel: viewModel,
                     onProfileTap: onProfileTap,
                     onNoteTap: onNoteTap,
@@ -596,12 +609,13 @@ private struct ProfileHeaderView: View {
 
 private struct ProfileTabBar: View {
     @Binding var selected: ProfileTab
+    let tabs: [ProfileTab]
 
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 0) {
-                    ForEach(ProfileTab.allCases, id: \.self) { tab in
+                    ForEach(tabs, id: \.self) { tab in
                         Button {
                             selected = tab
                             withAnimation { proxy.scrollTo(tab, anchor: .center) }
