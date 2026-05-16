@@ -265,11 +265,17 @@ extension NostrEvent {
     }
 
     /// Inner author of a kind-6 repost (pubkey of the embedded original note).
+    /// Falls back to the `p` tag when the reposter omits the embedded event
+    /// JSON — without it, mute-list filtering misses tag-only reposts.
     var repostInnerPubkey: String? {
-        guard kind == 6, !content.isEmpty,
-              let data = content.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-        return json["pubkey"] as? String
+        guard kind == 6 else { return nil }
+        if !content.isEmpty,
+           let data = content.data(using: .utf8),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let pk = json["pubkey"] as? String, !pk.isEmpty {
+            return pk
+        }
+        return tags.first(where: { $0.count >= 2 && $0[0] == "p" })?[1]
     }
 
     private static func mentionPubkeys(content: String, tags: [[String]]) -> [String] {

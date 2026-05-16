@@ -119,6 +119,57 @@ struct SafetyTests {
         #expect(!SafetyFilter.shared.shouldDrop(event: strangerNote, context: .feed))
     }
 
+    @Test func mutedAuthorRepostDroppedWhenEmbeddedJsonPresent() {
+        let snap = SafetyFilterSnapshot(
+            mutedWords: [],
+            blockedPubkeys: ["alice"],
+            mutedThreads: [],
+            wotEnabled: false,
+            qualifiedNetwork: [],
+            userPubkey: "me"
+        )
+        SafetyFilter.shared.install(snap)
+        defer { SafetyFilter.shared.install(.empty) }
+
+        let embedded = #"{"pubkey":"alice","id":"abc","kind":1,"content":"hi"}"#
+        let repost = makeEvent(kind: 6, pubkey: "bob", content: embedded, tags: [["e", "abc"], ["p", "alice"]])
+        #expect(SafetyFilter.shared.shouldDrop(event: repost, context: .feed))
+    }
+
+    @Test func mutedAuthorRepostDroppedWhenContentEmpty() {
+        // Many clients omit the embedded event JSON and only emit `e`/`p` tags.
+        // The mute filter must still recognise the original author via the `p` tag.
+        let snap = SafetyFilterSnapshot(
+            mutedWords: [],
+            blockedPubkeys: ["alice"],
+            mutedThreads: [],
+            wotEnabled: false,
+            qualifiedNetwork: [],
+            userPubkey: "me"
+        )
+        SafetyFilter.shared.install(snap)
+        defer { SafetyFilter.shared.install(.empty) }
+
+        let repost = makeEvent(kind: 6, pubkey: "bob", content: "", tags: [["e", "abc"], ["p", "alice"]])
+        #expect(SafetyFilter.shared.shouldDrop(event: repost, context: .feed))
+    }
+
+    @Test func unmutedAuthorRepostKept() {
+        let snap = SafetyFilterSnapshot(
+            mutedWords: [],
+            blockedPubkeys: ["alice"],
+            mutedThreads: [],
+            wotEnabled: false,
+            qualifiedNetwork: [],
+            userPubkey: "me"
+        )
+        SafetyFilter.shared.install(snap)
+        defer { SafetyFilter.shared.install(.empty) }
+
+        let repost = makeEvent(kind: 6, pubkey: "bob", content: "", tags: [["e", "abc"], ["p", "carol"]])
+        #expect(!SafetyFilter.shared.shouldDrop(event: repost, context: .feed))
+    }
+
     // MARK: - Nip51Mute
 
     @Test func privateBodyRoundtrip() {
