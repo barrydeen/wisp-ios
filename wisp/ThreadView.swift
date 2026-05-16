@@ -259,12 +259,14 @@ struct ThreadView: View {
 
     private var emptyState: some View {
         VStack(spacing: 8) {
-            Image(systemName: "bubble.right")
-                .font(.system(size: 28))
+            Image("NoReplies")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 72, height: 72)
                 .foregroundStyle(.tertiary)
             Text("No replies yet")
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.tertiary)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 32)
