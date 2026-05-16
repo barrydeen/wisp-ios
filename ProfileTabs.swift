@@ -217,19 +217,11 @@ private struct ProfileSortPicker: View {
     let selection: ProfileSortMode
     let onSelect: (ProfileSortMode) -> Void
 
+    @State private var showMenu = false
+
     var body: some View {
-        Menu {
-            ForEach(ProfileSortMode.allCases, id: \.self) { mode in
-                Button {
-                    onSelect(mode)
-                } label: {
-                    if mode == selection {
-                        Label(mode.label, systemImage: "checkmark")
-                    } else {
-                        Text(mode.label)
-                    }
-                }
-            }
+        Button {
+            showMenu = true
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: "line.3.horizontal.decrease.circle")
@@ -243,6 +235,43 @@ private struct ProfileSortPicker: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
             .background(Color.wispSurfaceVariant, in: RoundedRectangle(cornerRadius: 16))
+        }
+        .buttonStyle(.plain)
+        // Follow-up to PR #127: SwiftUI's `Menu` plays a non-suppressible
+        // UIKit press animation on tap. A plain Button + popover gives the
+        // same dropdown affordance without that bounce.
+        .popover(isPresented: $showMenu) {
+            VStack(alignment: .leading, spacing: 0) {
+                let modes = ProfileSortMode.allCases
+                ForEach(modes, id: \.self) { mode in
+                    Button {
+                        showMenu = false
+                        onSelect(mode)
+                    } label: {
+                        HStack(spacing: 8) {
+                            Text(mode.label)
+                                .font(.subheadline.weight(mode == selection ? .semibold : .regular))
+                                .foregroundStyle(mode == selection ? Color.wispPrimary : Color.wispOnSurface)
+                            Spacer(minLength: 16)
+                            if mode == selection {
+                                Image(systemName: "checkmark")
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundStyle(Color.wispPrimary)
+                            }
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    if mode != modes.last {
+                        Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
+                    }
+                }
+            }
+            .frame(minWidth: 180)
+            .background(Color.wispBackground)
+            .presentationCompactAdaptation(.popover)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
