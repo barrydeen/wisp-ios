@@ -50,6 +50,8 @@ struct ComposeView: View {
     /// (which ignores `State(initialValue:)` when state already exists for this view identity).
     private let initialDraft: Nip37.Draft?
 
+    private let previewAnchorID = "composer-preview-card"
+
     init(keypair: Keypair, mode: ComposeMode = .new) {
         self.initialDraft = nil
         _viewModel = State(initialValue: ComposeViewModel(keypair: keypair, mode: mode))
@@ -68,6 +70,7 @@ struct ComposeView: View {
                 VStack(spacing: 0) {
                     contextHeader
 
+                    ScrollViewReader { proxy in
                     ScrollView {
                         VStack(alignment: .leading, spacing: 12) {
                             if viewModel.galleryMode {
@@ -110,6 +113,7 @@ struct ComposeView: View {
                                     tags: previewTags,
                                     userProfile: ProfileRepository.shared.get(viewModel.keypair.pubkey)
                                 )
+                                .id(previewAnchorID)
                             }
 
                             if let error = viewModel.lastError {
@@ -122,6 +126,17 @@ struct ComposeView: View {
                             Color.clear.frame(height: 80)
                         }
                         .padding(.top, 12)
+                    }
+                    .onChange(of: viewModel.countdownSeconds) { oldValue, newValue in
+                        // When the undo countdown starts, bring the post
+                        // preview into view (top-aligned) so the user can
+                        // spot-check what's about to publish before the
+                        // window closes.
+                        guard oldValue == nil, newValue != nil, shouldShowPreview else { return }
+                        withAnimation(.easeInOut(duration: 0.3)) {
+                            proxy.scrollTo(previewAnchorID, anchor: .top)
+                        }
+                    }
                     }
 
                     if viewModel.scheduleEnabled {
