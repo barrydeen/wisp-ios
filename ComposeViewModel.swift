@@ -85,6 +85,7 @@ final class ComposeViewModel {
     /// `@` signal is active this is the UTF-16 offset of the `@` character.
     @ObservationIgnored private var mentionStartUtf16: Int?
     @ObservationIgnored private var emojiStartUtf16: Int?
+    @ObservationIgnored private var mentionRemoteTask: Task<Void, Never>?
 
     // MARK: - Init
 
@@ -281,10 +282,31 @@ final class ComposeViewModel {
     func updateMentionTrigger(query: String?, atOffsetUtf16: Int?) {
         mentionStartUtf16 = atOffsetUtf16
         mentionQuery = query
-        if let query {
-            mentionCandidates = MentionSearch.search(query: query, currentUserPubkey: keypair.pubkey)
-        } else {
+        mentionRemoteTask?.cancel()
+        guard let query else {
             mentionCandidates = []
+            return
+        }
+        mentionCandidates = MentionSearch.search(query: query, currentUserPubkey: keypair.pubkey)
+        // The local pass is follows-only and only sees cached kind-0s, so an
+        // account the author doesn't follow yet (e.g. a fresh handle typed
+        // from memory) never appears. Fall back to a NIP-50 relay lookup,
+        // debounced so we don't fire a query per keystroke and guarded
+        // against staleness so a slow reply can't replace a newer query's
+        // results.
+        let pubkey = keypair.pubkey
+        mentionRemoteTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(350))
+            guard !Task.isCancelled, let self, self.mentionQuery == query else { return }
+            let existing = Set(self.mentionCandidates.map(\.pubkey))
+            let remote = await MentionSearch.searchRemote(
+                query: query,
+                currentUserPubkey: pubkey,
+                excluding: existing
+            )
+            guard !Task.isCancelled, self.mentionQuery == query, !remote.isEmpty else { return }
+            let known = Set(self.mentionCandidates.map(\.pubkey))
+            self.mentionCandidates.append(contentsOf: remote.filter { !known.contains($0.pubkey) })
         }
     }
 
@@ -314,6 +336,7 @@ final class ComposeViewModel {
         newContent.replaceSubrange(stringStartIdx..<end, with: "@\(displayName) ")
         content = newContent
         mentions.append(InsertedMention(displayName: displayName, pubkey: candidate.pubkey))
+        mentionRemoteTask?.cancel()
         mentionQuery = nil
         mentionCandidates = []
         mentionStartUtf16 = nil
