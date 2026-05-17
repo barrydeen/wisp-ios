@@ -16,12 +16,28 @@ final class OnboardingViewModel {
         case error(String)
     }
 
+    enum RestoreState: Equatable {
+        case idle
+        case restoring
+        case restored(Int)
+        case failed
+    }
+
     var phase: Phase = .idle
     var isReady = false
     var profileName: String?
     var profilePicture: String?
     var followCount = 0
     var relayListsFound = 0
+
+    /// A larger contact list recovered from relay history. Non-nil pauses the
+    /// outbox build at the waiting step so the user can choose restore vs keep.
+    var restoreOffer: FollowRestoreCandidate?
+    var restoreState: RestoreState = .idle
+
+    /// The (possibly clobbered) list the user actually arrived with. Kept so
+    /// "keep current" and a failed restore both have something to fall back to.
+    private var currentFollowPubkeys: [String] = []
 
     var scoreBoard: RelayScoreBoard?
 
@@ -56,17 +72,75 @@ final class OnboardingViewModel {
 
         phase = .fetchingFollows
 
+        let kind3s = profileAndFollows.filter { $0.kind == 3 }
         var followPubkeys: [String] = []
-        if let followEvent = profileAndFollows
-            .filter({ $0.kind == 3 })
-            .max(by: { $0.createdAt < $1.createdAt }) {
-            followPubkeys = followEvent.tags.compactMap { tag in
-                tag.count >= 2 && tag[0] == "p" ? tag[1] : nil
-            }
+        if let latest = kind3s.max(by: { $0.createdAt < $1.createdAt }) {
+            followPubkeys = FollowHistoryGuard.followedPubkeys(in: latest)
         }
 
+        currentFollowPubkeys = followPubkeys
         followCount = followPubkeys.count
+
+        // Before committing to a possibly-clobbered list, see if a much larger
+        // overwritten/tombstoned version is still recoverable from relays. If
+        // so, pause here so the waiting step can ask the user what to do.
+        if let candidate = await FollowHistoryGuard.evaluateRestore(
+            pubkey: keypair.pubkey,
+            currentFollows: followPubkeys,
+            fetched: kind3s
+        ) {
+            restoreOffer = candidate
+            return
+        }
+
+        await finishOutbox(followPubkeys: followPubkeys, recordHighWater: true)
+    }
+
+    /// User chose to restore the recovered list: republish it, adopt it as the
+    /// trusted baseline, then build the outbox from the larger set.
+    func acceptRestore() {
+        guard let candidate = restoreOffer else { return }
+        restoreOffer = nil
+        restoreState = .restoring
+        Task { @MainActor in
+            do {
+                try await FollowSender.shared.restore(
+                    follows: candidate.pubkeys,
+                    keypair: keypair
+                )
+                FollowHistoryGuard.didRestore(pubkey: keypair.pubkey, to: candidate.count)
+                followCount = candidate.count
+                restoreState = .restored(candidate.count)
+                await finishOutbox(followPubkeys: candidate.pubkeys, recordHighWater: false)
+            } catch {
+                restoreState = .failed
+                // Couldn't republish — fall back to what they arrived with so
+                // the app is still usable.
+                await finishOutbox(followPubkeys: currentFollowPubkeys, recordHighWater: false)
+            }
+        }
+    }
+
+    /// User chose to keep the smaller list. Record it as an intentional
+    /// baseline so the same drop isn't flagged again, then continue.
+    func declineRestore() {
+        let candidateCount = restoreOffer?.count ?? followCount
+        restoreOffer = nil
+        FollowHistoryGuard.didDecline(
+            pubkey: keypair.pubkey,
+            currentCount: followCount,
+            candidateCount: candidateCount
+        )
+        Task { @MainActor in
+            await finishOutbox(followPubkeys: currentFollowPubkeys, recordHighWater: false)
+        }
+    }
+
+    private func finishOutbox(followPubkeys: [String], recordHighWater: Bool) async {
         FollowsCache.shared.update(pubkey: keypair.pubkey, follows: followPubkeys)
+        if recordHighWater {
+            FollowHistoryGuard.recordHighWater(for: keypair.pubkey, count: followPubkeys.count)
+        }
 
         guard !followPubkeys.isEmpty else {
             phase = .done
