@@ -493,6 +493,12 @@ final class SearchViewModel {
 
     private func preprocessQuery(_ text: String) -> SearchIntent {
         var s = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Strip a sole leading `@` so a user who reflexively types
+        // `@scrubby` (the composer-mention syntax) gets matched against
+        // the same content the bare-handle form would. NIP-05 lookups
+        // like `_@domain.com` still parse because the `_` precedes the
+        // `@` — we only drop the very first `@` if it's at position 0.
+        if s.hasPrefix("@") { s = String(s.dropFirst()) }
         if s.lowercased().hasPrefix("nostr:") { s = String(s.dropFirst("nostr:".count)) }
 
         let lower = s.lowercased()
