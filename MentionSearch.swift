@@ -63,24 +63,38 @@ enum MentionSearch {
         excluding existing: Set<String>
     ) async -> [MentionCandidate] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        // A 1-char NIP-50 query returns near-everything and is useless for
-        // disambiguation; wait until the author has typed something specific.
         guard trimmed.count >= 2 else { return [] }
-        // NIP-50 search relay plus the indexers, deduped — mirrors the combined
-        // set the global people search uses for profile lookups.
-        let relays = ([SearchViewModel.defaultSearchRelay] + RelayDefaults.indexers)
-            .reduce(into: [String]()) { acc, url in if !acc.contains(url) { acc.append(url) } }
+        // Query the NIP-50 search relay only — matches the global People
+        // search. Adding the discovery indexers (damus / primal / coracle)
+        // hurts here: they don't honor `search`, so they EOSE almost
+        // instantly with zero results, which trips `RelayPool.query`'s
+        // first-EOSE fast path and shortens the window before the actual
+        // search relay has a chance to reply.
+        //
+        // `waitForAllRelays: true` skips the post-EOSE-then-stop fast path
+        // — some NIP-50 relays send EOSE optimistically and stream the
+        // matching kind-0 events afterwards, and we need the full window
+        // for those rather than the 1.5 s grace.
+        let relays = [SearchViewModel.defaultSearchRelay]
         let filter = NostrFilter(kinds: [0], limit: 20, search: trimmed)
-        let events = await RelayPool.query(relays: relays, filter: filter, timeout: 4)
+        let events = await RelayPool.query(
+            relays: relays,
+            filter: filter,
+            timeout: 6,
+            waitForAllRelays: true
+        )
         guard !events.isEmpty else { return [] }
 
         let q = trimmed.lowercased()
         let repo = ProfileRepository.shared
         let follows = FollowsCache.shared.followsSet(for: currentUserPubkey)
+        // Normalize against the same canonical form `SearchViewModel`
+        // uses so mixed-case hex / npub variants of the same identity
+        // collapse to one row.
         var seen = Set<String>()
         var scored: [(MentionCandidate, Int)] = []
         for event in events where event.kind == 0 {
-            let pk = event.pubkey
+            let pk = canonicalPubkey(event.pubkey)
             if existing.contains(pk) || !seen.insert(pk).inserted { continue }
             let p = repo.updateFromEvent(event) ?? repo.get(pk)
             let name = p?.displayName?.nilIfEmpty
@@ -104,6 +118,20 @@ enum MentionSearch {
             return lhs.0.name.localizedCaseInsensitiveCompare(rhs.0.name) == .orderedAscending
         }
         return scored.prefix(maxResults).map(\.0)
+    }
+
+    /// Mirrors `SearchViewModel.canonicalPubkey`: collapse the different
+    /// string forms the same identity can arrive in from a NIP-50 search
+    /// relay — mixed-case or whitespace-padded hex, or an `npub` /
+    /// `nprofile` in place of raw hex — down to one canonical
+    /// lowercase-hex key so dedupe lands cleanly.
+    private static func canonicalPubkey(_ raw: String) -> String {
+        let lower = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if lower.hasPrefix("npub1") || lower.hasPrefix("nprofile1"),
+           case .profileRef(let hex, _)? = Nip19.decodeNostrUri(lower) {
+            return hex
+        }
+        return lower
     }
 
     /// Higher score = better match. Empty query returns 0 (caller treats as "default suggestion").
