@@ -47,6 +47,8 @@ final class ComposeViewModel {
     var miningAttempts: Int = 0
     var uploadProgress: String?
     var countdownSeconds: Int?
+    var countdownTotalSeconds: Int = 10
+    var countdownStartedAt: Date?
     var lastError: String?
     var publishedEventId: String?
 
@@ -606,6 +608,8 @@ final class ComposeViewModel {
         // stays on "Publish" until the Task scheduled below first runs,
         // which on a busy main actor reads as a 1–2 s no-op.
         countdownSeconds = totalSeconds
+        countdownTotalSeconds = totalSeconds
+        countdownStartedAt = Date()
         countdownTask = Task { @MainActor [weak self] in
             guard let self else { return }
             for n in stride(from: totalSeconds - 1, through: 1, by: -1) {
@@ -622,6 +626,7 @@ final class ComposeViewModel {
                 return
             }
             self.countdownSeconds = nil
+            self.countdownStartedAt = nil
             await self.runPublishPipeline()
         }
     }
@@ -630,6 +635,7 @@ final class ComposeViewModel {
         countdownTask?.cancel()
         countdownTask = nil
         countdownSeconds = nil
+        countdownStartedAt = nil
         Task { await runPublishPipeline() }
     }
 
@@ -637,6 +643,7 @@ final class ComposeViewModel {
         countdownTask?.cancel()
         countdownTask = nil
         countdownSeconds = nil
+        countdownStartedAt = nil
         mineTask?.cancel()
         mineTask = nil
         isPublishing = false

@@ -719,24 +719,20 @@ struct ComposeView: View {
                 Button(role: .destructive) {
                     viewModel.cancelPublish()
                 } label: {
-                    Text("Undo")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
+                    Image(systemName: "xmark")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 44, height: 44)
+                        .background(Color.red, in: Circle())
                 }
-                .background(Color.wispSurfaceVariant, in: Capsule())
+                .buttonStyle(.plain)
 
                 Button {
                     viewModel.publishNow()
                 } label: {
-                    Text("Post Now (\(viewModel.countdownSeconds ?? 0)s)")
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
+                    countdownProgressLabel
                 }
-                .background(Color.wispPrimary, in: Capsule())
-                .foregroundStyle(.white)
+                .buttonStyle(.plain)
             } else {
                 Button {
                     if viewModel.isImageOnlyPost {
@@ -802,6 +798,30 @@ struct ComposeView: View {
         case .new: return viewModel.galleryMode ? "Add a caption…" : "What's on your mind?"
         case .reply: return "Write your reply…"
         case .quote: return "Add a comment…"
+        }
+    }
+
+    private var countdownProgressLabel: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+            let started = viewModel.countdownStartedAt ?? context.date
+            let total = max(Double(viewModel.countdownTotalSeconds), 1)
+            let elapsed = context.date.timeIntervalSince(started)
+            let progress = max(0, min(1, elapsed / total))
+            let remaining = max(0, Int(ceil(total - elapsed)))
+
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Color.wispPrimary.opacity(0.25)
+                    Color.wispPrimary
+                        .frame(width: geo.size.width * progress)
+                    Text("Post Now (\(remaining)s)")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                }
+                .clipShape(Capsule())
+            }
+            .frame(height: 44)
         }
     }
 
