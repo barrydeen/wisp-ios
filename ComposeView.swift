@@ -166,7 +166,6 @@ struct ComposeView: View {
                 viewModel.loadDraft(draft)
             }
             await viewModel.start()
-            contentFocused = true
         }
         .interactiveDismissDisabled(
             viewModel.isPublishing
@@ -391,17 +390,9 @@ struct ComposeView: View {
                         .padding(.horizontal, 16)
                         .padding(.top, 12)
                 }
-                TextEditor(text: Binding(
-                    get: { viewModel.content },
-                    set: { newVal in
-                        viewModel.updateContent(newVal)
-                        recomputeTriggers(for: newVal)
-                    }
-                ))
-                .focused($contentFocused)
-                .scrollContentBackground(.hidden)
-                .frame(minHeight: viewModel.galleryMode ? 80 : 160)
-                .padding(.horizontal, 12)
+                MentionComposerTextView(viewModel: viewModel)
+                    .frame(minHeight: viewModel.galleryMode ? 80 : 160, alignment: .topLeading)
+                    .padding(.horizontal, 12)
             }
             if let progress = viewModel.uploadProgress {
                 HStack(spacing: 6) {
@@ -822,41 +813,4 @@ struct ComposeView: View {
         return tags
     }
 
-    /// Re-derive `@mention` and `:emoji:` triggers from the current content. We pick the
-    /// last whitespace-delimited token at the end of the buffer as a heuristic for the
-    /// caret position — works for the typical "type at end" flow that the SwiftUI
-    /// `TextEditor` defaults to.
-    private func recomputeTriggers(for text: String) {
-        // Find the start of the last token. NBSPs inside a sanitised display
-        // name are not token breaks (`isMentionTokenBreak`), so a multi-word
-        // mention stays a single `@displayName` trigger token.
-        var idx = text.endIndex
-        while idx > text.startIndex {
-            let prev = text.index(before: idx)
-            if text[prev].isMentionTokenBreak { break }
-            idx = prev
-        }
-        let token = String(text[idx..<text.endIndex])
-        let utf16Offset = text.utf16.distance(from: text.utf16.startIndex,
-                                              to: idx.samePosition(in: text.utf16) ?? text.utf16.startIndex)
-
-        if token.hasPrefix("@"), token.count >= 1 {
-            let query = String(token.dropFirst())
-            // Only show popup once they typed at least 1 char OR have an active candidate set.
-            if query.isEmpty {
-                viewModel.updateMentionTrigger(query: nil, atOffsetUtf16: nil)
-            } else {
-                viewModel.updateMentionTrigger(query: query, atOffsetUtf16: utf16Offset)
-            }
-        } else {
-            viewModel.updateMentionTrigger(query: nil, atOffsetUtf16: nil)
-        }
-
-        if token.hasPrefix(":"), token.count >= 2, !token.dropFirst().contains(":") {
-            let query = String(token.dropFirst())
-            viewModel.updateEmojiTrigger(query: query, atOffsetUtf16: utf16Offset)
-        } else {
-            viewModel.updateEmojiTrigger(query: nil, atOffsetUtf16: nil)
-        }
-    }
 }

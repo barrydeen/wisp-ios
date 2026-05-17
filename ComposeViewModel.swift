@@ -264,6 +264,13 @@ final class ComposeViewModel {
         } else {
             content = new
         }
+        // Rehydrate `nostr:nprofile1...` / `nostr:npub1...` pastes into the
+        // `@displayName + mentions[]` form so they render as pills. Cheap
+        // guard avoids the regex on every keystroke; only runs when a paste
+        // actually introduces the URI form.
+        if content.contains("nostr:") {
+            rehydrateMentionsFromContent()
+        }
         recomputeHashtags()
     }
 
@@ -667,10 +674,14 @@ final class ComposeViewModel {
         }
         recomputeHashtags()
 
-        // Mentions in the text are already materialized as `nostr:nprofile1...`
-        // URIs, so we don't need to repopulate the `mentions` array — the rich
-        // renderer handles them, and re-publishing won't mangle them because
-        // `materializeMentions` is a no-op for tokens it doesn't recognize.
+        // Mentions persist in the body as `nostr:nprofile1...` URIs. Convert
+        // each back to `@displayName` and seed `mentions` so the rich editor
+        // can render them as pills — without this, drafts come back as raw
+        // bech32 strings even though the on-disk format is identical to what
+        // `materializeMentions` produces for a fresh post. `materializeMentions`
+        // at publish time will turn them back into URIs, so this is a pure
+        // display rehydrate.
+        rehydrateMentionsFromContent()
 
         // Reconstruct reply context from draft tags (Android: Navigation.kt:989).
         let replyTag = draft.tags.first(where: {
@@ -1111,10 +1122,12 @@ final class ComposeViewModel {
     }
 
     /// Content as it would appear in the published note, including any spliced
-    /// attachment URLs. Used by the live preview card so pasted/uploaded images
-    /// render inline even though the URLs no longer live in `content`.
+    /// attachment URLs and `nostr:` mention URIs. Used by the live preview card
+    /// so pasted/uploaded images render inline (even though the URLs no longer
+    /// live in `content`) and tagged usernames render as pills rather than raw
+    /// `@displayName` text.
     var previewContent: String {
-        bodyForPublish(kind: determineKind(), materialized: content)
+        bodyForPublish(kind: determineKind(), materialized: materializeMentions(content))
     }
 
     /// Replace each `@displayName` token with `nostr:nprofile1...` (per stored mentions).
@@ -1124,9 +1137,34 @@ final class ComposeViewModel {
             guard let bytes = Hex.decode(mention.pubkey) else { continue }
             guard let nprofile = Nip19.nprofileEncode(pubkey32: Array(bytes)) else { continue }
             let needle = "@\(mention.displayName)"
-            if let range = out.range(of: needle) {
-                out.replaceSubrange(range, with: "nostr:\(nprofile)")
-            }
+            // Replace *every* occurrence, not just the first — a user can
+            // copy a pill within the composer and end up with multiple
+            // `@displayName` tokens for the same mention. Each one should
+            // materialize to its own `nostr:nprofile1...` URI so the
+            // preview / final event sees the same `.nostrProfile` segment
+            // count, and so subsequent pastes don't degrade to plain text
+            // on publish.
+            out = out.replacingOccurrences(of: needle, with: "nostr:\(nprofile)")
+        }
+        // Separator pass: two pills typed back-to-back (or pasted next to
+        // each other) produce `nostr:Y1nostr:Y2` in the materialized text.
+        // `ContentParser`'s greedy `[a-z0-9]+` then consumes the second
+        // URI's `nostr` prefix into the first match, decoding fails, and
+        // the second mention falls through to plain text in the preview /
+        // published event. Insert a space between adjacent URIs so the
+        // parser can find the boundary cleanly. Non-greedy `+?` + a
+        // lookahead is the minimum bech32 run that satisfies "followed by
+        // another nostr:" — i.e. the full first URI.
+        if let regex = try? NSRegularExpression(
+            pattern: "(nostr:(?:note1|nevent1|npub1|nprofile1|naddr1)[a-z0-9]+?)(?=nostr:)",
+            options: []
+        ) {
+            let ns = out as NSString
+            out = regex.stringByReplacingMatches(
+                in: out,
+                range: NSRange(location: 0, length: ns.length),
+                withTemplate: "$1 "
+            )
         }
         return out
     }
@@ -1286,6 +1324,45 @@ final class ComposeViewModel {
             }
         }
         return out
+    }
+
+    /// Walk `content` for `nostr:nprofile1...` and `nostr:npub1...` tokens
+    /// (the materialized form used in drafts and finalized event bodies),
+    /// replace each with `@displayName`, and add the corresponding
+    /// `InsertedMention` so the rich editor pill-styles them. Idempotent
+    /// when no nostr tokens are present.
+    private func rehydrateMentionsFromContent() {
+        let pattern = #"nostr:(npub1[acdefghjklmnpqrstuvwxyz023456789]+|nprofile1[acdefghjklmnpqrstuvwxyz023456789]+)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return }
+        let ns = content as NSString
+        let matches = regex.matches(in: content, range: NSRange(location: 0, length: ns.length))
+        guard !matches.isEmpty else { return }
+
+        var rewritten = ""
+        var lastEnd = 0
+        var added: [String: String] = [:]   // pubkey → displayName
+        for match in matches {
+            rewritten += ns.substring(with: NSRange(location: lastEnd, length: match.range.location - lastEnd))
+            let token = ns.substring(with: match.range)
+            if let decoded = Nip19.decodeNostrUri(token), case .profileRef(let pubkey, _) = decoded {
+                let displayName: String
+                if let existing = added[pubkey] {
+                    displayName = existing
+                } else {
+                    let profile = ProfileRepository.shared.get(pubkey)
+                    let raw = profile?.displayString ?? Nip19.shortNpub(hex: pubkey)
+                    displayName = sanitizeDisplayName(raw)
+                    added[pubkey] = displayName
+                    mentions.append(InsertedMention(displayName: displayName, pubkey: pubkey))
+                }
+                rewritten += "@\(displayName)"
+            } else {
+                rewritten += token
+            }
+            lastEnd = match.range.upperBound
+        }
+        rewritten += ns.substring(from: lastEnd)
+        content = rewritten
     }
 
     private func sanitizeDisplayName(_ name: String) -> String {
