@@ -1,6 +1,7 @@
 import Foundation
 import BreezSdkSpark
 import BigNumber
+import CryptoKit
 
 /// Embedded self-custodial Lightning wallet via the Breez Spark SDK.
 /// Mirrors the Android `SparkRepository` semantics: the mnemonic is the source of truth
@@ -53,8 +54,53 @@ final class SparkWallet: Wallet {
     func clearMnemonic() {
         WalletKeychain.deleteSparkMnemonic(for: pubkey)
         UserDefaults.standard.removeObject(forKey: "spark_seed_acked_\(pubkey)")
+        UserDefaults.standard.removeObject(forKey: "spark_is_default_\(pubkey)")
         balanceMsats = nil
         isConnected = false
+    }
+
+    // MARK: - nsec-derived default wallet
+
+    /// Derive the default Spark wallet deterministically from the user's Nostr
+    /// private key so it is recoverable on any device by signing in with the
+    /// same key. The mnemonic is HKDF-SHA256(privkey) → 16 bytes entropy →
+    /// BIP-39, matching Android `Keys.deriveSparkEntropy` /
+    /// `SparkRepository.generateDefaultFromPrivkey`. Marks the wallet as
+    /// default and pre-acknowledges the seed backup: there is nothing to back
+    /// up manually because the seed is recoverable from the nsec.
+    @discardableResult
+    func generateDefaultFromPrivkey(_ privkey: Data) throws -> String {
+        let entropy = Self.deriveSparkEntropy(privkey: privkey)
+        let mnemonic = try Bip39.mnemonic(fromEntropy: entropy)
+        saveMnemonic(mnemonic)
+        UserDefaults.standard.set(true, forKey: "spark_is_default_\(pubkey)")
+        setSeedBackupAcknowledged(true)
+        return mnemonic
+    }
+
+    /// True when the current wallet was derived from the user's nsec via
+    /// `generateDefaultFromPrivkey`. Such wallets need no NIP-78 relay backup —
+    /// the seed is recoverable from the key and Breez retains the lightning
+    /// address registration server-side.
+    func isDefaultWallet() -> Bool {
+        UserDefaults.standard.bool(forKey: "spark_is_default_\(pubkey)")
+    }
+
+    /// HKDF-SHA256 entropy derivation. Byte-for-byte equivalent to Android
+    /// `Keys.deriveSparkEntropy`: PRK = HMAC-SHA256(salt: "wisp-spark-wallet-v1",
+    /// ikm: privkey); OKM = HKDF-Expand(PRK, info: "entropy", 16).
+    private static func deriveSparkEntropy(privkey: Data) -> Data {
+        precondition(privkey.count == 32, "Private key must be 32 bytes")
+        let prk = HKDF<SHA256>.extract(
+            inputKeyMaterial: SymmetricKey(data: privkey),
+            salt: Data("wisp-spark-wallet-v1".utf8)
+        )
+        let okm = HKDF<SHA256>.expand(
+            pseudoRandomKey: prk,
+            info: Data("entropy".utf8),
+            outputByteCount: 16
+        )
+        return okm.withUnsafeBytes { Data($0) }
     }
 
     func isSeedBackupAcknowledged() -> Bool {
