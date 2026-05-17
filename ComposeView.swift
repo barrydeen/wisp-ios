@@ -43,6 +43,11 @@ struct ComposeView: View {
     @State private var showImageOnlyConfirm = false
     @State private var showGifPicker = false
     @State private var showPhotosPicker = false
+    /// Drives the Drafts & Scheduled sheet launched from the composer
+    /// toolbar. Tapping a draft inside the sheet opens it in a *nested*
+    /// `ComposeView`, leaving the in-progress composer behind it untouched
+    /// — no risk of losing unsaved text just by peeking at drafts.
+    @State private var showDraftsSheet = false
     @State private var photosPickerMaxCount: Int = 8
 
     /// Draft to load on first appear. Nil for `.new` and `.reply`/`.quote` composers.
@@ -135,28 +140,49 @@ struct ComposeView: View {
             }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") {
-                        if viewModel.hasUnsavedContent {
-                            showCancelConfirm = true
-                        } else {
-                            viewModel.cancelPublish()
-                            viewModel.explicitlyDiscarded = true
-                            dismiss()
-                        }
+                    Button {
+                        cancelTapped()
+                    } label: {
+                        Image(systemName: "chevron.left")
+                            .font(.body.weight(.semibold))
                     }
+                    .accessibilityLabel("Close")
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showDraftsSheet = true
+                    } label: {
+                        Image(systemName: "tray.full")
+                    }
+                    .accessibilityLabel("Drafts")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     if viewModel.mode.allowsGalleryToggle {
+                        // No principal title — the pill itself identifies
+                        // the current post type ("Switch to Gallery" means
+                        // we're in Text, vice versa), and reply / quote
+                        // modes use `contextHeader` to show the parent
+                        // event. Dropping the title freed enough trailing
+                        // space to fit the full label.
                         Button {
                             viewModel.toggleGallery()
                         } label: {
-                            Label(viewModel.galleryMode ? "Text" : "Gallery",
-                                  systemImage: viewModel.galleryMode ? "doc.plaintext" : "photo.on.rectangle")
+                            HStack(spacing: 6) {
+                                Image(systemName: viewModel.galleryMode ? "doc.plaintext" : "photo.on.rectangle")
+                                    .font(.system(size: 13, weight: .semibold))
+                                Text(viewModel.galleryMode ? "Switch to Text" : "Switch to Gallery")
+                                    .font(.subheadline.weight(.semibold))
+                            }
+                            .foregroundStyle(Color.wispPrimary)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(
+                                Capsule()
+                                    .strokeBorder(Color.wispPrimary.opacity(0.5), lineWidth: 1)
+                            )
                         }
+                        .buttonStyle(.plain)
                     }
-                }
-                ToolbarItem(placement: .principal) {
-                    Text(navTitle).font(.headline)
                 }
             }
             .navigationBarTitleDisplayMode(.inline)
@@ -181,6 +207,9 @@ struct ComposeView: View {
                 onConfirm: { date in viewModel.setSchedule(date) },
                 onCancel: { /* keep existing schedule */ }
             )
+        }
+        .sheet(isPresented: $showDraftsSheet) {
+            DraftsScheduledView(keypair: viewModel.keypair)
         }
         // GIF picker is presented as a true UIKit modal via a hidden
         // representable rather than a SwiftUI .sheet / .fullScreenCover.
@@ -277,6 +306,18 @@ struct ComposeView: View {
     }
 
     // MARK: - Sub-areas
+
+    /// Discard-confirmation pivot used by both the leading chevron and any
+    /// programmatic dismiss. Confirms before dropping unsaved content.
+    private func cancelTapped() {
+        if viewModel.hasUnsavedContent {
+            showCancelConfirm = true
+        } else {
+            viewModel.cancelPublish()
+            viewModel.explicitlyDiscarded = true
+            dismiss()
+        }
+    }
 
     @ViewBuilder
     private var contextHeader: some View {
@@ -775,7 +816,7 @@ struct ComposeView: View {
         switch viewModel.mode {
         case .new:
             if viewModel.pollEnabled { return "New Poll" }
-            return viewModel.galleryMode ? "Gallery" : "New Post"
+            return viewModel.galleryMode ? "Gallery Post" : "New Post"
         case .reply: return "Reply"
         case .quote: return "Quote"
         }

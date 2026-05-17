@@ -652,6 +652,17 @@ final class ComposeViewModel {
     /// matching the Android client's behavior.
     func loadDraft(_ draft: Nip37.Draft) {
         currentDraftId = draft.dTag
+        // Restore the composer mode from the draft's inner kind. Kind 20
+        // (NIP-68 picture) and 21 / 22 (NIP-71 short-form video) round-trip
+        // as gallery posts; kind 1 stays in text mode. Without this, a
+        // gallery draft would silently reopen in text mode and republish
+        // as a kind-1 note with the URLs spliced into the body.
+        let isGalleryKind = (draft.innerKind == Nip68.kindPicture
+                             || draft.innerKind == Nip71.kindVideoHorizontal
+                             || draft.innerKind == Nip71.kindVideoVertical)
+        if isGalleryKind && mode.allowsGalleryToggle {
+            galleryMode = true
+        }
         let imetaAttachments = Self.parseImetaAttachments(tags: draft.tags)
         if !imetaAttachments.isEmpty {
             // Imeta tags carry full attachment metadata (mime, dim, hash), so the
@@ -724,9 +735,16 @@ final class ComposeViewModel {
         currentDraftId = dTag
 
         let materialized = materializeMentions(content)
-        // Inner kind is always 1 for now (kind-1 notes only — gallery drafts not supported,
-        // matches Android).
-        let innerKind = 1
+        // Inner kind matches the post the draft will publish as: 1 for a
+        // text post, 20 (NIP-68 picture) or 21 / 22 (NIP-71 horizontal /
+        // vertical short-form video) for a gallery post. The wrapper's
+        // `["k", ...]` tag preserves it across the round-trip so
+        // `loadDraft` can restore the correct composer mode (text vs
+        // gallery) instead of silently dropping the gallery state.
+        // **Android counterpart needed**: Android's draft save currently
+        // hard-codes kind-1; needs the same treatment to keep gallery
+        // drafts round-trippable across clients.
+        let innerKind = determineKind()
         var innerTags: [[String]] = buildBaseTags(kind: innerKind, materializedContent: materialized)
         // Strip `client` and the publish-time `imeta`; we rebuild `imeta` below from the
         // composer's `attachments` so reopening the draft restores the thumbnail row.
