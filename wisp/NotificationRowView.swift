@@ -156,7 +156,8 @@ struct NotificationRowView: View {
             PostCardView(
                 event: actorEvent,
                 profile: profiles[actorEvent.pubkey],
-                profiles: profiles
+                profiles: profiles,
+                onNoteTap: { _ in onNoteTap?(actorEvent.id, actorEvent.pubkey) }
             )
             .contentShape(Rectangle())
             .onTapGesture {
