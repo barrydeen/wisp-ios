@@ -23,9 +23,24 @@ struct FollowHistoryGuardTests {
         #expect(FollowHistoryGuard.isSubstantialDrop(current: 1, previous: 400))
     }
 
-    @Test func substantialDrop_ignoresTinyPreviousLists() {
-        // Below the meaningful floor we never flag, even a 9 → 0 swing.
-        #expect(!FollowHistoryGuard.isSubstantialDrop(current: 0, previous: 9))
+    @Test func substantialDrop_ignoresTinyPartialDrops() {
+        // Below the meaningful floor we don't flag partial drops — normal
+        // churn on a small list reads as proportionally large.
+        #expect(!FollowHistoryGuard.isSubstantialDrop(current: 1, previous: 9))
+    }
+
+    @Test func substantialDrop_completeWipeAlwaysFiresWhenRecoverable() {
+        // A drop to zero is unambiguous — surface whenever there's anything
+        // recoverable. The deep sweep that produced `previous` already
+        // filters out the "no history exists at all" case.
+        #expect(FollowHistoryGuard.isSubstantialDrop(current: 0, previous: 9))
+        #expect(FollowHistoryGuard.isSubstantialDrop(current: 0, previous: 5))
+        #expect(FollowHistoryGuard.isSubstantialDrop(current: 0, previous: 1))
+    }
+
+    @Test func substantialDrop_nothingToRecover() {
+        // If literally nothing was published before, there's nothing to offer.
+        #expect(!FollowHistoryGuard.isSubstantialDrop(current: 0, previous: 0))
     }
 
     @Test func substantialDrop_needsAbsoluteFloor() {
