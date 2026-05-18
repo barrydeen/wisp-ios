@@ -312,8 +312,8 @@ struct WalletView: View {
                         Text(fiatBalance)
                             .font(.system(size: 52, weight: .semibold, design: .rounded))
                             .foregroundStyle(.primary)
-                            .contentTransition(.numericText(value: Double(sats)))
-                            .animation(.easeInOut(duration: 0.25), value: sats)
+                            .contentTransition(syncing ? .identity : .numericText(value: Double(sats)))
+                            .animation(syncing ? nil : .easeInOut(duration: 0.25), value: sats)
                     } else {
                         HStack(alignment: .center, spacing: 6) {
                             if let symbol = unit.symbolPrefix {
@@ -324,8 +324,8 @@ struct WalletView: View {
                             Text(unit.formatNumber(sats))
                                 .font(.system(size: 52, weight: .semibold, design: .rounded))
                                 .foregroundStyle(.primary)
-                                .contentTransition(.numericText(value: Double(sats)))
-                                .animation(.easeInOut(duration: 0.25), value: sats)
+                                .contentTransition(syncing ? .identity : .numericText(value: Double(sats)))
+                                .animation(syncing ? nil : .easeInOut(duration: 0.25), value: sats)
                         }
                     }
                     if fiatBalance == nil, !unit.unitLabel.isEmpty {
