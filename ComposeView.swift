@@ -248,21 +248,31 @@ struct ComposeView: View {
             if saved { dismiss() }
         }
         .onChange(of: viewModel.content) { _, _ in
-            viewModel.writeLocalAutosave()
+            viewModel.scheduleLocalAutosave()
         }
         .onChange(of: viewModel.attachments.map { $0.url ?? "" }) { _, _ in
-            viewModel.writeLocalAutosave()
+            viewModel.scheduleLocalAutosave()
         }
         .onChange(of: viewModel.explicit) { _, _ in
-            viewModel.writeLocalAutosave()
+            viewModel.scheduleLocalAutosave()
         }
         .onChange(of: viewModel.powEnabled) { _, _ in
-            viewModel.writeLocalAutosave()
+            viewModel.scheduleLocalAutosave()
         }
         .onChange(of: viewModel.scheduleAt) { _, _ in
-            viewModel.writeLocalAutosave()
+            viewModel.scheduleLocalAutosave()
         }
         .onDisappear {
+            // The local autosave is debounced off the keystroke, so the last
+            // few characters may not be persisted yet. Flush them now — unless
+            // an explicit discard / successful publish already cleared the
+            // bucket (those paths call `clearLocalAutosave()`), in which case
+            // just drop the pending debounce so it can't resurrect the bucket.
+            if viewModel.explicitlyDiscarded || viewModel.publishedEventId != nil {
+                viewModel.clearLocalAutosave()
+            } else {
+                viewModel.flushLocalAutosave()
+            }
             // Auto-save on dismiss when the user navigated away without publishing
             // or explicitly discarding (e.g. swipe-to-dismiss the sheet). Fires
             // for reply / quote / new alike — `saveDraft` builds the appropriate

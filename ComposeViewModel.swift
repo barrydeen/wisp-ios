@@ -79,6 +79,7 @@ final class ComposeViewModel {
     @ObservationIgnored private var countdownTask: Task<Void, Never>?
     @ObservationIgnored private var publishContinuation: CheckedContinuation<Void, Never>?
     @ObservationIgnored private var mineTask: Task<Void, Never>?
+    @ObservationIgnored private var autosaveTask: Task<Void, Never>?
     private var powDifficulty: Int { PowPreferences.shared.noteDifficulty }
 
     /// Track mention triggers via a sentinel index into the content string. When the
@@ -149,7 +150,32 @@ final class ComposeViewModel {
         UserDefaults.standard.set(payload, forKey: autosaveKey)
     }
 
+    /// Debounced entry point for the per-keystroke autosave triggers. The
+    /// compose `TextEditor` binds through a custom `Binding`; running the
+    /// `UserDefaults` serialization synchronously inside the keystroke commit
+    /// transaction destabilises the editor and leaves a phantom caret on the
+    /// previously typed word. Coalescing the write off the keystroke avoids it.
+    func scheduleLocalAutosave() {
+        autosaveTask?.cancel()
+        autosaveTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled else { return }
+            self?.writeLocalAutosave()
+        }
+    }
+
+    /// Cancel any pending debounced write and persist immediately. Called from
+    /// the view's `onDisappear` so a swipe-dismiss right after the last
+    /// keystroke still flushes the autosave bucket for the reopen path.
+    func flushLocalAutosave() {
+        autosaveTask?.cancel()
+        autosaveTask = nil
+        writeLocalAutosave()
+    }
+
     func clearLocalAutosave() {
+        autosaveTask?.cancel()
+        autosaveTask = nil
         UserDefaults.standard.removeObject(forKey: autosaveKey)
     }
 
