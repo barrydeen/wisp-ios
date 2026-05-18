@@ -27,6 +27,10 @@ struct RichInlineTextView: UIViewRepresentable {
     var onNoteTap: ((String) -> Void)? = nil
     var onHashtagTap: ((String) -> Void)? = nil
     var onPlainTextTap: (() -> Void)? = nil
+    /// When true (composer preview only), `@mention` runs render as rounded
+    /// pills via `WispPillLayoutManager`. Default false keeps every feed / bio
+    /// call site on the untouched default TextKit path.
+    var mentionPillStyle: Bool = false
 
     @ObservedObject private var emojiCache = EmojiImageCache.shared
 
@@ -66,6 +70,7 @@ struct RichInlineTextView: UIViewRepresentable {
         var hasher = Hasher()
         hasher.combine(segmentSig)
         hasher.combine(linksEnabled)
+        hasher.combine(mentionPillStyle)
         hasher.combine(UIFont.preferredFont(forTextStyle: .callout).pointSize)
         for seg in segments {
             switch seg {
@@ -85,7 +90,7 @@ struct RichInlineTextView: UIViewRepresentable {
     }
 
     func makeUIView(context: Context) -> ContentSizingTextView {
-        let tv = ContentSizingTextView()
+        let tv = ContentSizingTextView(pillLayout: mentionPillStyle)
         tv.backgroundColor = .clear
         tv.isEditable = false
         tv.isScrollEnabled = false
@@ -227,7 +232,10 @@ struct RichInlineTextView: UIViewRepresentable {
                 // against other surfaces, and which never exposes hex.
                 let name = resolvedProfile?.displayString ?? Nip19.shortNpub(hex: pubkey)
                 var attrs = baseAttrs
-                attrs[.foregroundColor] = primaryColor
+                attrs[.foregroundColor] = mentionPillStyle ? ComposerTextStyling.pillTextColor : primaryColor
+                if mentionPillStyle {
+                    attrs[.wispMentionPill] = ComposerTextStyling.pillFillColor
+                }
                 if let url = URL(string: "wisp-profile://\(pubkey)") {
                     attrs[.wispLinkURL] = url
                 }
@@ -422,6 +430,24 @@ final class ContentSizingTextView: UITextView {
     override init(frame: CGRect, textContainer: NSTextContainer?) {
         super.init(frame: frame, textContainer: textContainer)
         addGestureRecognizer(linkTapRecognizer)
+    }
+
+    /// `pillLayout: true` wires an explicit TextKit 1 stack with
+    /// `WispPillLayoutManager` so `@mention` runs can paint a rounded pill
+    /// background. `false` keeps the stock text-container path used by every
+    /// feed / bio surface unchanged.
+    convenience init(pillLayout: Bool) {
+        guard pillLayout else {
+            self.init(frame: .zero, textContainer: nil)
+            return
+        }
+        let storage = NSTextStorage()
+        let layout = WispPillLayoutManager()
+        storage.addLayoutManager(layout)
+        let container = NSTextContainer(size: CGSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
+        container.widthTracksTextView = true
+        layout.addTextContainer(container)
+        self.init(frame: .zero, textContainer: container)
     }
 
     required init?(coder: NSCoder) {

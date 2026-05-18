@@ -24,7 +24,14 @@ struct ComposerPreviewCard: View {
                 content: content,
                 tags: tags,
                 profiles: [:],
-                showLinkPreviews: false
+                showLinkPreviews: false,
+                // Preview is read-only — mentions render as colored text
+                // (`wispPrimary`) without the editor's capsule background,
+                // so the user isn't tricked into thinking they can edit
+                // the pill from here. The composer's editable surface
+                // still gets the capsule via its own `.wispMentionPill`
+                // attribute pass.
+                mentionPillStyle: false
             )
         }
         .padding(12)

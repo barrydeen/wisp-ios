@@ -37,6 +37,9 @@ struct RichContentView: View {
     /// NavigationLink and need the tap to fall through; surfaces with no
     /// enclosing tap target (profile bio, composer preview) opt in.
     var linksEnabled: Bool = false
+    /// When true (composer preview only), `@mention` runs render as rounded
+    /// pills. Default false leaves feed / bio rendering unchanged.
+    var mentionPillStyle: Bool = false
     /// When true, signal that this content is rendered inside a nested
     /// container (e.g. `QuotedNoteView` inside a `PostCardView` body) so
     /// children can size themselves against the actual available width
@@ -412,7 +415,8 @@ struct RichContentView: View {
             onProfileTap: onProfileTap,
             onNoteTap: onNoteTap,
             onHashtagTap: onHashtagTap,
-            onPlainTextTap: onPlainTextTap
+            onPlainTextTap: onPlainTextTap,
+            mentionPillStyle: mentionPillStyle
         )
         .frame(maxWidth: .infinity, alignment: .leading)
     }
