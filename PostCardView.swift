@@ -1,16 +1,5 @@
 import SwiftUI
 
-/// Reports the intrinsic body height of a post card up to the
-/// `naturalContentHeight` state. Defined as a `max` reducer so a tall
-/// child (an image grid, a quoted-note image) wins over a short sibling
-/// when the body holds multiple groups.
-private struct PostBodyHeightKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
-    }
-}
-
 struct PostCardView: View {
     let event: NostrEvent
     let profile: ProfileData?
@@ -56,14 +45,14 @@ struct PostCardView: View {
     @Environment(AppSettings.self) private var settings
     @State private var expanded = false
     @State private var contentExpanded = false
-    /// Largest intrinsic height we've observed for the body content.
-    /// Latched (only grows) so the cap stays applied once the post is
-    /// known to overflow, even if a sub-pixel relayout reports a slightly
-    /// smaller value on a subsequent pass. Drives the "Show more" toggle
-    /// — text-only posts trigger via the char-count heuristic, anything
-    /// that *renders* taller than `longPostCollapsedHeight` (tall image,
-    /// quoted note with media, image grid, etc.) triggers via this.
-    @State private var naturalContentHeight: CGFloat = 0
+    /// Largest rendered height we've observed for the body's *text* runs
+    /// (media excluded). Latched (only grows) so the cap stays applied once
+    /// a post is known to overflow, even if a sub-pixel relayout reports a
+    /// slightly smaller value on a later pass. Drives the "Show more"
+    /// toggle: the collapse exists to tame long text walls, so a tall
+    /// image / gallery / video must not trigger it — clipping fixed-height
+    /// media by a few points only produced a toggle that revealed nothing.
+    @State private var naturalTextHeight: CGFloat = 0
     @State private var showReactionPicker = false
     /// Reference-type frame tracker for the heart button. The GeometryReader
     /// background writes the heart's current global frame here on every layout
@@ -138,6 +127,11 @@ struct PostCardView: View {
     /// instead of being clipped for a trivial amount of hidden content.
     /// ~5 lines of body text — meaningful enough to be worth a tap.
     private static let longPostMinOverflow: CGFloat = 72
+    /// Visible height of trailing media when the body is collapsed. Shows
+    /// the top sliver of a video poster / image grid so the user can tell
+    /// media exists below the "Show more" toggle without it dominating
+    /// the row. Tap "Show more" to reveal the full media at natural size.
+    private static let mediaPeekHeight: CGFloat = 80
 
     private struct ActionAlert: Identifiable {
         let id = UUID()
@@ -320,9 +314,12 @@ struct PostCardView: View {
             VStack(alignment: .leading, spacing: 8) {
                 if !displayEvent.content.isEmpty || !displayEvent.tags.isEmpty {
                     let cap = Self.longPostCollapsedHeight
-                    let isLong = naturalContentHeight > cap + Self.longPostMinOverflow
+                    let isLong = naturalTextHeight > cap + Self.longPostMinOverflow
                     let collapsed = isLong && !contentExpanded
                     VStack(alignment: .leading, spacing: 6) {
+                        // Text portion: leading inline groups only. Capped at
+                        // `cap` when collapsed so a long body folds at the
+                        // toggle line, not partway through trailing media.
                         RichContentView(
                             content: displayEvent.content,
                             tags: displayEvent.tags,
@@ -332,50 +329,24 @@ struct PostCardView: View {
                             onNoteTap: onNoteTap,
                             onHashtagTap: onHashtagTap,
                             onPlainTextTap: { onNoteTap?(displayEvent.id) },
-                            linksEnabled: true
+                            linksEnabled: true,
+                            // Each inline-text run publishes its height up
+                            // `RichTextContentHeightKey` so "Show more" can
+                            // trigger off text length alone.
+                            reportsTextHeight: true,
+                            renderMode: .textPortion
                         )
-                        // `.fixedSize(vertical: true)` so inline media render
-                        // at their natural intrinsic height (parent_width ÷
-                        // aspect) instead of getting scaled down by the
-                        // parent's `maxHeight` constraint. The outer
-                        // `.frame(maxHeight:)` + `.clipped()` then crops
-                        // anything past the threshold rather than shrinking
-                        // a portrait video into an unreadable thumbnail.
                         .fixedSize(horizontal: false, vertical: true)
-                        // Measure the intrinsic body height *before* the
-                        // maxHeight cap is applied. With `.fixedSize` upstream,
-                        // the inner content keeps its full intrinsic size even
-                        // when the outer frame is capped — so the GeometryReader
-                        // here reports e.g. 1000pt for a tall quoted-note image
-                        // post, even while the outer `.frame(maxHeight:)` clips
-                        // visible drawing to 615pt. Latching to the largest
-                        // observed value avoids feedback loops from sub-pixel
-                        // relayout passes.
-                        .background(
-                            GeometryReader { proxy in
-                                Color.clear
-                                    .preference(key: PostBodyHeightKey.self, value: proxy.size.height)
-                            }
-                        )
                         .frame(
                             maxHeight: collapsed ? cap : .infinity,
                             alignment: .top
                         )
                         .clipped()
-                        .onPreferenceChange(PostBodyHeightKey.self) { h in
-                            if h > naturalContentHeight + 0.5 {
-                                naturalContentHeight = h
+                        .onPreferenceChange(RichTextContentHeightKey.self) { h in
+                            if h > naturalTextHeight + 0.5 {
+                                naturalTextHeight = h
                             }
                         }
-                        // Pin the hit-test area to the clipped rectangle.
-                        // `.clipped()` clips drawing but NOT taps, so a
-                        // tile (or any other inner Button) that overflows
-                        // past the height cap still receives taps in its
-                        // natural frame — including the y range where the
-                        // action bar sits below this body. Without this
-                        // tapping the heart icon on a collapsed
-                        // gallery-overflowing post would open the gallery
-                        // fullscreen instead.
                         .contentShape(Rectangle())
                         .overlay(alignment: .bottom) {
                             if collapsed {
@@ -388,6 +359,7 @@ struct PostCardView: View {
                                 .allowsHitTesting(false)
                             }
                         }
+
                         if isLong {
                             Button {
                                 withAnimation(.easeInOut(duration: 0.2)) {
@@ -405,6 +377,42 @@ struct PostCardView: View {
                             .buttonStyle(.plain)
                             .frame(maxWidth: .infinity, alignment: .center)
                             .padding(.top, 4)
+                        }
+
+                        // Media portion: everything from the first
+                        // block/media group onward. Always rendered, even
+                        // when collapsed — peeked to `mediaPeekHeight` so
+                        // the user can see media exists below the "Show
+                        // more" toggle. Expands to natural size on toggle.
+                        RichContentView(
+                            content: displayEvent.content,
+                            tags: displayEvent.tags,
+                            profiles: profiles,
+                            authorPubkey: displayEvent.pubkey,
+                            onProfileTap: onProfileTap,
+                            onNoteTap: onNoteTap,
+                            onHashtagTap: onHashtagTap,
+                            onPlainTextTap: { onNoteTap?(displayEvent.id) },
+                            linksEnabled: true,
+                            renderMode: .mediaPortion
+                        )
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(
+                            maxHeight: collapsed ? Self.mediaPeekHeight : .infinity,
+                            alignment: .top
+                        )
+                        .clipped()
+                        .contentShape(Rectangle())
+                        .overlay(alignment: .bottom) {
+                            if collapsed {
+                                LinearGradient(
+                                    colors: [Color.wispBackground.opacity(0), Color.wispBackground],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                                .frame(height: 32)
+                                .allowsHitTesting(false)
+                            }
                         }
                     }
                 }
