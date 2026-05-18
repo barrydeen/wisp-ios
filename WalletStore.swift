@@ -81,6 +81,11 @@ final class WalletStore {
         (wallet as? SparkWallet)?.setSeedBackupAcknowledged(true)
     }
 
+    /// True when this wallet was derived from the user's nsec (recoverable from the key).
+    var isDefaultWallet: Bool {
+        (wallet as? SparkWallet)?.isDefaultWallet() ?? false
+    }
+
     /// Mnemonic for the active Spark wallet, nil for NWC or nsec-derived.
     var sparkMnemonic: String? {
         (wallet as? SparkWallet)?.loadMnemonic()
@@ -160,6 +165,11 @@ final class WalletStore {
     /// Try to bring up whatever wallet the user previously configured. Safe to call repeatedly.
     /// On a re-call after wallet is already wired up, just refresh balance + transactions
     /// in the background so the user sees fresh data on tab open.
+    ///
+    /// Per WALLET_PARITY.md §2.2: sign-in does NOT auto-derive or
+    /// auto-connect the default wallet. A user arriving on a new device sees
+    /// an empty Wallet tab with a "Use my default wallet" card; tapping it
+    /// triggers `useDefaultWallet()` to derive + connect on demand.
     func startIfConfigured() async {
         guard let mode else { return }
         if wallet == nil {
@@ -172,6 +182,49 @@ final class WalletStore {
             await refreshLightningAddress()
             await refreshNwcNodeAlias()
         }
+    }
+
+    /// True when the active account has the prerequisites to derive a default
+    /// Spark wallet from its private key: a Breez API key is configured and
+    /// the keypair is a real signing key (not watch-only or remote-signer).
+    var canUseDefaultWallet: Bool {
+        guard BreezConfig.hasApiKey else { return false }
+        guard let bytes = Hex.decode(keypair.privkey), bytes.count == 32 else { return false }
+        return true
+    }
+
+    /// Derive the default Spark wallet from the user's nsec and connect.
+    /// Surfaced from the wallet mode picker as "Use my default wallet" —
+    /// covers both the fresh-install case (user signed up on another device)
+    /// and the post-disconnect case (user previously tapped Switch Wallet).
+    /// Per parity §2.3, tapping the card explicitly ignores `skipAutoCreate`
+    /// — that flag exists to prevent silent recreation, not to lock the user
+    /// out of their default wallet.
+    @discardableResult
+    func useDefaultWallet() async -> Bool {
+        guard canUseDefaultWallet else { return false }
+        guard let privkey = Hex.decode(keypair.privkey), privkey.count == 32 else { return false }
+        let scratch = SparkWallet(pubkey: keypair.pubkey)
+        do {
+            _ = try scratch.generateDefaultFromPrivkey(privkey)
+        } catch {
+            return false
+        }
+        Self.clearSkipAutoCreate(for: keypair.pubkey)
+        try? await switchToMode(.spark)
+        return isConnected
+    }
+
+    /// Set per `WALLET_PARITY.md` §2.3 when the user taps Switch Wallet
+    /// on the default wallet. Currently informational — iOS doesn't run a
+    /// silent auto-derive — but kept in lockstep with Android so future
+    /// behaviour stays consistent.
+    static func setSkipAutoCreate(for pubkey: String) {
+        UserDefaults.standard.set(true, forKey: "wallet_skip_auto_create_\(pubkey)")
+    }
+
+    static func clearSkipAutoCreate(for pubkey: String) {
+        UserDefaults.standard.removeObject(forKey: "wallet_skip_auto_create_\(pubkey)")
     }
 
     func refreshLightningAddress() async {
