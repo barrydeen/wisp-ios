@@ -8,7 +8,6 @@ struct LoginView: View {
     @State private var error: String?
     @State private var isSecure = true
     @State private var isLoading = false
-    @State private var showRemoteSigner = false
     @State private var showQRScanner = false
     @State private var showSignUp = false
     /// Pubkey derived from the current input. Used to look up + display the
@@ -107,23 +106,6 @@ struct LoginView: View {
                 .padding(.vertical, 4)
 
                 Button {
-                    showRemoteSigner = true
-                } label: {
-                    Label("Use a remote signer", systemImage: "link.badge.plus")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-                .tint(.wispPrimary)
-                .controlSize(.large)
-
-                HStack(spacing: 8) {
-                    Rectangle().fill(.tertiary).frame(height: 1)
-                    Text("OR").font(.caption.bold()).foregroundStyle(.tertiary)
-                    Rectangle().fill(.tertiary).frame(height: 1)
-                }
-                .padding(.vertical, 4)
-
-                Button {
                     showSignUp = true
                 } label: {
                     Label("Create a new account", systemImage: "person.badge.plus")
@@ -143,12 +125,6 @@ struct LoginView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                         .foregroundStyle(.secondary)
-                }
-            }
-            .sheet(isPresented: $showRemoteSigner) {
-                Nip46LoginView { kp in
-                    showRemoteSigner = false
-                    onLogin(kp)
                 }
             }
             .fullScreenCover(isPresented: $showQRScanner) {
