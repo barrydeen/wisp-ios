@@ -14,6 +14,14 @@ final class NotificationsViewModel {
     /// `maybeScoreReplyForSpam` or `unhideSpamAuthor` mutates this set.
     var hiddenSpamPubkeys: Set<String> = []
 
+    /// Bumped whenever `SafetyFilter`'s snapshot changes so `filteredItems`
+    /// re-evaluates against the current blocklist. The repo's in-memory
+    /// `flatItems` keeps notifications that were ingested *before* the user
+    /// blocked their author — without this trigger they'd remain visible
+    /// until app relaunch, since the ingestion-time `SafetyFilter` check
+    /// only catches new events.
+    private(set) var safetyGeneration: Int = 0
+
     @ObservationIgnored private var subNotif: RelaySubscription?
     @ObservationIgnored private var subRepliesEtag: RelaySubscription?
     @ObservationIgnored private var subQuotesQtag: RelaySubscription?
@@ -52,10 +60,17 @@ final class NotificationsViewModel {
     /// `@Observable` the dependency tracking happens automatically when the
     /// View reads `viewModel.filteredItems`.
     var filteredItems: [FlatNotificationItem] {
+        // Bind to `safetyGeneration` so this view re-evaluates when a
+        // block / mute edit lands. Without the read, `@Observable` has no
+        // dependency to track and the blocklist check below would never
+        // re-run for in-memory items already past the ingest filter.
+        _ = safetyGeneration
         let hidden = hiddenSpamPubkeys
         let allowed = enabledTypes
+        let blocked = SafetyFilter.shared.snapshot.blockedPubkeys
         return repo.flatItems.filter { item in
             !hidden.contains(item.actorPubkey)
+                && !blocked.contains(item.actorPubkey)
                 && allowed.contains(NotificationFilter.bucket(for: item.kind))
         }
     }
@@ -80,6 +95,7 @@ final class NotificationsViewModel {
         startRearmCycle()
         startDmObservation()
         startSelfIdsRefreshCycle()
+        startBlocklistObservation()
 
         // Hydrate from ObjectBox in the background so the screen paints instantly from disk
         // on the next render tick. Runs in parallel with the live subs warming up.
@@ -472,6 +488,22 @@ final class NotificationsViewModel {
     }
 
     // MARK: - DM observation
+
+    /// Listen for blocklist edits so `filteredItems` drops in-memory
+    /// notifications from a newly-blocked author without waiting for a
+    /// cold relaunch. The ingestion-time `SafetyFilter` check (see
+    /// `hydrateFromObjectBox` / `openSubscriptions`) only catches events
+    /// arriving *after* the block — anything already in `repo.flatItems`
+    /// would otherwise persist until app restart.
+    private func startBlocklistObservation() {
+        let task = Task { @MainActor [weak self] in
+            let events = NotificationCenter.default.notifications(named: .userBlocked)
+            for await _ in events {
+                self?.safetyGeneration &+= 1
+            }
+        }
+        listenerTasks.append(task)
+    }
 
     private func startDmObservation() {
         dmObserverTask = Task { [weak self] in
