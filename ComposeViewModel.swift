@@ -966,8 +966,13 @@ final class ComposeViewModel {
             // drop-down instead of popping in instantly — matches the new-posts
             // pill's entrance.
             withAnimation(.spring(response: 0.55, dampingFraction: 0.82)) {
+                let (parentId, parentPubkey): (String?, String?) = {
+                    if case .reply(let parent, _) = mode { return (parent.id, parent.pubkey) }
+                    return (nil, nil)
+                }()
                 PostPublishedToastStore.shared.published = PublishedPostToast(
-                    id: event.id, pubkey: event.pubkey
+                    id: event.id, pubkey: event.pubkey,
+                    parentEventId: parentId, parentAuthorPubkey: parentPubkey
                 )
             }
             Haptics.shared.pulse()

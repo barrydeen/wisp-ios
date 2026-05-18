@@ -543,7 +543,8 @@ struct MainView: View {
                                     authorHint: route.authorPubkey,
                                     keypair: keypair,
                                     path: $feedPath,
-                                    chain: $feedThreadChain
+                                    chain: $feedThreadChain,
+                                    scrollToId: route.scrollToId
                                 )
                             }
                             .navigationDestination(for: LiveStreamRoute.self) { route in
@@ -619,7 +620,8 @@ struct MainView: View {
                                     authorHint: route.authorPubkey,
                                     keypair: keypair,
                                     path: $searchPath,
-                                    chain: $searchThreadChain
+                                    chain: $searchThreadChain,
+                                    scrollToId: route.scrollToId
                                 )
                             }
                             .toolbar(.hidden, for: .navigationBar)
@@ -660,7 +662,8 @@ struct MainView: View {
                                 authorHint: route.authorPubkey,
                                 keypair: keypair,
                                 path: $notificationsPath,
-                                chain: $notificationsThreadChain
+                                chain: $notificationsThreadChain,
+                                scrollToId: route.scrollToId
                             )
                         }
                         .toolbar(.hidden, for: .navigationBar)
@@ -682,7 +685,8 @@ struct MainView: View {
                                     authorHint: route.authorPubkey,
                                     keypair: keypair,
                                     path: $placeholderPath,
-                                    chain: $placeholderThreadChain
+                                    chain: $placeholderThreadChain,
+                                    scrollToId: route.scrollToId
                                 )
                             }
                             .toolbar(.hidden, for: .navigationBar)
@@ -885,7 +889,17 @@ struct MainView: View {
             }
             postPublishedToastTask?.cancel()
             selectedTab = .home
-            feedPath.append(ThreadRoute(eventId: toast.id, authorPubkey: toast.pubkey))
+            if let parentId = toast.parentEventId {
+                // Reply: navigate to the parent's thread so the user sees their
+                // reply below the note they responded to.
+                feedPath.append(ThreadRoute(
+                    eventId: parentId,
+                    authorPubkey: toast.parentAuthorPubkey,
+                    scrollToId: toast.id
+                ))
+            } else {
+                feedPath.append(ThreadRoute(eventId: toast.id, authorPubkey: toast.pubkey))
+            }
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: "checkmark.circle.fill")

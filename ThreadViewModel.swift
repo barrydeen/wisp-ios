@@ -55,6 +55,14 @@ final class ThreadViewModel {
     var isLoading = false
     var errorMessage: String?
     var isSending = false
+    /// Set when the view should scroll to a specific event. Cleared by ThreadView
+    /// after scrolling. Only promoted from `pendingScrollToId` once the target
+    /// event actually appears in `nestedReplies`, so the scroll fires after data
+    /// loads rather than immediately on navigation.
+    var scrollTargetId: String?
+    /// Holds the scroll target from the route until `rebuildSlices` confirms the
+    /// event is in the rendered list.
+    @ObservationIgnored private var pendingScrollToId: String?
     /// Active undo countdown for an unsent reply, mirroring `ComposeViewModel`.
     var replyCountdown: Int?
     /// Buffered text + parent for a reply that's mid-countdown, so `publishNow` /
@@ -92,12 +100,13 @@ final class ThreadViewModel {
 
     private static let fallbackRelays = RelayDefaults.fallbacks
 
-    init(seedEventId: String, authorHint: String?, keypair: Keypair) {
+    init(seedEventId: String, authorHint: String?, keypair: Keypair, scrollToId: String? = nil) {
         self.keypair = keypair
         self.seedEventId = seedEventId
         self.authorHint = authorHint
         self.rootId = seedEventId
         self.focalEventId = seedEventId
+        self.pendingScrollToId = scrollToId
         // Catch the user's own freshly-published replies the moment ComposeViewModel
         // broadcasts them — the live relay subscription often doesn't reflect outbound
         // events back, so without this the new reply only shows after a manual refresh.
@@ -158,6 +167,7 @@ final class ThreadViewModel {
         guard known else { return }
         if event.kind == 1 {
             ingestReply(event)
+            scrollTargetId = event.id
         }
     }
 
@@ -881,6 +891,15 @@ final class ThreadViewModel {
         }
 
         nestedReplies = buildNestedReplies()
+
+        // Promote the pending scroll target the first time it appears in the
+        // rendered list, so ThreadView scrolls after data is visible rather
+        // than on navigation before anything has loaded.
+        if let pending = pendingScrollToId,
+           nestedReplies.contains(where: { $0.id == pending }) {
+            scrollTargetId = pending
+            pendingScrollToId = nil
+        }
     }
 
     /// DFS preorder walk from the focal through every known descendant.

@@ -308,7 +308,7 @@ struct PostCardView: View {
                     onHashtagTap: nil
                 )
                 .padding(.horizontal, 16)
-                .padding(.top, 6)
+                .padding(.top, 14)
                 .padding(.bottom, 12)
             } else {
             VStack(alignment: .leading, spacing: 8) {
@@ -459,7 +459,7 @@ struct PostCardView: View {
                 }
             }
             .padding(.horizontal, 16)
-            .padding(.top, 8)
+            .padding(.top, 14)
             .padding(.bottom, 12)
             }
         }
