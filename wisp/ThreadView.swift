@@ -461,7 +461,8 @@ struct ThreadView: View {
         var counts = viewModel.engagement[eventId] ?? EngagementCounts()
         let effective = effectiveReplyCount(for: eventId)
         guard effective > 0 || counts.reactions > 0 || counts.reposts > 0
-              || counts.zapSats > 0 || counts.zapCount > 0 else {
+              || counts.zapSats > 0 || counts.zapCount > 0
+              || !counts.quoters.isEmpty else {
             return nil
         }
         counts.replies = effective

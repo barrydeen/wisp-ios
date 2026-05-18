@@ -778,6 +778,14 @@ final class ThreadViewModel {
             let subId = "thread-engagement-\(UUID().uuidString.prefix(6))"
             let filter = NostrFilter(kinds: [1, 6, 7, 9735], eTags: chunk, limit: 500, since: since)
             let sub = RelayPool.subscribe(relays: relays, filter: filter, id: subId)
+            // NIP-18 quote reposts (kind-1 with only a `q` tag) are not
+            // fetched here. A parallel `#q` subscription roughly doubled
+            // the thread's engagement REQ load on every relay for a row
+            // the user almost never opens. The "Quoted by" drawer instead
+            // lazy-fetches via `EngagementRepository.fetchQuoters(eventId:)`
+            // when the user actually expands the focal note's details
+            // panel. Quote events that *also* carry an `e` tag still
+            // arrive on this stream and are routed into `quoters` below.
             let consumer = Task { [weak self] in
                 for await (event, _) in sub.events {
                     if SafetyFilter.shared.shouldDrop(event: event, context: .thread(rootId: rootIdLocal)) { continue }
@@ -800,6 +808,34 @@ final class ThreadViewModel {
             // can otherwise double-count the same id). `seenEngagementIds`
             // is shared across both pathways.
             guard seenEngagementIds.insert(event.id).inserted else { continue }
+
+            // NIP-18 quote reposts arrive via the parallel `#q` subscription
+            // and (per spec) carry only a `q` tag for the quoted id. Handle
+            // them up front so they populate the "Quoted by" row instead of
+            // falling through to the reply path on the off chance the quote
+            // event also stamps an `e` tag for backward compatibility.
+            if event.kind == 1 {
+                let qTargets = event.tags.compactMap { tag -> String? in
+                    guard tag.count >= 2, tag[0] == "q" else { return nil }
+                    return tag[1]
+                }
+                let quotedHere = qTargets.filter { engagedIds.contains($0) }
+                if !quotedHere.isEmpty {
+                    for quotedId in Set(quotedHere) {
+                        var qCurrent = engagement[quotedId] ?? EngagementCounts()
+                        if !qCurrent.quoters.contains(where: { $0.eventId == event.id }) {
+                            qCurrent.quoters.append(Quoter(
+                                eventId: event.id,
+                                pubkey: event.pubkey,
+                                createdAt: event.createdAt
+                            ))
+                        }
+                        engagement[quotedId] = qCurrent
+                    }
+                    continue
+                }
+            }
+
             // Aggregate against every e-tag the engagement event references so the count attaches to
             // both the direct parent and (where applicable) the root.
             let targets = event.tags.compactMap { tag -> String? in

@@ -452,12 +452,26 @@ struct PostCardView: View {
                         zappers: repoBox.counts.zappers.isEmpty ? (engagement?.zappers ?? []) : repoBox.counts.zappers,
                         reactors: repoBox.counts.reactors.isEmpty ? (engagement?.reactors ?? []) : repoBox.counts.reactors,
                         reposters: repoBox.counts.reposters.isEmpty ? (engagement?.reposters ?? []) : repoBox.counts.reposters,
+                        quoters: repoBox.counts.quoters.isEmpty ? (engagement?.quoters ?? []) : repoBox.counts.quoters,
                         relays: combinedRelays(for: displayEvent.id),
                         tags: displayEvent.tags,
                         createdAt: displayEvent.createdAt,
                         profiles: profiles,
-                        onProfileTap: onProfileTap
+                        onProfileTap: onProfileTap,
+                        onNoteTap: onNoteTap
                     )
+                    // Lazy-fetch NIP-18 quoters on first expand. The feed /
+                    // thread engagement subscriptions deliberately don't
+                    // stream `#q` matches (too heavy for a row almost no one
+                    // opens), so the "Quoted by" data is pulled here
+                    // instead. The repo dedupes per id for the app's
+                    // lifetime, so re-expanding is free.
+                    .task(id: displayEvent.id) {
+                        engagementRepo.fetchQuoters(
+                            eventId: displayEvent.id,
+                            authorPubkey: displayEvent.pubkey
+                        )
+                    }
                     // Pure fade — the prior `.move(edge: .top)` made the
                     // top-of-panel content (the reactor avatar row) settle
                     // into place before the rows below caught up, so the
@@ -1412,11 +1426,15 @@ private struct NoteDetailsPanel: View {
     let zappers: [Zapper]
     let reactors: [Reactor]
     let reposters: [String]
+    let quoters: [Quoter]
     let relays: [String]
     let tags: [[String]]
     let createdAt: Int
     let profiles: [String: ProfileData]
     let onProfileTap: ((String) -> Void)?
+    /// Tap on a quote-post avatar navigates to that quote's thread. Wired
+    /// from `PostCardView.onNoteTap` — falls back to no-op when nil.
+    let onNoteTap: ((String) -> Void)?
 
     @State private var relaysExpanded = false
 
@@ -1435,6 +1453,9 @@ private struct NoteDetailsPanel: View {
             }
             if !reposters.isEmpty {
                 repostsSection
+            }
+            if !quoters.isEmpty {
+                quotesSection
             }
             if !reactors.isEmpty {
                 reactionsSection
@@ -1505,9 +1526,42 @@ private struct NoteDetailsPanel: View {
         .padding(.vertical, 3)
     }
 
+    /// "Quoted by" — NIP-18 quote reposts of this note. Stacked avatars are the
+    /// quote-post authors; tapping a row navigates to the quote post itself
+    /// (via `onNoteTap`), not the author's profile, because a "find what people
+    /// said about this" affordance is the whole point of the section.
+    private var quotesSection: some View {
+        let unique = Array(NSOrderedSet(array: quoters.sorted { $0.createdAt > $1.createdAt })) as? [Quoter] ?? quoters
+        return HStack(alignment: .center, spacing: 8) {
+            Image(systemName: "quote.bubble")
+                .font(.system(size: 17))
+                .foregroundStyle(Color.wispPrimary)
+                .frame(width: 22)
+            StackedAvatarRow(
+                pubkeys: unique.map(\.pubkey),
+                profiles: profiles,
+                onProfileTap: { pubkey in
+                    guard let quote = unique.first(where: { $0.pubkey == pubkey }) else { return }
+                    onNoteTap?(quote.eventId)
+                }
+            )
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 3)
+    }
+
     private var reactionsSection: some View {
         let grouped = Dictionary(grouping: reactors, by: { $0.emoji })
-        let sortedKeys = grouped.keys.sorted { (grouped[$0]?.count ?? 0) > (grouped[$1]?.count ?? 0) }
+        // Stable order: count desc, then emoji string asc as a tiebreaker.
+        // `Dictionary.keys` iteration is non-deterministic between renders, so
+        // ties were reshuffling every time the panel re-evaluated — visible as
+        // emoji icons rapidly swapping while avatars streamed in.
+        let sortedKeys = grouped.keys.sorted { lhs, rhs in
+            let lc = grouped[lhs]?.count ?? 0
+            let rc = grouped[rhs]?.count ?? 0
+            if lc != rc { return lc > rc }
+            return lhs < rhs
+        }
         // Build a per-reaction emoji map so each row resolves its own shortcode against the
         // URL the reactor included in their kind-7 NIP-30 `emoji` tag. Falls back to the
         // local user's emoji set for shortcodes the reactor didn't tag (rare).
