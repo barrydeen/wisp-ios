@@ -65,16 +65,13 @@ final class SparkWallet: Wallet {
     /// private key so it is recoverable on any device by signing in with the
     /// same key. The mnemonic is HKDF-SHA256(privkey) → 16 bytes entropy →
     /// BIP-39, matching Android `Keys.deriveSparkEntropy` /
-    /// `SparkRepository.generateDefaultFromPrivkey`. Marks the wallet as
-    /// default and pre-acknowledges the seed backup: there is nothing to back
-    /// up manually because the seed is recoverable from the nsec.
+    /// `SparkRepository.generateDefaultFromPrivkey`.
     @discardableResult
     func generateDefaultFromPrivkey(_ privkey: Data) throws -> String {
         let entropy = Self.deriveSparkEntropy(privkey: privkey)
         let mnemonic = try Bip39.mnemonic(fromEntropy: entropy)
         saveMnemonic(mnemonic)
         UserDefaults.standard.set(true, forKey: "spark_is_default_\(pubkey)")
-        setSeedBackupAcknowledged(true)
         return mnemonic
     }
 
