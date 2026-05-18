@@ -803,7 +803,7 @@ struct ComposeView: View {
                         }
                     }
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
+                    .frame(height: 44)
                 }
                 .background(Color.wispPrimary, in: Capsule())
                 .foregroundStyle(.white)
