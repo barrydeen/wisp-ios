@@ -37,6 +37,12 @@ final class ComposeViewModel {
 
     var mentionQuery: String?
     var mentionCandidates: [MentionCandidate] = []
+    /// True while the NIP-50 relay lookup is in flight after the local
+    /// search has returned (no follows match). The view surfaces a
+    /// "Searching…" row so the user can tell the popup is working on
+    /// something rather than assuming the autocomplete is broken — relay
+    /// queries take 1-3 s vs the instant follows search.
+    var isMentionSearchingRemote: Bool = false
     var emojiQuery: String?
     var emojiCandidates: [CustomEmoji] = []
 
@@ -86,6 +92,7 @@ final class ComposeViewModel {
     /// `@` signal is active this is the UTF-16 offset of the `@` character.
     @ObservationIgnored private var mentionStartUtf16: Int?
     @ObservationIgnored private var emojiStartUtf16: Int?
+    @ObservationIgnored private var mentionRemoteTask: Task<Void, Never>?
 
     // MARK: - Init
 
@@ -314,10 +321,48 @@ final class ComposeViewModel {
     func updateMentionTrigger(query: String?, atOffsetUtf16: Int?) {
         mentionStartUtf16 = atOffsetUtf16
         mentionQuery = query
-        if let query {
-            mentionCandidates = MentionSearch.search(query: query, currentUserPubkey: keypair.pubkey)
-        } else {
+        mentionRemoteTask?.cancel()
+        guard let query else {
             mentionCandidates = []
+            isMentionSearchingRemote = false
+            return
+        }
+        mentionCandidates = MentionSearch.search(query: query, currentUserPubkey: keypair.pubkey)
+        // Only fire the relay fallback when the query is long enough to
+        // disambiguate and not yet served locally. `searchRemote` itself
+        // gates on `.count >= 2`, but checking here too avoids spinning
+        // up the loading spinner for `@s` only to clear it instantly.
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 2 else {
+            isMentionSearchingRemote = false
+            return
+        }
+        // Surface a "Searching…" row so the user can tell the popup is
+        // working on something — relay queries take 1-3 s vs the instant
+        // follows search and look broken without an affordance.
+        isMentionSearchingRemote = true
+        // The local pass is follows-only and only sees cached kind-0s, so an
+        // account the author doesn't follow yet (e.g. a fresh handle typed
+        // from memory) never appears. Fall back to a NIP-50 relay lookup,
+        // debounced so we don't fire a query per keystroke and guarded
+        // against staleness so a slow reply can't replace a newer query's
+        // results. 200 ms gives a typical typist time to add one more
+        // letter without firing two relay queries.
+        let pubkey = keypair.pubkey
+        mentionRemoteTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(200))
+            guard !Task.isCancelled, let self, self.mentionQuery == query else { return }
+            let existing = Set(self.mentionCandidates.map(\.pubkey))
+            let remote = await MentionSearch.searchRemote(
+                query: query,
+                currentUserPubkey: pubkey,
+                excluding: existing
+            )
+            guard !Task.isCancelled, self.mentionQuery == query else { return }
+            self.isMentionSearchingRemote = false
+            guard !remote.isEmpty else { return }
+            let known = Set(self.mentionCandidates.map(\.pubkey))
+            self.mentionCandidates.append(contentsOf: remote.filter { !known.contains($0.pubkey) })
         }
     }
 
@@ -347,8 +392,10 @@ final class ComposeViewModel {
         newContent.replaceSubrange(stringStartIdx..<end, with: "@\(displayName) ")
         content = newContent
         mentions.append(InsertedMention(displayName: displayName, pubkey: candidate.pubkey))
+        mentionRemoteTask?.cancel()
         mentionQuery = nil
         mentionCandidates = []
+        isMentionSearchingRemote = false
         mentionStartUtf16 = nil
         recomputeHashtags()
     }
@@ -1196,6 +1243,34 @@ final class ComposeViewModel {
                 range: NSRange(location: 0, length: ns.length),
                 withTemplate: "$1 "
             )
+        }
+        // Separator pass. `ContentParser`'s greedy `[a-z0-9]+` after the
+        // bech32 prefix runs past the end of a `nostr:nprofile1...` URI
+        // and eats any contiguous lowercase letters / digits that follow
+        // — e.g. user backspaces the trailing space after a pill and
+        // types `tag!`, producing `nostr:Ytag!`. The decode then fails
+        // on the bech32 mismatch and the whole token renders as plain
+        // text in the published event. Insert a space between the URI
+        // and any such blender character. We iterate the known
+        // materialized URIs (exact lengths are known here) so we don't
+        // have to fight the parser's greedy regex.
+        for mention in mentions {
+            guard let bytes = Hex.decode(mention.pubkey) else { continue }
+            guard let nprofile = Nip19.nprofileEncode(pubkey32: Array(bytes)) else { continue }
+            let uri = "nostr:\(nprofile)"
+            var cursor = out.startIndex
+            while let r = out.range(of: uri, range: cursor..<out.endIndex) {
+                let nextIdx = r.upperBound
+                if nextIdx < out.endIndex {
+                    let c = out[nextIdx]
+                    if (c >= "a" && c <= "z") || (c >= "0" && c <= "9") {
+                        out.insert(" ", at: nextIdx)
+                        cursor = out.index(after: nextIdx)
+                        continue
+                    }
+                }
+                cursor = nextIdx
+            }
         }
         return out
     }

@@ -2,6 +2,12 @@ import SwiftUI
 
 struct MentionCandidateRow: View {
     let candidate: MentionCandidate
+    /// Short npub to render beneath the name when multiple candidates
+    /// share the same display name. Nil when the name is unique in the
+    /// popup. Lets the author tell impersonators / clones apart at a
+    /// glance — the underlying pubkeys are different, just the metadata
+    /// is identical.
+    var disambiguationNpub: String? = nil
 
     var body: some View {
         HStack(spacing: 10) {
@@ -14,6 +20,11 @@ struct MentionCandidateRow: View {
                 if let nip = candidate.nip05, !nip.isEmpty {
                     Text(nip)
                         .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                } else if let npub = disambiguationNpub {
+                    Text(npub)
+                        .font(.caption2.monospaced())
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }

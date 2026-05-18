@@ -101,7 +101,7 @@ struct ComposeView: View {
                                 nsfwBanner
                             }
 
-                            if !viewModel.mentionCandidates.isEmpty {
+                            if !viewModel.mentionCandidates.isEmpty || viewModel.isMentionSearchingRemote {
                                 mentionPopup
                             }
 
@@ -566,15 +566,41 @@ struct ComposeView: View {
     }
 
     private var mentionPopup: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        // Display-name collision detection. Search relays surface
+        // impersonators using the same display name as a real account
+        // (different pubkeys, identical bio). We can't safely dedupe
+        // by content, so we surface a short npub beneath the colliding
+        // names so the user can tell them apart.
+        let nameCounts: [String: Int] = viewModel.mentionCandidates.reduce(into: [:]) { acc, c in
+            acc[c.name.lowercased(), default: 0] += 1
+        }
+        return VStack(alignment: .leading, spacing: 0) {
             ForEach(viewModel.mentionCandidates) { candidate in
                 Button {
                     viewModel.selectMention(candidate)
                 } label: {
-                    MentionCandidateRow(candidate: candidate)
+                    let isCollision = (nameCounts[candidate.name.lowercased()] ?? 0) > 1
+                    MentionCandidateRow(
+                        candidate: candidate,
+                        disambiguationNpub: isCollision ? Nip19.shortNpub(hex: candidate.pubkey) : nil
+                    )
                 }
                 .buttonStyle(.plain)
                 Divider().overlay(Color.wispSurfaceVariant.opacity(0.4))
+            }
+            if viewModel.isMentionSearchingRemote {
+                // Pinned at the bottom so any local matches stay clickable
+                // at the top while we wait on the relay. The spinner is the
+                // signal that "more results may yet arrive" — without it
+                // the popup looks like it's already final.
+                HStack(spacing: 8) {
+                    ProgressView().scaleEffect(0.7)
+                    Text("Searching…")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
             }
         }
         .background(Color.wispSurfaceVariant.opacity(0.3),

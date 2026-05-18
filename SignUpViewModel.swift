@@ -403,7 +403,7 @@ final class SignUpViewModel {
     private func signProfileEvent(lightningAddress: String? = nil) -> NostrEvent? {
         guard let privkey = Hex.decode(keypair.privkey) else { return nil }
         var json: [String: String] = [:]
-        let trimmedName = name.trimmingCharacters(in: .whitespaces)
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedAbout = about.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedName.isEmpty {
             json["name"] = trimmedName

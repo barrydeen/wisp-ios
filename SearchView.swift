@@ -75,32 +75,44 @@ struct SearchView: View {
                 .padding(.vertical, 8)
                 .background(Color.wispSurfaceVariant, in: RoundedRectangle(cornerRadius: 20))
 
-                if queryFocused {
-                    // Standard iOS search-cancel affordance: appears only
-                    // when the field is focused, dismisses the keyboard.
-                    Button("Cancel") {
-                        queryFocused = false
-                        viewModel.updateQuery("")
+                Group {
+                    if queryFocused {
+                        // Standard iOS search-cancel affordance: appears
+                        // only when the field is focused, dismisses the
+                        // keyboard.
+                        Button("Cancel") {
+                            queryFocused = false
+                            viewModel.updateQuery("")
+                        }
+                        .font(.subheadline)
+                        .foregroundStyle(Color.wispPrimary)
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                    } else {
+                        Button {
+                            viewModel.showAdvanced.toggle()
+                        } label: {
+                            Image(systemName: "slider.horizontal.3")
+                                .font(.system(size: 18))
+                                .foregroundStyle(viewModel.showAdvanced ? Color.wispPrimary : .secondary)
+                                .frame(width: 32, height: 32)
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .font(.subheadline)
-                    .foregroundStyle(Color.wispPrimary)
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
-                } else {
-                    Button {
-                        viewModel.showAdvanced.toggle()
-                    } label: {
-                        Image(systemName: "slider.horizontal.3")
-                            .font(.system(size: 18))
-                            .foregroundStyle(viewModel.showAdvanced ? Color.wispPrimary : .secondary)
-                            .frame(width: 32, height: 32)
-                    }
-                    .buttonStyle(.plain)
                 }
+                // Scope the animation to just the Cancel ↔ Settings swap.
+                // The previous `.animation(value: queryFocused)` lived on
+                // the outer top-bar VStack, so when `scrollDismissesKeyboard`
+                // flipped focus during a scroll, the value-scoped transaction
+                // swept in unrelated layout changes in the same render pass
+                // — most visibly the `LazyVStack` realizing result rows,
+                // which flickered as if the results were blanking and
+                // re-searching. Keeping the animation on the Group below
+                // the offending render scope cuts the propagation path.
+                .animation(.easeInOut(duration: 0.2), value: queryFocused)
             }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .animation(.easeInOut(duration: 0.2), value: queryFocused)
     }
 
     /// Two-segment toggle for the search mode. Both options are always
@@ -406,7 +418,15 @@ struct SearchView: View {
     }
 
     private var peopleList: some View {
-        ForEach(viewModel.people, id: \.pubkey) { profile in
+        // Display-name collision detection. Search relays surface
+        // impersonators using the same display name (different pubkeys,
+        // often identical bio). We can't safely dedupe by content, so
+        // we surface a short npub next to colliding names instead so
+        // the user can tell them apart at a glance.
+        let nameCounts: [String: Int] = viewModel.people.reduce(into: [:]) { acc, p in
+            acc[p.displayString.lowercased(), default: 0] += 1
+        }
+        return ForEach(viewModel.people, id: \.pubkey) { profile in
             NavigationLink(value: ProfileRoute(pubkey: profile.pubkey)) {
                 HStack(alignment: .top, spacing: 12) {
                     CachedAvatarView(url: profile.picture, size: 44)
@@ -424,6 +444,13 @@ struct SearchView: View {
                                 Nip05Badge(nip05: nip05, pubkey: profile.pubkey)
                             }
                             Spacer(minLength: 0)
+                        }
+                        let isCollision = (nameCounts[profile.displayString.lowercased()] ?? 0) > 1
+                        if isCollision, (profile.nip05 ?? "").isEmpty {
+                            Text(Nip19.shortNpub(hex: profile.pubkey))
+                                .font(.caption2.monospaced())
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
                         }
                         if let about = profile.about, !about.isEmpty {
                             Text(about)

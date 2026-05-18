@@ -230,7 +230,12 @@ struct RichInlineTextView: UIViewRepresentable {
                 // Unresolved mentions fall back to a short npub instead of a
                 // bare ellipsis: a stable identifier the reader can match
                 // against other surfaces, and which never exposes hex.
-                let name = resolvedProfile?.displayString ?? Nip19.shortNpub(hex: pubkey)
+                // Some users unknowingly save a display name with trailing
+                // whitespace; left intact it renders as "@name " and collides
+                // with the space that follows the mention in the surrounding
+                // text, producing a visible double space.
+                let name = (resolvedProfile?.displayString ?? Nip19.shortNpub(hex: pubkey))
+                    .replacingOccurrences(of: "\\s+$", with: "", options: .regularExpression)
                 var attrs = baseAttrs
                 attrs[.foregroundColor] = mentionPillStyle ? ComposerTextStyling.pillTextColor : primaryColor
                 if mentionPillStyle {
