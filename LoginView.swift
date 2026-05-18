@@ -10,6 +10,7 @@ struct LoginView: View {
     @State private var isLoading = false
     @State private var showRemoteSigner = false
     @State private var showQRScanner = false
+    @State private var showSignUp = false
     /// Pubkey derived from the current input. Used to look up + display the
     /// matching profile so the user can sanity-check that the key they
     /// pasted is the one they meant. Cleared when input goes invalid.
@@ -115,6 +116,23 @@ struct LoginView: View {
                 .tint(.wispPrimary)
                 .controlSize(.large)
 
+                HStack(spacing: 8) {
+                    Rectangle().fill(.tertiary).frame(height: 1)
+                    Text("OR").font(.caption.bold()).foregroundStyle(.tertiary)
+                    Rectangle().fill(.tertiary).frame(height: 1)
+                }
+                .padding(.vertical, 4)
+
+                Button {
+                    showSignUp = true
+                } label: {
+                    Label("Create a new account", systemImage: "person.badge.plus")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .tint(.wispPrimary)
+                .controlSize(.large)
+
                 Spacer()
             }
             .padding(.horizontal, 32)
@@ -139,6 +157,12 @@ struct LoginView: View {
                     onCancel: { showQRScanner = false }
                 )
                 .ignoresSafeArea()
+            }
+            .fullScreenCover(isPresented: $showSignUp) {
+                SignUpFlowView { kp in
+                    showSignUp = false
+                    onLogin(kp)
+                }
             }
         }
         .presentationDetents([.large])
