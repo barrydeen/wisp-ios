@@ -695,17 +695,24 @@ struct MainView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            if audioPlayer.currentTrack != nil {
-                MiniAudioPlayerView()
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            } else {
-                Divider().overlay(Color.wispSurfaceVariant.opacity(0.5))
+            // Animation modifier scoped to the audio-player slot only. Hoisting
+            // it onto the surrounding VStack made the player toggle catch any
+            // unrelated state change in the active tab (notifications,
+            // timeline) in the same frame, producing a "float-down" of late
+            // arriving rows over existing content.
+            Group {
+                if audioPlayer.currentTrack != nil {
+                    MiniAudioPlayerView()
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                } else {
+                    Divider().overlay(Color.wispSurfaceVariant.opacity(0.5))
+                }
             }
+            .animation(.smooth(duration: 0.22), value: audioPlayer.currentTrack != nil)
 
             bottomBar
         }
         .background(Color.wispBackground)
-        .animation(.smooth(duration: 0.22), value: audioPlayer.currentTrack != nil)
     }
 
     // MARK: - Drawer
@@ -1113,6 +1120,17 @@ struct MainView: View {
                             Divider()
                                 .overlay(Color.wispSurfaceVariant.opacity(0.3))
                         }
+                        // Defensively strip any ambient animation from row
+                        // diffs so a late-arriving event merged into
+                        // `viewModel.events` can't ride a sibling animation
+                        // transaction (audio-player slide, new-posts-pill
+                        // toggle, etc.) and visibly "float down" from its
+                        // insertion index into its sorted position. The
+                        // upstream `withTransaction(animation: nil)` around
+                        // `events = ...` in `flushPendingInserts` doesn't
+                        // carry across the `@Observable` render-pass
+                        // boundary; this is the last line of defense.
+                        .transaction { $0.animation = nil }
                     }
                 }
                 .refreshable { await viewModel.refresh() }
@@ -1144,36 +1162,44 @@ struct MainView: View {
                     }
                 }
                 .overlay(alignment: .top) {
-                    if viewModel.pendingNewCount > 0 && !feedAtTop {
-                        NewPostsPill(
-                            count: viewModel.pendingNewCount,
-                            onTap: {
-                                viewModel.applyPendingNewPosts()
-                                // Defer to the next runloop so the LazyVStack
-                                // has a chance to lay out the prepended rows
-                                // before we resolve `feedTop`. Without this,
-                                // `scrollTo` runs against the pre-merge
-                                // layout and only nudges the offset by a
-                                // single row's height.
-                                DispatchQueue.main.async {
-                                    withAnimation(.easeInOut(duration: 0.35)) {
-                                        feedProxy.scrollTo("feedTop", anchor: .top)
+                    // Animation modifier scoped INSIDE the overlay so the pill's
+                    // enter/exit transition fires, but the row LazyVStack above
+                    // is not part of the same value-scoped transaction. Hoisting
+                    // this onto the ScrollView caused stragglers from a sorted
+                    // insert to visibly "float down" whenever pendingNewCount
+                    // toggled in the same frame as a merge.
+                    Group {
+                        if viewModel.pendingNewCount > 0 && !feedAtTop {
+                            NewPostsPill(
+                                count: viewModel.pendingNewCount,
+                                onTap: {
+                                    viewModel.applyPendingNewPosts()
+                                    // Defer to the next runloop so the LazyVStack
+                                    // has a chance to lay out the prepended rows
+                                    // before we resolve `feedTop`. Without this,
+                                    // `scrollTo` runs against the pre-merge
+                                    // layout and only nudges the offset by a
+                                    // single row's height.
+                                    DispatchQueue.main.async {
+                                        withAnimation(.easeInOut(duration: 0.35)) {
+                                            feedProxy.scrollTo("feedTop", anchor: .top)
+                                        }
+                                    }
+                                },
+                                onDismiss: {
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        viewModel.dismissPendingNewPosts()
                                     }
                                 }
-                            },
-                            onDismiss: {
-                                withAnimation(.easeInOut(duration: 0.2)) {
-                                    viewModel.dismissPendingNewPosts()
-                                }
-                            }
-                        )
-                        .padding(.top, 8)
-                        .opacity(feedFabOpacity)
-                        .animation(.easeInOut(duration: 0.2), value: feedFabOpacity)
-                        .transition(.move(edge: .top).combined(with: .opacity))
+                            )
+                            .padding(.top, 8)
+                            .opacity(feedFabOpacity)
+                            .animation(.easeInOut(duration: 0.2), value: feedFabOpacity)
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                        }
                     }
+                    .animation(.easeInOut(duration: 0.25), value: viewModel.pendingNewCount > 0)
                 }
-                .animation(.easeInOut(duration: 0.25), value: viewModel.pendingNewCount > 0)
                 }
             }
         }
