@@ -227,6 +227,40 @@ private struct WaitingStep: View {
     private let avatarSize: CGFloat = 52
 
     var body: some View {
+        Group {
+            if let offer = viewModel.restoreOffer {
+                restoreOfferCard(offer)
+            } else {
+                standardContent
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .animation(.easeInOut, value: viewModel.isReady)
+        .animation(.easeInOut, value: viewModel.restoreOffer)
+        .onAppear {
+            profile = ProfileRepository.shared.get(keypair.pubkey)
+            // Stage 1: ring draws itself in. Stage 2: rotation kicks off
+            // and the avatar fades in inside the now-visible ring.
+            withAnimation(.easeOut(duration: 0.45)) { ringDrawn = 0.7 }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                withAnimation(.linear(duration: 1).repeatForever(autoreverses: false)) {
+                    rotation = 360
+                }
+                withAnimation(.easeIn(duration: 0.25)) { avatarRevealed = true }
+            }
+            Task {
+                while !viewModel.isReady {
+                    try? await Task.sleep(for: .seconds(2.5))
+                    guard !viewModel.isReady else { break }
+                    withAnimation {
+                        messageIndex = (messageIndex + 1) % OnboardingViewModel.statusMessages.count
+                    }
+                }
+            }
+        }
+    }
+
+    private var standardContent: some View {
         VStack(spacing: 24) {
             Spacer()
 
@@ -264,6 +298,10 @@ private struct WaitingStep: View {
                     }
                 }
                 .transition(.opacity)
+            } else if viewModel.restoreState == .restoring {
+                Text("Restoring your follows\u{2026}")
+                    .font(.headline)
+                    .foregroundStyle(.secondary)
             } else {
                 Text(OnboardingViewModel.statusMessages[messageIndex])
                     .font(.headline)
@@ -286,27 +324,50 @@ private struct WaitingStep: View {
 
             Spacer().frame(height: 48)
         }
-        .animation(.easeInOut, value: viewModel.isReady)
-        .onAppear {
-            profile = ProfileRepository.shared.get(keypair.pubkey)
-            // Stage 1: ring draws itself in. Stage 2: rotation kicks off
-            // and the avatar fades in inside the now-visible ring.
-            withAnimation(.easeOut(duration: 0.45)) { ringDrawn = 0.7 }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                withAnimation(.linear(duration: 1).repeatForever(autoreverses: false)) {
-                    rotation = 360
+    }
+
+    private func restoreOfferCard(_ offer: FollowRestoreCandidate) -> some View {
+        VStack(spacing: 20) {
+            Spacer()
+
+            Image(systemName: "arrow.counterclockwise.circle.fill")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 64, height: 64)
+                .foregroundStyle(Color.wispPrimary)
+
+            Text("Restore your follows?")
+                .font(.system(size: 28, weight: .bold))
+                .foregroundStyle(.white)
+
+            Text("You\u{2019}re currently following \(viewModel.followCount) \(viewModel.followCount == 1 ? "person" : "people"), but we found an earlier list with \(offer.count). Another app may have overwritten it.")
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+
+            Spacer()
+
+            VStack(spacing: 12) {
+                Button("Restore \(offer.count) follows") {
+                    viewModel.acceptRestore()
                 }
-                withAnimation(.easeIn(duration: 0.25)) { avatarRevealed = true }
-            }
-            Task {
-                while !viewModel.isReady {
-                    try? await Task.sleep(for: .seconds(2.5))
-                    guard !viewModel.isReady else { break }
-                    withAnimation {
-                        messageIndex = (messageIndex + 1) % OnboardingViewModel.statusMessages.count
-                    }
+                .buttonStyle(.borderedProminent)
+                .tint(.wispPrimary)
+                .controlSize(.large)
+                .frame(maxWidth: .infinity)
+
+                Button("Keep current list") {
+                    viewModel.declineRestore()
                 }
+                .buttonStyle(.bordered)
+                .tint(.secondary)
+                .controlSize(.large)
+                .frame(maxWidth: .infinity)
             }
+            .padding(.horizontal, 32)
+
+            Spacer().frame(height: 48)
         }
     }
 }

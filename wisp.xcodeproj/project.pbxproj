@@ -73,6 +73,8 @@
 		4CEE000100000000000000B1 /* BreezSdkSpark in Frameworks */ = {isa = PBXBuildFile; productRef = 4CEE000000000000000000B1 /* BreezSdkSpark */; };
 		4CFA00010001000000A1BA01 /* RelayDefaults.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFA00020001000000A1BA01 /* RelayDefaults.swift */; };
 		4CFA00030001000000A1BA01 /* FollowsCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFA00040001000000A1BA01 /* FollowsCache.swift */; };
+		4CFB00020001000000A1BA01 /* FollowHistoryGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFB00010001000000A1BA01 /* FollowHistoryGuard.swift */; };
+		4CFB00040001000000A1BA01 /* FollowRestorePromptSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFB00030001000000A1BA01 /* FollowRestorePromptSheet.swift */; };
 		4CFA00050001000000A1BA01 /* EventPersistQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFA00060001000000A1BA01 /* EventPersistQueue.swift */; };
 		4CFADE0100000000000F1001 /* SafetyFilter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFADE0000000000000F1001 /* SafetyFilter.swift */; };
 		4CFADE0100000000000F1002 /* SafetyPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFADE0000000000000F1002 /* SafetyPreferences.swift */; };
@@ -352,6 +354,8 @@
 		4CDFAB0000000000000DF201 /* Nip38.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Nip38.swift; sourceTree = "<group>"; };
 		4CFA00020001000000A1BA01 /* RelayDefaults.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayDefaults.swift; sourceTree = "<group>"; };
 		4CFA00040001000000A1BA01 /* FollowsCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowsCache.swift; sourceTree = "<group>"; };
+		4CFB00010001000000A1BA01 /* FollowHistoryGuard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowHistoryGuard.swift; sourceTree = "<group>"; };
+		4CFB00030001000000A1BA01 /* FollowRestorePromptSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowRestorePromptSheet.swift; sourceTree = "<group>"; };
 		4CFA00060001000000A1BA01 /* EventPersistQueue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventPersistQueue.swift; sourceTree = "<group>"; };
 		4CFADE0000000000000F1001 /* SafetyFilter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafetyFilter.swift; sourceTree = "<group>"; };
 		4CFADE0000000000000F1002 /* SafetyPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafetyPreferences.swift; sourceTree = "<group>"; };
@@ -606,6 +610,8 @@
 				4CDA87E32F9C54980079A1BA /* RelayPool.swift */,
 				4CFA00020001000000A1BA01 /* RelayDefaults.swift */,
 				4CFA00040001000000A1BA01 /* FollowsCache.swift */,
+				4CFB00010001000000A1BA01 /* FollowHistoryGuard.swift */,
+				4CFB00030001000000A1BA01 /* FollowRestorePromptSheet.swift */,
 				4CFA00060001000000A1BA01 /* EventPersistQueue.swift */,
 				4CAA00020002000000A1BA01 /* AudioTrack.swift */,
 				4CAA00040002000000A1BA01 /* AudioPlayerStore.swift */,
@@ -1039,6 +1045,8 @@
 				4CDA87E42F9C54980079A1BA /* RelayPool.swift in Sources */,
 				4CFA00010001000000A1BA01 /* RelayDefaults.swift in Sources */,
 				4CFA00030001000000A1BA01 /* FollowsCache.swift in Sources */,
+				4CFB00020001000000A1BA01 /* FollowHistoryGuard.swift in Sources */,
+				4CFB00040001000000A1BA01 /* FollowRestorePromptSheet.swift in Sources */,
 				4CFA00050001000000A1BA01 /* EventPersistQueue.swift in Sources */,
 				4CAA00010002000000A1BA01 /* AudioTrack.swift in Sources */,
 				4CAA00030002000000A1BA01 /* AudioPlayerStore.swift in Sources */,
