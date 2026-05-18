@@ -87,6 +87,10 @@ final class ComposeViewModel {
     @ObservationIgnored private var countdownTask: Task<Void, Never>?
     @ObservationIgnored private var publishContinuation: CheckedContinuation<Void, Never>?
     @ObservationIgnored private var mineTask: Task<Void, Never>?
+    /// Debounce handle for social-preview cache warming. Cancelled and
+    /// recreated on each content change so a URL typed character by
+    /// character doesn't fan out a fetch for every partial fragment.
+    @ObservationIgnored private var socialPreviewPrefetchTask: Task<Void, Never>?
     @ObservationIgnored private var autosaveTask: Task<Void, Never>?
     private var powDifficulty: Int { PowPreferences.shared.noteDifficulty }
 
@@ -1213,6 +1217,27 @@ final class ComposeViewModel {
     /// `@displayName` text.
     var previewContent: String {
         bodyForPublish(kind: determineKind(), materialized: materializeMentions(content))
+    }
+
+    /// Warm `LinkPreviewService`'s cache for every standalone link in the
+    /// post being written. The composer preview panel renders links as
+    /// plain text (`showLinkPreviews: false`), but once the note is
+    /// published it shows full preview cards in the feed/thread — doing
+    /// the OG fetch while the user is still composing means those cards
+    /// paint from cache on first render instead of flashing a spinner.
+    /// Debounced ~800ms so mid-typing URL fragments don't trigger wasted
+    /// fetches; the service itself dedupes the rest.
+    func prefetchSocialPreviews() {
+        socialPreviewPrefetchTask?.cancel()
+        let body = previewContent
+        socialPreviewPrefetchTask = Task {
+            try? await Task.sleep(for: .milliseconds(800))
+            guard !Task.isCancelled else { return }
+            let segments = ContentParser.parse(content: body, tags: [])
+            for case .link(let url) in segments {
+                LinkPreviewService.shared.prefetch(url)
+            }
+        }
     }
 
     /// Replace each `@displayName` token with `nostr:nprofile1...` (per stored mentions).

@@ -186,6 +186,10 @@ struct ComposeView: View {
                 viewModel.loadDraft(draft)
             }
             await viewModel.start()
+            contentFocused = true
+            // Drafts / reply prefills land before the view observes
+            // `content`, so warm their links once on open too.
+            viewModel.prefetchSocialPreviews()
         }
         .interactiveDismissDisabled(
             viewModel.isPublishing
@@ -263,6 +267,7 @@ struct ComposeView: View {
         }
         .onChange(of: viewModel.content) { _, _ in
             viewModel.scheduleLocalAutosave()
+            viewModel.prefetchSocialPreviews()
         }
         .onChange(of: viewModel.attachments.map { $0.url ?? "" }) { _, _ in
             viewModel.scheduleLocalAutosave()

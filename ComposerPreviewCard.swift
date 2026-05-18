@@ -24,7 +24,13 @@ struct ComposerPreviewCard: View {
                 content: content,
                 tags: tags,
                 profiles: [:],
-                showLinkPreviews: false,
+                // Render link preview cards inline the same way the
+                // published note will. The composer's prefetch warms
+                // `LinkPreviewService`'s cache for these URLs so the
+                // card paints from cache instead of flashing a spinner
+                // — the user gets to see what their post will look like
+                // before they hit Publish.
+                showLinkPreviews: true,
                 // Preview is read-only — mentions render as colored text
                 // (`wispPrimary`) without the editor's capsule background,
                 // so the user isn't tricked into thinking they can edit
