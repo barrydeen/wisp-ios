@@ -3,6 +3,7 @@ import SwiftUI
 enum ProfileTab: String, CaseIterable, Hashable {
     case notes
     case replies
+    case conversation
     case gallery
     case media
     case following
@@ -14,6 +15,7 @@ enum ProfileTab: String, CaseIterable, Hashable {
         switch self {
         case .notes: return "Notes"
         case .replies: return "Replies"
+        case .conversation: return "Conversation"
         case .gallery: return "Gallery"
         case .media: return "Media"
         case .following: return "Following"
@@ -34,8 +36,6 @@ struct NotesTabView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            sortRow
-
             if viewModel.notesSortMode == .recency {
                 if viewModel.isLoadingNotes && viewModel.rootNotes.isEmpty {
                     loading("Loading notes…")
@@ -90,17 +90,6 @@ struct NotesTabView: View {
             }
         }
     }
-
-    private var sortRow: some View {
-        ProfileSortPicker(
-            selection: viewModel.notesSortMode,
-            onSelect: { mode in
-                Task { await viewModel.setNotesSortMode(mode) }
-            }
-        )
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-    }
 }
 
 struct RepliesTabView: View {
@@ -111,15 +100,6 @@ struct RepliesTabView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ProfileSortPicker(
-                selection: viewModel.repliesSortMode,
-                onSelect: { mode in
-                    Task { await viewModel.setRepliesSortMode(mode) }
-                }
-            )
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-
             if viewModel.repliesSortMode == .recency {
                 if viewModel.isLoadingReplies && viewModel.replies.isEmpty {
                     loading("Loading replies…")
@@ -176,38 +156,103 @@ struct RepliesTabView: View {
     }
 }
 
-private struct ProfileSortPicker: View {
-    let selection: ProfileSortMode
-    let onSelect: (ProfileSortMode) -> Void
+struct ConversationTabView: View {
+    @Bindable var viewModel: ProfileViewModel
+    var onProfileTap: ((String) -> Void)? = nil
+    var onNoteTap: ((String) -> Void)? = nil
+    var onHashtagTap: ((String) -> Void)? = nil
 
     var body: some View {
-        Menu {
-            ForEach(ProfileSortMode.allCases, id: \.self) { mode in
-                Button {
-                    onSelect(mode)
-                } label: {
-                    if mode == selection {
-                        Label(mode.label, systemImage: "checkmark")
-                    } else {
-                        Text(mode.label)
+        Group {
+            if viewModel.isLoadingConversation && viewModel.conversationNotes.isEmpty {
+                loading("Loading conversation…")
+            } else if viewModel.conversationNotes.isEmpty {
+                emptyState("No public conversation with this user yet")
+            } else {
+                LazyVStack(spacing: 0) {
+                    ForEach(viewModel.conversationNotes, id: \.id) { event in
+                        NavigationLink(value: ThreadRoute(eventId: event.id, authorPubkey: event.pubkey)) {
+                            PostCardView(
+                                event: event,
+                                profile: viewModel.profiles[event.pubkey],
+                                profiles: viewModel.profiles,
+                                engagement: viewModel.engagement[event.id],
+                                onProfileTap: onProfileTap,
+                                onNoteTap: onNoteTap,
+                                onHashtagTap: onHashtagTap
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
                     }
                 }
             }
+        }
+    }
+}
+
+struct ProfileSortPicker: View {
+    let selection: ProfileSortMode
+    let onSelect: (ProfileSortMode) -> Void
+
+    @State private var showMenu = false
+
+    var body: some View {
+        Button {
+            showMenu = true
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: "line.3.horizontal.decrease.circle")
                     .font(.system(size: 13))
                 Text(selection.label)
                     .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
                 Image(systemName: "chevron.down")
                     .font(.system(size: 10, weight: .semibold))
             }
+            .fixedSize(horizontal: true, vertical: false)
             .foregroundStyle(Color.wispPrimary)
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
             .background(Color.wispSurfaceVariant, in: RoundedRectangle(cornerRadius: 16))
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .buttonStyle(.plain)
+        // Follow-up to PR #127: SwiftUI's `Menu` plays a non-suppressible
+        // UIKit press animation on tap. A plain Button + popover gives the
+        // same dropdown affordance without that bounce.
+        .popover(isPresented: $showMenu) {
+            VStack(alignment: .leading, spacing: 0) {
+                let modes = ProfileSortMode.allCases
+                ForEach(modes, id: \.self) { mode in
+                    Button {
+                        showMenu = false
+                        onSelect(mode)
+                    } label: {
+                        HStack(spacing: 8) {
+                            Text(mode.label)
+                                .font(.subheadline.weight(mode == selection ? .semibold : .regular))
+                                .foregroundStyle(mode == selection ? Color.wispPrimary : Color.wispOnSurface)
+                            Spacer(minLength: 16)
+                            if mode == selection {
+                                Image(systemName: "checkmark")
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundStyle(Color.wispPrimary)
+                            }
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    if mode != modes.last {
+                        Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
+                    }
+                }
+            }
+            .frame(minWidth: 180)
+            .background(Color.wispBackground)
+            .presentationCompactAdaptation(.popover)
+        }
     }
 }
 
