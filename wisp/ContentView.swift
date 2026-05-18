@@ -74,6 +74,12 @@ struct ContentView: View {
                         currentScreen = .loading
                     }, onAddAccount: {
                         showAddAccount = true
+                    }, onForceRerunOnboarding: {
+                        // Triggered by the follow-history guard after the user
+                        // accepts a restore. Bounce through onboarding so the
+                        // relay scoreboard gets rebuilt from the restored
+                        // follow list; OnboardingView lands back here when done.
+                        withAnimation { currentScreen = .onboarding }
                     })
                 }
             }

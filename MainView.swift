@@ -75,12 +75,26 @@ struct MainView: View {
     private let drawerWidth: CGFloat = 320
 
     var onAddAccount: () -> Void = {}
+    var onForceRerunOnboarding: () -> Void = {}
 
-    init(keypair: Keypair, onLogout: @escaping () -> Void = {}, onSwitchAccount: @escaping (Keypair) -> Void = { _ in }, onAddAccount: @escaping () -> Void = {}) {
+    /// Restore-prompt candidate when a returning user arrives with a follow
+    /// list that looks clobbered relative to the largest version still
+    /// recoverable from relay history. Set by `runFollowGuardOnce()` on the
+    /// first appearance of MainView per account session.
+    @State private var followRestoreOffer: FollowRestoreCandidate?
+    /// Snapshot of the relay-published follow count at the moment the
+    /// candidate was found. Used by the restore sheet so its "right now" copy
+    /// matches what the guard evaluated against — `FollowsCache` can hold
+    /// stale data from before another client clobbered the on-relay kind-3.
+    @State private var followGuardCurrentCount: Int = 0
+    @State private var followGuardChecked = false
+
+    init(keypair: Keypair, onLogout: @escaping () -> Void = {}, onSwitchAccount: @escaping (Keypair) -> Void = { _ in }, onAddAccount: @escaping () -> Void = {}, onForceRerunOnboarding: @escaping () -> Void = {}) {
         self.keypair = keypair
         self.onLogout = onLogout
         self.onSwitchAccount = onSwitchAccount
         self.onAddAccount = onAddAccount
+        self.onForceRerunOnboarding = onForceRerunOnboarding
         _viewModel = State(initialValue: FeedViewModel(keypair: keypair))
         _messagesVM = State(initialValue: MessagesViewModel(keypair: keypair))
         _notificationsVM = State(initialValue: NotificationsViewModel(keypair: keypair))
@@ -315,7 +329,27 @@ struct MainView: View {
             // instead of waiting for the user to land on it before kicking off the
             // 3-8s Spark SDK init or NWC relay handshake.
             async let wallet: Void = walletStore.startIfConfigured()
-            _ = await (feed, messages, notifications, groups, emoji, hashtagSets, peopleLists, noteLists, relaySettings, wallet)
+            async let followGuard: Void = runFollowGuardOnce()
+            _ = await (feed, messages, notifications, groups, emoji, hashtagSets, peopleLists, noteLists, relaySettings, wallet, followGuard)
+        }
+        .sheet(item: $followRestoreOffer) { candidate in
+            FollowRestorePromptSheet(
+                candidate: candidate,
+                currentCount: followGuardCurrentCount,
+                onRestore: {
+                    Task { await acceptFollowRestore(candidate) }
+                },
+                onKeep: {
+                    FollowHistoryGuard.didDecline(
+                        pubkey: keypair.pubkey,
+                        currentCount: followGuardCurrentCount,
+                        candidateCount: candidate.count
+                    )
+                    followRestoreOffer = nil
+                }
+            )
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
         }
         .onDisappear {
             viewModel.stop()
@@ -1276,6 +1310,80 @@ struct MainView: View {
         case 1_000_000...: String(format: "%.1fM", Double(n) / 1_000_000)
         case 1_000...: String(format: "%.1fk", Double(n) / 1_000)
         default: "\(n)"
+        }
+    }
+
+    // MARK: - Follow history guard
+
+    /// Onboarding's outbox-build path runs the follow-history guard once, but
+    /// only on first-launch onboarding. The clobber case this feature
+    /// actually targets — user away from Wisp while another client overwrote
+    /// their kind-3 with a tiny list — is missed because onboarding doesn't
+    /// re-run on subsequent cold launches or account switches. Run a
+    /// lightweight check here on every MainView appearance for an
+    /// already-onboarded account. Cheap when the current count isn't a
+    /// substantial drop from the recorded high-water; the deep relay sweep
+    /// only fires when suspicion is real.
+    private func runFollowGuardOnce() async {
+        guard !followGuardChecked else { return }
+        followGuardChecked = true
+
+        let pubkey = keypair.pubkey
+        guard NostrKey.isOnboardingComplete(pubkey: pubkey) else {
+            NSLog("[FollowGuard] skip — onboarding not complete for \(pubkey.prefix(8))")
+            return
+        }
+        guard !isWatchOnly else {
+            NSLog("[FollowGuard] skip — watch-only account")
+            return
+        }
+
+        let highWater = FollowHistoryGuard.recordedHighWater(for: pubkey)
+        NSLog("[FollowGuard] starting for \(pubkey.prefix(8)) — recorded high-water = \(highWater)")
+
+        let fetched = await RelayPool.query(
+            relays: RelayDefaults.indexers,
+            filter: NostrFilter(kinds: [3], authors: [pubkey])
+        )
+        let kind3s = fetched.filter { $0.kind == 3 }
+        let currentFollows = kind3s
+            .max(by: { $0.createdAt < $1.createdAt })
+            .map(FollowHistoryGuard.followedPubkeys) ?? []
+
+        NSLog("[FollowGuard] indexer fetch: \(kind3s.count) kind-3 event(s), latest has \(currentFollows.count) follows")
+
+        let candidate = await FollowHistoryGuard.evaluateRestore(
+            pubkey: pubkey,
+            currentFollows: currentFollows,
+            fetched: kind3s
+        )
+
+        if let candidate {
+            NSLog("[FollowGuard] candidate: \(candidate.count) follows from createdAt=\(candidate.createdAt) — presenting sheet")
+            followGuardCurrentCount = currentFollows.count
+            followRestoreOffer = candidate
+        } else {
+            NSLog("[FollowGuard] no candidate — no restore offered")
+        }
+    }
+
+    /// User tapped Restore: republish the recovered list as the active
+    /// kind-3, then hand off to ContentView to re-route through
+    /// OnboardingView so the relay scoreboard gets rebuilt from the
+    /// restored follows. The brief onboarding splash is the right UX here —
+    /// it surfaces the rebuild progress and lands the user back in MainView
+    /// with a working feed.
+    private func acceptFollowRestore(_ candidate: FollowRestoreCandidate) async {
+        do {
+            try await FollowSender.shared.restore(
+                follows: candidate.pubkeys,
+                keypair: keypair
+            )
+            FollowHistoryGuard.didRestore(pubkey: keypair.pubkey, to: candidate.count)
+            followRestoreOffer = nil
+            onForceRerunOnboarding()
+        } catch {
+            followRestoreOffer = nil
         }
     }
 

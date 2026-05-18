@@ -3,7 +3,7 @@ import Foundation
 /// A recoverable contact list pulled from relay history (an overwritten or
 /// tombstoned kind-3) that has substantially more follows than the version the
 /// user just arrived with.
-struct FollowRestoreCandidate: Equatable, Sendable {
+struct FollowRestoreCandidate: Equatable, Sendable, Identifiable {
     /// De-duplicated, order-preserving list of followed pubkeys.
     let pubkeys: [String]
     /// `created_at` of the kind-3 this came from — surfaced so the UI can say
@@ -11,6 +11,7 @@ struct FollowRestoreCandidate: Equatable, Sendable {
     let createdAt: Int
 
     var count: Int { pubkeys.count }
+    var id: Int { createdAt }
 }
 
 /// Detects the "my follow list got clobbered" failure mode that plagues Nostr:
@@ -127,7 +128,15 @@ enum FollowHistoryGuard {
 
     /// Is `current` a substantial drop from `previous`? Encodes the
     /// ratio + absolute-floor + minimum-meaningful-previous rules.
+    ///
+    /// A complete wipe (current = 0) surfaces whenever there's anything at
+    /// all to recover. The thresholds in the other branch exist to avoid
+    /// nagging on normal churn for small follow lists — but a full clobber
+    /// to zero is never normal churn, and recovering even a single follow
+    /// beats starting over. The deep relay sweep that produced `previous`
+    /// has already filtered out the no-history case.
     static func isSubstantialDrop(current: Int, previous: Int) -> Bool {
+        if current == 0 { return previous >= 1 }
         guard previous >= minMeaningfulPreviousCount else { return false }
         guard previous - current >= minAbsoluteDrop else { return false }
         return Double(current) < Double(previous) * substantialDropRatio
@@ -168,8 +177,17 @@ enum FollowHistoryGuard {
         let firstArrival = highWater == 0
         let cheapBest = bestVersion(in: fetched, beating: currentCount)
 
+        // Always cast the wide net when the current list is empty. Indexers
+        // typically only retain the newest replaceable event, so a clobber
+        // event leaves the cheap fetch with nothing to suggest a drop; the
+        // recoverable older versions live on whichever relays haven't yet
+        // received the wipe. Without this we'd silently skip the sweep that
+        // is the whole point of the feature.
+        let emptyArrival = currentCount == 0
+
         let suspicious =
             firstArrival ||
+            emptyArrival ||
             isSubstantialDrop(current: currentCount, previous: highWater) ||
             (cheapBest.map { isSubstantialDrop(current: currentCount, previous: $0.count) } ?? false)
         guard suspicious else { return nil }
