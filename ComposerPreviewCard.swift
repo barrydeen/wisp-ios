@@ -30,7 +30,14 @@ struct ComposerPreviewCard: View {
                 // card paints from cache instead of flashing a spinner
                 // — the user gets to see what their post will look like
                 // before they hit Publish.
-                showLinkPreviews: true
+                showLinkPreviews: true,
+                // Preview is read-only — mentions render as colored text
+                // (`wispPrimary`) without the editor's capsule background,
+                // so the user isn't tricked into thinking they can edit
+                // the pill from here. The composer's editable surface
+                // still gets the capsule via its own `.wispMentionPill`
+                // attribute pass.
+                mentionPillStyle: false
             )
         }
         .padding(12)

@@ -23,6 +23,11 @@ final class DraftSavedToastStore {
 struct PublishedPostToast: Equatable {
     let id: String
     let pubkey: String
+    /// Set when the published event is a reply. Holds the direct parent's event id
+    /// so the toast can navigate to the parent's thread (showing the reply below it)
+    /// rather than opening the reply itself as the thread focal.
+    let parentEventId: String?
+    let parentAuthorPubkey: String?
 }
 
 @MainActor
@@ -50,6 +55,8 @@ struct ComposeView: View {
     /// (which ignores `State(initialValue:)` when state already exists for this view identity).
     private let initialDraft: Nip37.Draft?
 
+    private let previewAnchorID = "composer-preview-card"
+
     init(keypair: Keypair, mode: ComposeMode = .new) {
         self.initialDraft = nil
         _viewModel = State(initialValue: ComposeViewModel(keypair: keypair, mode: mode))
@@ -68,6 +75,7 @@ struct ComposeView: View {
                 VStack(spacing: 0) {
                     contextHeader
 
+                    ScrollViewReader { proxy in
                     ScrollView {
                         VStack(alignment: .leading, spacing: 12) {
                             if viewModel.galleryMode {
@@ -96,7 +104,7 @@ struct ComposeView: View {
                                 nsfwBanner
                             }
 
-                            if !viewModel.mentionCandidates.isEmpty {
+                            if !viewModel.mentionCandidates.isEmpty || viewModel.isMentionSearchingRemote {
                                 mentionPopup
                             }
 
@@ -110,6 +118,7 @@ struct ComposeView: View {
                                     tags: previewTags,
                                     userProfile: ProfileRepository.shared.get(viewModel.keypair.pubkey)
                                 )
+                                .id(previewAnchorID)
                             }
 
                             if let error = viewModel.lastError {
@@ -122,6 +131,17 @@ struct ComposeView: View {
                             Color.clear.frame(height: 80)
                         }
                         .padding(.top, 12)
+                    }
+                    .onChange(of: viewModel.countdownSeconds) { oldValue, newValue in
+                        // When the undo countdown starts, bring the post
+                        // preview into view (top-aligned) so the user can
+                        // spot-check what's about to publish before the
+                        // window closes.
+                        guard oldValue == nil, newValue != nil, shouldShowPreview else { return }
+                        withAnimation(.easeInOut(duration: 0.3)) {
+                            proxy.scrollTo(previewAnchorID, anchor: .top)
+                        }
+                    }
                     }
 
                     if viewModel.scheduleEnabled {
@@ -246,22 +266,32 @@ struct ComposeView: View {
             if saved { dismiss() }
         }
         .onChange(of: viewModel.content) { _, _ in
-            viewModel.writeLocalAutosave()
+            viewModel.scheduleLocalAutosave()
             viewModel.prefetchSocialPreviews()
         }
         .onChange(of: viewModel.attachments.map { $0.url ?? "" }) { _, _ in
-            viewModel.writeLocalAutosave()
+            viewModel.scheduleLocalAutosave()
         }
         .onChange(of: viewModel.explicit) { _, _ in
-            viewModel.writeLocalAutosave()
+            viewModel.scheduleLocalAutosave()
         }
         .onChange(of: viewModel.powEnabled) { _, _ in
-            viewModel.writeLocalAutosave()
+            viewModel.scheduleLocalAutosave()
         }
         .onChange(of: viewModel.scheduleAt) { _, _ in
-            viewModel.writeLocalAutosave()
+            viewModel.scheduleLocalAutosave()
         }
         .onDisappear {
+            // The local autosave is debounced off the keystroke, so the last
+            // few characters may not be persisted yet. Flush them now — unless
+            // an explicit discard / successful publish already cleared the
+            // bucket (those paths call `clearLocalAutosave()`), in which case
+            // just drop the pending debounce so it can't resurrect the bucket.
+            if viewModel.explicitlyDiscarded || viewModel.publishedEventId != nil {
+                viewModel.clearLocalAutosave()
+            } else {
+                viewModel.flushLocalAutosave()
+            }
             // Auto-save on dismiss when the user navigated away without publishing
             // or explicitly discarding (e.g. swipe-to-dismiss the sheet). Fires
             // for reply / quote / new alike — `saveDraft` builds the appropriate
@@ -395,17 +425,9 @@ struct ComposeView: View {
                         .padding(.horizontal, 16)
                         .padding(.top, 12)
                 }
-                TextEditor(text: Binding(
-                    get: { viewModel.content },
-                    set: { newVal in
-                        viewModel.updateContent(newVal)
-                        recomputeTriggers(for: newVal)
-                    }
-                ))
-                .focused($contentFocused)
-                .scrollContentBackground(.hidden)
-                .frame(minHeight: viewModel.galleryMode ? 80 : 160)
-                .padding(.horizontal, 12)
+                MentionComposerTextView(viewModel: viewModel)
+                    .frame(minHeight: viewModel.galleryMode ? 80 : 160, alignment: .topLeading)
+                    .padding(.horizontal, 12)
             }
             if let progress = viewModel.uploadProgress {
                 HStack(spacing: 6) {
@@ -564,15 +586,41 @@ struct ComposeView: View {
     }
 
     private var mentionPopup: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        // Display-name collision detection. Search relays surface
+        // impersonators using the same display name as a real account
+        // (different pubkeys, identical bio). We can't safely dedupe
+        // by content, so we surface a short npub beneath the colliding
+        // names so the user can tell them apart.
+        let nameCounts: [String: Int] = viewModel.mentionCandidates.reduce(into: [:]) { acc, c in
+            acc[c.name.lowercased(), default: 0] += 1
+        }
+        return VStack(alignment: .leading, spacing: 0) {
             ForEach(viewModel.mentionCandidates) { candidate in
                 Button {
                     viewModel.selectMention(candidate)
                 } label: {
-                    MentionCandidateRow(candidate: candidate)
+                    let isCollision = (nameCounts[candidate.name.lowercased()] ?? 0) > 1
+                    MentionCandidateRow(
+                        candidate: candidate,
+                        disambiguationNpub: isCollision ? Nip19.shortNpub(hex: candidate.pubkey) : nil
+                    )
                 }
                 .buttonStyle(.plain)
                 Divider().overlay(Color.wispSurfaceVariant.opacity(0.4))
+            }
+            if viewModel.isMentionSearchingRemote {
+                // Pinned at the bottom so any local matches stay clickable
+                // at the top while we wait on the relay. The spinner is the
+                // signal that "more results may yet arrive" — without it
+                // the popup looks like it's already final.
+                HStack(spacing: 8) {
+                    ProgressView().scaleEffect(0.7)
+                    Text("Searching…")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
             }
         }
         .background(Color.wispSurfaceVariant.opacity(0.3),
@@ -708,24 +756,20 @@ struct ComposeView: View {
                 Button(role: .destructive) {
                     viewModel.cancelPublish()
                 } label: {
-                    Text("Undo")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
+                    Image(systemName: "xmark")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 44, height: 44)
+                        .background(Color.red, in: Circle())
                 }
-                .background(Color.wispSurfaceVariant, in: Capsule())
+                .buttonStyle(.plain)
 
                 Button {
                     viewModel.publishNow()
                 } label: {
-                    Text("Post Now (\(viewModel.countdownSeconds ?? 0)s)")
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
+                    countdownProgressLabel
                 }
-                .background(Color.wispPrimary, in: Capsule())
-                .foregroundStyle(.white)
+                .buttonStyle(.plain)
             } else {
                 Button {
                     if viewModel.isImageOnlyPost {
@@ -794,6 +838,30 @@ struct ComposeView: View {
         }
     }
 
+    private var countdownProgressLabel: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+            let started = viewModel.countdownStartedAt ?? context.date
+            let total = max(Double(viewModel.countdownTotalSeconds), 1)
+            let elapsed = context.date.timeIntervalSince(started)
+            let progress = max(0, min(1, elapsed / total))
+            let remaining = max(0, Int(ceil(total - elapsed)))
+
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Color.wispPrimary.opacity(0.25)
+                    Color.wispPrimary
+                        .frame(width: geo.size.width * progress)
+                    Text("Post Now (\(remaining)s)")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                }
+                .clipShape(Capsule())
+            }
+            .frame(height: 44)
+        }
+    }
+
     private var shouldShowPreview: Bool {
         if viewModel.galleryMode { return false }
         let hasText = !viewModel.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -826,41 +894,4 @@ struct ComposeView: View {
         return tags
     }
 
-    /// Re-derive `@mention` and `:emoji:` triggers from the current content. We pick the
-    /// last whitespace-delimited token at the end of the buffer as a heuristic for the
-    /// caret position — works for the typical "type at end" flow that the SwiftUI
-    /// `TextEditor` defaults to.
-    private func recomputeTriggers(for text: String) {
-        // Find the start of the last token. NBSPs inside a sanitised display
-        // name are not token breaks (`isMentionTokenBreak`), so a multi-word
-        // mention stays a single `@displayName` trigger token.
-        var idx = text.endIndex
-        while idx > text.startIndex {
-            let prev = text.index(before: idx)
-            if text[prev].isMentionTokenBreak { break }
-            idx = prev
-        }
-        let token = String(text[idx..<text.endIndex])
-        let utf16Offset = text.utf16.distance(from: text.utf16.startIndex,
-                                              to: idx.samePosition(in: text.utf16) ?? text.utf16.startIndex)
-
-        if token.hasPrefix("@"), token.count >= 1 {
-            let query = String(token.dropFirst())
-            // Only show popup once they typed at least 1 char OR have an active candidate set.
-            if query.isEmpty {
-                viewModel.updateMentionTrigger(query: nil, atOffsetUtf16: nil)
-            } else {
-                viewModel.updateMentionTrigger(query: query, atOffsetUtf16: utf16Offset)
-            }
-        } else {
-            viewModel.updateMentionTrigger(query: nil, atOffsetUtf16: nil)
-        }
-
-        if token.hasPrefix(":"), token.count >= 2, !token.dropFirst().contains(":") {
-            let query = String(token.dropFirst())
-            viewModel.updateEmojiTrigger(query: query, atOffsetUtf16: utf16Offset)
-        } else {
-            viewModel.updateEmojiTrigger(query: nil, atOffsetUtf16: nil)
-        }
-    }
 }

@@ -37,6 +37,12 @@ final class ComposeViewModel {
 
     var mentionQuery: String?
     var mentionCandidates: [MentionCandidate] = []
+    /// True while the NIP-50 relay lookup is in flight after the local
+    /// search has returned (no follows match). The view surfaces a
+    /// "Searching…" row so the user can tell the popup is working on
+    /// something rather than assuming the autocomplete is broken — relay
+    /// queries take 1-3 s vs the instant follows search.
+    var isMentionSearchingRemote: Bool = false
     var emojiQuery: String?
     var emojiCandidates: [CustomEmoji] = []
 
@@ -47,6 +53,8 @@ final class ComposeViewModel {
     var miningAttempts: Int = 0
     var uploadProgress: String?
     var countdownSeconds: Int?
+    var countdownTotalSeconds: Int = 10
+    var countdownStartedAt: Date?
     var lastError: String?
     var publishedEventId: String?
 
@@ -83,12 +91,14 @@ final class ComposeViewModel {
     /// recreated on each content change so a URL typed character by
     /// character doesn't fan out a fetch for every partial fragment.
     @ObservationIgnored private var socialPreviewPrefetchTask: Task<Void, Never>?
+    @ObservationIgnored private var autosaveTask: Task<Void, Never>?
     private var powDifficulty: Int { PowPreferences.shared.noteDifficulty }
 
     /// Track mention triggers via a sentinel index into the content string. When the
     /// `@` signal is active this is the UTF-16 offset of the `@` character.
     @ObservationIgnored private var mentionStartUtf16: Int?
     @ObservationIgnored private var emojiStartUtf16: Int?
+    @ObservationIgnored private var mentionRemoteTask: Task<Void, Never>?
 
     // MARK: - Init
 
@@ -153,7 +163,32 @@ final class ComposeViewModel {
         UserDefaults.standard.set(payload, forKey: autosaveKey)
     }
 
+    /// Debounced entry point for the per-keystroke autosave triggers. The
+    /// compose `TextEditor` binds through a custom `Binding`; running the
+    /// `UserDefaults` serialization synchronously inside the keystroke commit
+    /// transaction destabilises the editor and leaves a phantom caret on the
+    /// previously typed word. Coalescing the write off the keystroke avoids it.
+    func scheduleLocalAutosave() {
+        autosaveTask?.cancel()
+        autosaveTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled else { return }
+            self?.writeLocalAutosave()
+        }
+    }
+
+    /// Cancel any pending debounced write and persist immediately. Called from
+    /// the view's `onDisappear` so a swipe-dismiss right after the last
+    /// keystroke still flushes the autosave bucket for the reopen path.
+    func flushLocalAutosave() {
+        autosaveTask?.cancel()
+        autosaveTask = nil
+        writeLocalAutosave()
+    }
+
     func clearLocalAutosave() {
+        autosaveTask?.cancel()
+        autosaveTask = nil
         UserDefaults.standard.removeObject(forKey: autosaveKey)
     }
 
@@ -268,6 +303,13 @@ final class ComposeViewModel {
         } else {
             content = new
         }
+        // Rehydrate `nostr:nprofile1...` / `nostr:npub1...` pastes into the
+        // `@displayName + mentions[]` form so they render as pills. Cheap
+        // guard avoids the regex on every keystroke; only runs when a paste
+        // actually introduces the URI form.
+        if content.contains("nostr:") {
+            rehydrateMentionsFromContent()
+        }
         recomputeHashtags()
     }
 
@@ -285,10 +327,48 @@ final class ComposeViewModel {
     func updateMentionTrigger(query: String?, atOffsetUtf16: Int?) {
         mentionStartUtf16 = atOffsetUtf16
         mentionQuery = query
-        if let query {
-            mentionCandidates = MentionSearch.search(query: query, currentUserPubkey: keypair.pubkey)
-        } else {
+        mentionRemoteTask?.cancel()
+        guard let query else {
             mentionCandidates = []
+            isMentionSearchingRemote = false
+            return
+        }
+        mentionCandidates = MentionSearch.search(query: query, currentUserPubkey: keypair.pubkey)
+        // Only fire the relay fallback when the query is long enough to
+        // disambiguate and not yet served locally. `searchRemote` itself
+        // gates on `.count >= 2`, but checking here too avoids spinning
+        // up the loading spinner for `@s` only to clear it instantly.
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 2 else {
+            isMentionSearchingRemote = false
+            return
+        }
+        // Surface a "Searching…" row so the user can tell the popup is
+        // working on something — relay queries take 1-3 s vs the instant
+        // follows search and look broken without an affordance.
+        isMentionSearchingRemote = true
+        // The local pass is follows-only and only sees cached kind-0s, so an
+        // account the author doesn't follow yet (e.g. a fresh handle typed
+        // from memory) never appears. Fall back to a NIP-50 relay lookup,
+        // debounced so we don't fire a query per keystroke and guarded
+        // against staleness so a slow reply can't replace a newer query's
+        // results. 200 ms gives a typical typist time to add one more
+        // letter without firing two relay queries.
+        let pubkey = keypair.pubkey
+        mentionRemoteTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(200))
+            guard !Task.isCancelled, let self, self.mentionQuery == query else { return }
+            let existing = Set(self.mentionCandidates.map(\.pubkey))
+            let remote = await MentionSearch.searchRemote(
+                query: query,
+                currentUserPubkey: pubkey,
+                excluding: existing
+            )
+            guard !Task.isCancelled, self.mentionQuery == query else { return }
+            self.isMentionSearchingRemote = false
+            guard !remote.isEmpty else { return }
+            let known = Set(self.mentionCandidates.map(\.pubkey))
+            self.mentionCandidates.append(contentsOf: remote.filter { !known.contains($0.pubkey) })
         }
     }
 
@@ -318,8 +398,10 @@ final class ComposeViewModel {
         newContent.replaceSubrange(stringStartIdx..<end, with: "@\(displayName) ")
         content = newContent
         mentions.append(InsertedMention(displayName: displayName, pubkey: candidate.pubkey))
+        mentionRemoteTask?.cancel()
         mentionQuery = nil
         mentionCandidates = []
+        isMentionSearchingRemote = false
         mentionStartUtf16 = nil
         recomputeHashtags()
     }
@@ -610,6 +692,8 @@ final class ComposeViewModel {
         // stays on "Publish" until the Task scheduled below first runs,
         // which on a busy main actor reads as a 1–2 s no-op.
         countdownSeconds = totalSeconds
+        countdownTotalSeconds = totalSeconds
+        countdownStartedAt = Date()
         countdownTask = Task { @MainActor [weak self] in
             guard let self else { return }
             for n in stride(from: totalSeconds - 1, through: 1, by: -1) {
@@ -626,6 +710,7 @@ final class ComposeViewModel {
                 return
             }
             self.countdownSeconds = nil
+            self.countdownStartedAt = nil
             await self.runPublishPipeline()
         }
     }
@@ -634,6 +719,7 @@ final class ComposeViewModel {
         countdownTask?.cancel()
         countdownTask = nil
         countdownSeconds = nil
+        countdownStartedAt = nil
         Task { await runPublishPipeline() }
     }
 
@@ -641,6 +727,7 @@ final class ComposeViewModel {
         countdownTask?.cancel()
         countdownTask = nil
         countdownSeconds = nil
+        countdownStartedAt = nil
         mineTask?.cancel()
         mineTask = nil
         isPublishing = false
@@ -671,10 +758,14 @@ final class ComposeViewModel {
         }
         recomputeHashtags()
 
-        // Mentions in the text are already materialized as `nostr:nprofile1...`
-        // URIs, so we don't need to repopulate the `mentions` array — the rich
-        // renderer handles them, and re-publishing won't mangle them because
-        // `materializeMentions` is a no-op for tokens it doesn't recognize.
+        // Mentions persist in the body as `nostr:nprofile1...` URIs. Convert
+        // each back to `@displayName` and seed `mentions` so the rich editor
+        // can render them as pills — without this, drafts come back as raw
+        // bech32 strings even though the on-disk format is identical to what
+        // `materializeMentions` produces for a fresh post. `materializeMentions`
+        // at publish time will turn them back into URIs, so this is a pure
+        // display rehydrate.
+        rehydrateMentionsFromContent()
 
         // Reconstruct reply context from draft tags (Android: Navigation.kt:989).
         let replyTag = draft.tags.first(where: {
@@ -970,8 +1061,13 @@ final class ComposeViewModel {
             // drop-down instead of popping in instantly — matches the new-posts
             // pill's entrance.
             withAnimation(.spring(response: 0.55, dampingFraction: 0.82)) {
+                let (parentId, parentPubkey): (String?, String?) = {
+                    if case .reply(let parent, _) = mode { return (parent.id, parent.pubkey) }
+                    return (nil, nil)
+                }()
                 PostPublishedToastStore.shared.published = PublishedPostToast(
-                    id: event.id, pubkey: event.pubkey
+                    id: event.id, pubkey: event.pubkey,
+                    parentEventId: parentId, parentAuthorPubkey: parentPubkey
                 )
             }
             Haptics.shared.pulse()
@@ -1115,10 +1211,12 @@ final class ComposeViewModel {
     }
 
     /// Content as it would appear in the published note, including any spliced
-    /// attachment URLs. Used by the live preview card so pasted/uploaded images
-    /// render inline even though the URLs no longer live in `content`.
+    /// attachment URLs and `nostr:` mention URIs. Used by the live preview card
+    /// so pasted/uploaded images render inline (even though the URLs no longer
+    /// live in `content`) and tagged usernames render as pills rather than raw
+    /// `@displayName` text.
     var previewContent: String {
-        bodyForPublish(kind: determineKind(), materialized: content)
+        bodyForPublish(kind: determineKind(), materialized: materializeMentions(content))
     }
 
     /// Warm `LinkPreviewService`'s cache for every standalone link in the
@@ -1149,8 +1247,61 @@ final class ComposeViewModel {
             guard let bytes = Hex.decode(mention.pubkey) else { continue }
             guard let nprofile = Nip19.nprofileEncode(pubkey32: Array(bytes)) else { continue }
             let needle = "@\(mention.displayName)"
-            if let range = out.range(of: needle) {
-                out.replaceSubrange(range, with: "nostr:\(nprofile)")
+            // Replace *every* occurrence, not just the first — a user can
+            // copy a pill within the composer and end up with multiple
+            // `@displayName` tokens for the same mention. Each one should
+            // materialize to its own `nostr:nprofile1...` URI so the
+            // preview / final event sees the same `.nostrProfile` segment
+            // count, and so subsequent pastes don't degrade to plain text
+            // on publish.
+            out = out.replacingOccurrences(of: needle, with: "nostr:\(nprofile)")
+        }
+        // Separator pass: two pills typed back-to-back (or pasted next to
+        // each other) produce `nostr:Y1nostr:Y2` in the materialized text.
+        // `ContentParser`'s greedy `[a-z0-9]+` then consumes the second
+        // URI's `nostr` prefix into the first match, decoding fails, and
+        // the second mention falls through to plain text in the preview /
+        // published event. Insert a space between adjacent URIs so the
+        // parser can find the boundary cleanly. Non-greedy `+?` + a
+        // lookahead is the minimum bech32 run that satisfies "followed by
+        // another nostr:" — i.e. the full first URI.
+        if let regex = try? NSRegularExpression(
+            pattern: "(nostr:(?:note1|nevent1|npub1|nprofile1|naddr1)[a-z0-9]+?)(?=nostr:)",
+            options: []
+        ) {
+            let ns = out as NSString
+            out = regex.stringByReplacingMatches(
+                in: out,
+                range: NSRange(location: 0, length: ns.length),
+                withTemplate: "$1 "
+            )
+        }
+        // Separator pass. `ContentParser`'s greedy `[a-z0-9]+` after the
+        // bech32 prefix runs past the end of a `nostr:nprofile1...` URI
+        // and eats any contiguous lowercase letters / digits that follow
+        // — e.g. user backspaces the trailing space after a pill and
+        // types `tag!`, producing `nostr:Ytag!`. The decode then fails
+        // on the bech32 mismatch and the whole token renders as plain
+        // text in the published event. Insert a space between the URI
+        // and any such blender character. We iterate the known
+        // materialized URIs (exact lengths are known here) so we don't
+        // have to fight the parser's greedy regex.
+        for mention in mentions {
+            guard let bytes = Hex.decode(mention.pubkey) else { continue }
+            guard let nprofile = Nip19.nprofileEncode(pubkey32: Array(bytes)) else { continue }
+            let uri = "nostr:\(nprofile)"
+            var cursor = out.startIndex
+            while let r = out.range(of: uri, range: cursor..<out.endIndex) {
+                let nextIdx = r.upperBound
+                if nextIdx < out.endIndex {
+                    let c = out[nextIdx]
+                    if (c >= "a" && c <= "z") || (c >= "0" && c <= "9") {
+                        out.insert(" ", at: nextIdx)
+                        cursor = out.index(after: nextIdx)
+                        continue
+                    }
+                }
+                cursor = nextIdx
             }
         }
         return out
@@ -1311,6 +1462,45 @@ final class ComposeViewModel {
             }
         }
         return out
+    }
+
+    /// Walk `content` for `nostr:nprofile1...` and `nostr:npub1...` tokens
+    /// (the materialized form used in drafts and finalized event bodies),
+    /// replace each with `@displayName`, and add the corresponding
+    /// `InsertedMention` so the rich editor pill-styles them. Idempotent
+    /// when no nostr tokens are present.
+    private func rehydrateMentionsFromContent() {
+        let pattern = #"nostr:(npub1[acdefghjklmnpqrstuvwxyz023456789]+|nprofile1[acdefghjklmnpqrstuvwxyz023456789]+)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return }
+        let ns = content as NSString
+        let matches = regex.matches(in: content, range: NSRange(location: 0, length: ns.length))
+        guard !matches.isEmpty else { return }
+
+        var rewritten = ""
+        var lastEnd = 0
+        var added: [String: String] = [:]   // pubkey → displayName
+        for match in matches {
+            rewritten += ns.substring(with: NSRange(location: lastEnd, length: match.range.location - lastEnd))
+            let token = ns.substring(with: match.range)
+            if let decoded = Nip19.decodeNostrUri(token), case .profileRef(let pubkey, _) = decoded {
+                let displayName: String
+                if let existing = added[pubkey] {
+                    displayName = existing
+                } else {
+                    let profile = ProfileRepository.shared.get(pubkey)
+                    let raw = profile?.displayString ?? Nip19.shortNpub(hex: pubkey)
+                    displayName = sanitizeDisplayName(raw)
+                    added[pubkey] = displayName
+                    mentions.append(InsertedMention(displayName: displayName, pubkey: pubkey))
+                }
+                rewritten += "@\(displayName)"
+            } else {
+                rewritten += token
+            }
+            lastEnd = match.range.upperBound
+        }
+        rewritten += ns.substring(from: lastEnd)
+        content = rewritten
     }
 
     private func sanitizeDisplayName(_ name: String) -> String {

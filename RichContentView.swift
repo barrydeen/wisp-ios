@@ -1,6 +1,20 @@
 import SwiftUI
 import UIKit
 
+/// Sum of the rendered heights of a body's inline-text runs. Read by
+/// `PostCardView` to decide whether to offer "Show more": the collapse
+/// exists to tame long text walls, so media — galleries, single images,
+/// videos — must not count toward it (a fixed-height gallery clipped by a
+/// few points produced a toggle that revealed nothing). `reduce` *sums*
+/// sibling values because text can be split into several runs by
+/// interleaved media.
+struct RichTextContentHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value += nextValue()
+    }
+}
+
 struct RichContentView: View {
     let content: String
     let tags: [[String]]
@@ -23,12 +37,33 @@ struct RichContentView: View {
     /// NavigationLink and need the tap to fall through; surfaces with no
     /// enclosing tap target (profile bio, composer preview) opt in.
     var linksEnabled: Bool = false
+    /// When true (composer preview only), `@mention` runs render as rounded
+    /// pills. Default false leaves feed / bio rendering unchanged.
+    var mentionPillStyle: Bool = false
     /// When true, signal that this content is rendered inside a nested
     /// container (e.g. `QuotedNoteView` inside a `PostCardView` body) so
     /// children can size themselves against the actual available width
     /// rather than the full screen. Used by `MediaGridView` to opt out of
     /// its feed-only edge-bleed layout.
     var nested: Bool = false
+    /// When true, each inline-text run publishes its rendered height up the
+    /// `RichTextContentHeightKey` preference so the host card can base its
+    /// "Show more" decision on text length alone. Off by default so nested
+    /// bodies (quoted notes embedded in a feed card) don't leak their text
+    /// height into the outer card's measurement.
+    var reportsTextHeight: Bool = false
+    /// Lets the host split a body into two stacked renderings so a "Show
+    /// more" toggle can sit between long text and any trailing media:
+    /// `.textPortion` renders only the leading inline-text groups,
+    /// `.mediaPortion` renders everything from the first block/media group
+    /// onward. `.all` (default) renders everything inline as before.
+    var renderMode: RenderMode = .all
+
+    enum RenderMode {
+        case all
+        case textPortion
+        case mediaPortion
+    }
 
     @Environment(AppSettings.self) private var settings
     @State private var emojiRepo = EmojiRepository.shared
@@ -83,7 +118,8 @@ struct RichContentView: View {
 
     var body: some View {
         let segments = memoizedParse()
-        let groups = groupSegments(segments, gridLayout: settings.mediaLayoutStyle == .grid)
+        let allGroups = groupSegments(segments, gridLayout: settings.mediaLayoutStyle == .grid)
+        let groups = filteredGroups(allGroups)
         // Post-wide list of every image / video / unknown-media segment, in
         // document order. Tile taps + inline image taps both translate the
         // tapped URL to an index in this list, so the pager shows everything
@@ -101,6 +137,29 @@ struct RichContentView: View {
         )) { selection in
             FullScreenMediaPager(items: allMediaItems, initialIndex: selection.index)
         }
+    }
+
+    /// Split point for `.textPortion` / `.mediaPortion`: the first
+    /// non-inline group. Inline = text / hashtag / mention / inlineLink /
+    /// customEmoji (so `.textPortion` contains everything that contributes
+    /// to the `RichTextContentHeightKey` sum). The first block — image,
+    /// video, quoted note, link preview, etc. — starts the media portion.
+    private func filteredGroups(_ groups: [SegmentGroup]) -> [SegmentGroup] {
+        switch renderMode {
+        case .all:
+            return groups
+        case .textPortion:
+            let cut = groups.firstIndex(where: { !Self.isInlineGroup($0) }) ?? groups.count
+            return Array(groups.prefix(cut))
+        case .mediaPortion:
+            let cut = groups.firstIndex(where: { !Self.isInlineGroup($0) }) ?? groups.count
+            return Array(groups.dropFirst(cut))
+        }
+    }
+
+    private static func isInlineGroup(_ g: SegmentGroup) -> Bool {
+        if case .inline = g { return true }
+        return false
     }
 
     /// Identifiable wrapper required by `fullScreenCover(item:)`. The pager
@@ -209,7 +268,20 @@ struct RichContentView: View {
     private func renderGroup(_ group: SegmentGroup, allMediaItems: [MediaGridView.MediaItem]) -> some View {
         switch group {
         case .inline(let segs):
-            inlineText(segs)
+            if reportsTextHeight {
+                inlineText(segs)
+                    .background(
+                        GeometryReader { proxy in
+                            Color.clear
+                                .preference(
+                                    key: RichTextContentHeightKey.self,
+                                    value: proxy.size.height
+                                )
+                        }
+                    )
+            } else {
+                inlineText(segs)
+            }
         case .block(let seg):
             renderBlock(seg, allMediaItems: allMediaItems)
         case .mediaGroup(let segs):
@@ -343,7 +415,8 @@ struct RichContentView: View {
             onProfileTap: onProfileTap,
             onNoteTap: onNoteTap,
             onHashtagTap: onHashtagTap,
-            onPlainTextTap: onPlainTextTap
+            onPlainTextTap: onPlainTextTap,
+            mentionPillStyle: mentionPillStyle
         )
         .frame(maxWidth: .infinity, alignment: .leading)
     }

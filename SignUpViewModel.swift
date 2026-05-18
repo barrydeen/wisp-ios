@@ -238,10 +238,13 @@ final class SignUpViewModel {
 
     // MARK: - Wallet setup
 
-    /// Generate a Bip39 mnemonic and start the Breez Spark connect in parallel
-    /// with relay discovery, so by the time the user taps Continue on the
-    /// profile step the SDK is usually already up. Silent on failure: a
-    /// missing API key, bad entropy, or network error just leaves
+    /// Derive the default Spark wallet deterministically from the user's nsec
+    /// and start the Breez Spark connect in parallel with relay discovery, so
+    /// by the time the user taps Continue on the profile step the SDK is
+    /// usually already up. Deriving from the key (rather than a random
+    /// mnemonic) makes the brand-new account's wallet recoverable on any
+    /// device by signing in with the same nsec. Silent on failure: a missing
+    /// API key, bad entropy, or network error just leaves
     /// `sparkWallet?.isConnected == false` so `finishProfileStep` skips the
     /// lud16 path and publishes the profile bare.
     private func startWalletSetup() {
@@ -250,12 +253,15 @@ final class SignUpViewModel {
             signupLog.warning("Breez API key missing — skipping auto-wallet setup")
             return
         }
+        guard let privkey = Hex.decode(keypair.privkey) else {
+            signupLog.warning("Invalid privkey — skipping auto-wallet setup")
+            return
+        }
         let wallet = SparkWallet(pubkey: keypair.pubkey)
         do {
-            let mnemonic = try Bip39.newMnemonic()
-            wallet.saveMnemonic(mnemonic)
+            _ = try wallet.generateDefaultFromPrivkey(privkey)
         } catch {
-            signupLog.warning("Bip39.newMnemonic failed: \(error.localizedDescription, privacy: .public)")
+            signupLog.warning("Default wallet derivation failed: \(error.localizedDescription, privacy: .public)")
             return
         }
         sparkWallet = wallet
@@ -371,9 +377,14 @@ final class SignUpViewModel {
             }
         }
 
-        // NIP-78 encrypted seed backup: fire-and-forget to write relays only,
-        // matching Android's `relayPool.sendToWriteRelays(backupMsg)` semantics.
-        if lightning != nil, let mnemonic = sparkWallet?.loadMnemonic(), !writeRelays.isEmpty {
+        // NIP-78 relay backup is only useful for non-default wallets — the
+        // default wallet's mnemonic is derived from the nsec, and Breez
+        // remembers its lightning address registration server-side, so
+        // there's nothing extra to persist on relays. Manual backup of
+        // non-default (imported) wallets is unchanged. Fire-and-forget to
+        // write relays only, matching Android's `relayPool.sendToWriteRelays`.
+        if let wallet = sparkWallet, !wallet.isDefaultWallet(),
+           let mnemonic = wallet.loadMnemonic(), !writeRelays.isEmpty {
             let kp = self.keypair
             Task.detached { [mnemonic, writeRelays] in
                 do {
@@ -403,7 +414,7 @@ final class SignUpViewModel {
     private func signProfileEvent(lightningAddress: String? = nil) -> NostrEvent? {
         guard let privkey = Hex.decode(keypair.privkey) else { return nil }
         var json: [String: String] = [:]
-        let trimmedName = name.trimmingCharacters(in: .whitespaces)
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedAbout = about.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedName.isEmpty {
             json["name"] = trimmedName

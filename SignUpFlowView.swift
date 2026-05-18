@@ -150,7 +150,7 @@ private struct ProfileStep: View {
     }
 
     private var continueLabel: String {
-        if viewModel.publishingProfile { return "Publishing\u{2026}" }
+        if viewModel.publishingProfile { return "Creating account\u{2026}" }
         let phaseReady = viewModel.relayPhase == .ready || viewModel.relayPhase == .failed
         if !phaseReady { return "Please wait\u{2026}" }
         return "Continue"
@@ -251,6 +251,7 @@ private struct SuggestionsStep: View {
                         #if DEBUG
                         Button("Skip", action: onNext)
                             .font(.callout)
+                            .foregroundStyle(Color.wispPrimary)
                         #endif
                     }
 
@@ -433,7 +434,9 @@ private struct TopicsStep: View {
                             .font(.system(size: 28, weight: .bold))
                             .foregroundStyle(Color.wispOnSurface)
                         Spacer()
-                        Button("Skip", action: onSkip).font(.callout)
+                        Button("Skip", action: onSkip)
+                            .font(.callout)
+                            .foregroundStyle(Color.wispPrimary)
                     }
 
                     Text("Pick a few hashtags so your feed has more to show")
@@ -625,6 +628,7 @@ private struct IntroNoteStep: View {
                         Spacer()
                         Button("Skip", action: onSkip)
                             .font(.callout)
+                            .foregroundStyle(Color.wispPrimary)
                             .disabled(viewModel.publishingIntro || viewModel.postCountdown != nil)
                     }
 

@@ -1,16 +1,5 @@
 import SwiftUI
 
-/// Reports the intrinsic body height of a post card up to the
-/// `naturalContentHeight` state. Defined as a `max` reducer so a tall
-/// child (an image grid, a quoted-note image) wins over a short sibling
-/// when the body holds multiple groups.
-private struct PostBodyHeightKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
-    }
-}
-
 struct PostCardView: View {
     let event: NostrEvent
     let profile: ProfileData?
@@ -56,14 +45,14 @@ struct PostCardView: View {
     @Environment(AppSettings.self) private var settings
     @State private var expanded = false
     @State private var contentExpanded = false
-    /// Largest intrinsic height we've observed for the body content.
-    /// Latched (only grows) so the cap stays applied once the post is
-    /// known to overflow, even if a sub-pixel relayout reports a slightly
-    /// smaller value on a subsequent pass. Drives the "Show more" toggle
-    /// — text-only posts trigger via the char-count heuristic, anything
-    /// that *renders* taller than `longPostCollapsedHeight` (tall image,
-    /// quoted note with media, image grid, etc.) triggers via this.
-    @State private var naturalContentHeight: CGFloat = 0
+    /// Largest rendered height we've observed for the body's *text* runs
+    /// (media excluded). Latched (only grows) so the cap stays applied once
+    /// a post is known to overflow, even if a sub-pixel relayout reports a
+    /// slightly smaller value on a later pass. Drives the "Show more"
+    /// toggle: the collapse exists to tame long text walls, so a tall
+    /// image / gallery / video must not trigger it — clipping fixed-height
+    /// media by a few points only produced a toggle that revealed nothing.
+    @State private var naturalTextHeight: CGFloat = 0
     @State private var showReactionPicker = false
     /// Reference-type frame tracker for the heart button. The GeometryReader
     /// background writes the heart's current global frame here on every layout
@@ -83,6 +72,14 @@ struct PostCardView: View {
     @State private var reactionPickerMaxHeight: CGFloat = 192
     @State private var showDeleteConfirm = false
     @State private var showMuteUserConfirm = false
+    /// Tap-anchored menus on the action bar. We use `Button` + `.popover`
+    /// instead of SwiftUI's `Menu` because `Menu`'s label runs a baked-in
+    /// UIKit press animation that scales/shifts the icon every time it's
+    /// tapped — disable-able only by giving up `Menu` itself. `.popover`
+    /// with `.presentationCompactAdaptation(.popover)` keeps the
+    /// anchored-popup feel without animating the launching icon.
+    @State private var showRepostMenu = false
+    @State private var showOverflowMenu = false
     /// True when the user tapped Zap but no wallet is configured. Surfaces a
     /// confirmation prompt that can launch the Wallet tab to set one up.
     @State private var showWalletSetupPrompt = false
@@ -138,6 +135,11 @@ struct PostCardView: View {
     /// instead of being clipped for a trivial amount of hidden content.
     /// ~5 lines of body text — meaningful enough to be worth a tap.
     private static let longPostMinOverflow: CGFloat = 72
+    /// Visible height of trailing media when the body is collapsed. Shows
+    /// the top sliver of a video poster / image grid so the user can tell
+    /// media exists below the "Show more" toggle without it dominating
+    /// the row. Tap "Show more" to reveal the full media at natural size.
+    private static let mediaPeekHeight: CGFloat = 80
 
     private struct ActionAlert: Identifiable {
         let id = UUID()
@@ -314,15 +316,18 @@ struct PostCardView: View {
                     onHashtagTap: nil
                 )
                 .padding(.horizontal, 16)
-                .padding(.top, 6)
+                .padding(.top, 14)
                 .padding(.bottom, 12)
             } else {
             VStack(alignment: .leading, spacing: 8) {
                 if !displayEvent.content.isEmpty || !displayEvent.tags.isEmpty {
                     let cap = Self.longPostCollapsedHeight
-                    let isLong = naturalContentHeight > cap + Self.longPostMinOverflow
+                    let isLong = naturalTextHeight > cap + Self.longPostMinOverflow
                     let collapsed = isLong && !contentExpanded
                     VStack(alignment: .leading, spacing: 6) {
+                        // Text portion: leading inline groups only. Capped at
+                        // `cap` when collapsed so a long body folds at the
+                        // toggle line, not partway through trailing media.
                         RichContentView(
                             content: displayEvent.content,
                             tags: displayEvent.tags,
@@ -332,50 +337,24 @@ struct PostCardView: View {
                             onNoteTap: onNoteTap,
                             onHashtagTap: onHashtagTap,
                             onPlainTextTap: { onNoteTap?(displayEvent.id) },
-                            linksEnabled: true
+                            linksEnabled: true,
+                            // Each inline-text run publishes its height up
+                            // `RichTextContentHeightKey` so "Show more" can
+                            // trigger off text length alone.
+                            reportsTextHeight: true,
+                            renderMode: .textPortion
                         )
-                        // `.fixedSize(vertical: true)` so inline media render
-                        // at their natural intrinsic height (parent_width ÷
-                        // aspect) instead of getting scaled down by the
-                        // parent's `maxHeight` constraint. The outer
-                        // `.frame(maxHeight:)` + `.clipped()` then crops
-                        // anything past the threshold rather than shrinking
-                        // a portrait video into an unreadable thumbnail.
                         .fixedSize(horizontal: false, vertical: true)
-                        // Measure the intrinsic body height *before* the
-                        // maxHeight cap is applied. With `.fixedSize` upstream,
-                        // the inner content keeps its full intrinsic size even
-                        // when the outer frame is capped — so the GeometryReader
-                        // here reports e.g. 1000pt for a tall quoted-note image
-                        // post, even while the outer `.frame(maxHeight:)` clips
-                        // visible drawing to 615pt. Latching to the largest
-                        // observed value avoids feedback loops from sub-pixel
-                        // relayout passes.
-                        .background(
-                            GeometryReader { proxy in
-                                Color.clear
-                                    .preference(key: PostBodyHeightKey.self, value: proxy.size.height)
-                            }
-                        )
                         .frame(
                             maxHeight: collapsed ? cap : .infinity,
                             alignment: .top
                         )
                         .clipped()
-                        .onPreferenceChange(PostBodyHeightKey.self) { h in
-                            if h > naturalContentHeight + 0.5 {
-                                naturalContentHeight = h
+                        .onPreferenceChange(RichTextContentHeightKey.self) { h in
+                            if h > naturalTextHeight + 0.5 {
+                                naturalTextHeight = h
                             }
                         }
-                        // Pin the hit-test area to the clipped rectangle.
-                        // `.clipped()` clips drawing but NOT taps, so a
-                        // tile (or any other inner Button) that overflows
-                        // past the height cap still receives taps in its
-                        // natural frame — including the y range where the
-                        // action bar sits below this body. Without this
-                        // tapping the heart icon on a collapsed
-                        // gallery-overflowing post would open the gallery
-                        // fullscreen instead.
                         .contentShape(Rectangle())
                         .overlay(alignment: .bottom) {
                             if collapsed {
@@ -388,6 +367,7 @@ struct PostCardView: View {
                                 .allowsHitTesting(false)
                             }
                         }
+
                         if isLong {
                             Button {
                                 withAnimation(.easeInOut(duration: 0.2)) {
@@ -405,6 +385,42 @@ struct PostCardView: View {
                             .buttonStyle(.plain)
                             .frame(maxWidth: .infinity, alignment: .center)
                             .padding(.top, 4)
+                        }
+
+                        // Media portion: everything from the first
+                        // block/media group onward. Always rendered, even
+                        // when collapsed — peeked to `mediaPeekHeight` so
+                        // the user can see media exists below the "Show
+                        // more" toggle. Expands to natural size on toggle.
+                        RichContentView(
+                            content: displayEvent.content,
+                            tags: displayEvent.tags,
+                            profiles: profiles,
+                            authorPubkey: displayEvent.pubkey,
+                            onProfileTap: onProfileTap,
+                            onNoteTap: onNoteTap,
+                            onHashtagTap: onHashtagTap,
+                            onPlainTextTap: { onNoteTap?(displayEvent.id) },
+                            linksEnabled: true,
+                            renderMode: .mediaPortion
+                        )
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(
+                            maxHeight: collapsed ? Self.mediaPeekHeight : .infinity,
+                            alignment: .top
+                        )
+                        .clipped()
+                        .contentShape(Rectangle())
+                        .overlay(alignment: .bottom) {
+                            if collapsed {
+                                LinearGradient(
+                                    colors: [Color.wispBackground.opacity(0), Color.wispBackground],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                                .frame(height: 32)
+                                .allowsHitTesting(false)
+                            }
                         }
                     }
                 }
@@ -436,12 +452,26 @@ struct PostCardView: View {
                         zappers: repoBox.counts.zappers.isEmpty ? (engagement?.zappers ?? []) : repoBox.counts.zappers,
                         reactors: repoBox.counts.reactors.isEmpty ? (engagement?.reactors ?? []) : repoBox.counts.reactors,
                         reposters: repoBox.counts.reposters.isEmpty ? (engagement?.reposters ?? []) : repoBox.counts.reposters,
+                        quoters: repoBox.counts.quoters.isEmpty ? (engagement?.quoters ?? []) : repoBox.counts.quoters,
                         relays: combinedRelays(for: displayEvent.id),
                         tags: displayEvent.tags,
                         createdAt: displayEvent.createdAt,
                         profiles: profiles,
-                        onProfileTap: onProfileTap
+                        onProfileTap: onProfileTap,
+                        onNoteTap: onNoteTap
                     )
+                    // Lazy-fetch NIP-18 quoters on first expand. The feed /
+                    // thread engagement subscriptions deliberately don't
+                    // stream `#q` matches (too heavy for a row almost no one
+                    // opens), so the "Quoted by" data is pulled here
+                    // instead. The repo dedupes per id for the app's
+                    // lifetime, so re-expanding is free.
+                    .task(id: displayEvent.id) {
+                        engagementRepo.fetchQuoters(
+                            eventId: displayEvent.id,
+                            authorPubkey: displayEvent.pubkey
+                        )
+                    }
                     // Pure fade — the prior `.move(edge: .top)` made the
                     // top-of-panel content (the reactor avatar row) settle
                     // into place before the rows below caught up, so the
@@ -451,7 +481,7 @@ struct PostCardView: View {
                 }
             }
             .padding(.horizontal, 16)
-            .padding(.top, 8)
+            .padding(.top, 14)
             .padding(.bottom, 12)
             }
         }
@@ -795,27 +825,65 @@ struct PostCardView: View {
     private var repostAction: some View {
         let count = resolvedRepostCount
         let tint: Color? = iReposted ? Color.wispRepostColor : nil
-        return Menu {
-            Button {
-                sendRepost()
-            } label: {
-                Label(iReposted ? "Reposted" : "Repost", systemImage: "arrow.2.squarepath")
-            }
-            .disabled(iReposted)
-
-            Button {
-                if let route = onOpenQuoteCompose {
-                    route(resolveRepost().event)
-                } else {
-                    activeSheet = .quoteCompose
-                }
-            } label: {
-                Label("Quote", systemImage: "quote.bubble")
-            }
+        return Button {
+            showRepostMenu = true
         } label: {
             actionItem(icon: "arrow.2.squarepath", count: count > 0 ? count : nil, tint: tint)
         }
-        .menuStyle(.borderlessButton)
+        .buttonStyle(.plain)
+        .popover(isPresented: $showRepostMenu) {
+            VStack(alignment: .leading, spacing: 0) {
+                popoverMenuItem(
+                    title: iReposted ? "Reposted" : "Repost",
+                    systemImage: "arrow.2.squarepath",
+                    disabled: iReposted
+                ) {
+                    showRepostMenu = false
+                    sendRepost()
+                }
+                Divider()
+                popoverMenuItem(
+                    title: "Quote",
+                    systemImage: "quote.bubble"
+                ) {
+                    showRepostMenu = false
+                    if let route = onOpenQuoteCompose {
+                        route(resolveRepost().event)
+                    } else {
+                        activeSheet = .quoteCompose
+                    }
+                }
+            }
+            .frame(minWidth: 200)
+            .presentationCompactAdaptation(.popover)
+        }
+    }
+
+    /// Row inside a `.popover`-based action menu. Matches the visual
+    /// rhythm of SwiftUI's `Menu` items (Label-style icon + title, full
+    /// row tap target) but renders inside a regular Button so no system
+    /// press animation runs on the parent action-bar icon.
+    @ViewBuilder
+    private func popoverMenuItem(
+        title: String,
+        systemImage: String,
+        role: ButtonRole? = nil,
+        disabled: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(role: role, action: action) {
+            HStack(spacing: 12) {
+                Text(title)
+                Spacer(minLength: 0)
+                Image(systemName: systemImage)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .foregroundStyle(role == .destructive ? AnyShapeStyle(Color.red) : (disabled ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary)))
     }
 
     private var overflowMenu: some View {
@@ -827,97 +895,130 @@ struct PostCardView: View {
         let userMuted = muteRepo.isBlocked(target.pubkey)
         let threadMuted = muteRepo.isThreadMuted(threadRoot)
 
-        return Menu {
-            Button {
-                activeSheet = .addToList
-            } label: {
-                Label("Add to List", systemImage: "bookmark")
-            }
-
-            if isMine {
-                Button {
-                    pinNote(target)
-                } label: {
-                    Label("Pin to Profile", systemImage: "pin")
-                }
-            }
-
-            if !isMine {
-                Button {
-                    if userMuted {
-                        muteRepo.unblockUser(target.pubkey)
-                    } else {
-                        // Confirmation prompt before muting — direct mute
-                        // can collapse the thread the user is reading
-                        // (per #69) and is hard to discover how to undo.
-                        let displayed = profiles[target.pubkey]?.displayString
-                            ?? profile?.displayString
-                            ?? Nip19.shortNpub(hex: target.pubkey)
-                        muteCandidate = MuteCandidate(pubkey: target.pubkey, displayName: displayed)
-                        showMuteUserConfirm = true
-                    }
-                } label: {
-                    Label(userMuted ? "Unmute User" : "Mute User", systemImage: "speaker.slash")
-                }
-
-                Button {
-                    if threadMuted { muteRepo.unmuteThread(threadRoot) } else { muteRepo.muteThread(threadRoot) }
-                } label: {
-                    Label(threadMuted ? "Unmute Thread" : "Mute Thread", systemImage: "bell.slash")
-                }
-            }
-
-            ShareLink(item: shareItem) {
-                Label("Share", systemImage: "square.and.arrow.up")
-            }
-
-            Button {
-                copyNoteText(target)
-            } label: {
-                Label("Copy Note Text", systemImage: "doc.on.doc")
-            }
-            .disabled(target.content.isEmpty)
-
-            Button {
-                copyNoteId(target)
-            } label: {
-                Label("Copy Note ID", systemImage: "lanyardcard")
-            }
-
-            Button {
-                copyNoteJson(target)
-            } label: {
-                Label("Copy Note JSON", systemImage: "curlybraces")
-            }
-
-            Button {
-                copyNpub(target)
-            } label: {
-                Label("Copy npub", systemImage: "person.text.rectangle")
-            }
-
-            Button {
-                broadcast(target)
-            } label: {
-                Label("Broadcast", systemImage: "antenna.radiowaves.left.and.right")
-            }
-
-            if isMine {
-                Button(role: .destructive) {
-                    showDeleteConfirm = true
-                } label: {
-                    Label("Delete", systemImage: "trash")
-                }
-            }
+        return Button {
+            showOverflowMenu = true
         } label: {
             Image(systemName: "ellipsis")
                 .font(.system(size: 13))
                 .rotationEffect(.degrees(90))
                 .frame(width: 22, height: 22)
                 .contentShape(Rectangle())
+                .foregroundStyle(.secondary)
         }
-        .menuStyle(.borderlessButton)
-        .tint(.secondary)
+        .buttonStyle(.plain)
+        .popover(isPresented: $showOverflowMenu) {
+            VStack(alignment: .leading, spacing: 0) {
+                popoverMenuItem(title: "Add to List", systemImage: "bookmark") {
+                    showOverflowMenu = false
+                    activeSheet = .addToList
+                }
+                Divider()
+
+                if isMine {
+                    popoverMenuItem(title: "Pin to Profile", systemImage: "pin") {
+                        showOverflowMenu = false
+                        pinNote(target)
+                    }
+                    Divider()
+                }
+
+                if !isMine {
+                    popoverMenuItem(
+                        title: userMuted ? "Unmute User" : "Mute User",
+                        systemImage: "speaker.slash"
+                    ) {
+                        showOverflowMenu = false
+                        if userMuted {
+                            muteRepo.unblockUser(target.pubkey)
+                        } else {
+                            // Confirmation prompt before muting — direct
+                            // mute can collapse the thread the user is
+                            // reading (per #69) and is hard to discover
+                            // how to undo.
+                            let displayed = profiles[target.pubkey]?.displayString
+                                ?? profile?.displayString
+                                ?? Nip19.shortNpub(hex: target.pubkey)
+                            muteCandidate = MuteCandidate(pubkey: target.pubkey, displayName: displayed)
+                            showMuteUserConfirm = true
+                        }
+                    }
+                    Divider()
+                    popoverMenuItem(
+                        title: threadMuted ? "Unmute Thread" : "Mute Thread",
+                        systemImage: "bell.slash"
+                    ) {
+                        showOverflowMenu = false
+                        if threadMuted {
+                            muteRepo.unmuteThread(threadRoot)
+                        } else {
+                            muteRepo.muteThread(threadRoot)
+                        }
+                    }
+                    Divider()
+                }
+
+                // ShareLink kept as-is — it opens the system share sheet
+                // and there's no `Menu`-style bouncy parent here, just a
+                // popover row that dismisses naturally when the sheet
+                // takes over.
+                ShareLink(item: shareItem) {
+                    HStack(spacing: 12) {
+                        Text("Share")
+                        Spacer(minLength: 0)
+                        Image(systemName: "square.and.arrow.up")
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .simultaneousGesture(TapGesture().onEnded { showOverflowMenu = false })
+                Divider()
+
+                popoverMenuItem(
+                    title: "Copy Note Text",
+                    systemImage: "doc.on.doc",
+                    disabled: target.content.isEmpty
+                ) {
+                    showOverflowMenu = false
+                    copyNoteText(target)
+                }
+                Divider()
+                popoverMenuItem(title: "Copy Note ID", systemImage: "lanyardcard") {
+                    showOverflowMenu = false
+                    copyNoteId(target)
+                }
+                Divider()
+                popoverMenuItem(title: "Copy Note JSON", systemImage: "curlybraces") {
+                    showOverflowMenu = false
+                    copyNoteJson(target)
+                }
+                Divider()
+                popoverMenuItem(title: "Copy npub", systemImage: "person.text.rectangle") {
+                    showOverflowMenu = false
+                    copyNpub(target)
+                }
+                Divider()
+                popoverMenuItem(title: "Broadcast", systemImage: "antenna.radiowaves.left.and.right") {
+                    showOverflowMenu = false
+                    broadcast(target)
+                }
+
+                if isMine {
+                    Divider()
+                    popoverMenuItem(
+                        title: "Delete",
+                        systemImage: "trash",
+                        role: .destructive
+                    ) {
+                        showOverflowMenu = false
+                        showDeleteConfirm = true
+                    }
+                }
+            }
+            .frame(minWidth: 240)
+            .presentationCompactAdaptation(.popover)
+        }
     }
 
     private var heartAction: some View {
@@ -1325,11 +1426,15 @@ private struct NoteDetailsPanel: View {
     let zappers: [Zapper]
     let reactors: [Reactor]
     let reposters: [String]
+    let quoters: [Quoter]
     let relays: [String]
     let tags: [[String]]
     let createdAt: Int
     let profiles: [String: ProfileData]
     let onProfileTap: ((String) -> Void)?
+    /// Tap on a quote-post avatar navigates to that quote's thread. Wired
+    /// from `PostCardView.onNoteTap` — falls back to no-op when nil.
+    let onNoteTap: ((String) -> Void)?
 
     @State private var relaysExpanded = false
 
@@ -1348,6 +1453,9 @@ private struct NoteDetailsPanel: View {
             }
             if !reposters.isEmpty {
                 repostsSection
+            }
+            if !quoters.isEmpty {
+                quotesSection
             }
             if !reactors.isEmpty {
                 reactionsSection
@@ -1418,9 +1526,42 @@ private struct NoteDetailsPanel: View {
         .padding(.vertical, 3)
     }
 
+    /// "Quoted by" — NIP-18 quote reposts of this note. Stacked avatars are the
+    /// quote-post authors; tapping a row navigates to the quote post itself
+    /// (via `onNoteTap`), not the author's profile, because a "find what people
+    /// said about this" affordance is the whole point of the section.
+    private var quotesSection: some View {
+        let unique = Array(NSOrderedSet(array: quoters.sorted { $0.createdAt > $1.createdAt })) as? [Quoter] ?? quoters
+        return HStack(alignment: .center, spacing: 8) {
+            Image(systemName: "quote.bubble")
+                .font(.system(size: 17))
+                .foregroundStyle(Color.wispPrimary)
+                .frame(width: 22)
+            StackedAvatarRow(
+                pubkeys: unique.map(\.pubkey),
+                profiles: profiles,
+                onProfileTap: { pubkey in
+                    guard let quote = unique.first(where: { $0.pubkey == pubkey }) else { return }
+                    onNoteTap?(quote.eventId)
+                }
+            )
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 3)
+    }
+
     private var reactionsSection: some View {
         let grouped = Dictionary(grouping: reactors, by: { $0.emoji })
-        let sortedKeys = grouped.keys.sorted { (grouped[$0]?.count ?? 0) > (grouped[$1]?.count ?? 0) }
+        // Stable order: count desc, then emoji string asc as a tiebreaker.
+        // `Dictionary.keys` iteration is non-deterministic between renders, so
+        // ties were reshuffling every time the panel re-evaluated — visible as
+        // emoji icons rapidly swapping while avatars streamed in.
+        let sortedKeys = grouped.keys.sorted { lhs, rhs in
+            let lc = grouped[lhs]?.count ?? 0
+            let rc = grouped[rhs]?.count ?? 0
+            if lc != rc { return lc > rc }
+            return lhs < rhs
+        }
         // Build a per-reaction emoji map so each row resolves its own shortcode against the
         // URL the reactor included in their kind-7 NIP-30 `emoji` tag. Falls back to the
         // local user's emoji set for shortcodes the reactor didn't tag (rare).

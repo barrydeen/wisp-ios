@@ -55,6 +55,11 @@ final class ProfileViewModel {
     var isLoadingRelays: Bool = false
     var relaysLoaded: Bool = false
 
+    // Public conversation shared between the active user and this profile.
+    var conversationNotes: [NostrEvent] = []
+    var isLoadingConversation: Bool = false
+    var conversationLoaded: Bool = false
+
     // Author profile cache for cards (mentions, repost authors, follower rows, etc.)
     var profiles: [String: ProfileData] = [:]
 
@@ -148,6 +153,8 @@ final class ProfileViewModel {
             if !groupsLoaded { await loadGroups() }
         case .relays:
             if !relaysLoaded { await loadRelayList() }
+        case .conversation:
+            if !conversationLoaded { await loadConversation() }
         }
     }
 
@@ -637,6 +644,61 @@ final class ProfileViewModel {
         relaysLoaded = true
     }
 
+    // MARK: - Shared conversation
+
+    /// Public back-and-forth between the active user and this profile: kind-1
+    /// notes authored by this profile that p-tag the active user, plus notes
+    /// authored by the active user that p-tag this profile. Tapping a row
+    /// opens the full thread, same as the Notes/Replies tabs.
+    private func loadConversation() async {
+        isLoadingConversation = true
+        defer {
+            isLoadingConversation = false
+            conversationLoaded = true
+        }
+
+        // No conversation with yourself. The tab isn't shown on the own
+        // profile, but guard anyway so a stray call returns cleanly.
+        guard pubkey != activeUserPubkey else {
+            conversationNotes = []
+            return
+        }
+
+        let relays = queryRelays()
+        let theirs = NostrFilter(kinds: [1], authors: [pubkey], pTags: [activeUserPubkey], limit: 100)
+        let mine = NostrFilter(kinds: [1], authors: [activeUserPubkey], pTags: [pubkey], limit: 100)
+
+        var collected: [NostrEvent] = []
+        await withTaskGroup(of: [NostrEvent].self) { group in
+            group.addTask { await RelayPool.query(relays: relays, filter: theirs, timeout: 12) }
+            group.addTask { await RelayPool.query(relays: relays, filter: mine, timeout: 12) }
+            for await batch in group {
+                collected.append(contentsOf: batch)
+            }
+        }
+
+        var byId: [String: NostrEvent] = [:]
+        for event in collected where event.kind == 1 {
+            byId[event.id] = event
+        }
+        conversationNotes = byId.values.sorted { $0.createdAt > $1.createdAt }
+
+        // PostCardView needs both authors' profiles for the avatar/name. This
+        // profile is already cached; backfill the active user's if missing.
+        let missing = [pubkey, activeUserPubkey].filter { profiles[$0] == nil }
+        for pk in missing {
+            if let cached = profileRepo.get(pk) { profiles[pk] = cached }
+        }
+        let stillMissing = missing.filter { profiles[$0] == nil }
+        if !stillMissing.isEmpty {
+            let fetched = await fetchProfilesFromIndexers(stillMissing)
+            for (k, v) in fetched { profiles[k] = v }
+        }
+
+        await persistKnownKinds(conversationNotes)
+        await subscribeEngagement(for: conversationNotes.map(\.id))
+    }
+
     // MARK: - Engagement
 
     private func subscribeEngagement(for ids: [String]) async {
@@ -836,6 +898,11 @@ struct EngagementCounts: Equatable {
     var reactors: [Reactor] = []
     var reposters: [String] = []
     var zappers: [Zapper] = []
+    /// Kind-1 events that reference this note via a NIP-18 `q` tag — i.e.
+    /// posts that quoted it. Each row knows the quote event's id so the
+    /// note-details drawer can navigate to the quote post itself, not just
+    /// to the quoter's profile.
+    var quoters: [Quoter] = []
     var seenRelays: Set<String> = []
 }
 
@@ -861,6 +928,14 @@ struct Zapper: Equatable, Hashable {
     let pubkey: String
     let sats: Int64
     let message: String
+}
+
+struct Quoter: Equatable, Hashable {
+    /// The quote post's own event id — used to navigate to it on tap.
+    let eventId: String
+    /// Author of the quote post (avatar in the details drawer).
+    let pubkey: String
+    let createdAt: Int
 }
 
 struct MediaItem: Hashable {

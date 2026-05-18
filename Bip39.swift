@@ -37,6 +37,14 @@ enum Bip39 {
         return entropyToMnemonic(Data(entropy))
     }
 
+    /// Deterministic BIP-39 mnemonic from caller-supplied entropy. Used for
+    /// nsec-derived default Spark wallets so the same key always produces the
+    /// same recoverable wallet. Mirrors Android `SparkRepository.entropyToMnemonic`.
+    static func mnemonic(fromEntropy entropy: Data) throws -> String {
+        guard isWordlistAvailable else { throw Error.missingWordlist }
+        return entropyToMnemonic(entropy)
+    }
+
     /// Validate: word count ∈ {12, 15, 18, 21, 24}, all words present in wordlist,
     /// SHA-256 checksum matches. Returns nil on success, error message string on failure.
     static func validate(_ mnemonic: String) -> String? {

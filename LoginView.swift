@@ -8,8 +8,8 @@ struct LoginView: View {
     @State private var error: String?
     @State private var isSecure = true
     @State private var isLoading = false
-    @State private var showRemoteSigner = false
     @State private var showQRScanner = false
+    @State private var showSignUp = false
     /// Pubkey derived from the current input. Used to look up + display the
     /// matching profile so the user can sanity-check that the key they
     /// pasted is the one they meant. Cleared when input goes invalid.
@@ -106,9 +106,9 @@ struct LoginView: View {
                 .padding(.vertical, 4)
 
                 Button {
-                    showRemoteSigner = true
+                    showSignUp = true
                 } label: {
-                    Label("Use a remote signer", systemImage: "link.badge.plus")
+                    Label("Create a new account", systemImage: "person.badge.plus")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
@@ -127,18 +127,18 @@ struct LoginView: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            .sheet(isPresented: $showRemoteSigner) {
-                Nip46LoginView { kp in
-                    showRemoteSigner = false
-                    onLogin(kp)
-                }
-            }
             .fullScreenCover(isPresented: $showQRScanner) {
                 QRCodeScannerView(
                     onScanned: { value in handleScanned(value) },
                     onCancel: { showQRScanner = false }
                 )
                 .ignoresSafeArea()
+            }
+            .fullScreenCover(isPresented: $showSignUp) {
+                SignUpFlowView { kp in
+                    showSignUp = false
+                    onLogin(kp)
+                }
             }
         }
         .presentationDetents([.large])

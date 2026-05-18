@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import SwiftUI
 
 enum FeedKind: Equatable, Hashable {
     case follows
@@ -378,7 +379,12 @@ final class FeedViewModel {
         pendingInserts.removeAll(keepingCapacity: true)
 
         let sortedBatch = batch.sorted { $0.createdAt > $1.createdAt }
-        events = Self.consolidateReposts(Self.mergeSortedDesc(events, sortedBatch))
+        // Non-animating transaction so ambient animation modifiers in the
+        // parent shell (audio player, new-posts-pill) can't catch the merge
+        // and animate row repositioning when out-of-order events land mid-list.
+        withTransaction(Transaction(animation: nil)) {
+            events = Self.consolidateReposts(Self.mergeSortedDesc(events, sortedBatch))
+        }
         pendingNewCount = 0
 
         if relayFeedStatus != .streaming {

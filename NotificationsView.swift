@@ -113,9 +113,18 @@ struct NotificationsView: View {
                         )
                         Divider().overlay(Color.wispSurfaceVariant.opacity(0.4))
                     }
+                    // Defensively strip any ambient animation from row
+                    // diffs. `.transaction` runs *after* the view body has
+                    // observed the inserted item, so any animation context
+                    // SwiftUI implicitly attaches to a late-arriving
+                    // `flatItems.insert` — including ones the upstream
+                    // `withTransaction(animation: nil)` in
+                    // `NotificationRepository.ingest` failed to carry across
+                    // the `@Observable` render-pass boundary — gets cleared
+                    // before LazyVStack diffs the rows.
+                    .transaction { $0.animation = nil }
                 }
             }
-            .animation(.easeInOut(duration: 0.15), value: viewModel.enabledTypes)
         }
         .refreshable { await viewModel.refresh() }
     }

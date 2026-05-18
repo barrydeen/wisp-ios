@@ -218,6 +218,43 @@ struct WalletView: View {
     // MARK: - Seed backup banner
 
     private var seedBackupBanner: some View {
+        Group {
+            if store.isDefaultWallet {
+                walletWelcomeCard
+            } else {
+                seedBackupWarning
+            }
+        }
+    }
+
+    private var walletWelcomeCard: some View {
+        NavigationLink(value: WalletRoute.recoveryPhrase) {
+            HStack(spacing: 12) {
+                Image(systemName: "key.fill")
+                    .foregroundStyle(Color.wispPrimary)
+                    .font(.system(size: 16))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Your default wallet is secured by your key")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                    Text("Derived from your Nostr key — restores on any device when you sign in. Tap to also save your seed phrase as a backup.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.wispPrimary.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var seedBackupWarning: some View {
         NavigationLink(value: WalletRoute.recoveryPhrase) {
             HStack(spacing: 12) {
                 Image(systemName: "exclamationmark.triangle.fill")
@@ -275,8 +312,8 @@ struct WalletView: View {
                         Text(fiatBalance)
                             .font(.system(size: 52, weight: .semibold, design: .rounded))
                             .foregroundStyle(.primary)
-                            .contentTransition(.numericText(value: Double(sats)))
-                            .animation(.easeInOut(duration: 0.25), value: sats)
+                            .contentTransition(syncing ? .identity : .numericText(value: Double(sats)))
+                            .animation(syncing ? nil : .easeInOut(duration: 0.25), value: sats)
                     } else {
                         HStack(alignment: .center, spacing: 6) {
                             if let symbol = unit.symbolPrefix {
@@ -287,8 +324,8 @@ struct WalletView: View {
                             Text(unit.formatNumber(sats))
                                 .font(.system(size: 52, weight: .semibold, design: .rounded))
                                 .foregroundStyle(.primary)
-                                .contentTransition(.numericText(value: Double(sats)))
-                                .animation(.easeInOut(duration: 0.25), value: sats)
+                                .contentTransition(syncing ? .identity : .numericText(value: Double(sats)))
+                                .animation(syncing ? nil : .easeInOut(duration: 0.25), value: sats)
                         }
                     }
                     if fiatBalance == nil, !unit.unitLabel.isEmpty {
@@ -475,7 +512,7 @@ struct WalletModeSelectionView: View {
             VStack(spacing: 12) {
                 modeRow(
                     title: "Spark wallet",
-                    subtitle: "Self-custody, embedded. Create new or restore from seed/relays.",
+                    subtitle: "Self-custody, embedded. Use your default wallet or restore from seed/relays.",
                     logo: AnyView(
                         Image("SparkIcon")
                             .resizable()

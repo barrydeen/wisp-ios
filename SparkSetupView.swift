@@ -83,6 +83,14 @@ struct SparkSetupView: View {
 
             // Option rows
             VStack(spacing: 12) {
+                if store.canUseDefaultWallet {
+                    optionRow(
+                        icon: "key.fill",
+                        title: "Use my default wallet",
+                        subtitle: "Derived from your Nostr key — no extra backup needed.",
+                        action: { Task { await useDefault() } }
+                    )
+                }
                 optionRow(
                     icon: "plus.circle.fill",
                     title: "Create new wallet",
@@ -420,6 +428,17 @@ struct SparkSetupView: View {
             dismiss()
         } else {
             restoreError = store.lastStatus ?? "Failed to initialize wallet"
+        }
+    }
+
+    private func useDefault() async {
+        inFlight = true
+        defer { inFlight = false }
+        let ok = await store.useDefaultWallet()
+        if ok {
+            dismiss()
+        } else {
+            restoreError = store.lastStatus ?? "Failed to derive default wallet"
         }
     }
 }

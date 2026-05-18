@@ -107,6 +107,14 @@ final class SearchViewModel {
     // MARK: - Inputs
 
     func updateQuery(_ text: String) {
+        // No-op when the text hasn't actually changed. SwiftUI's
+        // `TextField` binding fires `set` again when the field loses
+        // focus (e.g. `scrollDismissesKeyboard` during a scroll over the
+        // results), passing back the same string. Without this guard,
+        // every scroll cancelled the previous debounce + restarted the
+        // 500 ms timer, then ran a fresh `runSearch()` that cleared the
+        // visible results and re-fetched them.
+        guard text != query else { return }
         query = text
         debounceTask?.cancel()
         let intent = preprocessQuery(text)
@@ -297,7 +305,7 @@ final class SearchViewModel {
         var seen = Set<String>()
         var results: [ProfileData] = []
         for event in events where event.kind == 0 {
-            guard seen.insert(event.pubkey).inserted else { continue }
+            guard seen.insert(canonicalPubkey(event.pubkey)).inserted else { continue }
             if let profile = profileRepo.updateFromEvent(event) {
                 results.append(profile)
             } else {
@@ -423,7 +431,7 @@ final class SearchViewModel {
                 var seen = Set<String>()
                 var results: [ProfileData] = []
                 for event in events where event.kind == 0 {
-                    guard seen.insert(event.pubkey).inserted else { continue }
+                    guard seen.insert(self.canonicalPubkey(event.pubkey)).inserted else { continue }
                     if let profile = self.profileRepo.updateFromEvent(event) {
                         results.append(profile)
                     } else {
@@ -445,6 +453,20 @@ final class SearchViewModel {
     }
 
     // MARK: - Helpers
+
+    /// Collapse the different string forms the same identity can arrive in
+    /// from a search relay — mixed-case or whitespace-padded hex, or an
+    /// `npub` / `nprofile` in place of raw hex — down to one canonical
+    /// lowercase-hex key. Without this, two index entries for one account
+    /// slip past the `Set`-based dedup and render as duplicate rows.
+    private func canonicalPubkey(_ raw: String) -> String {
+        let lower = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if lower.hasPrefix("npub1") || lower.hasPrefix("nprofile1"),
+           case .profileRef(let hex, _)? = Nip19.decodeNostrUri(lower) {
+            return hex
+        }
+        return lower
+    }
 
     private func relaysToQuery() -> [String] {
         switch relayOption {
@@ -471,6 +493,12 @@ final class SearchViewModel {
 
     private func preprocessQuery(_ text: String) -> SearchIntent {
         var s = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Strip a sole leading `@` so a user who reflexively types
+        // `@scrubby` (the composer-mention syntax) gets matched against
+        // the same content the bare-handle form would. NIP-05 lookups
+        // like `_@domain.com` still parse because the `_` precedes the
+        // `@` — we only drop the very first `@` if it's at position 0.
+        if s.hasPrefix("@") { s = String(s.dropFirst()) }
         if s.lowercased().hasPrefix("nostr:") { s = String(s.dropFirst("nostr:".count)) }
 
         let lower = s.lowercased()
