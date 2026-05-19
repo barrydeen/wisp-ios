@@ -186,7 +186,7 @@ final class WalletStore {
 
     /// True when the active account has the prerequisites to derive a default
     /// Spark wallet from its private key: a Breez API key is configured and
-    /// the keypair is a real signing key (not watch-only or remote-signer).
+    /// the keypair is a real signing key (not watch-only).
     var canUseDefaultWallet: Bool {
         guard BreezConfig.hasApiKey else { return false }
         guard let bytes = Hex.decode(keypair.privkey), bytes.count == 32 else { return false }
@@ -527,14 +527,8 @@ final class WalletStore {
             return
         }
 
-        // Decrypt every candidate concurrently. For nsec accounts each call
-        // resolves in-process and the loop is near-instant either way; for
-        // remote-signer accounts each call is a NIP-46 RPC round-trip
-        // (relay → bunker → relay → app), so parallelizing N decrypts
-        // collapses N × per-call latency into roughly the slowest single
-        // round-trip. The signer sees N concurrent requests; modern bunkers
-        // handle that fine, and the user sees one auth prompt per backup
-        // either way (sequential or parallel — same prompt count).
+        // Decrypt every candidate concurrently — collapses N × per-call
+        // latency into roughly the slowest single call.
         let kp = keypair
         struct DecryptResult { let event: NostrEvent; let outcome: Nip78Backup.DecryptOutcome }
         let results: [DecryptResult] = await withTaskGroup(of: DecryptResult.self) { group in
@@ -598,20 +592,11 @@ final class WalletStore {
         relayBackupSearchState = .idle
     }
 
-    /// False for NIP-46 remote-signer accounts. Relay backup writes are gated
-    /// off as a precaution until cross-client backup decryption is verified for
-    /// every remote-signer path the app might be used with. Restore stays
-    /// enabled — legacy backups that already decrypt remain usable.
-    var isRelayBackupSupported: Bool { !keypair.isRemote }
+    var isRelayBackupSupported: Bool { true }
 
     /// Encrypt the active Spark mnemonic and publish a kind 30078 backup event.
-    /// Disabled for remote-signer (NIP-46) accounts — see `isRelayBackupSupported`.
     func publishRelayBackup() async {
         relayBackupPublishState = .publishing
-        guard !keypair.isRemote else {
-            relayBackupPublishState = .error("Cloud backup is disabled for remote-signer accounts. Write down your recovery phrase instead.")
-            return
-        }
         guard let spark = wallet as? SparkWallet, let mnemonic = spark.loadMnemonic() else {
             relayBackupPublishState = .error("No Spark wallet to back up")
             return
