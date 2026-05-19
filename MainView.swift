@@ -1103,7 +1103,7 @@ struct MainView: View {
                             .transition(.move(edge: .top).combined(with: .opacity))
                         }
                     }
-                    .animation(.pillDrop, value: viewModel.pendingNewCount > 0)
+                    .animation(.pillDropFast, value: viewModel.pendingNewCount > 0)
                 }
                 }
             }

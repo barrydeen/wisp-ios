@@ -2,10 +2,15 @@ import SwiftUI
 import Observation
 
 extension Animation {
-    /// Shared motion signature for every drop-in pill — the success toasts
-    /// and the new-posts pill alike. A soft spring with gentle overshoot so
-    /// the family reads as one consistent gesture rather than a hard snap.
+    /// Shared motion signature for the success toasts. A soft spring with
+    /// gentle overshoot so the pill family reads as one consistent gesture
+    /// rather than a hard snap.
     static let pillDrop = Animation.spring(response: 0.38, dampingFraction: 0.68)
+
+    /// Same bounce character as `pillDrop` (identical damping → identical
+    /// overshoot) but a shorter response, so the new-posts pill — a "tap me
+    /// now" affordance — snaps in quicker while staying visually in-family.
+    static let pillDropFast = Animation.spring(response: 0.30, dampingFraction: 0.68)
 }
 
 /// Single ephemeral "success" pill that drops in from the top.
