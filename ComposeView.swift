@@ -84,6 +84,8 @@ struct ComposeView: View {
 
                             textEditor
 
+                            quoteContextHeader
+
                             actionsRow
 
                             if viewModel.pollEnabled {
@@ -319,12 +321,16 @@ struct ComposeView: View {
             replyContextRow(parent: parent)
                 .padding(.horizontal, 12)
                 .padding(.top, 8)
-        case .quote(let q):
+        case .quote, .new:
+            EmptyView()
+        }
+    }
+
+    @ViewBuilder
+    private var quoteContextHeader: some View {
+        if case .quote(let q) = viewModel.mode {
             quoteContextRow(quoted: q)
                 .padding(.horizontal, 12)
-                .padding(.top, 8)
-        case .new:
-            EmptyView()
         }
     }
 
