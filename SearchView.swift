@@ -427,7 +427,17 @@ struct SearchView: View {
             acc[p.displayString.lowercased(), default: 0] += 1
         }
         return ForEach(viewModel.people, id: \.pubkey) { profile in
-            NavigationLink(value: ProfileRoute(pubkey: profile.pubkey)) {
+            Button {
+                // Dismiss the keyboard first, then push on the next runloop
+                // tick. This gives SwiftUI a frame to re-layout SearchView
+                // at its no-keyboard safe area before the push covers it —
+                // otherwise the swipe-back snapshot captures the stale
+                // keyboard-inset layer state.
+                queryFocused = false
+                DispatchQueue.main.async {
+                    path.append(ProfileRoute(pubkey: profile.pubkey))
+                }
+            } label: {
                 HStack(alignment: .top, spacing: 12) {
                     CachedAvatarView(url: profile.picture, size: 44)
                         .clipShape(Circle())
@@ -466,7 +476,6 @@ struct SearchView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .simultaneousGesture(TapGesture().onEnded { queryFocused = false })
             Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
         }
     }

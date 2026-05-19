@@ -9,6 +9,10 @@ struct ProfileView: View {
     var onProfileTap: ((String) -> Void)? = nil
     var onNoteTap: ((String) -> Void)? = nil
     var onHashtagTap: ((String) -> Void)? = nil
+    /// The owning NavigationStack's path. When provided, the swipe-back gesture
+    /// removes the last entry directly (same pattern as ThreadView) so the
+    /// NavigationStack doesn't replay its own slide on top of the custom animation.
+    var path: Binding<NavigationPath>? = nil
 
     @State private var viewModel: ProfileViewModel
     @State private var selectedTab: ProfileTab = .notes
@@ -23,13 +27,15 @@ struct ProfileView: View {
         activeUserPubkey: String,
         onProfileTap: ((String) -> Void)? = nil,
         onNoteTap: ((String) -> Void)? = nil,
-        onHashtagTap: ((String) -> Void)? = nil
+        onHashtagTap: ((String) -> Void)? = nil,
+        path: Binding<NavigationPath>? = nil
     ) {
         self.pubkey = pubkey
         self.activeUserPubkey = activeUserPubkey
         self.onProfileTap = onProfileTap
         self.onNoteTap = onNoteTap
         self.onHashtagTap = onHashtagTap
+        self.path = path
         _viewModel = State(initialValue: ProfileViewModel(pubkey: pubkey, activeUserPubkey: activeUserPubkey))
     }
 
@@ -47,36 +53,38 @@ struct ProfileView: View {
     }
 
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                ProfileHeaderView(
-                    viewModel: viewModel,
-                    isMe: isMe,
-                    isWatchOnly: NostrKey.isWatchOnly(pubkey: activeUserPubkey),
-                    selectedTab: selectedTab,
-                    onEditProfile: { showEditProfile = true },
-                    onProfileTap: onProfileTap,
-                    onNoteTap: onNoteTap,
-                    onHashtagTap: onHashtagTap
-                )
-                Section {
-                    tabBody
-                } header: {
-                    ProfileTabBar(selected: $selectedTab, tabs: visibleTabs)
-                        // Matches `unifiedHeader`'s solid-opacity background
-                        // exactly so the pinned tab strip reads as one
-                        // continuous bar with the title above it (the prior
-                        // gradient produced a visible seam where the header
-                        // faded to 0.65 and the tab bar restarted at 0.92).
-                        .background(Color.wispBackground.opacity(0.92))
+        VStack(spacing: 0) {
+            unifiedHeader
+            Divider().overlay(Color.wispSurfaceVariant.opacity(0.5))
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+                    ProfileHeaderView(
+                        viewModel: viewModel,
+                        isMe: isMe,
+                        isWatchOnly: NostrKey.isWatchOnly(pubkey: activeUserPubkey),
+                        selectedTab: selectedTab,
+                        onEditProfile: { showEditProfile = true },
+                        onProfileTap: onProfileTap,
+                        onNoteTap: onNoteTap,
+                        onHashtagTap: onHashtagTap
+                    )
+                    Section {
+                        tabBody
+                    } header: {
+                        ProfileTabBar(selected: $selectedTab, tabs: visibleTabs)
+                            .background(Color.wispBackground.opacity(0.92))
+                    }
                 }
             }
         }
         .background(Color.wispBackground)
         .toolbar(.hidden, for: .navigationBar)
-        .swipeBackFromLeftEdge()
-        .safeAreaInset(edge: .top, spacing: 0) {
-            unifiedHeader
+        .swipeBackFromLeftEdge {
+            if let p = path, p.wrappedValue.count > 0 {
+                p.wrappedValue.removeLast()
+            } else {
+                dismiss()
+            }
         }
         .sheet(isPresented: $showAddToList) {
             if let keypair = NostrKey.load() {
