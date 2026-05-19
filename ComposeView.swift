@@ -304,7 +304,11 @@ struct ComposeView: View {
             let vm = viewModel
             Task {
                 if let draft = await vm.saveDraft() {
-                    await MainActor.run { DraftSavedToastStore.shared.pendingDraft = draft }
+                    await MainActor.run {
+                        withAnimation(.spring(response: 0.55, dampingFraction: 0.82)) {
+                            DraftSavedToastStore.shared.pendingDraft = draft
+                        }
+                    }
                 }
             }
         }
