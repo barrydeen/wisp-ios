@@ -24,13 +24,33 @@ enum MentionSearch {
         let repo = ProfileRepository.shared
         let profiles = repo.getAll(follows)
 
-        var candidates: [(MentionCandidate, Int)] = []
-        for pk in follows {
+        // Always include self so the user can tag their own account.
+        // Use name-match score when the profile is cached; fall back to a
+        // floor of 1 so self still appears at the end of the list even
+        // before the kind-0 has loaded (shortNpub would score 0 otherwise).
+        let selfProfile = repo.get(currentUserPubkey)
+        let selfName = selfProfile?.displayName?.nilIfEmpty
+            ?? selfProfile?.name?.nilIfEmpty
+            ?? Nip19.shortNpub(hex: currentUserPubkey)
+        let selfRawScore = matchScore(query: q, name: selfName, secondary: selfProfile?.name, nip05: selfProfile?.nip05)
+        let selfScore = q.isEmpty ? 0 : max(1, selfRawScore)
+        var candidates: [(MentionCandidate, Int)] = [(
+            MentionCandidate(
+                pubkey: currentUserPubkey,
+                name: selfName,
+                nip05: selfProfile?.nip05,
+                picture: selfProfile?.picture,
+                isFollowing: false
+            ),
+            selfScore
+        )]
+
+        for pk in follows where pk != currentUserPubkey {
             let p = profiles[pk]
             let name = p?.displayName?.nilIfEmpty
                 ?? p?.name?.nilIfEmpty
                 ?? Nip19.shortNpub(hex: pk)
-            let score = matchScore(query: q, name: name, secondary: p?.name)
+            let score = matchScore(query: q, name: name, secondary: p?.name, nip05: p?.nip05)
             if q.isEmpty || score > 0 {
                 let cand = MentionCandidate(
                     pubkey: pk,
@@ -47,9 +67,16 @@ enum MentionSearch {
             if lhs.1 != rhs.1 { return lhs.1 > rhs.1 }
             return lhs.0.name.localizedCaseInsensitiveCompare(rhs.0.name) == .orderedAscending
         }
-        let out = candidates.prefix(maxResults).map(\.0)
+        // Always guarantee self appears. Take the normal prefix first; if self
+        // was outscored by maxResults follows, append self so the signed-in
+        // user is always reachable without scrolling through all their contacts.
+        var out = Array(candidates.prefix(maxResults).map(\.0))
+        if !out.contains(where: { $0.pubkey == currentUserPubkey }),
+           let selfEntry = candidates.first(where: { $0.0.pubkey == currentUserPubkey })?.0 {
+            out.append(selfEntry)
+        }
         _ = followSet
-        return Array(out)
+        return out
     }
 
     /// Relay-backed fallback for users the local follow search can't satisfy —
@@ -100,7 +127,7 @@ enum MentionSearch {
             let name = p?.displayName?.nilIfEmpty
                 ?? p?.name?.nilIfEmpty
                 ?? Nip19.shortNpub(hex: pk)
-            let score = matchScore(query: q, name: name, secondary: p?.name)
+            let score = matchScore(query: q, name: name, secondary: p?.name, nip05: p?.nip05)
             guard score > 0 else { continue }
             scored.append((
                 MentionCandidate(
@@ -135,16 +162,31 @@ enum MentionSearch {
     }
 
     /// Higher score = better match. Empty query returns 0 (caller treats as "default suggestion").
-    private static func matchScore(query: String, name: String, secondary: String?) -> Int {
+    private static func matchScore(query: String, name: String, secondary: String?, nip05: String? = nil) -> Int {
         if query.isEmpty { return 0 }
         let n = name.lowercased()
         if n == query { return 100 }
         if n.hasPrefix(query) { return 80 }
+        // Word-boundary match: query equals or prefixes a word in a multi-word
+        // name, so "@daniel" scores "The Daniel" at 75 rather than a plain 50
+        // contains, surfacing it above unrelated contains matches.
+        let words = n.components(separatedBy: .whitespacesAndNewlines)
+            + n.components(separatedBy: "\u{00A0}")
+        if words.contains(query) { return 75 }
+        if words.contains(where: { $0.hasPrefix(query) }) { return 65 }
         if n.contains(query) { return 50 }
         if let s = secondary?.lowercased() {
             if s == query { return 40 }
             if s.hasPrefix(query) { return 30 }
             if s.contains(query) { return 20 }
+        }
+        // NIP-05 match: strip the domain part so "daniel@nostrich.cc" matches
+        // both "daniel" and "daniel@nostrich.cc" queries.
+        if let id = nip05?.lowercased() {
+            let local = id.components(separatedBy: "@").first ?? id
+            if id == query || local == query { return 38 }
+            if id.hasPrefix(query) || local.hasPrefix(query) { return 28 }
+            if id.contains(query) || local.contains(query) { return 18 }
         }
         return 0
     }

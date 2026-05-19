@@ -97,6 +97,7 @@ final class ComposeViewModel {
     /// Track mention triggers via a sentinel index into the content string. When the
     /// `@` signal is active this is the UTF-16 offset of the `@` character.
     @ObservationIgnored private var mentionStartUtf16: Int?
+    @ObservationIgnored private var mentionEndUtf16: Int?
     @ObservationIgnored private var emojiStartUtf16: Int?
     @ObservationIgnored private var mentionRemoteTask: Task<Void, Never>?
 
@@ -324,8 +325,9 @@ final class ComposeViewModel {
 
     /// Caller (the view) reports the substring after `@` and the offset of the `@` itself.
     /// Pass `nil` to dismiss the popup.
-    func updateMentionTrigger(query: String?, atOffsetUtf16: Int?) {
+    func updateMentionTrigger(query: String?, atOffsetUtf16: Int?, endUtf16: Int? = nil) {
         mentionStartUtf16 = atOffsetUtf16
+        mentionEndUtf16 = endUtf16
         mentionQuery = query
         mentionRemoteTask?.cancel()
         guard let query else {
@@ -390,10 +392,19 @@ final class ComposeViewModel {
         let s = content
         guard let stringStart = s.utf16.index(s.utf16.startIndex, offsetBy: startOffset, limitedBy: s.utf16.endIndex),
               let stringStartIdx = String.Index(stringStart, within: s) else { return }
-        // Find end of current token (whitespace or end of string). NBSPs inside
-        // a sanitised display name are not token breaks.
-        var end = stringStartIdx
-        while end < s.endIndex, !s[end].isMentionTokenBreak { end = s.index(after: end) }
+        // Use the stored cursor position as the replacement end when available
+        // (handles multi-word queries with spaces). Fall back to forward-scanning
+        // for callers that don't supply endUtf16.
+        var end: String.Index
+        if let endOffset = mentionEndUtf16,
+           let endUtf16Idx = s.utf16.index(s.utf16.startIndex, offsetBy: endOffset, limitedBy: s.utf16.endIndex),
+           let endIdx = String.Index(endUtf16Idx, within: s),
+           endIdx >= stringStartIdx {
+            end = endIdx
+        } else {
+            end = stringStartIdx
+            while end < s.endIndex, !s[end].isMentionTokenBreak { end = s.index(after: end) }
+        }
         var newContent = s
         newContent.replaceSubrange(stringStartIdx..<end, with: "@\(displayName) ")
         content = newContent
@@ -403,6 +414,7 @@ final class ComposeViewModel {
         mentionCandidates = []
         isMentionSearchingRemote = false
         mentionStartUtf16 = nil
+        mentionEndUtf16 = nil
         recomputeHashtags()
     }
 

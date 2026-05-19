@@ -417,10 +417,22 @@ struct MentionComposerTextView: UIViewRepresentable {
             let caret = max(0, min(textView.selectedRange.location, ns.length))
             let prefix = ns.substring(to: caret)
 
+            // Walk backwards allowing at most one regular space so multi-word
+            // display names (e.g. "The Daniel") can be queried as "@the daniel".
+            // A second space, a newline, or any other whitespace terminates the scan.
             var idx = prefix.endIndex
+            var regularSpacesSeen = 0
             while idx > prefix.startIndex {
                 let p = prefix.index(before: idx)
-                if prefix[p].isMentionTokenBreak { break }
+                let ch = prefix[p]
+                if ch == "\u{00A0}" {
+                    // NBSP: always part of the token
+                } else if ch.isNewline || (ch.isWhitespace && ch != " ") {
+                    break
+                } else if ch == " " {
+                    regularSpacesSeen += 1
+                    if regularSpacesSeen > 1 { break }
+                }
                 idx = p
             }
             let token = String(prefix[idx..<prefix.endIndex])
@@ -430,14 +442,16 @@ struct MentionComposerTextView: UIViewRepresentable {
             )
 
             if token.hasPrefix("@") {
-                let query = String(token.dropFirst())
+                // Trim trailing whitespace so "@the " (cursor right after space)
+                // queries "the" rather than "the " with a dangling space.
+                let query = String(token.dropFirst()).trimmingCharacters(in: .whitespaces)
                 if query.isEmpty {
-                    viewModel.updateMentionTrigger(query: nil, atOffsetUtf16: nil)
+                    viewModel.updateMentionTrigger(query: nil, atOffsetUtf16: nil, endUtf16: nil)
                 } else {
-                    viewModel.updateMentionTrigger(query: query, atOffsetUtf16: utf16Offset)
+                    viewModel.updateMentionTrigger(query: query, atOffsetUtf16: utf16Offset, endUtf16: caret)
                 }
             } else {
-                viewModel.updateMentionTrigger(query: nil, atOffsetUtf16: nil)
+                viewModel.updateMentionTrigger(query: nil, atOffsetUtf16: nil, endUtf16: nil)
             }
 
             if token.hasPrefix(":"), token.count >= 2, !token.dropFirst().contains(":") {
