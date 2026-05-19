@@ -49,9 +49,6 @@ final class FollowSender {
             tags.append(clientTag)
         }
 
-        // Route through `Signer.sign` so NIP-46 remote-signer accounts work —
-        // the old direct call to `NostrEvent.sign(privkey32:)` required a
-        // local private key and threw `missingKey` for every bunker user.
         let event = try await Signer.sign(
             keypair: keypair,
             kind: 3,
