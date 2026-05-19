@@ -1192,20 +1192,24 @@ struct PostCardView: View {
         guard let bytes = Hex.decode(target.id),
               let bech = Nip19.noteEncode(eventId: Array(bytes)) else { return }
         UIPasteboard.general.string = bech
+        QuickFollowToast.shared.show("Copied")
     }
 
     private func copyNpub(_ target: NostrEvent) {
         guard let bytes = Hex.decode(target.pubkey),
               let bech = Nip19.npubEncode(pubkey: Array(bytes)) else { return }
         UIPasteboard.general.string = bech
+        QuickFollowToast.shared.show("Copied")
     }
 
     private func copyNoteJson(_ target: NostrEvent) {
         UIPasteboard.general.string = target.toJSON()
+        QuickFollowToast.shared.show("Copied")
     }
 
     private func copyNoteText(_ target: NostrEvent) {
         UIPasteboard.general.string = target.content
+        QuickFollowToast.shared.show("Copied")
     }
 
     /// Resolve the thread root for a reply to `target`. If `target` is itself a reply,
