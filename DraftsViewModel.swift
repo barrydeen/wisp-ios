@@ -74,7 +74,15 @@ final class DraftsViewModel {
             parsed.append(draft)
         }
 
-        drafts = parsed.sorted { $0.createdAt > $1.createdAt }
+        // Deduplicate by trimmed text content — keep newest among identical drafts.
+        var latestByContent: [String: Nip37.Draft] = [:]
+        for draft in parsed {
+            let key = draft.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let existing = latestByContent[key], existing.createdAt >= draft.createdAt { continue }
+            latestByContent[key] = draft
+        }
+
+        drafts = latestByContent.values.sorted { $0.createdAt > $1.createdAt }
     }
 
     /// Optimistically remove the draft locally, then publish:
