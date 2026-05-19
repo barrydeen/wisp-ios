@@ -146,6 +146,10 @@ final class ComposeViewModel {
         if let ts = scheduleAt?.timeIntervalSince1970 {
             payload["scheduleAt"] = ts
         }
+        let mentionDicts: [[String: String]] = mentions.map { ["displayName": $0.displayName, "pubkey": $0.pubkey] }
+        if !mentionDicts.isEmpty {
+            payload["mentions"] = mentionDicts
+        }
         let attachmentDicts: [[String: Any]] = uploaded.map { a in
             var d: [String: Any] = [
                 "url": a.url ?? "",
@@ -210,9 +214,14 @@ final class ComposeViewModel {
                 localBytes: nil
             )
         }
+        let restoredMentions: [InsertedMention] = (payload["mentions"] as? [[String: String]] ?? []).compactMap { d in
+            guard let dn = d["displayName"], let pk = d["pubkey"] else { return nil }
+            return InsertedMention(displayName: dn, pubkey: pk)
+        }
         guard !saved.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !restored.isEmpty else { return }
         content = saved
         attachments = restored
+        mentions = restoredMentions
         explicit = payload["explicit"] as? Bool ?? false
         powEnabled = payload["powEnabled"] as? Bool ?? powEnabled
         if let ts = payload["scheduleAt"] as? TimeInterval {
