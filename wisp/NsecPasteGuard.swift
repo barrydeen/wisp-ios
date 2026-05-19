@@ -52,6 +52,7 @@ final class NsecPasteGuard {
     }
 
     func showWarning() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         ensureWarningWindow()
         dismissTask?.cancel()
         withAnimation(.easeInOut(duration: 0.18)) {

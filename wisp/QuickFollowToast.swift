@@ -17,8 +17,11 @@ final class QuickFollowToast {
     var message: String?
 
     @ObservationIgnored private var dismissTask: Task<Void, Never>?
+    /// Floating window above all sheets — created lazily on first show.
+    @ObservationIgnored private var toastWindow: UIWindow?
 
     func show(_ text: String, duration: TimeInterval = 1.6) {
+        ensureWindow()
         dismissTask?.cancel()
         withAnimation(.easeInOut(duration: 0.18)) {
             message = text
@@ -30,6 +33,23 @@ final class QuickFollowToast {
                 self?.message = nil
             }
         }
+    }
+
+    private func ensureWindow() {
+        guard toastWindow == nil else { return }
+        guard let scene = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .first else { return }
+        let window = UIWindow(windowScene: scene)
+        window.windowLevel = .statusBar + 1
+        window.backgroundColor = .clear
+        window.isUserInteractionEnabled = false
+        let vc = UIHostingController(rootView: QuickFollowToastOverlay())
+        vc.view.backgroundColor = .clear
+        vc.view.isUserInteractionEnabled = false
+        window.rootViewController = vc
+        window.isHidden = false
+        toastWindow = window
     }
 }
 

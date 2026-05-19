@@ -141,7 +141,10 @@ struct ProfileView: View {
                     Label("Share Profile", systemImage: "square.and.arrow.up")
                 }
                 Button {
-                    if let npub { UIPasteboard.general.string = npub }
+                    if let npub {
+                        UIPasteboard.general.string = npub
+                        QuickFollowToast.shared.show("Copied")
+                    }
                 } label: {
                     Label("Copy npub", systemImage: "person.text.rectangle")
                 }
@@ -379,6 +382,7 @@ private struct ProfileHeaderView: View {
                     }
                     .onTapGesture {
                         UIPasteboard.general.string = lud16
+                        QuickFollowToast.shared.show("Copied")
                     }
                 }
 
