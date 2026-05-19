@@ -41,6 +41,7 @@ final class AppSettings {
         static let postUndoTimerForReplies = "wisp_settings_post_undo_timer_for_replies"
         static let autoApproveRelayAuth = "wisp_settings_auto_approve_relay_auth"
         static let zapIconStyle = "wisp_settings_zap_icon_style"
+        static let videoLoop = "wisp_settings_video_loop"
     }
 
     /// Allowed durations for the post-undo countdown. Picker shows these as
@@ -107,6 +108,10 @@ final class AppSettings {
     var zapIconStyle: ZapIconStyle {
         didSet { UserDefaults.standard.set(zapIconStyle.rawValue, forKey: Keys.zapIconStyle) }
     }
+    // TODO: Persist to NIP78 (kind 30078) when that feature is available.
+    var videoLoop: Bool {
+        didSet { UserDefaults.standard.set(videoLoop, forKey: Keys.videoLoop) }
+    }
 
     private init() {
         let defaults = UserDefaults.standard
@@ -131,6 +136,7 @@ final class AppSettings {
         self.autoApproveRelayAuth = defaults.object(forKey: Keys.autoApproveRelayAuth) as? Bool ?? true
         let zapRaw = defaults.string(forKey: Keys.zapIconStyle) ?? ZapIconStyle.bitcoin.rawValue
         self.zapIconStyle = ZapIconStyle(rawValue: zapRaw) ?? .bitcoin
+        self.videoLoop = defaults.object(forKey: Keys.videoLoop) as? Bool ?? true
     }
 
     /// SF Symbol name for the zap icon. Only valid when `fiatModeEnabled` is false.
