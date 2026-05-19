@@ -167,10 +167,6 @@ final class DmConversationViewModel {
             _ = repo.markGiftWrapSeen(wrap.id)
         }
 
-        if !publishedRelays.isEmpty {
-            SuccessToast.shared.show("Message sent", icon: "paperplane.fill")
-        }
-
         draft = ""
         replyingTo = nil
         refresh()

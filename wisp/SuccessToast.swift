@@ -1,6 +1,13 @@
 import SwiftUI
 import Observation
 
+extension Animation {
+    /// Shared motion signature for every drop-in pill — the success toasts
+    /// and the new-posts pill alike. A soft spring with gentle overshoot so
+    /// the family reads as one consistent gesture rather than a hard snap.
+    static let pillDrop = Animation.spring(response: 0.38, dampingFraction: 0.68)
+}
+
 /// Single ephemeral "success" pill that drops in from the top.
 ///
 /// One `@Observable` surface, one overlay mounted at `MainView` root, so any
@@ -37,7 +44,7 @@ final class SuccessToast {
     ) {
         dismissTask?.cancel()
         tapAction = action
-        withAnimation(.easeInOut(duration: 0.2)) {
+        withAnimation(.pillDrop) {
             content = Content(message: message, icon: icon, accent: accent)
         }
         dismissTask = Task { @MainActor [weak self] in
@@ -56,7 +63,9 @@ final class SuccessToast {
     func dismiss() {
         dismissTask?.cancel()
         tapAction = nil
-        withAnimation(.easeInOut(duration: 0.25)) {
+        // Clean fade-up on exit — the bounce belongs to the entrance; a
+        // springy retreat reads as the pill being yanked away.
+        withAnimation(.easeOut(duration: 0.2)) {
             content = nil
         }
     }
