@@ -12,11 +12,11 @@ private var nsecPasteGuardInstalled = false
 /// Set to `true` while a view that intentionally accepts nsec input is on screen.
 nonisolated(unsafe) var nsecPasteAllowed = false
 
-/// Global guard that intercepts paste events on every UITextField and UITextView
-/// and blocks any paste whose clipboard contents match an nsec private key.
+/// Global guard that intercepts every paste action via `UIApplication.sendAction`,
+/// catching all UITextField, UITextView, and any custom subclass in one place.
 ///
-/// Fields that legitimately accept an nsec (e.g. the login key-import screen)
-/// opt out by setting `.accessibilityIdentifier("nsecInput")`.
+/// The login screen opts out by setting `nsecPasteAllowed = true` on appear and
+/// back to `false` on disappear.
 @Observable
 @MainActor
 final class NsecPasteGuard {
@@ -24,21 +24,25 @@ final class NsecPasteGuard {
     private init() {}
 
     var warningMessage: String?
+    /// Bottom inset matching the current keyboard frame so the pill always
+    /// floats above the keyboard rather than hiding behind it.
+    var keyboardBottomInset: CGFloat = 0
     @ObservationIgnored private var dismissTask: Task<Void, Never>?
-    /// Floating UIWindow that sits above sheets and modals so the pill is always
-    /// visible regardless of presentation depth.
     @ObservationIgnored private var warningWindow: UIWindow?
+    @ObservationIgnored private var keyboardObserver: NSObjectProtocol?
 
     /// Call once at app startup (before any views are created).
     nonisolated static func setUp() {
         guard !nsecPasteGuardInstalled else { return }
         nsecPasteGuardInstalled = true
-        swizzle(UITextField.self,
-                original: #selector(UITextField.paste(_:)),
-                replacement: #selector(UITextField.wisp_guardedPaste(_:)))
-        swizzle(UITextView.self,
-                original: #selector(UITextView.paste(_:)),
-                replacement: #selector(UITextView.wisp_guardedPaste(_:)))
+        // Intercept at UIApplication level so every responder — including
+        // UITextField subclasses, UITextView subclasses, and any third-party
+        // text control — is covered without needing per-class swizzles.
+        guard
+            let orig = class_getInstanceMethod(UIApplication.self, #selector(UIApplication.sendAction(_:to:from:for:))),
+            let repl = class_getInstanceMethod(UIApplication.self, #selector(UIApplication.wisp_sendAction(_:to:from:for:)))
+        else { return }
+        method_exchangeImplementations(orig, repl)
     }
 
     nonisolated static func pasteboardContainsNsec() -> Bool {
@@ -62,8 +66,8 @@ final class NsecPasteGuard {
         }
     }
 
-    /// Creates (once) a transparent UIWindow above the sheet level so the pill
-    /// renders over any presented sheet or navigation stack.
+    /// Creates (once) a transparent UIWindow above the sheet level and starts
+    /// tracking keyboard frame so the pill always renders in the visible area.
     private func ensureWarningWindow() {
         guard warningWindow == nil else { return }
         guard let scene = UIApplication.shared.connectedScenes
@@ -81,48 +85,42 @@ final class NsecPasteGuard {
         window.rootViewController = vc
         window.isHidden = false
         warningWindow = window
-    }
 
-    private nonisolated static func swizzle(
-        _ cls: AnyClass,
-        original: Selector,
-        replacement: Selector
-    ) {
-        guard
-            let orig = class_getInstanceMethod(cls, original),
-            let repl = class_getInstanceMethod(cls, replacement)
-        else { return }
-        method_exchangeImplementations(orig, repl)
+        keyboardObserver = NotificationCenter.default.addObserver(
+            forName: UIResponder.keyboardWillChangeFrameNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            let endFrame = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect ?? .zero
+            let screenHeight = UIScreen.main.bounds.height
+            let inset = max(0, screenHeight - endFrame.minY)
+            Task { @MainActor [weak self] in
+                withAnimation(.easeOut(duration: 0.25)) {
+                    self?.keyboardBottomInset = inset
+                }
+            }
+        }
     }
 }
 
-// MARK: - UITextField swizzle
+// MARK: - UIApplication swizzle
 
-extension UITextField {
-    @objc func wisp_guardedPaste(_ sender: Any?) {
-        if NsecPasteGuard.pasteboardContainsNsec(), !nsecPasteAllowed {
+extension UIApplication {
+    @objc func wisp_sendAction(_ action: Selector, to target: Any?, from sender: Any?, for event: UIEvent?) -> Bool {
+        if action == #selector(UIResponder.paste(_:)),
+           NsecPasteGuard.pasteboardContainsNsec(),
+           !nsecPasteAllowed {
             Task { @MainActor in NsecPasteGuard.shared.showWarning() }
-            return
+            return false
         }
-        wisp_guardedPaste(sender)
-    }
-}
-
-// MARK: - UITextView swizzle
-
-extension UITextView {
-    @objc func wisp_guardedPaste(_ sender: Any?) {
-        if NsecPasteGuard.pasteboardContainsNsec(), !nsecPasteAllowed {
-            Task { @MainActor in NsecPasteGuard.shared.showWarning() }
-            return
-        }
-        wisp_guardedPaste(sender)
+        return wisp_sendAction(action, to: target, from: sender, for: event)
     }
 }
 
 // MARK: - Warning overlay
 
 /// Red pill hosted in a floating UIWindow (above all sheets).
+/// Positioned above the keyboard when it is visible.
 struct NsecPasteWarningOverlay: View {
     @Bindable private var store = NsecPasteGuard.shared
 
@@ -142,7 +140,7 @@ struct NsecPasteWarningOverlay: View {
                 .padding(.vertical, 10)
                 .background(Capsule().fill(Color(UIColor.systemRed)))
                 .shadow(color: .black.opacity(0.3), radius: 8, y: 2)
-                .padding(.bottom, 96)
+                .padding(.bottom, store.keyboardBottomInset > 0 ? store.keyboardBottomInset + 12 : 96)
                 .padding(.horizontal, 20)
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
