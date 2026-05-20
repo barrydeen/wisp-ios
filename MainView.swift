@@ -533,7 +533,8 @@ struct MainView: View {
                                     activeUserPubkey: keypair.pubkey,
                                     onProfileTap: { pk in feedPath.append(ProfileRoute(pubkey: pk)) },
                                     onNoteTap: { eid in feedPath.append(ThreadRoute(eventId: eid, authorPubkey: route.pubkey)) },
-                                    onHashtagTap: { tag in feedPath.append(HashtagFeedRoute(tag: tag)) }
+                                    onHashtagTap: { tag in feedPath.append(HashtagFeedRoute(tag: tag)) },
+                                    path: $feedPath
                                 )
                             }
                             .navigationDestination(for: ThreadRoute.self) { route in
@@ -610,7 +611,8 @@ struct MainView: View {
                                     activeUserPubkey: keypair.pubkey,
                                     onProfileTap: { pk in searchPath.append(ProfileRoute(pubkey: pk)) },
                                     onNoteTap: { eid in searchPath.append(ThreadRoute(eventId: eid, authorPubkey: route.pubkey)) },
-                                    onHashtagTap: { _ in }
+                                    onHashtagTap: { _ in },
+                                    path: $searchPath
                                 )
                             }
                             .navigationDestination(for: ThreadRoute.self) { route in
@@ -652,7 +654,8 @@ struct MainView: View {
                                 activeUserPubkey: keypair.pubkey,
                                 onProfileTap: { pk in notificationsPath.append(ProfileRoute(pubkey: pk)) },
                                 onNoteTap: { eid in notificationsPath.append(ThreadRoute(eventId: eid, authorPubkey: route.pubkey)) },
-                                onHashtagTap: { _ in }
+                                onHashtagTap: { _ in },
+                                path: $notificationsPath
                             )
                         }
                         .navigationDestination(for: ThreadRoute.self) { route in
@@ -676,7 +679,7 @@ struct MainView: View {
                     NavigationStack(path: $placeholderPath) {
                         placeholderTab
                             .navigationDestination(for: ProfileRoute.self) { route in
-                                ProfileView(pubkey: route.pubkey, activeUserPubkey: keypair.pubkey)
+                                ProfileView(pubkey: route.pubkey, activeUserPubkey: keypair.pubkey, path: $placeholderPath)
                             }
                             .navigationDestination(for: ThreadRoute.self) { route in
                                 ThreadView(
