@@ -1169,7 +1169,12 @@ struct PostCardView: View {
 
     private func broadcast(_ target: NostrEvent) {
         guard let me = myPubkey else { return }
-        Task {
+        // `@MainActor in` pins the alert mutation to main. Without it, the
+        // assignment runs on whatever actor `RelayPool.publish` suspended on,
+        // which leaves the alert in an inconsistent presentation state — the
+        // OK button needs two or three taps to dismiss because SwiftUI is
+        // still reconciling the off-main update when the first tap lands.
+        Task { @MainActor in
             let writes = await RelayListRepository.shared.getWriteRelays(me)
             var set = Set(writes)
             if let board = RelayScoreBoard.load(pubkey: me) {
@@ -1179,6 +1184,11 @@ struct PostCardView: View {
                 set = ["wss://relay.damus.io", "wss://relay.primal.net", "wss://nos.lol"]
             }
             let succeeded = await RelayPool.publish(event: target, to: Array(set), timeout: 8)
+            // Yield one runloop tick so the overflow popover finishes its
+            // dismiss animation before the alert is presented. Without the
+            // hop the alert can mount on top of a still-dismissing popover
+            // and the popover dismissal eats the first OK tap.
+            try? await Task.sleep(nanoseconds: 50_000_000)
             actionAlert = ActionAlert(
                 title: succeeded.isEmpty ? "Broadcast failed" : "Broadcasted",
                 message: succeeded.isEmpty
