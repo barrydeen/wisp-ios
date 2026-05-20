@@ -33,6 +33,7 @@ struct NotesTabView: View {
     var onProfileTap: ((String) -> Void)? = nil
     var onNoteTap: ((String) -> Void)? = nil
     var onHashtagTap: ((String) -> Void)? = nil
+    @State private var engagementRepo = EngagementRepository.shared
 
     var body: some View {
         VStack(spacing: 0) {
@@ -49,13 +50,14 @@ struct NotesTabView: View {
                                     event: event,
                                     profile: viewModel.profiles[event.pubkey],
                                     profiles: viewModel.profiles,
-                                    engagement: viewModel.engagement[event.id],
+                                    engagement: nil,
                                     onProfileTap: onProfileTap,
                                     onNoteTap: onNoteTap,
                                     onHashtagTap: onHashtagTap
                                 )
                             }
                             .buttonStyle(.plain)
+                            .onAppear { engagementRepo.markVisible(event: event) }
                             Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
                         }
                         loadMoreFooter {
@@ -76,13 +78,14 @@ struct NotesTabView: View {
                                     event: event,
                                     profile: viewModel.profiles[event.pubkey],
                                     profiles: viewModel.profiles,
-                                    engagement: viewModel.engagement[event.id],
+                                    engagement: nil,
                                     onProfileTap: onProfileTap,
                                     onNoteTap: onNoteTap,
                                     onHashtagTap: onHashtagTap
                                 )
                             }
                             .buttonStyle(.plain)
+                            .onAppear { engagementRepo.markVisible(event: event) }
                             Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
                         }
                     }
@@ -97,6 +100,7 @@ struct RepliesTabView: View {
     var onProfileTap: ((String) -> Void)? = nil
     var onNoteTap: ((String) -> Void)? = nil
     var onHashtagTap: ((String) -> Void)? = nil
+    @State private var engagementRepo = EngagementRepository.shared
 
     var body: some View {
         VStack(spacing: 0) {
@@ -113,13 +117,14 @@ struct RepliesTabView: View {
                                     event: event,
                                     profile: viewModel.profiles[event.pubkey],
                                     profiles: viewModel.profiles,
-                                    engagement: viewModel.engagement[event.id],
+                                    engagement: nil,
                                     onProfileTap: onProfileTap,
                                     onNoteTap: onNoteTap,
                                     onHashtagTap: onHashtagTap
                                 )
                             }
                             .buttonStyle(.plain)
+                            .onAppear { engagementRepo.markVisible(event: event) }
                             Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
                         }
                         loadMoreFooter {
@@ -140,13 +145,14 @@ struct RepliesTabView: View {
                                     event: event,
                                     profile: viewModel.profiles[event.pubkey],
                                     profiles: viewModel.profiles,
-                                    engagement: viewModel.engagement[event.id],
+                                    engagement: nil,
                                     onProfileTap: onProfileTap,
                                     onNoteTap: onNoteTap,
                                     onHashtagTap: onHashtagTap
                                 )
                             }
                             .buttonStyle(.plain)
+                            .onAppear { engagementRepo.markVisible(event: event) }
                             Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
                         }
                     }
@@ -161,6 +167,7 @@ struct ConversationTabView: View {
     var onProfileTap: ((String) -> Void)? = nil
     var onNoteTap: ((String) -> Void)? = nil
     var onHashtagTap: ((String) -> Void)? = nil
+    @State private var engagementRepo = EngagementRepository.shared
 
     var body: some View {
         Group {
@@ -176,13 +183,14 @@ struct ConversationTabView: View {
                                 event: event,
                                 profile: viewModel.profiles[event.pubkey],
                                 profiles: viewModel.profiles,
-                                engagement: viewModel.engagement[event.id],
+                                engagement: nil,
                                 onProfileTap: onProfileTap,
                                 onNoteTap: onNoteTap,
                                 onHashtagTap: onHashtagTap
                             )
                         }
                         .buttonStyle(.plain)
+                        .onAppear { engagementRepo.markVisible(event: event) }
                         Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
                     }
                 }
