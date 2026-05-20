@@ -181,6 +181,7 @@ struct ProfileQrSheet: View {
                     .truncationMode(.middle)
                 Button {
                     UIPasteboard.general.string = value
+                    QuickFollowToast.shared.show("Copied")
                 } label: {
                     Image(systemName: "doc.on.doc")
                         .font(.caption)

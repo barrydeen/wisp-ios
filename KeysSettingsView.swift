@@ -1,4 +1,5 @@
 import SwiftUI
+import LocalAuthentication
 
 /// Sidebar → Settings → Keys. Shows the active account's bech32 public key (`npub`)
 /// always. For local accounts the private key (`nsec`) is shown behind a Reveal
@@ -109,14 +110,17 @@ struct KeysSettingsView: View {
                     } label: {
                         Label("Hide", systemImage: "eye.slash")
                             .font(.subheadline.weight(.medium))
+                            .foregroundStyle(.primary)
                     }
+                    .buttonStyle(.plain)
                     .padding(.top, 4)
                 } else {
                     Button {
-                        withAnimation(.easeInOut(duration: 0.15)) { revealNsec = true }
+                        Task { await authenticateAndRevealNsec() }
                     } label: {
                         Label("Reveal Private Key", systemImage: "eye")
                             .font(.subheadline.weight(.medium))
+                            .foregroundStyle(.primary)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 12)
                             .background(Color.wispSurface, in: RoundedRectangle(cornerRadius: 12))
@@ -311,6 +315,28 @@ struct KeysSettingsView: View {
         }
     }
 
+    @MainActor
+    private func authenticateAndRevealNsec() async {
+        let context = LAContext()
+        var error: NSError?
+        guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) else {
+            // No passcode or biometry configured — reveal directly.
+            withAnimation(.easeInOut(duration: 0.15)) { revealNsec = true }
+            return
+        }
+        do {
+            let granted = try await context.evaluatePolicy(
+                .deviceOwnerAuthentication,
+                localizedReason: "Authenticate to reveal your private key"
+            )
+            if granted {
+                withAnimation(.easeInOut(duration: 0.15)) { revealNsec = true }
+            }
+        } catch {
+            // User cancelled or authentication failed — do nothing.
+        }
+    }
+
     private static func formatTimestamp(_ ts: Int) -> String {
         let date = Date(timeIntervalSince1970: TimeInterval(ts))
         let formatter = DateFormatter()
@@ -336,9 +362,11 @@ struct KeysSettingsView: View {
         HStack(spacing: 10) {
             Button {
                 UIPasteboard.general.string = value
+                QuickFollowToast.shared.show("Copied")
             } label: {
                 Label("Copy", systemImage: "doc.on.doc")
                     .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.primary)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 10)
                     .background(Color.wispSurfaceVariant, in: Capsule())
@@ -350,6 +378,7 @@ struct KeysSettingsView: View {
             } label: {
                 Label("QR", systemImage: "qrcode")
                     .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.primary)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 10)
                     .background(Color.wispSurfaceVariant, in: Capsule())
@@ -358,13 +387,35 @@ struct KeysSettingsView: View {
         }
     }
 
+    private func keyRow(label: String, value: String) -> some View {
+        HStack(spacing: 8) {
+            Text(label)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 32, alignment: .leading)
+            Text(value)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 4)
+            Button {
+                UIPasteboard.general.string = value
+                QuickFollowToast.shared.show("Copied")
+            } label: {
+                Image(systemName: "doc.on.doc")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.wispSurface, in: RoundedRectangle(cornerRadius: 10))
+    }
+
     private func keyQrSheet(payload: QrPayload) -> some View {
-        // Brand the npub QR with the user's avatar (it's an identity QR). Don't put the
-        // avatar on the nsec QR — that QR carries the private key and shouldn't be visually
-        // tied to a recognizable face; show the Wisp logo instead.
-        let avatarUrl: String? = payload.label == "npub"
-            ? ProfileRepository.shared.get(keypair.pubkey)?.picture
-            : nil
+        let avatarUrl: String? = ProfileRepository.shared.get(keypair.pubkey)?.picture
 
         return VStack(spacing: 16) {
             Text(payload.label.uppercased())
@@ -392,18 +443,35 @@ struct KeysSettingsView: View {
             .padding(20)
             .background(Color.white, in: RoundedRectangle(cornerRadius: 16))
 
-            Text(payload.value)
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
+
+            if payload.label == "nsec" {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(Color.wispZapColor)
+                        .font(.caption)
+                        .padding(.top, 2)
+                    Text("Anyone who scans this QR code gains full control of your account. Only share it with apps you trust.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.wispZapColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
                 .padding(.horizontal, 24)
+            } else {
+                VStack(spacing: 8) {
+                    keyRow(label: "npub", value: npub)
+                    keyRow(label: "hex", value: keypair.pubkey)
+                }
+                .padding(.horizontal, 24)
+            }
 
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.wispBackground)
         .presentationDetents([.large])
-        .presentationDragIndicator(.visible)
+        .presentationDragIndicator(.hidden)
     }
 }

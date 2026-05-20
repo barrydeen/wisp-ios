@@ -8,6 +8,7 @@ struct wispApp: App {
     @State private var audioPlayer = AudioPlayerStore.shared
 
     init() {
+        NsecPasteGuard.setUp()
         try? ObjectBoxSetup.setUp()
         GiphyConfig.bootstrap()
         Task {

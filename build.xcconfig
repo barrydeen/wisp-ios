@@ -8,5 +8,6 @@
 
 DEVELOPMENT_TEAM = G738XL8P49
 PRODUCT_BUNDLE_IDENTIFIER = barrydeen.wisp
+INFOPLIST_KEY_NSFaceIDUsageDescription = Authenticate to reveal your private key
 
 #include? "local.xcconfig"
