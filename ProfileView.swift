@@ -290,8 +290,11 @@ private struct ProfileHeaderView: View {
     var onNoteTap: ((String) -> Void)? = nil
     var onHashtagTap: ((String) -> Void)? = nil
 
+    @Environment(WalletStore.self) private var walletStore: WalletStore?
     @State private var muteRepo = MuteRepository.shared
     @State private var followBusy = false
+    @State private var showDmSheet = false
+    @State private var showZapSheet = false
     /// Whether the bio is currently shown in full or capped to the
     /// collapsed height. Long bios start collapsed so the lightning
     /// address, follow stats, and tab bar stay above the fold; the
@@ -401,6 +404,25 @@ private struct ProfileHeaderView: View {
             .padding(.horizontal, 16)
             .padding(.top, 6)
             .padding(.bottom, 16)
+        }
+        .sheet(isPresented: $showDmSheet) {
+            if let kp = NostrKey.load() {
+                NavigationStack {
+                    DmConversationView(keypair: kp, participants: [viewModel.pubkey])
+                }
+            }
+        }
+        .sheet(isPresented: $showZapSheet) {
+            if let store = walletStore {
+                ZapSheet(
+                    store: store,
+                    recipientPubkey: viewModel.pubkey,
+                    recipientLud16: viewModel.profile?.lud16,
+                    recipientName: viewModel.profile?.displayString,
+                    eventId: nil,
+                    dismiss: { showZapSheet = false }
+                )
+            }
         }
     }
 
@@ -576,6 +598,22 @@ private struct ProfileHeaderView: View {
         let blocked = muteRepo.isBlocked(viewModel.pubkey)
         let following = viewModel.youFollow
         return HStack(spacing: 8) {
+            iconButton(
+                systemName: "bubble.left.fill",
+                active: false,
+                activeTint: Color.wispPrimary,
+                disabled: false,
+                accessibilityLabel: "Message",
+                action: { showDmSheet = true }
+            )
+            iconButton(
+                systemName: "bolt.fill",
+                active: false,
+                activeTint: Color.wispZapColor,
+                disabled: walletStore == nil,
+                accessibilityLabel: "Zap",
+                action: { showZapSheet = true }
+            )
             iconButton(
                 systemName: following ? "person.fill.checkmark" : "person.badge.plus",
                 active: following,
