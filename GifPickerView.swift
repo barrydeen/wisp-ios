@@ -37,9 +37,24 @@ struct GifPickerPresenter: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ host: UIViewController, context: Context) {
+        // Refresh the coordinator's view of the parent on every update so its
+        // delegate callbacks bind to the *current* `isPresented` storage and
+        // `onSelect` closure rather than the stale copy captured at
+        // `makeCoordinator` time. Without this, parent body re-renders can
+        // leave the coordinator pointing at a stale binding which drives the
+        // open/close loop on real devices.
+        context.coordinator.parent = self
+
         if isPresented {
-            // Already showing → no-op. Re-presenting would crash UIKit.
-            guard host.presentedViewController == nil else { return }
+            // Two guards against re-presentation:
+            //   1. The presented controller is still attached.
+            //   2. We already queued an async present that UIKit hasn't
+            //      registered yet — re-presenting in that window would stack
+            //      a second modal and force UIKit to flip-flop between them,
+            //      which manifests as the open / close loop the user sees.
+            guard host.presentedViewController == nil,
+                  !context.coordinator.isPresenting else { return }
+            context.coordinator.isPresenting = true
             GiphyConfig.bootstrap()
             let giphy = GiphyViewController()
             giphy.mediaTypeConfig = [.gifs, .stickers, .recents]
@@ -52,13 +67,22 @@ struct GifPickerPresenter: UIViewControllerRepresentable {
             DispatchQueue.main.async {
                 host.present(giphy, animated: true)
             }
-        } else if let presented = host.presentedViewController {
+        } else if let presented = host.presentedViewController,
+                  !presented.isBeingDismissed {
+            // SwiftUI side wants us closed. If the modal is already mid-
+            // dismiss (e.g. user-initiated swipe-down already fired
+            // `didDismiss`), don't call dismiss again — racing dismiss
+            // animations are part of what produced the loop.
             presented.dismiss(animated: true)
         }
     }
 
     final class Coordinator: NSObject, GiphyDelegate {
         var parent: GifPickerPresenter
+        /// Set when `updateUIViewController` queues an async present. Cleared
+        /// after dismiss completes. Prevents a second present from stacking
+        /// while UIKit hasn't yet registered the first one.
+        var isPresenting = false
 
         init(parent: GifPickerPresenter) {
             self.parent = parent
@@ -71,12 +95,14 @@ struct GifPickerPresenter: UIViewControllerRepresentable {
             if let url {
                 parent.onSelect(url)
             }
-            giphyViewController.dismiss(animated: true) {
-                self.parent.isPresented = false
+            giphyViewController.dismiss(animated: true) { [weak self] in
+                self?.isPresenting = false
+                self?.parent.isPresented = false
             }
         }
 
         func didDismiss(controller: GiphyViewController?) {
+            isPresenting = false
             parent.isPresented = false
         }
     }

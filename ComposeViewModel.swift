@@ -97,6 +97,7 @@ final class ComposeViewModel {
     /// Track mention triggers via a sentinel index into the content string. When the
     /// `@` signal is active this is the UTF-16 offset of the `@` character.
     @ObservationIgnored private var mentionStartUtf16: Int?
+    @ObservationIgnored private var mentionEndUtf16: Int?
     @ObservationIgnored private var emojiStartUtf16: Int?
     @ObservationIgnored private var mentionRemoteTask: Task<Void, Never>?
 
@@ -145,6 +146,10 @@ final class ComposeViewModel {
         ]
         if let ts = scheduleAt?.timeIntervalSince1970 {
             payload["scheduleAt"] = ts
+        }
+        let mentionDicts: [[String: String]] = mentions.map { ["displayName": $0.displayName, "pubkey": $0.pubkey] }
+        if !mentionDicts.isEmpty {
+            payload["mentions"] = mentionDicts
         }
         let attachmentDicts: [[String: Any]] = uploaded.map { a in
             var d: [String: Any] = [
@@ -210,9 +215,14 @@ final class ComposeViewModel {
                 localBytes: nil
             )
         }
+        let restoredMentions: [InsertedMention] = (payload["mentions"] as? [[String: String]] ?? []).compactMap { d in
+            guard let dn = d["displayName"], let pk = d["pubkey"] else { return nil }
+            return InsertedMention(displayName: dn, pubkey: pk)
+        }
         guard !saved.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !restored.isEmpty else { return }
         content = saved
         attachments = restored
+        mentions = restoredMentions
         explicit = payload["explicit"] as? Bool ?? false
         powEnabled = payload["powEnabled"] as? Bool ?? powEnabled
         if let ts = payload["scheduleAt"] as? TimeInterval {
@@ -324,8 +334,9 @@ final class ComposeViewModel {
 
     /// Caller (the view) reports the substring after `@` and the offset of the `@` itself.
     /// Pass `nil` to dismiss the popup.
-    func updateMentionTrigger(query: String?, atOffsetUtf16: Int?) {
+    func updateMentionTrigger(query: String?, atOffsetUtf16: Int?, endUtf16: Int? = nil) {
         mentionStartUtf16 = atOffsetUtf16
+        mentionEndUtf16 = endUtf16
         mentionQuery = query
         mentionRemoteTask?.cancel()
         guard let query else {
@@ -390,10 +401,19 @@ final class ComposeViewModel {
         let s = content
         guard let stringStart = s.utf16.index(s.utf16.startIndex, offsetBy: startOffset, limitedBy: s.utf16.endIndex),
               let stringStartIdx = String.Index(stringStart, within: s) else { return }
-        // Find end of current token (whitespace or end of string). NBSPs inside
-        // a sanitised display name are not token breaks.
-        var end = stringStartIdx
-        while end < s.endIndex, !s[end].isMentionTokenBreak { end = s.index(after: end) }
+        // Use the stored cursor position as the replacement end when available
+        // (handles multi-word queries with spaces). Fall back to forward-scanning
+        // for callers that don't supply endUtf16.
+        var end: String.Index
+        if let endOffset = mentionEndUtf16,
+           let endUtf16Idx = s.utf16.index(s.utf16.startIndex, offsetBy: endOffset, limitedBy: s.utf16.endIndex),
+           let endIdx = String.Index(endUtf16Idx, within: s),
+           endIdx >= stringStartIdx {
+            end = endIdx
+        } else {
+            end = stringStartIdx
+            while end < s.endIndex, !s[end].isMentionTokenBreak { end = s.index(after: end) }
+        }
         var newContent = s
         newContent.replaceSubrange(stringStartIdx..<end, with: "@\(displayName) ")
         content = newContent
@@ -403,6 +423,7 @@ final class ComposeViewModel {
         mentionCandidates = []
         isMentionSearchingRemote = false
         mentionStartUtf16 = nil
+        mentionEndUtf16 = nil
         recomputeHashtags()
     }
 
@@ -743,6 +764,17 @@ final class ComposeViewModel {
     /// matching the Android client's behavior.
     func loadDraft(_ draft: Nip37.Draft) {
         currentDraftId = draft.dTag
+        // Restore the composer mode from the draft's inner kind. Kind 20
+        // (NIP-68 picture) and 21 / 22 (NIP-71 short-form video) round-trip
+        // as gallery posts; kind 1 stays in text mode. Without this, a
+        // gallery draft would silently reopen in text mode and republish
+        // as a kind-1 note with the URLs spliced into the body.
+        let isGalleryKind = (draft.innerKind == Nip68.kindPicture
+                             || draft.innerKind == Nip71.kindVideoHorizontal
+                             || draft.innerKind == Nip71.kindVideoVertical)
+        if isGalleryKind && mode.allowsGalleryToggle {
+            galleryMode = true
+        }
         let imetaAttachments = Self.parseImetaAttachments(tags: draft.tags)
         if !imetaAttachments.isEmpty {
             // Imeta tags carry full attachment metadata (mime, dim, hash), so the
@@ -819,9 +851,16 @@ final class ComposeViewModel {
         currentDraftId = dTag
 
         let materialized = materializeMentions(content)
-        // Inner kind is always 1 for now (kind-1 notes only — gallery drafts not supported,
-        // matches Android).
-        let innerKind = 1
+        // Inner kind matches the post the draft will publish as: 1 for a
+        // text post, 20 (NIP-68 picture) or 21 / 22 (NIP-71 horizontal /
+        // vertical short-form video) for a gallery post. The wrapper's
+        // `["k", ...]` tag preserves it across the round-trip so
+        // `loadDraft` can restore the correct composer mode (text vs
+        // gallery) instead of silently dropping the gallery state.
+        // **Android counterpart needed**: Android's draft save currently
+        // hard-codes kind-1; needs the same treatment to keep gallery
+        // drafts round-trippable across clients.
+        let innerKind = determineKind()
         var innerTags: [[String]] = buildBaseTags(kind: innerKind, materializedContent: materialized)
         // Strip `client` and the publish-time `imeta`; we rebuild `imeta` below from the
         // composer's `attachments` so reopening the draft restores the thumbnail row.
@@ -1056,20 +1095,6 @@ final class ComposeViewModel {
                 userInfo: ["event": event]
             )
             publishedEventId = event.id
-            // Wrap the toast set in `withAnimation` so the pill's `.move(edge:
-            // .top).combined(with: .opacity)` transition runs as an ease-in
-            // drop-down instead of popping in instantly — matches the new-posts
-            // pill's entrance.
-            withAnimation(.spring(response: 0.55, dampingFraction: 0.82)) {
-                let (parentId, parentPubkey): (String?, String?) = {
-                    if case .reply(let parent, _) = mode { return (parent.id, parent.pubkey) }
-                    return (nil, nil)
-                }()
-                PostPublishedToastStore.shared.published = PublishedPostToast(
-                    id: event.id, pubkey: event.pubkey,
-                    parentEventId: parentId, parentAuthorPubkey: parentPubkey
-                )
-            }
             Haptics.shared.pulse()
         }
     }

@@ -260,8 +260,11 @@ struct ProfileSortPicker: View {
 
 struct GalleryTabView: View {
     @Bindable var viewModel: ProfileViewModel
+    var onNoteTap: ((String) -> Void)? = nil
 
-    private let columns = Array(repeating: GridItem(.flexible(), spacing: 2), count: 2)
+    private let columnCount: CGFloat = 2
+    private let spacing: CGFloat = 2
+    private let edgePadding: CGFloat = 2
 
     var body: some View {
         Group {
@@ -270,55 +273,55 @@ struct GalleryTabView: View {
             } else if viewModel.galleryPosts.isEmpty {
                 emptyState("No picture or video posts")
             } else {
-                LazyVGrid(columns: columns, spacing: 2) {
-                    ForEach(viewModel.galleryPosts, id: \.id) { event in
-                        GalleryTile(event: event)
-                    }
-                }
-                .padding(.horizontal, 2)
+                galleryGrid
             }
         }
     }
-}
 
-private struct GalleryTile: View {
-    let event: NostrEvent
+    @ViewBuilder
+    private var galleryGrid: some View {
+        let screenWidth = UIScreen.main.bounds.width
+        let totalGaps = spacing * (columnCount - 1) + edgePadding * 2
+        let tileWidth = ((screenWidth - totalGaps) / columnCount).rounded(.down)
+        let tileHeight = (tileWidth * 5.0 / 4.0).rounded(.down)
+        let renderable = viewModel.galleryPosts.compactMap { event -> (NostrEvent, String)? in
+            guard let url = firstImetaUrl(tags: event.tags) ?? firstUrlFromContent(event.content) else { return nil }
+            return (event, url)
+        }
+        let rows = Int(ceil(Double(renderable.count) / Double(columnCount)))
 
-    var body: some View {
-        let metas = ContentParser.parseImetaTags(event.tags)
-        let firstUrl = firstImetaUrl(metas) ?? firstUrlFromContent(event.content)
-        let isVideo = [21, 22].contains(event.kind)
-
-        ZStack(alignment: .center) {
-            if let url = firstUrl, let parsed = URL(string: url) {
-                AsyncImage(url: parsed) { phase in
-                    switch phase {
-                    case .success(let img):
-                        img.resizable().scaledToFill()
-                    case .failure:
-                        Color.wispSurfaceVariant
-                    default:
-                        Color.wispSurfaceVariant
+        VStack(spacing: spacing) {
+            ForEach(0..<rows, id: \.self) { row in
+                HStack(spacing: spacing) {
+                    ForEach(0..<Int(columnCount), id: \.self) { col in
+                        let idx = row * Int(columnCount) + col
+                        if idx < renderable.count {
+                            let (event, url) = renderable[idx]
+                            GalleryTile(
+                                event: event,
+                                firstUrl: url,
+                                width: tileWidth,
+                                height: tileHeight,
+                                onTap: { onNoteTap?(event.id) }
+                            )
+                        } else {
+                            Color.clear.frame(width: tileWidth, height: tileHeight)
+                        }
                     }
                 }
-            } else {
-                Color.wispSurfaceVariant
-            }
-
-            if isVideo {
-                Image(systemName: "play.circle.fill")
-                    .font(.system(size: 32))
-                    .foregroundStyle(.white.opacity(0.85))
             }
         }
-        .frame(maxWidth: .infinity)
-        .aspectRatio(1, contentMode: .fit)
-        .clipped()
+        .padding(.horizontal, edgePadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func firstImetaUrl(_ metas: [String: MediaMeta]) -> String? {
-        // imeta map preserves whichever URL was added last; fine for tile preview.
-        metas.values.first?.url
+    private func firstImetaUrl(tags: [[String]]) -> String? {
+        for tag in tags where tag.first == "imeta" {
+            for field in tag.dropFirst() where field.hasPrefix("url ") {
+                return String(field.dropFirst(4))
+            }
+        }
+        return nil
     }
 
     private func firstUrlFromContent(_ content: String) -> String? {
@@ -333,10 +336,46 @@ private struct GalleryTile: View {
     }
 }
 
+private struct GalleryTile: View {
+    let event: NostrEvent
+    let firstUrl: String
+    let width: CGFloat
+    let height: CGFloat
+    let onTap: () -> Void
+
+    var body: some View {
+        let isVideo = [21, 22].contains(event.kind)
+
+        ZStack(alignment: .center) {
+            RetryingAsyncImage(
+                url: URL(string: firstUrl),
+                content: { img in
+                    img.resizable().scaledToFill()
+                },
+                loading: { Color.wispSurfaceVariant },
+                failure: { Color.wispSurfaceVariant }
+            )
+
+            if isVideo {
+                Image(systemName: "play.circle.fill")
+                    .font(.system(size: 32))
+                    .foregroundStyle(.white.opacity(0.85))
+            }
+        }
+        .frame(width: width, height: height)
+        .clipped()
+        .contentShape(Rectangle())
+        .onTapGesture { onTap() }
+    }
+}
+
 struct MediaTabView: View {
     @Bindable var viewModel: ProfileViewModel
+    var onNoteTap: ((String) -> Void)? = nil
 
-    private let columns = Array(repeating: GridItem(.flexible(), spacing: 2), count: 3)
+    private let columnCount: CGFloat = 3
+    private let spacing: CGFloat = 2
+    private let edgePadding: CGFloat = 2
 
     var body: some View {
         let items = viewModel.mediaItems()
@@ -344,44 +383,66 @@ struct MediaTabView: View {
         if items.isEmpty {
             emptyState("No images or videos yet")
         } else {
-            LazyVGrid(columns: columns, spacing: 2) {
-                ForEach(items, id: \.url) { item in
-                    MediaTile(item: item)
+            mediaGrid(items: items)
+        }
+    }
+
+    @ViewBuilder
+    private func mediaGrid(items: [MediaItem]) -> some View {
+        let screenWidth = UIScreen.main.bounds.width
+        let totalGaps = spacing * (columnCount - 1) + edgePadding * 2
+        let tileSize = ((screenWidth - totalGaps) / columnCount).rounded(.down)
+        let rows = Int(ceil(Double(items.count) / Double(columnCount)))
+
+        VStack(spacing: spacing) {
+            ForEach(0..<rows, id: \.self) { row in
+                HStack(spacing: spacing) {
+                    ForEach(0..<Int(columnCount), id: \.self) { col in
+                        let idx = row * Int(columnCount) + col
+                        if idx < items.count {
+                            let item = items[idx]
+                            MediaTile(
+                                item: item,
+                                size: tileSize,
+                                onTap: { onNoteTap?(item.sourceEventId) }
+                            )
+                        } else {
+                            Color.clear.frame(width: tileSize, height: tileSize)
+                        }
+                    }
                 }
             }
-            .padding(.horizontal, 2)
         }
+        .padding(.horizontal, edgePadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
 private struct MediaTile: View {
     let item: MediaItem
+    let size: CGFloat
+    let onTap: () -> Void
 
     var body: some View {
         ZStack {
-            if let url = URL(string: item.url) {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let img):
-                        img.resizable().scaledToFill()
-                    case .failure:
-                        Color.wispSurfaceVariant
-                    default:
-                        Color.wispSurfaceVariant
-                    }
-                }
-            } else {
-                Color.wispSurfaceVariant
-            }
+            RetryingAsyncImage(
+                url: URL(string: item.url),
+                content: { img in
+                    img.resizable().scaledToFill()
+                },
+                loading: { Color.wispSurfaceVariant },
+                failure: { Color.wispSurfaceVariant }
+            )
             if item.isVideo {
                 Image(systemName: "play.circle.fill")
                     .font(.system(size: 24))
                     .foregroundStyle(.white.opacity(0.85))
             }
         }
-        .frame(maxWidth: .infinity)
-        .aspectRatio(1, contentMode: .fit)
+        .frame(width: size, height: size)
         .clipped()
+        .contentShape(Rectangle())
+        .onTapGesture { onTap() }
     }
 }
 

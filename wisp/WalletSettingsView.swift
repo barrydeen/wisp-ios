@@ -192,6 +192,7 @@ struct WalletSettingsView: View {
                     Spacer()
                     Button {
                         UIPasteboard.general.string = addr
+                        QuickFollowToast.shared.show("Copied")
                     } label: {
                         Image(systemName: "doc.on.clipboard")
                             .font(.system(size: 14))

@@ -52,6 +52,13 @@ final class NotificationsViewModel {
 
     init(keypair: Keypair) {
         self.keypair = keypair
+        // Bind the shared repo immediately so the first synchronous render
+        // (which reads `filteredItems` → `repo.flatItems`) sees an empty list
+        // for the new account rather than the previous account's stale data.
+        // Without this, the repo isn't cleared until `start()` runs inside
+        // `.task`, which fires *after* the view's initial layout pass.
+        repo.bind(activePubkey: keypair.pubkey)
+        loadFilterFromDefaults()
     }
 
     // MARK: - Derived state
@@ -84,8 +91,10 @@ final class NotificationsViewModel {
     func start() async {
         guard !started else { return }
         started = true
+        // `repo.bind` and `loadFilterFromDefaults` already ran in `init`; the
+        // bind call here is a no-op (pubkey unchanged) but keeps start()
+        // self-contained if ever called in a different context.
         repo.bind(activePubkey: keypair.pubkey)
-        loadFilterFromDefaults()
 
         // Prime relay sets synchronously from cached state (UserDefaults + RelayScoreBoard)
         // so live subscriptions can open IMMEDIATELY. Anything we don't have cached falls back

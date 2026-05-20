@@ -147,6 +147,8 @@ struct LoginView: View {
         // default behind the still-laying-out VStack and the buttons appear
         // to jump as the background settles in around them.
         .presentationBackground(Color.wispBackground)
+        .onAppear { nsecPasteAllowed = true }
+        .onDisappear { nsecPasteAllowed = false }
     }
 
     /// Avatar + name pulled from the pubkey the user is typing. Renders a

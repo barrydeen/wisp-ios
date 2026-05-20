@@ -47,16 +47,10 @@ struct MainView: View {
     @State private var showRelaySettings = false
     @State private var pendingAuthRequest: PendingAuthRequest?
     @State private var feedFabOpacity: Double = 1.0
-    /// Shared toast store — written to by every `ComposeView` autosave-on-dismiss
-    /// (new / reply / quote alike). Watched here so the pill renders no
-    /// matter which navigation surface presented the composer.
+    /// Written by every `ComposeView` autosave-on-dismiss (new / reply / quote
+    /// alike). Watched here and translated into the shared `SuccessToast` so
+    /// the pill fires no matter which navigation surface presented the composer.
     @State private var draftToast = DraftSavedToastStore.shared
-    @State private var draftSavedToastTask: Task<Void, Never>?
-    /// Mirror of `draftToast` for the "post published" pill — `ComposeViewModel`
-    /// writes here after a successful immediate publish so the tab root can
-    /// surface a tappable link back to the new post.
-    @State private var postPublishedToast = PostPublishedToastStore.shared
-    @State private var postPublishedToastTask: Task<Void, Never>?
     /// Set to reopen the composer pointed at an existing draft (populated by
     /// the draft-saved toast tap). Separate from `showCompose` so SwiftUI
     /// mounts a fresh `ComposeView` keyed off the draft's dTag.
@@ -92,24 +86,6 @@ struct MainView: View {
     var body: some View {
         ZStack(alignment: .leading) {
             mainShell
-
-            if let draft = draftToast.pendingDraft {
-                draftSavedPill(draft: draft)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .frame(maxHeight: .infinity, alignment: .top)
-                    .padding(.top, 8)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-                    .zIndex(2)
-            }
-
-            if let toast = postPublishedToast.published {
-                postPublishedPill(toast: toast)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .frame(maxHeight: .infinity, alignment: .top)
-                    .padding(.top, 8)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-                    .zIndex(2)
-            }
 
             if drawerOpen {
                 Color.black
@@ -216,7 +192,7 @@ struct MainView: View {
             .gesture(drawerDragGesture)
         }
         .background(Color.wispBackground)
-        .overlay(QuickFollowToastOverlay())
+        .overlay(SuccessToastOverlay())
         .environment(walletStore)
         .onReceive(NotificationCenter.default.publisher(for: .openWalletTab)) { _ in
             // PostCardView posts this when the user tries to zap without
@@ -423,27 +399,18 @@ struct MainView: View {
             ComposeView(keypair: keypair, draft: draft)
         }
         .onChange(of: draftToast.pendingDraft?.dTag) { _, dTag in
-            // Auto-dismiss the pill on a timer whenever a new draft arrives.
-            // Reading the dTag (a value type) keeps the watcher cheap.
-            guard dTag != nil else { return }
-            draftSavedToastTask?.cancel()
-            draftSavedToastTask = Task { @MainActor in
-                try? await Task.sleep(for: .seconds(3.5))
-                guard !Task.isCancelled else { return }
-                withAnimation(.easeInOut(duration: 0.25)) {
-                    draftToast.pendingDraft = nil
-                }
-            }
-        }
-        .onChange(of: postPublishedToast.published?.id) { _, eventId in
-            guard eventId != nil else { return }
-            postPublishedToastTask?.cancel()
-            postPublishedToastTask = Task { @MainActor in
-                try? await Task.sleep(for: .seconds(3.5))
-                guard !Task.isCancelled else { return }
-                withAnimation(.easeInOut(duration: 0.25)) {
-                    postPublishedToast.published = nil
-                }
+            // ComposeView's autosave-on-dismiss writes the draft here from
+            // whichever surface presented it; translate that into the shared
+            // success pill, with a tap action that reopens the draft. Consume
+            // the store entry so the same draft doesn't re-fire on next change.
+            guard dTag != nil, let draft = draftToast.pendingDraft else { return }
+            draftToast.pendingDraft = nil
+            SuccessToast.shared.show(
+                "Draft saved",
+                icon: "tray.and.arrow.down.fill",
+                duration: 3.5
+            ) {
+                reopenDraft = draft
             }
         }
         .sheet(isPresented: $showRelayPicker) {
@@ -532,7 +499,8 @@ struct MainView: View {
                                     activeUserPubkey: keypair.pubkey,
                                     onProfileTap: { pk in feedPath.append(ProfileRoute(pubkey: pk)) },
                                     onNoteTap: { eid in feedPath.append(ThreadRoute(eventId: eid, authorPubkey: route.pubkey)) },
-                                    onHashtagTap: { tag in feedPath.append(HashtagFeedRoute(tag: tag)) }
+                                    onHashtagTap: { tag in feedPath.append(HashtagFeedRoute(tag: tag)) },
+                                    path: $feedPath
                                 )
                             }
                             .navigationDestination(for: ThreadRoute.self) { route in
@@ -609,7 +577,8 @@ struct MainView: View {
                                     activeUserPubkey: keypair.pubkey,
                                     onProfileTap: { pk in searchPath.append(ProfileRoute(pubkey: pk)) },
                                     onNoteTap: { eid in searchPath.append(ThreadRoute(eventId: eid, authorPubkey: route.pubkey)) },
-                                    onHashtagTap: { _ in }
+                                    onHashtagTap: { _ in },
+                                    path: $searchPath
                                 )
                             }
                             .navigationDestination(for: ThreadRoute.self) { route in
@@ -651,7 +620,8 @@ struct MainView: View {
                                 activeUserPubkey: keypair.pubkey,
                                 onProfileTap: { pk in notificationsPath.append(ProfileRoute(pubkey: pk)) },
                                 onNoteTap: { eid in notificationsPath.append(ThreadRoute(eventId: eid, authorPubkey: route.pubkey)) },
-                                onHashtagTap: { _ in }
+                                onHashtagTap: { _ in },
+                                path: $notificationsPath
                             )
                         }
                         .navigationDestination(for: ThreadRoute.self) { route in
@@ -675,7 +645,7 @@ struct MainView: View {
                     NavigationStack(path: $placeholderPath) {
                         placeholderTab
                             .navigationDestination(for: ProfileRoute.self) { route in
-                                ProfileView(pubkey: route.pubkey, activeUserPubkey: keypair.pubkey)
+                                ProfileView(pubkey: route.pubkey, activeUserPubkey: keypair.pubkey, path: $placeholderPath)
                             }
                             .navigationDestination(for: ThreadRoute.self) { route in
                                 ThreadView(
@@ -860,69 +830,6 @@ struct MainView: View {
             .background(Color.wispSurfaceVariant.opacity(0.5), in: RoundedRectangle(cornerRadius: 20))
             .foregroundStyle(Color.primary)
         }
-    }
-
-    @ViewBuilder
-    private func draftSavedPill(draft: Nip37.Draft) -> some View {
-        Button {
-            withAnimation(.easeInOut(duration: 0.2)) {
-                draftToast.pendingDraft = nil
-            }
-            draftSavedToastTask?.cancel()
-            reopenDraft = draft
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "tray.and.arrow.down.fill")
-                    .font(.system(size: 12, weight: .semibold))
-                Text("Draft saved")
-                    .font(.caption.weight(.semibold))
-            }
-            .foregroundStyle(.white)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
-            .background(Color.wispPrimary, in: Capsule())
-            .shadow(color: .black.opacity(0.25), radius: 8, x: 0, y: 2)
-        }
-        .buttonStyle(.plain)
-    }
-
-    @ViewBuilder
-    private func postPublishedPill(toast: PublishedPostToast) -> some View {
-        Button {
-            withAnimation(.easeInOut(duration: 0.2)) {
-                postPublishedToast.published = nil
-            }
-            postPublishedToastTask?.cancel()
-            selectedTab = .home
-            if let parentId = toast.parentEventId {
-                // Reply: navigate to the parent's thread so the user sees their
-                // reply below the note they responded to.
-                feedPath.append(ThreadRoute(
-                    eventId: parentId,
-                    authorPubkey: toast.parentAuthorPubkey,
-                    scrollToId: toast.id
-                ))
-            } else {
-                feedPath.append(ThreadRoute(eventId: toast.id, authorPubkey: toast.pubkey))
-            }
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 12, weight: .semibold))
-                Text("Post published")
-                    .font(.caption.weight(.semibold))
-                Text("View")
-                    .font(.caption.weight(.semibold))
-                    .underline()
-                    .opacity(0.95)
-            }
-            .foregroundStyle(.white)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
-            .background(Color.wispPrimary, in: Capsule())
-            .shadow(color: .black.opacity(0.25), radius: 8, x: 0, y: 2)
-        }
-        .buttonStyle(.plain)
     }
 
     private func statusPill(icon: String, value: String, color: Color) -> some View {
@@ -1196,7 +1103,7 @@ struct MainView: View {
                             .transition(.move(edge: .top).combined(with: .opacity))
                         }
                     }
-                    .animation(.easeInOut(duration: 0.25), value: viewModel.pendingNewCount > 0)
+                    .animation(.pillDropFast, value: viewModel.pendingNewCount > 0)
                 }
                 }
             }

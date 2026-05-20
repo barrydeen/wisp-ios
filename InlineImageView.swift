@@ -96,6 +96,7 @@ struct InlineImageView: View {
         .contextMenu {
             Button {
                 UIPasteboard.general.string = meta.url
+                QuickFollowToast.shared.show("Copied")
             } label: {
                 Label("Copy Image URL", systemImage: "doc.on.doc")
             }

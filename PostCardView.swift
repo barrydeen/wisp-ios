@@ -135,6 +135,15 @@ struct PostCardView: View {
     /// instead of being clipped for a trivial amount of hidden content.
     /// ~5 lines of body text — meaningful enough to be worth a tap.
     private static let longPostMinOverflow: CGFloat = 72
+    /// Character count above which a body is treated as long regardless of
+    /// its measured text height. A 600+ char post wraps to ~12 lines —
+    /// well under the 66%-screen cap — so the height measurement alone
+    /// would never trigger "Show more". Matches QuotedNoteView's threshold.
+    private static let longPostCharThreshold = 600
+    /// Collapsed height for a char-long text body. Smaller than the
+    /// screen-height cap so "Show more" actually hides something on a
+    /// pure text post that wraps shorter than the media cap.
+    private static let longPostTextCollapsedHeight: CGFloat = 280
     /// Visible height of trailing media when the body is collapsed. Shows
     /// the top sliver of a video poster / image grid so the user can tell
     /// media exists below the "Show more" toggle without it dominating
@@ -322,7 +331,14 @@ struct PostCardView: View {
             VStack(alignment: .leading, spacing: 8) {
                 if !displayEvent.content.isEmpty || !displayEvent.tags.isEmpty {
                     let cap = Self.longPostCollapsedHeight
-                    let isLong = naturalTextHeight > cap + Self.longPostMinOverflow
+                    let pixelLong = naturalTextHeight > cap + Self.longPostMinOverflow
+                    // Char-count path is independent of measured height: a
+                    // 600+ char body wraps to ~12 lines (well under the
+                    // 66%-screen cap), so the height check alone would let
+                    // it escape truncation entirely.
+                    let charLong = displayEvent.content.count > Self.longPostCharThreshold
+                    let isLong = pixelLong || charLong
+                    let collapsedHeight = pixelLong ? cap : Self.longPostTextCollapsedHeight
                     let collapsed = isLong && !contentExpanded
                     VStack(alignment: .leading, spacing: 6) {
                         // Text portion: leading inline groups only. Capped at
@@ -346,7 +362,7 @@ struct PostCardView: View {
                         )
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(
-                            maxHeight: collapsed ? cap : .infinity,
+                            maxHeight: collapsed ? collapsedHeight : .infinity,
                             alignment: .top
                         )
                         .clipped()
@@ -1135,6 +1151,7 @@ struct PostCardView: View {
         Task {
             do {
                 try await RepostSender.shared.repost(target, keypair: keypair)
+                SuccessToast.shared.show("Reposted", icon: "arrow.2.squarepath", accent: .wispRepostColor)
             } catch RepostSender.SendError.alreadyReposted {
                 // No-op: button is also disabled in this state.
             } catch {
@@ -1169,7 +1186,12 @@ struct PostCardView: View {
 
     private func broadcast(_ target: NostrEvent) {
         guard let me = myPubkey else { return }
-        Task {
+        // `@MainActor in` pins the alert mutation to main. Without it, the
+        // assignment runs on whatever actor `RelayPool.publish` suspended on,
+        // which leaves the alert in an inconsistent presentation state — the
+        // OK button needs two or three taps to dismiss because SwiftUI is
+        // still reconciling the off-main update when the first tap lands.
+        Task { @MainActor in
             let writes = await RelayListRepository.shared.getWriteRelays(me)
             var set = Set(writes)
             if let board = RelayScoreBoard.load(pubkey: me) {
@@ -1179,6 +1201,11 @@ struct PostCardView: View {
                 set = ["wss://relay.damus.io", "wss://relay.primal.net", "wss://nos.lol"]
             }
             let succeeded = await RelayPool.publish(event: target, to: Array(set), timeout: 8)
+            // Yield one runloop tick so the overflow popover finishes its
+            // dismiss animation before the alert is presented. Without the
+            // hop the alert can mount on top of a still-dismissing popover
+            // and the popover dismissal eats the first OK tap.
+            try? await Task.sleep(nanoseconds: 50_000_000)
             actionAlert = ActionAlert(
                 title: succeeded.isEmpty ? "Broadcast failed" : "Broadcasted",
                 message: succeeded.isEmpty
@@ -1192,20 +1219,24 @@ struct PostCardView: View {
         guard let bytes = Hex.decode(target.id),
               let bech = Nip19.noteEncode(eventId: Array(bytes)) else { return }
         UIPasteboard.general.string = bech
+        QuickFollowToast.shared.show("Copied")
     }
 
     private func copyNpub(_ target: NostrEvent) {
         guard let bytes = Hex.decode(target.pubkey),
               let bech = Nip19.npubEncode(pubkey: Array(bytes)) else { return }
         UIPasteboard.general.string = bech
+        QuickFollowToast.shared.show("Copied")
     }
 
     private func copyNoteJson(_ target: NostrEvent) {
         UIPasteboard.general.string = target.toJSON()
+        QuickFollowToast.shared.show("Copied")
     }
 
     private func copyNoteText(_ target: NostrEvent) {
         UIPasteboard.general.string = target.content
+        QuickFollowToast.shared.show("Copied")
     }
 
     /// Resolve the thread root for a reply to `target`. If `target` is itself a reply,
