@@ -192,7 +192,7 @@ struct ProfileView: View {
                     onHashtagTap: onHashtagTap
                 )
             case .gallery:
-                GalleryTabView(viewModel: viewModel)
+                GalleryTabView(viewModel: viewModel, onNoteTap: onNoteTap)
             case .media:
                 MediaTabView(viewModel: viewModel)
             case .following:
