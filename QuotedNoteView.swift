@@ -214,7 +214,15 @@ struct QuotedNoteView: View {
         } label: {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 8) {
-                    CachedAvatarView(url: profile?.picture, size: 24)
+                    // Avatar alone routes to the author's profile; the rest
+                    // of the row + body still opens the quoted note's
+                    // thread via the surrounding Button.
+                    Button {
+                        onProfileTap?(event.pubkey)
+                    } label: {
+                        CachedAvatarView(url: profile?.picture, size: 24)
+                    }
+                    .buttonStyle(.plain)
                     EmojiText(
                         profile?.displayString ?? Nip19.shortNpub(hex: event.pubkey),
                         emojiMap: profile?.emojiMap ?? [:],
