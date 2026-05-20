@@ -501,7 +501,6 @@ private struct ProfileHeaderView: View {
             .offset(y: -pullDown)
         }
         .frame(height: 150)
-        .clipped()
     }
 
     private var statRow: some View {
