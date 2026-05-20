@@ -135,6 +135,15 @@ struct PostCardView: View {
     /// instead of being clipped for a trivial amount of hidden content.
     /// ~5 lines of body text — meaningful enough to be worth a tap.
     private static let longPostMinOverflow: CGFloat = 72
+    /// Character count above which a body is treated as long regardless of
+    /// its measured text height. A 600+ char post wraps to ~12 lines —
+    /// well under the 66%-screen cap — so the height measurement alone
+    /// would never trigger "Show more". Matches QuotedNoteView's threshold.
+    private static let longPostCharThreshold = 600
+    /// Collapsed height for a char-long text body. Smaller than the
+    /// screen-height cap so "Show more" actually hides something on a
+    /// pure text post that wraps shorter than the media cap.
+    private static let longPostTextCollapsedHeight: CGFloat = 280
     /// Visible height of trailing media when the body is collapsed. Shows
     /// the top sliver of a video poster / image grid so the user can tell
     /// media exists below the "Show more" toggle without it dominating
@@ -322,7 +331,14 @@ struct PostCardView: View {
             VStack(alignment: .leading, spacing: 8) {
                 if !displayEvent.content.isEmpty || !displayEvent.tags.isEmpty {
                     let cap = Self.longPostCollapsedHeight
-                    let isLong = naturalTextHeight > cap + Self.longPostMinOverflow
+                    let pixelLong = naturalTextHeight > cap + Self.longPostMinOverflow
+                    // Char-count path is independent of measured height: a
+                    // 600+ char body wraps to ~12 lines (well under the
+                    // 66%-screen cap), so the height check alone would let
+                    // it escape truncation entirely.
+                    let charLong = displayEvent.content.count > Self.longPostCharThreshold
+                    let isLong = pixelLong || charLong
+                    let collapsedHeight = pixelLong ? cap : Self.longPostTextCollapsedHeight
                     let collapsed = isLong && !contentExpanded
                     VStack(alignment: .leading, spacing: 6) {
                         // Text portion: leading inline groups only. Capped at
@@ -346,7 +362,7 @@ struct PostCardView: View {
                         )
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(
-                            maxHeight: collapsed ? cap : .infinity,
+                            maxHeight: collapsed ? collapsedHeight : .infinity,
                             alignment: .top
                         )
                         .clipped()
