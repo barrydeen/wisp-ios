@@ -231,6 +231,13 @@ struct InlineVideoView: View {
         .aspectRatio(displayAspect, contentMode: .fit)
         .frame(maxWidth: .infinity)
         .clipShape(RoundedRectangle(cornerRadius: 12))
+        .onReceive(NotificationCenter.default.publisher(for: AVPlayerItem.didPlayToEndTimeNotification)) { note in
+            guard let item = note.object as? AVPlayerItem,
+                  item === player?.currentItem,
+                  settings.videoLoop else { return }
+            player?.seek(to: .zero)
+            player?.play()
+        }
         .fullScreenCover(isPresented: $showFullScreen, onDismiss: {
             // Resume the inline player on dismiss only when autoplay is on,
             // so users who disabled autoplay aren't surprised by audio
@@ -302,6 +309,7 @@ struct CroppingVideoPlayer: UIViewRepresentable {
 struct FullScreenVideoView: View {
     let url: String
     @Environment(\.dismiss) private var dismiss
+    @Environment(AppSettings.self) private var settings
     @State private var player: AVPlayer?
     @State private var dismissY: CGFloat = 0
 
@@ -349,6 +357,13 @@ struct FullScreenVideoView: View {
                             }
                     )
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: AVPlayerItem.didPlayToEndTimeNotification)) { note in
+            guard let item = note.object as? AVPlayerItem,
+                  item === player?.currentItem,
+                  settings.videoLoop else { return }
+            player?.seek(to: .zero)
+            player?.play()
         }
         .task {
             if let videoURL = URL(string: url) {
