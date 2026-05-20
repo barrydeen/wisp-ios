@@ -68,9 +68,14 @@ final class DraftsViewModel {
             // Empty plaintext from a successfully decrypted but empty payload is also a tombstone.
             if plaintext.isEmpty { continue }
             guard let draft = Nip37.parseDraft(wrapper: wrapper, decryptedJSON: plaintext) else { continue }
-            // Empty inner content means the draft was tombstoned by a later replacement.
+            // Drop drafts with no salvageable payload — empty text AND no
+            // imeta attachments. Gallery drafts may legitimately have an
+            // empty caption but still hold images / videos in their imeta
+            // tags, so we keep those. Tombstones are already detected
+            // upstream as empty wrapper content (line ~69).
             let trimmed = draft.content.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmed.isEmpty { continue }
+            let hasImeta = draft.tags.contains { $0.first == "imeta" }
+            if trimmed.isEmpty && !hasImeta { continue }
             parsed.append(draft)
         }
 
