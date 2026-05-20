@@ -35,6 +35,7 @@ struct LightningInvoiceView: View {
             HStack(spacing: 8) {
                 Button {
                     UIPasteboard.general.string = invoice
+                    QuickFollowToast.shared.show("Copied")
                 } label: {
                     Label("Copy", systemImage: "doc.on.doc")
                         .font(.caption.weight(.medium))

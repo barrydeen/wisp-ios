@@ -104,13 +104,29 @@ enum ContentParser {
         trimBlankLines: Bool = true
     ) -> [ContentSegment] {
         let imetaMap = parseImetaTags(tags)
-        return parse(content: content, emojiMap: emojiMap, imetaMap: imetaMap, trimBlankLines: trimBlankLines)
+        // Preserve imeta tag order so gallery posts (kind 20/21/22) display
+        // images in the publisher's intended sequence rather than dict order.
+        var imetaUrlOrder: [String] = []
+        for tag in tags where tag.first == "imeta" {
+            for entry in tag.dropFirst() where entry.hasPrefix("url ") {
+                imetaUrlOrder.append(String(entry.dropFirst(4)))
+                break
+            }
+        }
+        return parse(
+            content: content,
+            emojiMap: emojiMap,
+            imetaMap: imetaMap,
+            imetaUrlOrder: imetaUrlOrder,
+            trimBlankLines: trimBlankLines
+        )
     }
 
     static func parse(
         content: String,
         emojiMap: [String: String] = [:],
         imetaMap: [String: MediaMeta] = [:],
+        imetaUrlOrder: [String] = [],
         trimBlankLines: Bool = true
     ) -> [ContentSegment] {
         var segments: [ContentSegment] = []
@@ -151,6 +167,37 @@ enum ContentParser {
         if lastEnd < nsContent.length {
             let trailing = nsContent.substring(from: lastEnd)
             if !trailing.isEmpty { segments.append(.text(trailing)) }
+        }
+
+        // Gallery posts (NIP-68 kind 20, NIP-71 kind 21/22) place media URLs
+        // only in imeta tags — the caption in `content` doesn't include them.
+        // The regex pass above misses those URLs, so append them here as
+        // explicit media segments in imeta tag order (so the publisher's
+        // intended first image stays first).
+        if !imetaMap.isEmpty {
+            var seenUrls = Set<String>()
+            for seg in segments {
+                switch seg {
+                case .image(let m), .video(let m), .audio(let m), .unknownMedia(let m):
+                    seenUrls.insert(m.url)
+                case .link(let url), .inlineLink(let url):
+                    seenUrls.insert(url)
+                default: break
+                }
+            }
+            let orderedUrls = imetaUrlOrder.isEmpty ? Array(imetaMap.keys) : imetaUrlOrder
+            for url in orderedUrls where !seenUrls.contains(url) {
+                guard let meta = imetaMap[url] else { continue }
+                let imetaClass = meta.mime.flatMap { classifyByMime($0) }
+                let ext = fileExtension(url)
+                if imetaClass == "image" { segments.append(.image(meta)) }
+                else if imetaClass == "video" { segments.append(.video(meta)) }
+                else if imetaClass == "audio" { segments.append(.audio(meta)) }
+                else if imageExtensions.contains(ext) { segments.append(.image(meta)) }
+                else if videoExtensions.contains(ext) { segments.append(.video(meta)) }
+                else if audioExtensions.contains(ext) { segments.append(.audio(meta)) }
+                else { segments.append(.unknownMedia(meta)) }
+            }
         }
 
         // Pass 2: split text segments on custom emoji shortcodes

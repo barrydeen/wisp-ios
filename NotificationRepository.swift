@@ -39,10 +39,27 @@ final class NotificationRepository {
 
     private var activePubkey: String = ""
 
-    /// Wall-clock at first construction. Mirrors Android's `soundEligibleAfter`
-    /// so 24h backfill after a cold start never blasts sounds for already-old
-    /// events.
-    private let sessionStartTime: Int = Int(Date().timeIntervalSince1970)
+    /// Wall-clock floor for firing notification sounds/haptics. Initialized to
+    /// app-launch and bumped to `now` every time the app re-enters the
+    /// foreground, so an overnight backlog of relay events doesn't blast
+    /// hundreds of sounds when the user reopens the app. Only events whose
+    /// `createdAt` is at or after this threshold are considered "live arrivals
+    /// the user is here to witness."
+    private var soundEligibleAfter: Int = Int(Date().timeIntervalSince1970)
+
+    init() {
+        #if canImport(UIKit)
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.soundEligibleAfter = Int(Date().timeIntervalSince1970)
+            }
+        }
+        #endif
+    }
 
     func bind(activePubkey: String) {
         if activePubkey != self.activePubkey {
@@ -120,7 +137,7 @@ final class NotificationRepository {
 
     private func fireEffects(for item: FlatNotificationItem, persist: Bool) {
         guard persist else { return }
-        guard item.timestamp >= sessionStartTime else { return }
+        guard item.timestamp >= soundEligibleAfter else { return }
         #if canImport(UIKit)
         let state = UIApplication.shared.applicationState
         guard state == .active else { return }

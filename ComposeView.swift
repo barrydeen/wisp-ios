@@ -28,6 +28,11 @@ struct ComposeView: View {
     @State private var showImageOnlyConfirm = false
     @State private var showGifPicker = false
     @State private var showPhotosPicker = false
+    /// Drives the Drafts & Scheduled sheet launched from the composer
+    /// toolbar. Tapping a draft inside the sheet opens it in a *nested*
+    /// `ComposeView`, leaving the in-progress composer behind it untouched
+    /// — no risk of losing unsaved text just by peeking at drafts.
+    @State private var showDraftsSheet = false
     @State private var photosPickerMaxCount: Int = 8
 
     /// Draft to load on first appear. Nil for `.new` and `.reply`/`.quote` composers.
@@ -63,6 +68,8 @@ struct ComposeView: View {
                             }
 
                             textEditor
+
+                            quoteContextHeader
 
                             actionsRow
 
@@ -135,28 +142,59 @@ struct ComposeView: View {
             }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") {
-                        if viewModel.hasUnsavedContent {
-                            showCancelConfirm = true
-                        } else {
-                            viewModel.cancelPublish()
-                            viewModel.explicitlyDiscarded = true
-                            dismiss()
-                        }
+                    Button {
+                        cancelTapped()
+                    } label: {
+                        Image(systemName: "chevron.left")
+                            .font(.body.weight(.semibold))
                     }
+                    .accessibilityLabel("Close")
+                    .disabled(isPublishInFlight)
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        contentFocused = false
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                            showDraftsSheet = true
+                        }
+                    } label: {
+                        Image(systemName: "tray.full")
+                    }
+                    .accessibilityLabel("Drafts")
+                    .disabled(isPublishInFlight)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     if viewModel.mode.allowsGalleryToggle {
+                        // No principal title — the pill itself identifies
+                        // the current post type ("Switch to Gallery" means
+                        // we're in Text, vice versa), and reply / quote
+                        // modes use `contextHeader` to show the parent
+                        // event. Dropping the title freed enough trailing
+                        // space to fit the full label.
                         Button {
                             viewModel.toggleGallery()
                         } label: {
-                            Label(viewModel.galleryMode ? "Text" : "Gallery",
-                                  systemImage: viewModel.galleryMode ? "doc.plaintext" : "photo.on.rectangle")
+                            HStack(spacing: 6) {
+                                Image(systemName: viewModel.galleryMode ? "doc.plaintext" : "photo.on.rectangle")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .symbolEffectsRemoved()
+                                    .transaction { $0.animation = nil }
+                                Text(viewModel.galleryMode ? "Switch to Text" : "Switch to Gallery")
+                                    .font(.subheadline.weight(.semibold))
+                                    .transaction { $0.animation = nil }
+                            }
+                            .foregroundStyle(Color.wispPrimary)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(
+                                Capsule()
+                                    .strokeBorder(Color.wispPrimary.opacity(0.5), lineWidth: 1)
+                            )
                         }
+                        .buttonStyle(.plain)
+                        .disabled(isPublishInFlight)
+                        .opacity(isPublishInFlight ? 0.4 : 1)
                     }
-                }
-                ToolbarItem(placement: .principal) {
-                    Text(navTitle).font(.headline)
                 }
             }
             .navigationBarTitleDisplayMode(.inline)
@@ -184,6 +222,9 @@ struct ComposeView: View {
                 onConfirm: { date in viewModel.setSchedule(date) },
                 onCancel: { /* keep existing schedule */ }
             )
+        }
+        .sheet(isPresented: $showDraftsSheet) {
+            DraftsScheduledView(keypair: viewModel.keypair)
         }
         // GIF picker is presented as a true UIKit modal via a hidden
         // representable rather than a SwiftUI .sheet / .fullScreenCover.
@@ -284,13 +325,35 @@ struct ComposeView: View {
             let vm = viewModel
             Task {
                 if let draft = await vm.saveDraft() {
-                    await MainActor.run { DraftSavedToastStore.shared.pendingDraft = draft }
+                    await MainActor.run {
+                        withAnimation(.spring(response: 0.55, dampingFraction: 0.82)) {
+                            DraftSavedToastStore.shared.pendingDraft = draft
+                        }
+                    }
                 }
             }
         }
     }
 
     // MARK: - Sub-areas
+
+    private var isPublishInFlight: Bool {
+        viewModel.isPublishing
+            || viewModel.countdownSeconds != nil
+            || viewModel.uploadProgress != nil
+    }
+
+    /// Discard-confirmation pivot used by both the leading chevron and any
+    /// programmatic dismiss. Confirms before dropping unsaved content.
+    private func cancelTapped() {
+        if viewModel.hasUnsavedContent {
+            showCancelConfirm = true
+        } else {
+            viewModel.cancelPublish()
+            viewModel.explicitlyDiscarded = true
+            dismiss()
+        }
+    }
 
     @ViewBuilder
     private var contextHeader: some View {
@@ -299,12 +362,16 @@ struct ComposeView: View {
             replyContextRow(parent: parent)
                 .padding(.horizontal, 12)
                 .padding(.top, 8)
-        case .quote(let q):
+        case .quote, .new:
+            EmptyView()
+        }
+    }
+
+    @ViewBuilder
+    private var quoteContextHeader: some View {
+        if case .quote(let q) = viewModel.mode {
             quoteContextRow(quoted: q)
                 .padding(.horizontal, 12)
-                .padding(.top, 8)
-        case .new:
-            EmptyView()
         }
     }
 
@@ -783,7 +850,7 @@ struct ComposeView: View {
                         }
                     }
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
+                    .frame(height: 44)
                 }
                 .background(Color.wispPrimary, in: Capsule())
                 .foregroundStyle(.white)
@@ -813,7 +880,7 @@ struct ComposeView: View {
         switch viewModel.mode {
         case .new:
             if viewModel.pollEnabled { return "New Poll" }
-            return viewModel.galleryMode ? "Gallery" : "New Post"
+            return viewModel.galleryMode ? "Gallery Post" : "New Post"
         case .reply: return "Reply"
         case .quote: return "Quote"
         }

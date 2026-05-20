@@ -19,9 +19,25 @@ final class DmRepository {
 
     private var activePubkey: String = ""
 
-    /// Wall-clock at first construction. Used to gate the incoming-DM haptic so backfilled
-    /// gift wraps don't buzz the user on cold start. Mirrors NotificationRepository.
-    private let sessionStartTime: Int = Int(Date().timeIntervalSince1970)
+    /// Wall-clock floor for firing the incoming-DM haptic. Initialized at
+    /// app-launch and bumped to `now` every time the app re-enters the
+    /// foreground, so an overnight backlog of gift wraps doesn't buzz the
+    /// user when they reopen the app. Mirrors NotificationRepository.
+    private var soundEligibleAfter: Int = Int(Date().timeIntervalSince1970)
+
+    init() {
+        #if canImport(UIKit)
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.soundEligibleAfter = Int(Date().timeIntervalSince1970)
+            }
+        }
+        #endif
+    }
 
     /// Comma-joined sorted participant pubkeys; stable across sender/receiver.
     nonisolated static func conversationKey(participants: [String]) -> String {
@@ -60,7 +76,7 @@ final class DmRepository {
 
     private func fireIncomingHaptic(for msg: DmMessage) {
         guard msg.senderPubkey != activePubkey else { return }
-        guard msg.createdAt >= sessionStartTime else { return }
+        guard msg.createdAt >= soundEligibleAfter else { return }
         #if canImport(UIKit)
         guard UIApplication.shared.applicationState == .active else { return }
         #endif
