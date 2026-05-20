@@ -63,9 +63,6 @@ final class ProfileViewModel {
     // Author profile cache for cards (mentions, repost authors, follower rows, etc.)
     var profiles: [String: ProfileData] = [:]
 
-    // Engagement counts keyed by event id
-    var engagement: [String: EngagementCounts] = [:]
-
     @ObservationIgnored private var notesQueryGen = 0
     @ObservationIgnored private var repliesQueryGen = 0
     @ObservationIgnored private var oldestNoteTs: Int?
@@ -273,7 +270,6 @@ final class ProfileViewModel {
             self.flushNotesPending()
             self.isLoadingNotes = false
             self.noNotesAvailable = self.rootNotes.isEmpty
-            await self.subscribeEngagement(for: self.rootNotes.map(\.id))
         }
     }
 
@@ -337,7 +333,6 @@ final class ProfileViewModel {
             self.flushRepliesPending()
             self.isLoadingReplies = false
             self.noRepliesAvailable = self.replies.isEmpty
-            await self.subscribeEngagement(for: self.replies.map(\.id))
         }
     }
 
@@ -380,7 +375,6 @@ final class ProfileViewModel {
         rootNotes = merged
         oldestNoteTs = merged.last?.createdAt
         await persistKnownKinds(events)
-        if !extra.isEmpty { await subscribeEngagement(for: extra.map(\.id)) }
     }
 
     func loadMoreReplies() async {
@@ -396,8 +390,6 @@ final class ProfileViewModel {
         replies = merged
         oldestReplyTs = merged.last?.createdAt
         await persistKnownKinds(events)
-        let newIds = extra.map(\.id)
-        if !newIds.isEmpty { await subscribeEngagement(for: newIds) }
     }
 
     // MARK: - Sort modes
@@ -433,7 +425,6 @@ final class ProfileViewModel {
             }
             guard gen == self.notesQueryGen else { return }
             self.isLoadingSortedNotes = false
-            await self.subscribeEngagement(for: self.sortedNotes.map(\.id))
         }
     }
 
@@ -466,7 +457,6 @@ final class ProfileViewModel {
             }
             guard gen == self.repliesQueryGen else { return }
             self.isLoadingSortedReplies = false
-            await self.subscribeEngagement(for: self.sortedReplies.map(\.id))
         }
     }
 
@@ -696,66 +686,6 @@ final class ProfileViewModel {
         }
 
         await persistKnownKinds(conversationNotes)
-        await subscribeEngagement(for: conversationNotes.map(\.id))
-    }
-
-    // MARK: - Engagement
-
-    private func subscribeEngagement(for ids: [String]) async {
-        guard !ids.isEmpty else { return }
-        let relays = queryRelays()
-        let chunks = ids.chunked(into: 200)
-        let kinds = [1, 6, 7, 9735]
-
-        await withTaskGroup(of: [NostrEvent].self) { group in
-            for chunk in chunks {
-                group.addTask {
-                    await RelayPool.query(
-                        relays: relays,
-                        filter: NostrFilter(kinds: kinds, eTags: chunk, limit: 500),
-                        timeout: 10
-                    )
-                }
-            }
-            for await batch in group {
-                ingestEngagement(batch)
-            }
-        }
-    }
-
-    private func ingestEngagement(_ events: [NostrEvent]) {
-        for event in events {
-            // First valid `e` tag is the referenced root.
-            guard let target = event.tags.first(where: { $0.first == "e" && $0.count >= 2 })?[1] else { continue }
-            var current = engagement[target] ?? EngagementCounts()
-            switch event.kind {
-            case 1:
-                current.replies += 1
-            case 6:
-                current.reposts += 1
-            case 7:
-                current.reactions += 1
-                let reactor = Reactor(
-                    pubkey: event.pubkey,
-                    emoji: event.content,
-                    customEmojiUrl: EngagementRepository.customEmojiUrl(for: event.content, in: event.tags)
-                )
-                if !current.reactors.contains(where: { $0.pubkey == reactor.pubkey && $0.emoji == reactor.emoji }) {
-                    current.reactors.append(reactor)
-                }
-            case 9735:
-                if let bolt = event.tags.first(where: { $0.first == "bolt11" && $0.count >= 2 })?[1],
-                   let decoded = Bolt11.decode(bolt),
-                   let sats = decoded.amountSats {
-                    current.zapSats += sats
-                    current.zapCount += 1
-                } else {
-                    current.zapCount += 1
-                }
-            default: break
-            }
-            engagement[target] = current
-        }
     }
 
     // MARK: - Media derivation
