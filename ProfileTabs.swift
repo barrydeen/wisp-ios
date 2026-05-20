@@ -326,8 +326,11 @@ private struct GalleryTile: View {
 
 struct MediaTabView: View {
     @Bindable var viewModel: ProfileViewModel
+    var onNoteTap: ((String) -> Void)? = nil
 
-    private let columns = Array(repeating: GridItem(.flexible(), spacing: 2), count: 3)
+    private let columnCount: CGFloat = 3
+    private let spacing: CGFloat = 2
+    private let edgePadding: CGFloat = 2
 
     var body: some View {
         let items = viewModel.mediaItems()
@@ -335,44 +338,66 @@ struct MediaTabView: View {
         if items.isEmpty {
             emptyState("No images or videos yet")
         } else {
-            LazyVGrid(columns: columns, spacing: 2) {
-                ForEach(items, id: \.url) { item in
-                    MediaTile(item: item)
+            mediaGrid(items: items)
+        }
+    }
+
+    @ViewBuilder
+    private func mediaGrid(items: [MediaItem]) -> some View {
+        let screenWidth = UIScreen.main.bounds.width
+        let totalGaps = spacing * (columnCount - 1) + edgePadding * 2
+        let tileSize = ((screenWidth - totalGaps) / columnCount).rounded(.down)
+        let rows = Int(ceil(Double(items.count) / Double(columnCount)))
+
+        VStack(spacing: spacing) {
+            ForEach(0..<rows, id: \.self) { row in
+                HStack(spacing: spacing) {
+                    ForEach(0..<Int(columnCount), id: \.self) { col in
+                        let idx = row * Int(columnCount) + col
+                        if idx < items.count {
+                            let item = items[idx]
+                            MediaTile(
+                                item: item,
+                                size: tileSize,
+                                onTap: { onNoteTap?(item.sourceEventId) }
+                            )
+                        } else {
+                            Color.clear.frame(width: tileSize, height: tileSize)
+                        }
+                    }
                 }
             }
-            .padding(.horizontal, 2)
         }
+        .padding(.horizontal, edgePadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
 private struct MediaTile: View {
     let item: MediaItem
+    let size: CGFloat
+    let onTap: () -> Void
 
     var body: some View {
         ZStack {
-            if let url = URL(string: item.url) {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let img):
-                        img.resizable().scaledToFill()
-                    case .failure:
-                        Color.wispSurfaceVariant
-                    default:
-                        Color.wispSurfaceVariant
-                    }
-                }
-            } else {
-                Color.wispSurfaceVariant
-            }
+            RetryingAsyncImage(
+                url: URL(string: item.url),
+                content: { img in
+                    img.resizable().scaledToFill()
+                },
+                loading: { Color.wispSurfaceVariant },
+                failure: { Color.wispSurfaceVariant }
+            )
             if item.isVideo {
                 Image(systemName: "play.circle.fill")
                     .font(.system(size: 24))
                     .foregroundStyle(.white.opacity(0.85))
             }
         }
-        .frame(maxWidth: .infinity)
-        .aspectRatio(1, contentMode: .fit)
+        .frame(width: size, height: size)
         .clipped()
+        .contentShape(Rectangle())
+        .onTapGesture { onTap() }
     }
 }
 

@@ -194,7 +194,7 @@ struct ProfileView: View {
             case .gallery:
                 GalleryTabView(viewModel: viewModel, onNoteTap: onNoteTap)
             case .media:
-                MediaTabView(viewModel: viewModel)
+                MediaTabView(viewModel: viewModel, onNoteTap: onNoteTap)
             case .following:
                 FollowingTabView(viewModel: viewModel)
             case .followers:
