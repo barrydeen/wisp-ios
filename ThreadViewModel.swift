@@ -861,14 +861,23 @@ final class ThreadViewModel {
                     current.reactors.append(reactor)
                 }
             case 9735:
+                var sats: Int64 = 0
                 if let bolt = event.tags.first(where: { $0.first == "bolt11" && $0.count >= 2 })?[1],
-                   let decoded = Bolt11.decode(bolt),
-                   let sats = decoded.amountSats {
-                    current.zapSats += sats
-                    current.zapCount += 1
-                } else {
-                    current.zapCount += 1
+                   let decoded = Bolt11.decode(bolt) {
+                    sats = decoded.amountSats ?? 0
                 }
+                current.zapSats += sats
+                current.zapCount += 1
+                var zapperPubkey = event.pubkey
+                var message = ""
+                if let descTag = event.tags.first(where: { $0.first == "description" && $0.count >= 2 }),
+                   let descData = descTag[1].data(using: .utf8),
+                   let descJson = try? JSONSerialization.jsonObject(with: descData) as? [String: Any] {
+                    if let p = descJson["pubkey"] as? String { zapperPubkey = p }
+                    if let c = descJson["content"] as? String { message = c }
+                }
+                current.zappers.append(Zapper(pubkey: zapperPubkey, sats: sats, message: message))
+                MissingProfileWatcher.shared.observePubkeys([zapperPubkey])
             default: break
             }
             engagement[primary] = current
