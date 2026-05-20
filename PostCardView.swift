@@ -849,13 +849,23 @@ struct PostCardView: View {
         .buttonStyle(.plain)
         .popover(isPresented: $showRepostMenu) {
             VStack(alignment: .leading, spacing: 0) {
-                popoverMenuItem(
-                    title: iReposted ? "Reposted" : "Repost",
-                    systemImage: "arrow.2.squarepath",
-                    disabled: iReposted
-                ) {
-                    showRepostMenu = false
-                    sendRepost()
+                if iReposted {
+                    popoverMenuItem(
+                        title: "Undo Repost",
+                        systemImage: "arrow.2.squarepath",
+                        role: .destructive
+                    ) {
+                        showRepostMenu = false
+                        undoRepost()
+                    }
+                } else {
+                    popoverMenuItem(
+                        title: "Repost",
+                        systemImage: "arrow.2.squarepath"
+                    ) {
+                        showRepostMenu = false
+                        sendRepost()
+                    }
                 }
                 Divider()
                 popoverMenuItem(
@@ -1037,28 +1047,33 @@ struct PostCardView: View {
         }
     }
 
+    private var myReactionEventId: String? { myReactor?.reactionEventId }
+    private var myRepostEventId: String? {
+        guard let me = myPubkey else { return nil }
+        return repoBox.counts.reposterEventIds[me]
+    }
+
     private var heartAction: some View {
         let displayed = displayReactedEmoji
         let custom = displayReactedCustomEmoji
+        let alreadyReacted = iReactedEmoji != nil
         return Button {
-            // Pick whichever side of the heart has more usable vertical
-            // space, then size the picker to fit that space so it scrolls
-            // internally instead of getting clipped by the popover. Reserve
-            // small margins for the status bar above and the home indicator
-            // / tab bar below. Frame is read live from the tracker so the
-            // anchor is correct for the heart's current scroll position.
-            let frame = heartFrameTracker.frame
-            let screenHeight = UIScreen.main.bounds.height
-            let topReserve: CGFloat = 60
-            let bottomReserve: CGFloat = 80
-            let popoverChrome: CGFloat = 32
-            let availableBelow = max(0, screenHeight - bottomReserve - frame.maxY - popoverChrome)
-            let availableAbove = max(0, frame.minY - topReserve - popoverChrome)
-            let preferBelow = availableBelow >= availableAbove
-            reactionArrowEdge = preferBelow ? .top : .bottom
-            let chosenSpace = preferBelow ? availableBelow : availableAbove
-            reactionPickerMaxHeight = min(192, max(80, chosenSpace))
-            showReactionPicker = true
+            if alreadyReacted {
+                undoReaction()
+            } else {
+                let frame = heartFrameTracker.frame
+                let screenHeight = UIScreen.main.bounds.height
+                let topReserve: CGFloat = 60
+                let bottomReserve: CGFloat = 80
+                let popoverChrome: CGFloat = 32
+                let availableBelow = max(0, screenHeight - bottomReserve - frame.maxY - popoverChrome)
+                let availableAbove = max(0, frame.minY - topReserve - popoverChrome)
+                let preferBelow = availableBelow >= availableAbove
+                reactionArrowEdge = preferBelow ? .top : .bottom
+                let chosenSpace = preferBelow ? availableBelow : availableAbove
+                reactionPickerMaxHeight = min(192, max(80, chosenSpace))
+                showReactionPicker = true
+            }
         } label: {
             if let emoji = displayed {
                 HStack(spacing: 4) {
@@ -1156,6 +1171,39 @@ struct PostCardView: View {
                 // No-op: button is also disabled in this state.
             } catch {
                 actionAlert = ActionAlert(title: "Repost failed", message: String(describing: error))
+            }
+        }
+    }
+
+    private func undoReaction() {
+        guard let keypair = NostrKey.load(),
+              let me = myPubkey,
+              let reactor = myReactor,
+              let reactionEventId = myReactionEventId else { return }
+        ReactionSender.shared.clearSent(pubkey: me, targetEventId: displayEventId, frequencyKey: reactor.emoji)
+        EngagementRepository.shared.undoReaction(eventId: displayEventId, pubkey: me, emoji: reactor.emoji)
+        Haptics.shared.blip()
+        Task {
+            do {
+                try await DeletionSender.shared.deleteById(reactionEventId, kind: Nip25.kindReaction, keypair: keypair)
+            } catch {
+                NSLog("[Reaction] undo failed: %@", String(describing: error))
+            }
+        }
+    }
+
+    private func undoRepost() {
+        guard let keypair = NostrKey.load(),
+              let me = myPubkey,
+              let repostEventId = myRepostEventId else { return }
+        RepostSender.shared.clearSent(pubkey: me, targetEventId: displayEventId)
+        EngagementRepository.shared.undoRepost(eventId: displayEventId, reposterPubkey: me)
+        Haptics.shared.blip()
+        Task {
+            do {
+                try await DeletionSender.shared.deleteById(repostEventId, kind: 6, keypair: keypair)
+            } catch {
+                NSLog("[Repost] undo failed: %@", String(describing: error))
             }
         }
     }

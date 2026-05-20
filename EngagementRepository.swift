@@ -134,6 +134,27 @@ final class EngagementRepository {
         b.counts = current
     }
 
+    /// User-initiated undo of a reaction. Removes from local counts (same as a
+    /// publish-failure revert) so the NIP-09 deletion can proceed.
+    func undoReaction(eventId: String, pubkey: String, emoji: String) {
+        revertOptimisticReaction(eventId: eventId, pubkey: pubkey, emoji: emoji)
+    }
+
+    /// Stamp the signed kind-7 event id onto the matching reactor so undo can find it.
+    /// Called by `ReactionSender` after the event is signed.
+    func updateReactionEventId(eventId: String, pubkey: String, emoji: String, reactionEventId: String) {
+        let b = box(for: eventId)
+        var current = b.counts
+        if let idx = current.reactors.firstIndex(where: { $0.pubkey == pubkey && $0.emoji == emoji }) {
+            let r = current.reactors[idx]
+            current.reactors[idx] = Reactor(
+                pubkey: r.pubkey, emoji: r.emoji,
+                customEmojiUrl: r.customEmojiUrl, reactionEventId: reactionEventId
+            )
+            b.counts = current
+        }
+    }
+
     /// Reserve the signed kind-7 event id against `seenEngagementIds` so the inbound copy
     /// doesn't double-count. Call after `Signer.sign` succeeds.
     func reserveReactionEventId(_ id: String) {
@@ -158,6 +179,7 @@ final class EngagementRepository {
         if current.reposters.contains(reposterPubkey) { return }
         current.reposts += 1
         current.reposters.append(reposterPubkey)
+        current.reposterEventIds[reposterPubkey] = repostEventId
         b.counts = current
     }
 
@@ -183,7 +205,13 @@ final class EngagementRepository {
         guard current.reposters.contains(reposterPubkey) else { return }
         if current.reposts > 0 { current.reposts -= 1 }
         current.reposters.removeAll { $0 == reposterPubkey }
+        current.reposterEventIds.removeValue(forKey: reposterPubkey)
         b.counts = current
+    }
+
+    /// User-initiated undo of a repost. Removes the reposter from local counts.
+    func undoRepost(eventId: String, reposterPubkey: String) {
+        revertOptimisticRepost(eventId: eventId, reposterPubkey: reposterPubkey)
     }
 
     // MARK: - Optimistic zaps
@@ -466,6 +494,7 @@ final class EngagementRepository {
             if !current.reposters.contains(event.pubkey) {
                 current.reposters.append(event.pubkey)
             }
+            current.reposterEventIds[event.pubkey] = event.id
             MissingProfileWatcher.shared.observePubkeys([event.pubkey])
         case 7:
             // Dedupe by (target, pubkey, content) so an optimistic apply followed by the
@@ -476,7 +505,8 @@ final class EngagementRepository {
             let reactor = Reactor(
                 pubkey: event.pubkey,
                 emoji: event.content,
-                customEmojiUrl: Self.customEmojiUrl(for: event.content, in: event.tags)
+                customEmojiUrl: Self.customEmojiUrl(for: event.content, in: event.tags),
+                reactionEventId: event.id
             )
             if !current.reactors.contains(where: { $0.pubkey == reactor.pubkey && $0.emoji == reactor.emoji }) {
                 current.reactors.append(reactor)
