@@ -147,14 +147,19 @@ struct ComposeView: View {
                             .font(.body.weight(.semibold))
                     }
                     .accessibilityLabel("Close")
+                    .disabled(isPublishInFlight)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
-                        showDraftsSheet = true
+                        contentFocused = false
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                            showDraftsSheet = true
+                        }
                     } label: {
                         Image(systemName: "tray.full")
                     }
                     .accessibilityLabel("Drafts")
+                    .disabled(isPublishInFlight)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     if viewModel.mode.allowsGalleryToggle {
@@ -170,8 +175,11 @@ struct ComposeView: View {
                             HStack(spacing: 6) {
                                 Image(systemName: viewModel.galleryMode ? "doc.plaintext" : "photo.on.rectangle")
                                     .font(.system(size: 13, weight: .semibold))
+                                    .symbolEffectsRemoved()
+                                    .transaction { $0.animation = nil }
                                 Text(viewModel.galleryMode ? "Switch to Text" : "Switch to Gallery")
                                     .font(.subheadline.weight(.semibold))
+                                    .transaction { $0.animation = nil }
                             }
                             .foregroundStyle(Color.wispPrimary)
                             .padding(.horizontal, 12)
@@ -182,6 +190,8 @@ struct ComposeView: View {
                             )
                         }
                         .buttonStyle(.plain)
+                        .disabled(isPublishInFlight)
+                        .opacity(isPublishInFlight ? 0.4 : 1)
                     }
                 }
             }
@@ -306,6 +316,12 @@ struct ComposeView: View {
     }
 
     // MARK: - Sub-areas
+
+    private var isPublishInFlight: Bool {
+        viewModel.isPublishing
+            || viewModel.countdownSeconds != nil
+            || viewModel.uploadProgress != nil
+    }
 
     /// Discard-confirmation pivot used by both the leading chevron and any
     /// programmatic dismiss. Confirms before dropping unsaved content.
