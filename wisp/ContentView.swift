@@ -102,13 +102,9 @@ struct ContentView: View {
             checkedSavedAccount = true
             if let saved = NostrKey.load() {
                 keypair = saved
-                // Remote-signer accounts need their NIP-46 session rehydrated
-                // before any signing surface is reachable. Restore on a Task
-                // because `Nip46Manager.restoreSession` is async (opens
-                // WebSockets to the signer's relays).
-                if saved.isRemote && !NostrKey.isWatchOnly(pubkey: saved.pubkey) {
-                    Task { _ = await Nip46Manager.shared.restoreSession(pubkey: saved.pubkey) }
-                }
+                // Ensure accounts set up before multi-account was added are
+                // registered in wisp_accounts so they survive an "Add Account" flow.
+                NostrKey.registerInAccountList(saved.pubkey)
                 if NostrKey.isOnboardingComplete(pubkey: saved.pubkey) {
                     currentScreen = .loading
                 } else {

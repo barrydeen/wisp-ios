@@ -93,11 +93,7 @@ final class ReactionSender {
             let signTags: [[String]]
             let signCreatedAt: Int
 
-            // PoW mining: bump nonce until the event id has the requested
-            // leading zeroes. Skipped for remote-signer accounts since the
-            // signer would mine its own — which most signers don't do, so
-            // PoW reactions on a NIP-46 account just publish without PoW.
-            if powSnap.reactionEnabled, !keypair.isRemote {
+            if powSnap.reactionEnabled {
                 let pubkey = keypair.pubkey
                 let content = picked.content
                 let bits = powSnap.reactionDifficulty

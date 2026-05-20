@@ -22,11 +22,6 @@ enum AppDataWipe {
         RelayPool.authSigner = nil
         RelayPool.authApprovalCheck = nil
         await GroupRelayPool.shared.shutdownAll()
-        // Tear down the active NIP-46 client. Without this its three per-relay
-        // sockets stay alive in the background, hammer the same relays with
-        // exponential-backoff reconnects, and starve the next login attempt
-        // of relay connections (the `get_public_key` response never lands).
-        await Nip46Manager.shared.clearActive()
 
         // 2. In-memory singletons — match the existing logout flow plus the wallet store.
         EngagementRepository.shared.clear()
@@ -95,7 +90,7 @@ enum AppDataWipe {
     private static func wipeKeychain() {
         // Service-level wipe: matches NostrKey.service ("com.wisp.nostr") which
         // WalletKeychain also uses, so this catches NostrKey + NWC URI + Spark seed.
-        for service in ["com.wisp.nostr", "com.wisp.nip46"] {
+        for service in ["com.wisp.nostr"] {
             let query: [String: Any] = [
                 kSecClass as String: kSecClassGenericPassword,
                 kSecAttrService as String: service

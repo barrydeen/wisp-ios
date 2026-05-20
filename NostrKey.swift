@@ -58,18 +58,8 @@ enum NostrKey {
         setCachedActive(keypair)
     }
 
-    /// Save a remote-signer (NIP-46) account. The private key is stored as an
-    /// empty string sentinel — `Keypair.isRemote` (defined in `Signer.swift`)
-    /// reads that as the marker for "signing is delegated, look up
-    /// `Nip46Manager.shared.activeClient`". The actual session lives in
-    /// `Nip46SessionStore`.
-    static func saveRemote(pubkey: String) {
-        let kp = Keypair(privkey: "", pubkey: pubkey)
-        save(kp)
-    }
-
-    /// Save a watch-only account (npub/nprofile scan). Uses the same empty-privkey
-    /// sentinel as NIP-46, but is distinguishable via `isWatchOnly(pubkey:)`.
+    /// Save a watch-only account (npub/nprofile scan). Uses an empty privkey sentinel
+    /// distinguishable via `isWatchOnly(pubkey:)`.
     static func saveWatchOnly(pubkey: String) {
         let kp = Keypair(privkey: "", pubkey: pubkey)
         save(kp)
@@ -112,7 +102,6 @@ enum NostrKey {
         if cachedActive()?.pubkey == pubkey {
             setCachedActive(nil)
         }
-        Nip46SessionStore.delete(pubkey: pubkey)
         var list = accounts()
         list.removeAll { $0 == pubkey }
         UserDefaults.standard.set(list, forKey: "wisp_accounts")
@@ -176,12 +165,11 @@ enum NostrKey {
         guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
               let data = result as? Data,
               let str = String(data: data, encoding: .utf8) else { return nil }
-        // `omittingEmptySubsequences: false` is load-bearing here — remote
-        // signer accounts are persisted with an empty privkey (the
-        // `Keypair.isRemote` sentinel set by `saveRemote`), so the stored
-        // data is `":<pubkey>"`. The default `split` drops that leading
-        // empty substring, returns 1 part, and we'd hand back nil — making
-        // every NIP-46 account unswitchable from the sidebar picker.
+        // `omittingEmptySubsequences: false` is load-bearing here — watch-only
+        // accounts are persisted with an empty privkey, so the stored data is
+        // `":<pubkey>"`. The default `split` drops the leading empty substring,
+        // returns 1 part, and we'd hand back nil — making watch-only accounts
+        // unswitchable from the sidebar picker.
         let parts = str.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
         guard parts.count == 2 else { return nil }
         return Keypair(privkey: parts[0], pubkey: parts[1])
