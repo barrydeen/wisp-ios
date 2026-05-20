@@ -14,6 +14,7 @@ struct ProfileEditView: View {
     @State private var viewModel: ProfileEditViewModel
     @State private var advancedExpanded = false
     @Environment(\.dismiss) private var dismiss
+    @Environment(WalletStore.self) private var walletStore: WalletStore?
 
     init(keypair: Keypair, onSaved: @escaping (ProfileData) -> Void = { _ in }) {
         self.keypair = keypair
@@ -171,7 +172,35 @@ struct ProfileEditView: View {
         }
 
         field(label: "NIP-05", text: $viewModel.nip05, placeholder: "you@example.com", keyboard: .emailAddress, autocaps: false)
-        field(label: "Lightning Address", text: $viewModel.lud16, placeholder: "you@walletofsatoshi.com", keyboard: .emailAddress, autocaps: false)
+        VStack(alignment: .leading, spacing: 6) {
+            field(label: "Lightning Address", text: $viewModel.lud16, placeholder: "you@walletofsatoshi.com", keyboard: .emailAddress, autocaps: false)
+            if let walletAddr = walletStore?.lightningAddress,
+               !walletAddr.isEmpty,
+               walletAddr.lowercased() != viewModel.lud16.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+                HStack(spacing: 6) {
+                    Image(systemName: "bolt.fill")
+                        .font(.caption2)
+                        .foregroundStyle(Color.wispZapColor)
+                    Text("Wallet: \(walletAddr)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                    Button {
+                        viewModel.lud16 = walletAddr
+                    } label: {
+                        Text("Use")
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 4)
+                            .background(Color.wispPrimary.opacity(0.15), in: Capsule())
+                            .foregroundStyle(Color.wispPrimary)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 4)
+            }
+        }
 
         advancedSection
     }

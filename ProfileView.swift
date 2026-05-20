@@ -77,6 +77,7 @@ struct ProfileView: View {
                 }
             }
         }
+        .coordinateSpace(name: "profileScroll")
         .background(Color.wispBackground)
         .toolbar(.hidden, for: .navigationBar)
         .swipeBackFromLeftEdge {
@@ -474,22 +475,31 @@ private struct ProfileHeaderView: View {
     }
 
     private var banner: some View {
-        Group {
-            if let banner = viewModel.profile?.banner, !banner.isEmpty,
-               let url = URL(string: banner) {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let img):
-                        img.resizable().scaledToFill()
-                    default:
-                        Color.wispSurfaceVariant
+        GeometryReader { geo in
+            let minY = geo.frame(in: .named("profileScroll")).minY
+            let pullDown = max(0, minY)
+            let targetHeight = 150 + pullDown
+            Group {
+                if let banner = viewModel.profile?.banner, !banner.isEmpty,
+                   let url = URL(string: banner) {
+                    AsyncImage(url: url) { phase in
+                        switch phase {
+                        case .success(let img):
+                            img.resizable().scaledToFill()
+                                .frame(width: geo.size.width, height: targetHeight)
+                        default:
+                            Color.wispSurfaceVariant
+                                .frame(width: geo.size.width, height: targetHeight)
+                        }
                     }
+                } else {
+                    Color.wispSurfaceVariant
+                        .frame(width: geo.size.width, height: targetHeight)
                 }
-            } else {
-                Color.wispSurfaceVariant
             }
+            .clipped()
+            .offset(y: -pullDown)
         }
-        .frame(maxWidth: .infinity)
         .frame(height: 150)
         .clipped()
     }
