@@ -3,11 +3,12 @@ import PhotosUI
 import UniformTypeIdentifiers
 import Observation
 
-/// Shared one-shot "Draft saved" pill state. `ComposeView` writes to this
-/// from its autosave-on-dismiss path; `MainView` renders the pill from it.
-/// Lives outside the View so reply / quote composers presented from
-/// `PostCardView` or `NotificationComposer` light up the same pill without
-/// each entry point needing to thread a callback up to the tab root.
+/// Cross-surface channel for the autosaved draft. `ComposeView` writes the
+/// draft here from its autosave-on-dismiss path; `MainView` watches it and
+/// raises the shared `SuccessToast` ("Draft saved", tap to reopen). Lives
+/// outside the View so reply / quote composers presented from `PostCardView`
+/// or `NotificationComposer` light up the same pill without each entry point
+/// threading a callback up to the tab root.
 @MainActor
 @Observable
 final class DraftSavedToastStore {
@@ -16,27 +17,6 @@ final class DraftSavedToastStore {
     private init() {}
 }
 
-/// Shared one-shot "Post published" pill state. `ComposeViewModel` writes to
-/// this after an immediate publish succeeds; `MainView` renders a themed
-/// pill linking back to the new post — same indirection as the draft toast
-/// so reply / quote composers anywhere in the app light up the same indicator.
-struct PublishedPostToast: Equatable {
-    let id: String
-    let pubkey: String
-    /// Set when the published event is a reply. Holds the direct parent's event id
-    /// so the toast can navigate to the parent's thread (showing the reply below it)
-    /// rather than opening the reply itself as the thread focal.
-    let parentEventId: String?
-    let parentAuthorPubkey: String?
-}
-
-@MainActor
-@Observable
-final class PostPublishedToastStore {
-    static let shared = PostPublishedToastStore()
-    var published: PublishedPostToast? = nil
-    private init() {}
-}
 
 struct ComposeView: View {
     @State var viewModel: ComposeViewModel
@@ -880,7 +860,17 @@ struct ComposeView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .onChange(of: viewModel.publishedEventId) { _, newId in
-            if newId != nil { dismiss() }
+            guard newId != nil else { return }
+            SuccessToast.shared.show(publishToastMessage)
+            dismiss()
+        }
+    }
+
+    private var publishToastMessage: String {
+        switch viewModel.mode {
+        case .reply: return "Reply sent"
+        case .quote: return "Quote posted"
+        case .new: return viewModel.pollEnabled ? "Poll posted" : "Posted"
         }
     }
 

@@ -91,6 +91,11 @@ final class ZapAnimationStore {
             case .success:
                 Haptics.shared.zapBuzz()
                 NotificationSounds.shared.play(.zap)
+                SuccessToast.shared.show(
+                    "Zapped \(amountSats.formatted()) \(amountSats == 1 ? "sat" : "sats")",
+                    icon: "bolt.fill",
+                    accent: .wispZapColor
+                )
                 onSuccessSats?(amountSats)
                 if let eventId {
                     self.bursting.insert(eventId)

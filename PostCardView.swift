@@ -1151,6 +1151,7 @@ struct PostCardView: View {
         Task {
             do {
                 try await RepostSender.shared.repost(target, keypair: keypair)
+                SuccessToast.shared.show("Reposted", icon: "arrow.2.squarepath", accent: .wispRepostColor)
             } catch RepostSender.SendError.alreadyReposted {
                 // No-op: button is also disabled in this state.
             } catch {
