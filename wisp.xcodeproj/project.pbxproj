@@ -70,6 +70,8 @@
 		4CDFAB0000000000000DF103 /* DraftsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDFAB0000000000000DF003 /* DraftsViewModel.swift */; };
 		4CDFAB0000000000000DF104 /* ScheduleSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDFAB0000000000000DF004 /* ScheduleSheet.swift */; };
 		4CDFAB0000000000000DF105 /* DraftsScheduledView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDFAB0000000000000DF005 /* DraftsScheduledView.swift */; };
+		4CDFAB0000000000000DF107 /* PollsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDFAB0000000000000DF007 /* PollsViewModel.swift */; };
+		4CDFAB0000000000000DF109 /* PollsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDFAB0000000000000DF009 /* PollsView.swift */; };
 		4CDFAB0000000000000DF200 /* Nip38.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDFAB0000000000000DF201 /* Nip38.swift */; };
 		4CEE000100000000000000B1 /* BreezSdkSpark in Frameworks */ = {isa = PBXBuildFile; productRef = 4CEE000000000000000000B1 /* BreezSdkSpark */; };
 		4CFA00010001000000A1BA01 /* RelayDefaults.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFA00020001000000A1BA01 /* RelayDefaults.swift */; };
@@ -350,6 +352,8 @@
 		4CDFAB0000000000000DF003 /* DraftsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftsViewModel.swift; sourceTree = "<group>"; };
 		4CDFAB0000000000000DF004 /* ScheduleSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScheduleSheet.swift; sourceTree = "<group>"; };
 		4CDFAB0000000000000DF005 /* DraftsScheduledView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftsScheduledView.swift; sourceTree = "<group>"; };
+		4CDFAB0000000000000DF007 /* PollsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PollsViewModel.swift; sourceTree = "<group>"; };
+		4CDFAB0000000000000DF009 /* PollsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PollsView.swift; sourceTree = "<group>"; };
 		4CDFAB0000000000000DF201 /* Nip38.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Nip38.swift; sourceTree = "<group>"; };
 		4CFA00020001000000A1BA01 /* RelayDefaults.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayDefaults.swift; sourceTree = "<group>"; };
 		4CFA00040001000000A1BA01 /* FollowsCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowsCache.swift; sourceTree = "<group>"; };
@@ -811,6 +815,8 @@
 				4CDFAB0000000000000DF003 /* DraftsViewModel.swift */,
 				4CDFAB0000000000000DF004 /* ScheduleSheet.swift */,
 				4CDFAB0000000000000DF005 /* DraftsScheduledView.swift */,
+				4CDFAB0000000000000DF007 /* PollsViewModel.swift */,
+				4CDFAB0000000000000DF009 /* PollsView.swift */,
 				4CFFCC00000000000000040D /* HashtagChipsView.swift */,
 				4CFFCC00000000000000040E /* MentionCandidateRow.swift */,
 				4CFFCC00000000000000040F /* ComposerPreviewCard.swift */,
@@ -1235,6 +1241,8 @@
 				4CDFAB0000000000000DF103 /* DraftsViewModel.swift in Sources */,
 				4CDFAB0000000000000DF104 /* ScheduleSheet.swift in Sources */,
 				4CDFAB0000000000000DF105 /* DraftsScheduledView.swift in Sources */,
+				4CDFAB0000000000000DF107 /* PollsViewModel.swift in Sources */,
+				4CDFAB0000000000000DF109 /* PollsView.swift in Sources */,
 				4CFFCC01000000000000040D /* HashtagChipsView.swift in Sources */,
 				4CFFCC01000000000000040E /* MentionCandidateRow.swift in Sources */,
 				4CFFCC01000000000000040F /* ComposerPreviewCard.swift in Sources */,

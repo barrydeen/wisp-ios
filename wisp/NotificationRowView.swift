@@ -112,7 +112,7 @@ struct NotificationRowView: View {
                 quoteExpansion
             case .mention:
                 mentionExpansion
-            case .reaction, .repost, .pollVote:
+            case .reaction, .repost, .pollVote, .pollEnded:
                 referencedNoteExpansion
             case .zap:
                 zapExpansion
@@ -317,7 +317,7 @@ struct NotificationRowView: View {
             raw = repo.event(forId: item.id)?.content
         case .quote:
             raw = repo.event(forId: item.actorEventId ?? item.id)?.content
-        case .pollVote:
+        case .pollVote, .pollEnded:
             raw = repo.event(forId: item.referencedEventId)?.content
         case .dm, .reaction, .repost, .zap:
             return nil

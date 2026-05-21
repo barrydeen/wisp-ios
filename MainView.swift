@@ -34,6 +34,7 @@ struct MainView: View {
     @State private var showCustomEmojis = false
     @State private var showHashtagSets = false
     @State private var showLists = false
+    @State private var showPolls = false
     @State private var showCompose = false
     @State private var showDraftsScheduled = false
     @State private var showRelayPicker = false
@@ -158,6 +159,10 @@ struct MainView: View {
                 onOpenLists: {
                     closeDrawer()
                     showLists = true
+                },
+                onOpenPolls: {
+                    closeDrawer()
+                    showPolls = true
                 },
                 onOpenHashtagSets: {
                     closeDrawer()
@@ -440,6 +445,16 @@ struct MainView: View {
         }
         .sheet(isPresented: $showDraftsScheduled) {
             DraftsScheduledView(keypair: keypair)
+        }
+        .sheet(isPresented: $showPolls) {
+            PollsView(keypair: keypair, onOpenPoll: { eventId, authorPubkey in
+                showPolls = false
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(350))
+                    feedPath.append(ThreadRoute(eventId: eventId, authorPubkey: authorPubkey))
+                    selectedTab = .home
+                }
+            })
         }
         .sheet(isPresented: $showOnlineSheet) {
             OnlineNowSheet(
