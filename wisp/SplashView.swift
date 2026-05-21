@@ -20,6 +20,7 @@ struct SplashView: View {
 
     var onSignUp: () -> Void = {}
     var onLogIn: () -> Void = {}
+    var onContinueWithGoogle: () -> Void = {}
 
     var body: some View {
         GeometryReader { geo in
@@ -85,6 +86,10 @@ struct SplashView: View {
                     Spacer().frame(height: 32)
 
                     VStack(spacing: 8) {
+                        if GoogleAuthConfig.isConfigured {
+                            ContinueWithGoogleButton(action: onContinueWithGoogle)
+                        }
+
                         Button(action: onSignUp) {
                             Text("Create Account")
                                 .frame(maxWidth: .infinity)
@@ -127,6 +132,33 @@ struct SplashView: View {
             withAnimation(.easeOut(duration: 0.35)) { actionsVisible = true }
         }
         .onDisappear { viewModel.cancel() }
+    }
+}
+
+/// Matches the Android "Continue with Google" pill from
+/// `SplashScreen.kt` (lines 211–238): black background, light-grey text
+/// and 1pt grey border, with the Google "G" mark to the left.
+private struct ContinueWithGoogleButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image("GoogleG")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 20, height: 20)
+                Text("Continue with Google")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(Color(red: 0xE3/255.0, green: 0xE3/255.0, blue: 0xE3/255.0))
+            }
+            .frame(maxWidth: .infinity, minHeight: 44)
+        }
+        .background(Color(red: 0x13/255.0, green: 0x13/255.0, blue: 0x14/255.0),
+                    in: Capsule())
+        .overlay(
+            Capsule().stroke(Color(red: 0x8E/255.0, green: 0x91/255.0, blue: 0x8F/255.0), lineWidth: 1)
+        )
     }
 }
 

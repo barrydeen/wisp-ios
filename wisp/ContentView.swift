@@ -11,6 +11,7 @@ enum AppScreen {
 struct ContentView: View {
     @State private var currentScreen: AppScreen = .splash
     @State private var showLogin = false
+    @State private var showGoogleAuth = false
     @State private var keypair: Keypair?
     @State private var checkedSavedAccount = false
     @State private var accountSwitchInProgress = false
@@ -26,6 +27,9 @@ struct ContentView: View {
                     },
                     onLogIn: {
                         showLogin = true
+                    },
+                    onContinueWithGoogle: {
+                        showGoogleAuth = true
                     }
                 )
                 .sheet(isPresented: $showLogin) {
@@ -40,6 +44,25 @@ struct ContentView: View {
                             currentScreen = .onboarding
                         }
                     }
+                }
+                .fullScreenCover(isPresented: $showGoogleAuth) {
+                    GoogleAuthView(
+                        onCancel: { showGoogleAuth = false },
+                        onDone: { _, kp in
+                            keypair = kp
+                            showGoogleAuth = false
+                            // Both new and restored Google accounts run the
+                            // outbox-builder onboarding so the feed has
+                            // relays-per-author before MainView mounts.
+                            // `OnboardingView`'s watch-only fast path is
+                            // skipped because we always have a privkey here.
+                            if NostrKey.isOnboardingComplete(pubkey: kp.pubkey) {
+                                currentScreen = .loading
+                            } else {
+                                currentScreen = .onboarding
+                            }
+                        }
+                    )
                 }
 
             case .signUp:

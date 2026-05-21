@@ -1,0 +1,30 @@
+# Google "Continue with Google" — Web OAuth client ID
+#
+# Wisp lets users back up their nsec to a hidden folder in their own
+# Google Drive (encrypted with a 4–8 digit PIN). To enable that flow
+# you need two OAuth clients from Google Cloud Console:
+#
+#   1. Web application client — its client ID goes in THIS file.
+#   2. iOS application client — its client ID goes in
+#      google-ios-client-id.txt (see google-ios-client-id.txt.example).
+#
+# The Web client ID is set as `serverClientID` on GIDConfiguration so the
+# ID token's audience matches what the Android app sees. Without this,
+# the `sub` claim a user gets on iOS would differ from Android and
+# cross-platform backup restore would fail.
+#
+# To use this file:
+#   - Visit https://console.cloud.google.com/apis/credentials and create
+#     (or reuse) a Web application OAuth 2.0 client. Use the same client
+#     that the Android Wisp app uses so backups round-trip across
+#     platforms — copy it from
+#     ~/dev/wisp/app/src/main/res/values/strings.xml (look for
+#     `google_web_client_id`).
+#   - Save your client ID (looks like
+#     1234567890-abc...xyz.apps.googleusercontent.com) to
+#     wisp/Resources/google-web-client-id.txt (no quotes, single line).
+#   - Also enable the Google Drive API for your project so the
+#     drive.appdata scope works.
+#
+# This file (the .example) is checked in. The real file
+# (google-web-client-id.txt) is gitignored.

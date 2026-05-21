@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import GoogleSignIn
 
 @main
 struct wispApp: App {
@@ -41,6 +42,12 @@ struct wispApp: App {
                 .environment(powPrefs)
                 .environment(audioPlayer)
                 .preferredColorScheme(settings.preferredColorScheme)
+                .onOpenURL { url in
+                    // Required for Google Sign-In's OAuth redirect to make
+                    // its way back into the SDK after the in-app browser
+                    // returns from accounts.google.com.
+                    GIDSignIn.sharedInstance.handle(url)
+                }
         }
     }
 }

@@ -12,6 +12,8 @@ DerivedData/
 ## Secrets
 wisp/Resources/breez-api-key.txt
 wisp/Resources/giphy-api-key.txt
+wisp/Resources/google-web-client-id.txt
+wisp/Resources/google-ios-client-id.txt
 
 ## Per-developer signing override (see local.xcconfig.example)
 local.xcconfig
