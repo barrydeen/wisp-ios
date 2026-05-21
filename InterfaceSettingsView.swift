@@ -172,8 +172,8 @@ struct InterfaceSettingsView: View {
                            isOn: $settings.quickZapEnabled)
                         .toggleStyle(SwitchToggleStyle(tint: theme.primary))
                     Text(settings.fiatModeEnabled
-                        ? "When on, tapping the pay button on a post immediately sends your chosen amount. Long-press to open the payment composer."
-                        : "When on, tapping the zap button on a post immediately sends your chosen amount. Long-press to open the zap composer.")
+                        ? "When on, long-pressing the pay button on a post immediately sends your chosen amount. Tap still opens the payment composer."
+                        : "When on, long-pressing the zap button on a post immediately sends your chosen amount. Tap still opens the zap composer.")
                         .font(.system(size: 12))
                         .foregroundStyle(theme.palette.onSurfaceVariant)
                         .padding(.bottom, 4)

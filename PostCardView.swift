@@ -815,25 +815,18 @@ struct PostCardView: View {
         let eventId = displayEventId
         let isFlying = zapStore.inFlight.contains(eventId)
         let isBursting = zapStore.bursting.contains(eventId)
+        let isOwnPost = (myPubkey != nil) && (myPubkey == resolveRepost().event.pubkey)
         return Button {
-            // Tap: fire the configured instant-zap amount when the user has
-            // opted in AND a wallet is set up. In fiat mode the configured
-            // amount is denominated in `fiatCurrency` major units and gets
-            // converted to sats at fire time via the exchange-rate cache.
-            // Falls back to the composer sheet when the rate isn't available
-            // (rare; the cache pre-fetches at app launch) or when quick-zap
-            // is off / no wallet. Long-press always opens the sheet.
+            // Tap always opens the composer. Long-press fires the
+            // configured instant-zap amount (when the user has opted in
+            // AND a wallet is set up). This matches the standard iOS
+            // pattern of "tap to inspect, long-press to act" and prevents
+            // an accidental finger from auto-zapping.
             if zapLongPressFired {
                 zapLongPressFired = false
                 return
             }
-            if settings.quickZapEnabled,
-               let store = walletStore, store.mode != nil,
-               let amount = resolvedInstantZapSats() {
-                fireQuickZap(amountSats: amount)
-            } else {
-                triggerZapOrWalletSetup()
-            }
+            triggerZapOrWalletSetup()
         } label: {
             ZStack {
                 if isFlying {
@@ -851,14 +844,28 @@ struct PostCardView: View {
             }
         }
         .buttonStyle(.plain)
-        .disabled(isFlying)
+        // Disable + dim on the user's own posts — self-zapping is a
+        // no-op that just round-trips sats minus routing fees.
+        .disabled(isFlying || isOwnPost)
+        .opacity(isOwnPost ? 0.35 : 1)
         .simultaneousGesture(
-            // Long-press always opens the composer — escape hatch from
-            // one-tap mode (different amount, different message, anonymous).
+            // Long-press fires the configured instant zap when the user
+            // has opted in and a wallet is set up. Without those, fall
+            // through to the composer — long-press shouldn't feel like
+            // a no-op for users who haven't enabled instant zaps yet.
+            // Skip entirely on the user's own posts so the dimmed state
+            // is truly inert.
             LongPressGesture(minimumDuration: 0.4).onEnded { _ in
+                guard !isOwnPost else { return }
                 zapLongPressFired = true
                 Haptics.shared.blip()
-                triggerZapOrWalletSetup()
+                if settings.quickZapEnabled,
+                   let store = walletStore, store.mode != nil,
+                   let amount = resolvedInstantZapSats() {
+                    fireQuickZap(amountSats: amount)
+                } else {
+                    triggerZapOrWalletSetup()
+                }
             }
         )
         .overlay(alignment: .center) {
