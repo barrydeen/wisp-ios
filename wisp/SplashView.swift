@@ -18,8 +18,7 @@ struct SplashView: View {
     /// launch and sheet animations.
     @State private var lockedHeight: CGFloat?
 
-    var onSignUp: () -> Void = {}
-    var onLogIn: () -> Void = {}
+    var onContinueWithNostr: () -> Void = {}
     var onContinueWithGoogle: () -> Void = {}
 
     var body: some View {
@@ -90,21 +89,7 @@ struct SplashView: View {
                             ContinueWithGoogleButton(action: onContinueWithGoogle)
                         }
 
-                        Button(action: onSignUp) {
-                            Text("Create Account")
-                                .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(.wispPrimary)
-                        .controlSize(.large)
-
-                        Button(action: onLogIn) {
-                            Text("Log In")
-                                .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.bordered)
-                        .tint(.wispPrimary)
-                        .controlSize(.large)
+                        ContinueWithNostrButton(action: onContinueWithNostr)
                     }
                 }
                 .padding(.horizontal, 32)
@@ -144,9 +129,7 @@ private struct ContinueWithGoogleButton: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 12) {
-                Image("GoogleG")
-                    .resizable()
-                    .scaledToFit()
+                GoogleGIcon()
                     .frame(width: 20, height: 20)
                 Text("Continue with Google")
                     .font(.system(size: 15, weight: .medium))
@@ -159,6 +142,169 @@ private struct ContinueWithGoogleButton: View {
         .overlay(
             Capsule().stroke(Color(red: 0x8E/255.0, green: 0x91/255.0, blue: 0x8F/255.0), lineWidth: 1)
         )
+    }
+}
+
+/// Matches the Android "Continue with Nostr" pill from `SplashScreen.kt`
+/// (lines 242–269): dark-purple background, light-purple text and purple
+/// border, with the Nostr ostrich mark to the left.
+private struct ContinueWithNostrButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                NostrOstrichIcon()
+                    .frame(width: 22, height: 22)
+                Text("Continue with Nostr")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(Color(red: 0xE9/255.0, green: 0xDD/255.0, blue: 0xFF/255.0))
+            }
+            .frame(maxWidth: .infinity, minHeight: 44)
+        }
+        .background(Color(red: 0x1A/255.0, green: 0x0E/255.0, blue: 0x2E/255.0),
+                    in: Capsule())
+        .overlay(
+            Capsule().stroke(Color(red: 0x8E/255.0, green: 0x30/255.0, blue: 0xEB/255.0), lineWidth: 1)
+        )
+    }
+}
+
+/// SwiftUI port of `res/drawable/ic_google_g.xml` — Google's four-colour "G"
+/// mark drawn from the same 24×24 viewport coordinates so the icon stays
+/// pixel-identical to Android.
+private struct GoogleGIcon: View {
+    private static let blue = Color(red: 0x42 / 255.0, green: 0x85 / 255.0, blue: 0xF4 / 255.0)
+    private static let green = Color(red: 0x34 / 255.0, green: 0xA8 / 255.0, blue: 0x53 / 255.0)
+    private static let yellow = Color(red: 0xFB / 255.0, green: 0xBC / 255.0, blue: 0x05 / 255.0)
+    private static let red = Color(red: 0xEA / 255.0, green: 0x43 / 255.0, blue: 0x35 / 255.0)
+
+    var body: some View {
+        Canvas { ctx, size in
+            let s = min(size.width, size.height) / 24.0
+            func P(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: x * s, y: y * s) }
+
+            var blue = Path()
+            blue.move(to: P(22.56, 12.25))
+            blue.addCurve(to: P(22.36, 10),
+                          control1: P(22.56, 11.47),
+                          control2: P(22.49, 10.72))
+            blue.addLine(to: P(12, 10))
+            blue.addLine(to: P(12, 14.26))
+            blue.addLine(to: P(17.92, 14.26))
+            blue.addCurve(to: P(15.71, 17.57),
+                          control1: P(17.66, 15.63),
+                          control2: P(16.88, 16.79))
+            blue.addLine(to: P(15.71, 20.34))
+            blue.addLine(to: P(19.28, 20.34))
+            blue.addCurve(to: P(22.56, 12.25),
+                          control1: P(21.36, 18.42),
+                          control2: P(22.56, 15.60))
+            blue.closeSubpath()
+            ctx.fill(blue, with: .color(Self.blue))
+
+            var green = Path()
+            green.move(to: P(12, 23))
+            green.addCurve(to: P(19.28, 20.34),
+                           control1: P(14.97, 23),
+                           control2: P(17.46, 22.02))
+            green.addLine(to: P(15.71, 17.57))
+            green.addCurve(to: P(12, 18.63),
+                           control1: P(14.73, 18.23),
+                           control2: P(13.48, 18.63))
+            green.addCurve(to: P(5.84, 14.10),
+                           control1: P(9.14, 18.63),
+                           control2: P(6.71, 16.70))
+            green.addLine(to: P(2.18, 14.10))
+            green.addLine(to: P(2.18, 16.94))
+            green.addCurve(to: P(12, 23),
+                           control1: P(3.99, 20.53),
+                           control2: P(7.70, 23))
+            green.closeSubpath()
+            ctx.fill(green, with: .color(Self.green))
+
+            var yellow = Path()
+            yellow.move(to: P(5.84, 14.09))
+            yellow.addCurve(to: P(5.49, 12),
+                            control1: P(5.62, 13.43),
+                            control2: P(5.49, 12.73))
+            // Smooth-cubic: first control reflected across current point
+            // from the previous segment's second control (5.49, 12.73) →
+            // (5.49, 11.27).
+            yellow.addCurve(to: P(5.84, 9.91),
+                            control1: P(5.49, 11.27),
+                            control2: P(5.62, 10.57))
+            yellow.addLine(to: P(5.84, 7.07))
+            yellow.addLine(to: P(2.18, 7.07))
+            yellow.addCurve(to: P(1, 12),
+                            control1: P(1.43, 8.55),
+                            control2: P(1, 10.22))
+            // Smooth-cubic: reflection of (1, 10.22) across (1, 12) → (1, 13.78).
+            yellow.addCurve(to: P(2.18, 16.93),
+                            control1: P(1, 13.78),
+                            control2: P(1.43, 15.45))
+            yellow.addLine(to: P(5.03, 14.71))
+            yellow.addLine(to: P(5.84, 14.09))
+            yellow.closeSubpath()
+            ctx.fill(yellow, with: .color(Self.yellow))
+
+            var red = Path()
+            red.move(to: P(12, 5.38))
+            red.addCurve(to: P(16.21, 7.02),
+                         control1: P(13.62, 5.38),
+                         control2: P(15.06, 5.94))
+            red.addLine(to: P(19.36, 3.87))
+            red.addCurve(to: P(12, 1),
+                         control1: P(17.45, 2.09),
+                         control2: P(14.97, 1))
+            red.addCurve(to: P(2.18, 7.07),
+                         control1: P(7.70, 1),
+                         control2: P(3.99, 3.47))
+            red.addLine(to: P(5.84, 9.91))
+            red.addCurve(to: P(12, 5.38),
+                         control1: P(6.71, 7.31),
+                         control2: P(9.14, 5.38))
+            red.closeSubpath()
+            ctx.fill(red, with: .color(Self.red))
+        }
+        .aspectRatio(1, contentMode: .fit)
+    }
+}
+
+/// SwiftUI port of `res/drawable/ic_nostr_ostrich.xml` — two-tone pixel
+/// ostrich rendered from the same 240×270 viewport coordinates so the icon
+/// stays pixel-identical to Android.
+private struct NostrOstrichIcon: View {
+    private static let orange = Color(red: 0xFD/255.0, green: 0x96/255.0, blue: 0x2C/255.0)
+    private static let purple = Color(red: 0xA2/255.0, green: 0x23/255.0, blue: 0xE9/255.0)
+
+    var body: some View {
+        Canvas { ctx, size in
+            let sx = size.width / 240
+            let sy = size.height / 270
+
+            var legs = Path()
+            legs.addRect(CGRect(x: 105 * sx, y: 225 * sy, width: 30 * sx, height: 30 * sy))
+            legs.addRect(CGRect(x: 165 * sx, y: 225 * sy, width: 30 * sx, height: 30 * sy))
+            legs.addRect(CGRect(x: 195 * sx, y: 75 * sy, width: 30 * sx, height: 30 * sy))
+            ctx.fill(legs, with: .color(Self.orange))
+
+            let pts: [(CGFloat, CGFloat)] = [
+                (165, 45), (165, 15), (135, 15), (135, 45), (135, 75), (135, 105),
+                (105, 105), (75, 105), (45, 105), (15, 105), (15, 135), (45, 135),
+                (45, 165), (75, 165), (75, 195), (105, 195), (105, 225), (135, 225),
+                (135, 195), (165, 195), (165, 225), (195, 225), (195, 195), (195, 165),
+                (195, 135), (195, 105), (195, 75), (195, 45)
+            ]
+            var body = Path()
+            body.move(to: CGPoint(x: pts[0].0 * sx, y: pts[0].1 * sy))
+            for i in 1..<pts.count {
+                body.addLine(to: CGPoint(x: pts[i].0 * sx, y: pts[i].1 * sy))
+            }
+            body.closeSubpath()
+            ctx.fill(body, with: .color(Self.purple))
+        }
+        .aspectRatio(240.0 / 270.0, contentMode: .fit)
     }
 }
 
@@ -235,6 +381,166 @@ private struct AnimatedLogo: View {
                     sway = true
                 }
             }
+    }
+}
+
+/// Bottom sheet mirroring Android's `NostrLoginSheet` (lines 322–474 of
+/// `SplashScreen.kt`): ostrich + title + body, nsec/npub field with
+/// show/hide + QR trailing icons, "Log In" primary button, divider,
+/// "Create new account" outlined button.
+struct NostrLoginSheet: View {
+    var onLogin: (Keypair) -> Void
+    var onCreateAccount: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var nsecInput = ""
+    @State private var error: String?
+    @State private var isSecure = true
+    @State private var isLoading = false
+    @State private var showQRScanner = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            NostrOstrichIcon()
+                .frame(width: 48, height: 48)
+                .padding(.top, 24)
+
+            Text("Continue with Nostr")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.white)
+                .padding(.top, 12)
+
+            Text("Enter your existing key, or create a new account. Your key never leaves the device.")
+                .font(.subheadline)
+                .foregroundStyle(Color.wispOnSurfaceVariant)
+                .multilineTextAlignment(.center)
+                .padding(.top, 6)
+                .padding(.horizontal, 4)
+
+            HStack(spacing: 8) {
+                Group {
+                    if isSecure {
+                        SecureField("nsec or npub…", text: $nsecInput)
+                    } else {
+                        TextField("nsec or npub…", text: $nsecInput)
+                    }
+                }
+                .textFieldStyle(.roundedBorder)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+                .onChange(of: nsecInput) { _, _ in error = nil }
+
+                Button {
+                    isSecure.toggle()
+                } label: {
+                    Image(systemName: isSecure ? "eye.slash" : "eye")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    showQRScanner = true
+                } label: {
+                    Image(systemName: "qrcode.viewfinder")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.top, 20)
+
+            if let error {
+                Text(error)
+                    .foregroundStyle(.red)
+                    .font(.caption)
+                    .padding(.top, 8)
+            }
+
+            Button(action: login) {
+                Group {
+                    if isLoading {
+                        ProgressView()
+                    } else {
+                        Text("Log In").font(.body.weight(.semibold))
+                    }
+                }
+                .frame(maxWidth: .infinity, minHeight: 48)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.wispPrimary)
+            .clipShape(Capsule())
+            .disabled(nsecInput.isEmpty || isLoading)
+            .padding(.top, 12)
+
+            HStack(spacing: 0) {
+                Rectangle()
+                    .fill(Color.wispOutline.opacity(0.5))
+                    .frame(height: 1)
+            }
+            .padding(.vertical, 20)
+
+            Button(action: onCreateAccount) {
+                Text("Create new account")
+                    .font(.body.weight(.semibold))
+                    .frame(maxWidth: .infinity, minHeight: 48)
+            }
+            .buttonStyle(.bordered)
+            .tint(.wispPrimary)
+            .clipShape(Capsule())
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 24)
+        .padding(.bottom, 32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(Color.wispBackground)
+        .presentationDetents([.medium, .large])
+        .presentationBackground(Color.wispBackground)
+        .presentationDragIndicator(.visible)
+        .fullScreenCover(isPresented: $showQRScanner) {
+            QRCodeScannerView(
+                onScanned: { value in handleScanned(value) },
+                onCancel: { showQRScanner = false }
+            )
+            .ignoresSafeArea()
+        }
+        .onAppear { nsecPasteAllowed = true }
+        .onDisappear { nsecPasteAllowed = false }
+    }
+
+    private func login() {
+        error = nil
+        let trimmed = nsecInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let keypair = NostrKey.parseNsec(trimmed) {
+            isLoading = true
+            NostrKey.save(keypair)
+            onLogin(keypair)
+            return
+        }
+        if let uriData = Nip19.decodeNostrUri(trimmed),
+           case .profileRef(let pubkeyHex, _) = uriData {
+            isLoading = true
+            NostrKey.saveWatchOnly(pubkey: pubkeyHex)
+            onLogin(Keypair(privkey: "", pubkey: pubkeyHex))
+            return
+        }
+        error = "Invalid key. Enter an nsec, npub, nprofile, or hex private key."
+    }
+
+    private func handleScanned(_ value: String) {
+        showQRScanner = false
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let keypair = NostrKey.parseNsec(trimmed) {
+            NostrKey.save(keypair)
+            onLogin(keypair)
+            return
+        }
+        if let uriData = Nip19.decodeNostrUri(trimmed),
+           case .profileRef(let pubkeyHex, _) = uriData {
+            NostrKey.saveWatchOnly(pubkey: pubkeyHex)
+            onLogin(Keypair(privkey: "", pubkey: pubkeyHex))
+            return
+        }
+        error = "Unrecognized format. Scan an nsec, npub, nprofile, or hex private key."
     }
 }
 
