@@ -830,10 +830,9 @@ struct PostCardView: View {
         } label: {
             ZStack {
                 if isFlying {
-                    LightningPulseView()
+                    LightningPulseView(image: settings.zapImage)
                         .frame(width: 18, height: 18)
                         .frame(height: 28)
-                        .foregroundStyle(Color.wispZapColor)
                 } else {
                     actionItem(
                         image: settings.zapImage,

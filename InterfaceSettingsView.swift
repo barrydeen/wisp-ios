@@ -10,6 +10,9 @@ struct InterfaceSettingsView: View {
     @State private var rateUpdatedAt: Date? = nil
     @State private var themesExpanded = false
     @State private var emojiRepo = EmojiRepository.shared
+    #if DEBUG
+    @State private var showDeveloperTools = false
+    #endif
 
     var body: some View {
         @Bindable var settings = settings
@@ -336,6 +339,27 @@ struct InterfaceSettingsView: View {
                     }
                 }
 
+                #if DEBUG
+                // Developer playground — compiled out of release builds via
+                // `#if DEBUG`. Park throwaway experiments here.
+                section(title: "Developer") {
+                    Button {
+                        showDeveloperTools = true
+                    } label: {
+                        HStack {
+                            Text("Developer tools")
+                                .foregroundStyle(theme.palette.onSurface)
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(theme.palette.onSurfaceVariant)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+                #endif
+
                 Spacer(minLength: 40)
             }
             .padding(20)
@@ -343,6 +367,11 @@ struct InterfaceSettingsView: View {
         .background(theme.palette.background.ignoresSafeArea())
         .navigationTitle("Interface")
         .navigationBarTitleDisplayMode(.inline)
+        #if DEBUG
+        .sheet(isPresented: $showDeveloperTools) {
+            NavigationStack { DeveloperToolsView() }
+        }
+        #endif
         .sheet(isPresented: $showAccentPicker) {
             NavigationStack {
                 AccentColorPickerView()

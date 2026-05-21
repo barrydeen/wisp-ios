@@ -1,85 +1,79 @@
 import SwiftUI
 
-/// Pulsing lightning bolt shown on the action-bar zap button while a zap is
-/// in flight. Three layers (outer glow, fill, white-hot core) modulate alpha
-/// 0.5→1.0 and scale 0.92→1.08 on a 600 ms cycle.
+/// Pulsing zap icon shown on the action-bar zap button while a zap is in
+/// flight. Renders the user's configured `zapImage` (bolt in bitcoin mode,
+/// fiat-coin glyph in fiat mode) as an always-white silhouette with three
+/// stacked zap-color shadows behind it. Three ingredients run off a single
+/// sin-eased oscillator:
 ///
-/// Mirrors Android `ActionBar.kt`'s `LightningAnimation` — same path
-/// (`icBoltPath` viewBox 55×94), same cycle, same three-layer stack.
+///   * scale breath, centered at 1.0 (0.90 → 1.10 on either side)
+///   * 0.5pt vertical bounce centered on the icon's baseline
+///   * shadow opacity + radius modulated by the cycle phase
+///
+/// White silhouette + breathing warm halo reads as a luminous core
+/// brightening and dimming — sharper than tinting the icon directly,
+/// which the eye reads as the bolt fading.
 struct LightningPulseView: View {
-    /// Continuous time anchor so the sin-curve phase doesn't reset each time
-    /// SwiftUI rebuilds the view.
-    private let start = Date()
+    let image: Image
+    /// Must be `@State` rather than `let`. SwiftUI re-instantiates the view
+    /// struct on every parent re-render — and the action bar re-renders
+    /// repeatedly during a zap flight (zap state changes, repost count
+    /// updates, etc.). With `let`, `start` snaps to "now" on each re-init,
+    /// `elapsed` jumps back to ~0, and the sine wave restarts mid-cycle —
+    /// the visible read is "the pulse speed is inconsistent / stutters".
+    /// `@State` is owned by SwiftUI's storage and survives view-struct
+    /// rebuilds, so `elapsed` keeps climbing monotonically.
+    @State private var start = Date()
 
     var body: some View {
-        TimelineView(.animation) { context in
-            let phase = currentPhase(at: context.date)
-            let alpha = 0.5 + 0.5 * phase
-            let scale = 0.92 + 0.16 * phase
-            BoltCanvas(alpha: alpha, scale: scale)
+        TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { context in
+            let frame = frame(at: context.date)
+            let scale = 1.0 + 0.10 * frame.sine
+            let dy = -0.5 * frame.sine
+
+            image
+                .resizable()
+                .scaledToFit()
+                .foregroundStyle(.white)
+                // Halo radii reduced from the original 1.5 / 4-7 / 8-14pt
+                // spec — at action-bar size the original outer glow was
+                // wider than the bolt itself and read as a hot amber
+                // smear. Inner halo bumped back up to 2.0pt so the bolt
+                // keeps a visible warm border at rest (without it, the
+                // glyph reads smaller on iOS than on Android even though
+                // the asset is the same size). See
+                // /Users/daniel/GitHub/wisp/ZAP_BOLT_PULSE_NOTES.md for
+                // the rationale.
+                .shadow(color: Color.wispZapColor.opacity(0.95), radius: 2.0)
+                .shadow(color: Color.wispZapColor.opacity(0.55 + 0.45 * frame.phase),
+                        radius: 3 + 2 * frame.phase)
+                .shadow(color: Color.wispZapColor.opacity(0.3 + 0.5 * frame.phase),
+                        radius: 5 + 3 * frame.phase)
+                .scaleEffect(scale)
+                .offset(y: dy)
         }
     }
 
-    /// 600 ms cycle, sin-eased so it accelerates into both extrema —
-    /// close enough to Android's reverse-repeating FastOutSlowInEasing tween
-    /// that it reads as the same animation.
-    private func currentPhase(at date: Date) -> CGFloat {
+    // MARK: - Frame math
+
+    private struct Frame {
+        /// -1 … 1, raw sin oscillator. Drives the centered scale + bounce.
+        let sine: Double
+        /// 0 … 1, normalised from sine. Drives the one-way shadow growth.
+        let phase: Double
+    }
+
+    private func frame(at date: Date) -> Frame {
         let elapsed = date.timeIntervalSince(start)
-        let twoPi = 2 * Double.pi
-        let raw = sin(elapsed / 0.6 * twoPi - .pi / 2)
-        return CGFloat((raw + 1) / 2)
-    }
-}
-
-private struct BoltCanvas: View {
-    let alpha: CGFloat
-    let scale: CGFloat
-
-    var body: some View {
-        Canvas { ctx, size in
-            let path = boltPath(in: size, scale: scale)
-            let zap = Color.wispZapColor
-
-            // 1. Soft outer glow — wide round-capped stroke. Stroke width
-            //    scales with view size to keep the glow proportional on every
-            //    frame (matches `w * 0.14` on Android).
-            ctx.stroke(
-                path,
-                with: .color(zap.opacity(alpha * 0.3)),
-                style: StrokeStyle(
-                    lineWidth: size.width * 0.14,
-                    lineCap: .round,
-                    lineJoin: .round
-                )
-            )
-            // 2. Solid bolt fill.
-            ctx.fill(path, with: .color(zap))
-            // 3. White-hot core — semi-transparent white over the fill.
-            ctx.fill(path, with: .color(.white.opacity(alpha * 0.4)))
-        }
-    }
-
-    private func boltPath(in size: CGSize, scale: CGFloat) -> Path {
-        let sx = size.width / 55 * scale
-        let sy = size.height / 94 * scale
-        let ox = size.width * (1 - scale) / 2
-        let oy = size.height * (1 - scale) / 2
-
-        var p = Path()
-        p.move(to: CGPoint(x: ox + 35.563 * sx, y: oy))
-        p.addLine(to: CGPoint(x: ox + 35.563 * sx, y: oy + 40.406 * sy))
-        p.addLine(to: CGPoint(x: ox + 54.969 * sx, y: oy + 40.406 * sy))
-        p.addLine(to: CGPoint(x: ox + 21.016 * sx, y: oy + 93.75 * sy))
-        p.addLine(to: CGPoint(x: ox + 21.016 * sx, y: oy + 51.719 * sy))
-        p.addLine(to: CGPoint(x: ox, y: oy + 51.719 * sy))
-        p.closeSubpath()
-        return p
+        let sine = sin(elapsed / 0.9 * 2 * .pi)
+        let phase = (sine + 1) / 2
+        return Frame(sine: sine, phase: phase)
     }
 }
 
 #Preview {
-    LightningPulseView()
-        .frame(width: 60, height: 60)
+    LightningPulseView(image: Image(systemName: "bolt.fill"))
+        .frame(width: 28, height: 28)
         .padding()
         .background(Color.black)
 }
