@@ -10,17 +10,26 @@ struct SparkSetupView: View {
     @State private var restoreEntry: String = ""
     @State private var restoreError: String?
     @State private var inFlight = false
+    @State private var showAdvancedOptions = false
 
     enum PickerMode { case pick, create, restoreSeed, restoreRelays }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                content
+        GeometryReader { geo in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    content
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 8)
+                .padding(.bottom, 32)
+                // Stretch the inner VStack to fill the visible scroll area
+                // so the leading + trailing Spacers in `pickSection` can
+                // actually push content toward vertical center. Without
+                // the explicit minHeight the VStack sizes to its content
+                // and Spacers collapse to zero.
+                .frame(minHeight: geo.size.height)
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 8)
-            .padding(.bottom, 32)
         }
         .background(Color.wispBackground.ignoresSafeArea())
         .navigationTitle(mode == .pick ? "" : subModeTitle)
@@ -68,6 +77,7 @@ struct SparkSetupView: View {
 
     private var pickSection: some View {
         VStack(spacing: 24) {
+            Spacer(minLength: 24)
             // Logo header
             VStack(spacing: 12) {
                 Image("SparkBreezLogo")
@@ -81,57 +91,109 @@ struct SparkSetupView: View {
             }
             .frame(maxWidth: .infinity)
 
-            // Option rows
+            // Option rows — default wallet is the recommended path, so it
+            // sits alone above the fold. Create / restore live under a
+            // disclosure so the screen leads with one obvious next step
+            // but power users can still get to seed and relay-backup flows.
             VStack(spacing: 12) {
                 if store.canUseDefaultWallet {
                     optionRow(
                         icon: "key.fill",
                         title: "Use my default wallet",
                         subtitle: "Derived from your Nostr key — no extra backup needed.",
+                        primary: true,
                         action: { Task { await useDefault() } }
                     )
+                    // Soft orange glow marks this as the recommended path,
+                    // matching the primary Spark button on the wallet mode
+                    // picker. Two stacked shadows: tight + wide so the
+                    // halo reads on dark backgrounds without smudging.
+                    .shadow(color: Color.wispZapColor.opacity(0.55), radius: 16, x: 0, y: 0)
+                    .shadow(color: Color.wispZapColor.opacity(0.35), radius: 28, x: 0, y: 6)
                 }
-                optionRow(
-                    icon: "plus.circle.fill",
-                    title: "Create new wallet",
-                    subtitle: "Generate a fresh 12-word seed phrase",
-                    action: { startCreate() }
-                )
-                optionRow(
-                    icon: "arrow.uturn.backward.circle.fill",
-                    title: "Restore from seed phrase",
-                    subtitle: "12 words from a Spark-based wallet",
-                    action: { mode = .restoreSeed }
-                )
-                optionRow(
-                    icon: "icloud.and.arrow.down.fill",
-                    title: "Restore from relays",
-                    subtitle: "Encrypted backup from another device",
-                    action: { mode = .restoreRelays; Task { await store.searchRelayBackup() } }
-                )
+
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showAdvancedOptions.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        Text("More options")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .rotationEffect(.degrees(showAdvancedOptions ? 180 : 0))
+                    }
+                    .padding(.vertical, 6)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                if showAdvancedOptions {
+                    VStack(spacing: 12) {
+                        optionRow(
+                            icon: "plus.circle.fill",
+                            title: "Create new wallet",
+                            subtitle: "Generate a fresh 12-word seed phrase",
+                            action: { startCreate() }
+                        )
+                        optionRow(
+                            icon: "arrow.uturn.backward.circle.fill",
+                            title: "Restore from seed phrase",
+                            subtitle: "12 words from a Spark-based wallet",
+                            action: { mode = .restoreSeed }
+                        )
+                        optionRow(
+                            icon: "icloud.and.arrow.down.fill",
+                            title: "Restore from relays",
+                            subtitle: "Encrypted backup from another device",
+                            action: { mode = .restoreRelays; Task { await store.searchRelayBackup() } }
+                        )
+                    }
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                }
             }
+            Spacer(minLength: 24)
         }
     }
 
-    private func optionRow(icon: String, title: String, subtitle: String, action: @escaping () -> Void) -> some View {
+    private func optionRow(
+        icon: String,
+        title: String,
+        subtitle: String,
+        primary: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
         Button(action: action) {
             HStack(spacing: 14) {
                 Image(systemName: icon)
                     .font(.system(size: 22))
-                    .foregroundStyle(Color.wispZapColor)
+                    .foregroundStyle(primary ? .white : Color.wispZapColor)
                     .frame(width: 28)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
-                    Text(subtitle).font(.caption).foregroundStyle(.secondary)
+                    Text(title)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(primary ? .white : .primary)
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(primary ? Color.white.opacity(0.85) : .secondary)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 Spacer()
                 Image(systemName: "chevron.right")
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(primary ? AnyShapeStyle(Color.white.opacity(0.85)) : AnyShapeStyle(.tertiary))
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 14)
-            .background(Color.wispSurfaceVariant.opacity(0.4), in: RoundedRectangle(cornerRadius: 14))
+            .background(
+                (primary ? Color.wispZapColor : Color.wispSurfaceVariant.opacity(0.4)),
+                in: RoundedRectangle(cornerRadius: 14)
+            )
             .contentShape(RoundedRectangle(cornerRadius: 14))
         }
         .buttonStyle(.plain)
