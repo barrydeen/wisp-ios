@@ -10,7 +10,7 @@ enum AppScreen {
 
 struct ContentView: View {
     @State private var currentScreen: AppScreen = .splash
-    @State private var showLogin = false
+    @State private var showNostrSheet = false
     @State private var showGoogleAuth = false
     @State private var keypair: Keypair?
     @State private var checkedSavedAccount = false
@@ -22,28 +22,31 @@ struct ContentView: View {
             switch currentScreen {
             case .splash:
                 SplashView(
-                    onSignUp: {
-                        currentScreen = .signUp
-                    },
-                    onLogIn: {
-                        showLogin = true
+                    onContinueWithNostr: {
+                        showNostrSheet = true
                     },
                     onContinueWithGoogle: {
                         showGoogleAuth = true
                     }
                 )
-                .sheet(isPresented: $showLogin) {
-                    LoginView { kp in
-                        keypair = kp
-                        showLogin = false
-                        // Watch-only accounts skip onboarding (markOnboardingComplete
-                        // is called in LoginView before this closure fires).
-                        if NostrKey.isOnboardingComplete(pubkey: kp.pubkey) {
-                            currentScreen = .loading
-                        } else {
-                            currentScreen = .onboarding
+                .sheet(isPresented: $showNostrSheet) {
+                    NostrLoginSheet(
+                        onLogin: { kp in
+                            keypair = kp
+                            showNostrSheet = false
+                            // Watch-only accounts skip onboarding (markOnboardingComplete
+                            // is called in NostrLoginSheet before this closure fires).
+                            if NostrKey.isOnboardingComplete(pubkey: kp.pubkey) {
+                                currentScreen = .loading
+                            } else {
+                                currentScreen = .onboarding
+                            }
+                        },
+                        onCreateAccount: {
+                            showNostrSheet = false
+                            currentScreen = .signUp
                         }
-                    }
+                    )
                 }
                 .fullScreenCover(isPresented: $showGoogleAuth) {
                     GoogleAuthView(
