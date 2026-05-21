@@ -254,7 +254,14 @@ final class AppSettings {
         if let m = payload.fiatModeEnabled { fiatModeEnabled = m }
         if let c = payload.fiatCurrency, !c.isEmpty { fiatCurrency = c }
         if let raw = payload.zapPresetsCSV, !raw.isEmpty {
-            UserDefaults.standard.set(raw, forKey: "zapPresetAmounts")
+            // Per-pubkey storage — fall back to the legacy global key when
+            // there's no active account so the value is at least available
+            // for the next session.
+            if let pubkey = NostrKey.load()?.pubkey {
+                UserDefaults.standard.set(raw, forKey: "zapPresetAmounts_\(pubkey)")
+            } else {
+                UserDefaults.standard.set(raw, forKey: "zapPresetAmounts")
+            }
         }
         // Appearance
         if let b = payload.largeText { largeText = b }
@@ -282,7 +289,17 @@ final class AppSettings {
     /// Build the payload that gets NIP-44 encrypted and published as kind-30078.
     /// Mirrors `applyRestored` — every field the backup carries.
     func snapshotForBackup() -> Nip78Backup.AppSettingsPayload {
-        let presetsRaw = UserDefaults.standard.string(forKey: "zapPresetAmounts")
+        // Pull the active account's preset row first; fall back to the
+        // legacy global key for users who haven't yet opened the new
+        // ZapSheet (which would have migrated the value over).
+        let defaults = UserDefaults.standard
+        let presetsRaw: String?
+        if let pubkey = NostrKey.load()?.pubkey,
+           let perUser = defaults.string(forKey: "zapPresetAmounts_\(pubkey)") {
+            presetsRaw = perUser
+        } else {
+            presetsRaw = defaults.string(forKey: "zapPresetAmounts")
+        }
         return Nip78Backup.AppSettingsPayload(
             quickZapEnabled: quickZapEnabled,
             quickZapAmountSats: quickZapAmountSats,

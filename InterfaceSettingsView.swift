@@ -188,7 +188,19 @@ struct InterfaceSettingsView: View {
                                     "0.10",
                                     value: Binding(
                                         get: { settings.quickZapAmountFiat },
-                                        set: { settings.quickZapAmountFiat = max(0.01, $0) }
+                                        set: { newValue in
+                                            // Mirror the sats cap so a one-tap can't
+                                            // exceed 10k sats equivalent. Convert
+                                            // the entered fiat to sats via the cached
+                                            // rate; if it's over 10k, snap the fiat
+                                            // value back to the 10k-sats equivalent.
+                                            let clamped = max(0.01, newValue)
+                                            let cap = ExchangeRateCache.shared.satsToFiat(
+                                                10_000,
+                                                currency: settings.fiatCurrency
+                                            ) ?? Double.greatestFiniteMagnitude
+                                            settings.quickZapAmountFiat = min(clamped, cap)
+                                        }
                                     ),
                                     format: .number.precision(.fractionLength(2))
                                 )
@@ -208,7 +220,7 @@ struct InterfaceSettingsView: View {
                                     "100",
                                     value: Binding(
                                         get: { settings.quickZapAmountSats },
-                                        set: { settings.quickZapAmountSats = max(1, $0) }
+                                        set: { settings.quickZapAmountSats = min(10_000, max(1, $0)) }
                                     ),
                                     format: .number
                                 )
