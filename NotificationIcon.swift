@@ -60,8 +60,9 @@ struct NotificationTypeIcon: View {
                 VStack(spacing: 0) {
                     BoltIcon(tint: .wispZapColor)
                         .frame(width: 22, height: 22)
-                    if showSats, item.zapSats > 0 {
-                        Text(NotificationStyle.formatSats(item.zapSats))
+                    let displaySats = item.totalZapSats
+                    if showSats, displaySats > 0 {
+                        Text(NotificationStyle.formatSats(displaySats))
                             .font(.caption2.weight(.semibold))
                             .foregroundStyle(Color.wispZapColor)
                             .lineLimit(1)
