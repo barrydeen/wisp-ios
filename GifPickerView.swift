@@ -68,11 +68,16 @@ struct GifPickerPresenter: UIViewControllerRepresentable {
                 host.present(giphy, animated: true)
             }
         } else if let presented = host.presentedViewController,
+                  presented is GiphyViewController,
                   !presented.isBeingDismissed {
-            // SwiftUI side wants us closed. If the modal is already mid-
-            // dismiss (e.g. user-initiated swipe-down already fired
-            // `didDismiss`), don't call dismiss again — racing dismiss
-            // animations are part of what produced the loop.
+            // SwiftUI side wants us closed. The `is GiphyViewController`
+            // guard is critical: `UIViewController.presentedViewController`
+            // returns the modal presented by THIS VC *or any ancestor*
+            // — so when the compose sheet presents the PHPicker from
+            // upstream, this host (a SwiftUI .background child) sees
+            // that PHPicker as `presentedViewController` and would
+            // dismiss it on every parent re-render. Only dismiss if
+            // the presented modal is actually our own Giphy controller.
             presented.dismiss(animated: true)
         }
     }
