@@ -1,0 +1,31 @@
+# Google "Continue with Google" — iOS OAuth client ID
+#
+# This client ID is the platform-specific OAuth client used by
+# GoogleSignIn-iOS to launch the consent flow from the app.
+#
+# To set up:
+#   1. Visit https://console.cloud.google.com/apis/credentials and
+#      create an "iOS" OAuth 2.0 Client ID. Bundle ID must match the
+#      Wisp iOS bundle identifier (see "PRODUCT_BUNDLE_IDENTIFIER" in
+#      wisp.xcodeproj/project.pbxproj).
+#   2. Copy the resulting client ID (looks like
+#      1234567890-abc...xyz.apps.googleusercontent.com) into
+#      wisp/Resources/google-ios-client-id.txt (no quotes, single line).
+#   3. ALSO register the reversed URL scheme so the OAuth redirect can
+#      re-enter the app. In Xcode:
+#         Target wisp → Info → URL Types → +
+#         URL Schemes:  com.googleusercontent.apps.<reversed-id>
+#         (the "reversed" form is the client ID with its components in
+#         reverse; Google Cloud Console shows it directly).
+#   4. Add the SPM dependency in Xcode if not already added:
+#         File → Add Package Dependencies…
+#         https://github.com/google/GoogleSignIn-iOS
+#         Add GoogleSignIn (and optionally GoogleSignInSwift) to the
+#         wisp target.
+#   5. Add the "Google G" mark asset to Assets.xcassets as `GoogleG`
+#      (Google's brand guidelines require their official G mark on
+#      "Sign in with Google" / "Continue with Google" buttons —
+#      download from https://developers.google.com/identity/branding-guidelines).
+#
+# This file (the .example) is checked in. The real file
+# (google-ios-client-id.txt) is gitignored.
