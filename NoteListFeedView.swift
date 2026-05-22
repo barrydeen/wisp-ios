@@ -86,6 +86,16 @@ struct NoteListFeedView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
+            // `.ignoresSafeArea(.keyboard)` keeps the feed's layout stable
+            // when a presented sheet (e.g. `ZapSheet`) raises the keyboard.
+            // Without it the keyboard shrinks the feed's content area, the
+            // `LazyVStack` re-lays-out, the row that owns the sheet's
+            // `.sheet(item:)` binding recycles, the binding flips to nil,
+            // the sheet dismisses, and SwiftUI re-presents it on the next
+            // tick — an infinite mount/unmount loop. The feed has no input
+            // fields of its own, so opting out of keyboard avoidance here
+            // is safe; any presented sheet handles its own keyboard
+            // dodging internally.
             ScrollView {
                 LazyVStack(spacing: 0) {
                     ForEach(viewModel.events, id: \.id) { event in
@@ -108,6 +118,7 @@ struct NoteListFeedView: View {
                     }
                 }
             }
+            .ignoresSafeArea(.keyboard, edges: .bottom)
             .refreshable { await viewModel.refresh() }
         }
     }

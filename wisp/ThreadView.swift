@@ -116,6 +116,12 @@ struct ThreadView: View {
                     }
                     viewModel.scrollTargetId = nil
                 }
+                // Stable thread layout while sheets presented from a
+                // PostCardView row raise the keyboard — see
+                // NoteListFeedView for the full rationale. The reply
+                // `composer` below is a sibling, so it still dodges the
+                // keyboard normally.
+                .ignoresSafeArea(.keyboard, edges: .bottom)
             }
             if !viewModel.keypair.isWatchOnly {
                 composer
