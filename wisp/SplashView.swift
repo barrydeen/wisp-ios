@@ -407,7 +407,7 @@ struct NostrLoginSheet: View {
 
             Text("Continue with Nostr")
                 .font(.title3.weight(.semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(Color.wispOnSurface)
                 .padding(.top, 12)
 
             Text("Enter your existing key, or create a new account. Your key never leaves the device.")
