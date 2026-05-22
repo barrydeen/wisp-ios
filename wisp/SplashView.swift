@@ -558,9 +558,23 @@ nonisolated extension Color {
     static var wispSurface: Color { ResolvedThemeProxy.current.palette.surface }
     static var wispSurfaceVariant: Color { ResolvedThemeProxy.current.palette.surfaceVariant }
     static var wispPrimary: Color { ResolvedThemeProxy.current.primary }
-    static var wispZapColor: Color { ResolvedThemeProxy.current.palette.zap }
+    /// Zap-tinted surfaces — post bolt icon, zap count text, top-zapper
+    /// indicator, wallet zap accents, the Lightning QR icon, etc. Reads
+    /// from `ResolvedTheme.zap`, which on the `custom` theme equals
+    /// `primary` so a user-picked accent flows through; on every other
+    /// preset it stays the curated palette value chosen for hue contrast.
+    /// The celebratory in-flight bolt pulse uses `wispZapAnimationColor`
+    /// instead — never use this accessor for that animation.
+    static var wispZapColor: Color { ResolvedThemeProxy.current.zap }
+    /// Vivid variant of `wispZapColor`, reserved for the in-flight bolt
+    /// animation (`LightningPulseView`). Plain `wispZapColor` reads muddy
+    /// in light mode because the primary is darkened for button contrast;
+    /// the burst needs a brightness floor or the animation looks dim on
+    /// the near-white surface. Static UI everywhere else stays on the
+    /// plain `wispZapColor`.
+    static var wispZapAnimationColor: Color { ResolvedThemeProxy.current.zapAnimation }
     static var wispRepostColor: Color { ResolvedThemeProxy.current.palette.repost }
-    static var wispBookmarkColor: Color { ResolvedThemeProxy.current.palette.bookmark }
+    static var wispBookmarkColor: Color { ResolvedThemeProxy.current.bookmark }
     static var wispPaidColor: Color { ResolvedThemeProxy.current.palette.paid }
     static var wispOnSurface: Color { ResolvedThemeProxy.current.palette.onSurface }
     static var wispOnSurfaceVariant: Color { ResolvedThemeProxy.current.palette.onSurfaceVariant }

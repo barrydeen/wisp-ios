@@ -14,13 +14,24 @@ nonisolated enum Themes {
                 bookmark: .hex(0xFFFF9800), paid: .hex(0xFFFFD54F)
             ),
             light: ThemePalette(
-                primary: .hex(0xFFCC7000), secondary: .hex(0xFFFFB74D),
+                // Default-theme light primary is the throughout-the-theme
+                // orange shared with the Android counterpart. `#D9730D` has
+                // enough contrast against the near-white surface that
+                // buttons + tinted icons still read as obviously
+                // interactive — the prior `#CC7000` was a touch too dark
+                // and the zap / bookmark sat one shade below it, producing
+                // a visible two-tone mismatch. Zap + bookmark now track
+                // the same value so every "this is a zap surface" hint
+                // (icon, count text, top zapper indicator, etc.) reads as
+                // the same hue as the primary. See LIGHT_MODE_COLOR_PARITY.md
+                // in the wisp Android repo for the cross-platform contract.
+                primary: .hex(0xFFD9730D), secondary: .hex(0xFFFFB74D),
                 background: .hex(0xFFD8D8D8), surface: .hex(0xFFE8E8E8),
                 surfaceVariant: .hex(0xFFCDCDCD),
                 onBackground: .hex(0xFF1C1B1F), onSurface: .hex(0xFF1C1B1F),
                 onSurfaceVariant: .hex(0xFF333333), outline: .hex(0xFF999999),
-                zap: .hex(0xFFB85C00), repost: .hex(0xFF2E7D32),
-                bookmark: .hex(0xFFB85C00), paid: .hex(0xFFC9A000)
+                zap: .hex(0xFFD9730D), repost: .hex(0xFF2E7D32),
+                bookmark: .hex(0xFFD9730D), paid: .hex(0xFFC9A000)
             )
         ),
         ThemePreset(

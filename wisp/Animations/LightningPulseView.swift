@@ -38,7 +38,14 @@ private struct BoltCanvas: View {
     var body: some View {
         Canvas { ctx, size in
             let path = boltPath(in: size, scale: scale)
-            let zap = Color.wispZapColor
+            // Animation uses `wispZapAnimationColor` (the vivid variant)
+            // not plain `wispZapColor`. In light mode the static zap color
+            // is darkened for button contrast against the near-white
+            // surface; reusing it here would render this celebratory
+            // pulse muddy. Static UI everywhere else still uses
+            // `wispZapColor`. See LIGHT_MODE_COLOR_PARITY.md (Wisp
+            // Android repo) for the cross-platform contract.
+            let zap = Color.wispZapAnimationColor
 
             // 1. Soft outer glow — wide round-capped stroke. Stroke width
             //    scales with view size to keep the glow proportional on every
