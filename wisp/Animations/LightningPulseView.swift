@@ -1,92 +1,152 @@
 import SwiftUI
 
-/// Pulsing lightning bolt shown on the action-bar zap button while a zap is
-/// in flight. Three layers (outer glow, fill, white-hot core) modulate alpha
-/// 0.5→1.0 and scale 0.92→1.08 on a 600 ms cycle.
+/// Pulsing zap icon shown on the action-bar zap button while a zap is in
+/// flight. Draws the lightning bolt as a true vector `Shape` and uses
+/// `.stroke(lineWidth:)` for the outer halo + `.fill` for the body, so
+/// the outline is crisp at every size and free of the aliasing that an
+/// image-offset stack produces.
 ///
-/// Mirrors Android `ActionBar.kt`'s `LightningAnimation` — same path
-/// (`icBoltPath` viewBox 55×94), same cycle, same three-layer stack.
+/// Mirrors Wisp Android's `LightningAnimation`: same bolt geometry, same
+/// `stroke` width / fill / white-hot core composition, same pulse +
+/// breath envelope.
+///
+/// The bolt `Shape` is used regardless of the user's chosen zap-icon
+/// style (`bolt.fill` vs `bitcoinsign`) — the in-flight pulse is always
+/// the bolt as the universal "zap is happening" iconography. The static
+/// post-card icon outside the in-flight state still respects the
+/// user's symbol preference via `AppSettings.zapImage`.
+///
+/// Three ingredients ride a single sin-eased oscillator:
+///
+///   * scale breath (0.92 → 1.08, matches Android's `LightningAnimation`)
+///   * stroke + white-core opacity (Android-equivalent ramps)
+///   * 0.5pt vertical bounce centered on the icon's baseline (iOS flourish)
+///
+/// See LIGHT_MODE_COLOR_PARITY.md (Wisp Android repo) for the
+/// cross-platform contract on which color this animation consumes.
 struct LightningPulseView: View {
-    /// Continuous time anchor so the sin-curve phase doesn't reset each time
-    /// SwiftUI rebuilds the view.
-    private let start = Date()
+    /// Defaulted for source-compat with both call patterns: the post
+    /// action bar's `LightningPulseView()` bare call (on main) and the
+    /// `LightningPulseView(image: settings.zapImage)` form introduced
+    /// on `feat/one-tap-zap`. The animation always renders the bolt
+    /// vector regardless of which symbol the user picked — the
+    /// in-flight pulse is iconic, not skinnable. Static icon
+    /// elsewhere still honors `zapImage`.
+    var image: Image = Image(systemName: "bolt.fill")
+    /// Must be `@State` rather than `let`. SwiftUI re-instantiates the view
+    /// struct on every parent re-render — and the action bar re-renders
+    /// repeatedly during a zap flight (zap state changes, repost count
+    /// updates, etc.). With `let`, `start` snaps to "now" on each re-init,
+    /// `elapsed` jumps back to ~0, and the sine wave restarts mid-cycle —
+    /// the visible read is "the pulse speed is inconsistent / stutters".
+    /// `@State` is owned by SwiftUI's storage and survives view-struct
+    /// rebuilds, so `elapsed` keeps climbing monotonically.
+    @State private var start = Date()
 
     var body: some View {
-        TimelineView(.animation) { context in
-            let phase = currentPhase(at: context.date)
-            let alpha = 0.5 + 0.5 * phase
-            let scale = 0.92 + 0.16 * phase
-            BoltCanvas(alpha: alpha, scale: scale)
+        TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { context in
+            let frame = frame(at: context.date)
+            // Scale breath 0.92 → 1.08, matches Android exactly.
+            let breath = 0.92 + 0.16 * frame.phase
+            // Stroke opacity 0.7 → 1.0. Higher than Android's 0.15-0.3
+            // because the iOS stroke needs to read clearly at the
+            // action-bar size; Android's path stroke benefits from a
+            // dedicated `Canvas` render that anti-aliases at the full
+            // device pixel ratio.
+            let strokeAlpha = 0.7 + 0.3 * frame.phase
+            // iOS-only flourish — a sub-pixel vertical bounce that
+            // keeps the bolt feeling alive at all pulse phases.
+            let dy = -0.5 * frame.sine
+
+            GeometryReader { geo in
+                let size = min(geo.size.width, geo.size.height)
+                // Stroke width scales with the view size, matching
+                // Android's `Stroke(width = w * 0.14f)` on the bolt
+                // path. Half of this width sits inside the silhouette
+                // (covered by the fill) and half outside (the visible
+                // outer halo).
+                let strokeWidth = size * 0.22
+
+                ZStack {
+                    // 1. Outer halo — wide stroke on the bolt path,
+                    //    drawn before the fill so the inside half of
+                    //    the stroke gets covered. The visible orange
+                    //    is the outside half of the stroke.
+                    BoltGlyph()
+                        .stroke(
+                            Color.wispZapAnimationColor.opacity(strokeAlpha),
+                            style: StrokeStyle(
+                                lineWidth: strokeWidth,
+                                lineCap: .round,
+                                lineJoin: .round
+                            )
+                        )
+
+                    // 2. White bolt body. Fills the silhouette + covers
+                    //    the inside half of the stroke, leaving only
+                    //    the outside half visible as the outer halo.
+                    BoltGlyph()
+                        .fill(.white)
+                }
+                .frame(width: size, height: size)
+                // Centre the square render area inside whatever rect
+                // the parent gave us.
+                .frame(width: geo.size.width, height: geo.size.height)
+            }
+            .scaleEffect(breath)
+            .offset(y: dy)
         }
     }
 
-    /// 600 ms cycle, sin-eased so it accelerates into both extrema —
-    /// close enough to Android's reverse-repeating FastOutSlowInEasing tween
-    /// that it reads as the same animation.
-    private func currentPhase(at date: Date) -> CGFloat {
+    // MARK: - Frame math
+
+    private struct Frame {
+        /// -1 … 1, raw sin oscillator. Drives the centered bounce.
+        let sine: Double
+        /// 0 … 1, normalised from sine. Drives the one-way stroke
+        /// opacity ramp and the scale-breath envelope.
+        let phase: Double
+    }
+
+    private func frame(at date: Date) -> Frame {
         let elapsed = date.timeIntervalSince(start)
-        let twoPi = 2 * Double.pi
-        let raw = sin(elapsed / 0.6 * twoPi - .pi / 2)
-        return CGFloat((raw + 1) / 2)
+        let sine = sin(elapsed / 0.9 * 2 * .pi)
+        let phase = (sine + 1) / 2
+        return Frame(sine: sine, phase: phase)
     }
 }
 
-private struct BoltCanvas: View {
-    let alpha: CGFloat
-    let scale: CGFloat
+/// Hand-built lightning-bolt `Shape`, normalized to its bounding rect.
+/// Coordinates trace a standard "Z"-style bolt: top vertex centred,
+/// diagonal down-left to the middle, kink right and back, diagonal
+/// down to the bottom vertex, then kink up to close the path. Used by
+/// `LightningPulseView` because SwiftUI's SF-Symbol `Image` doesn't
+/// expose a strokable vector path — and the multi-offset image trick
+/// produces aliased bitmap copies, not a clean stroke.
+private struct BoltGlyph: Shape {
+    func path(in rect: CGRect) -> Path {
+        let w = rect.width
+        let h = rect.height
 
-    var body: some View {
-        Canvas { ctx, size in
-            let path = boltPath(in: size, scale: scale)
-            // Animation uses `wispZapAnimationColor` (the vivid variant)
-            // not plain `wispZapColor`. In light mode the static zap color
-            // is darkened for button contrast against the near-white
-            // surface; reusing it here would render this celebratory
-            // pulse muddy. Static UI everywhere else still uses
-            // `wispZapColor`. See LIGHT_MODE_COLOR_PARITY.md (Wisp
-            // Android repo) for the cross-platform contract.
-            let zap = Color.wispZapAnimationColor
-
-            // 1. Soft outer glow — wide round-capped stroke. Stroke width
-            //    scales with view size to keep the glow proportional on every
-            //    frame (matches `w * 0.14` on Android).
-            ctx.stroke(
-                path,
-                with: .color(zap.opacity(alpha * 0.3)),
-                style: StrokeStyle(
-                    lineWidth: size.width * 0.14,
-                    lineCap: .round,
-                    lineJoin: .round
-                )
-            )
-            // 2. Solid bolt fill.
-            ctx.fill(path, with: .color(zap))
-            // 3. White-hot core — semi-transparent white over the fill.
-            ctx.fill(path, with: .color(.white.opacity(alpha * 0.4)))
-        }
-    }
-
-    private func boltPath(in size: CGSize, scale: CGFloat) -> Path {
-        let sx = size.width / 55 * scale
-        let sy = size.height / 94 * scale
-        let ox = size.width * (1 - scale) / 2
-        let oy = size.height * (1 - scale) / 2
-
-        var p = Path()
-        p.move(to: CGPoint(x: ox + 35.563 * sx, y: oy))
-        p.addLine(to: CGPoint(x: ox + 35.563 * sx, y: oy + 40.406 * sy))
-        p.addLine(to: CGPoint(x: ox + 54.969 * sx, y: oy + 40.406 * sy))
-        p.addLine(to: CGPoint(x: ox + 21.016 * sx, y: oy + 93.75 * sy))
-        p.addLine(to: CGPoint(x: ox + 21.016 * sx, y: oy + 51.719 * sy))
-        p.addLine(to: CGPoint(x: ox, y: oy + 51.719 * sy))
-        p.closeSubpath()
-        return p
+        // Normalized vertex set tuned to read as a familiar lightning
+        // bolt at action-bar size. Approximates Wisp Android's
+        // `icBoltPath` (viewBox 55×94) — same proportions, simplified
+        // for a hand-walkable SwiftUI Path build.
+        var path = Path()
+        path.move(to:  CGPoint(x: 0.62 * w, y: 0.02 * h))      // top vertex
+        path.addLine(to: CGPoint(x: 0.18 * w, y: 0.55 * h))    // diag down-left
+        path.addLine(to: CGPoint(x: 0.42 * w, y: 0.55 * h))    // kink right (inner)
+        path.addLine(to: CGPoint(x: 0.30 * w, y: 0.98 * h))    // diag down to bottom
+        path.addLine(to: CGPoint(x: 0.82 * w, y: 0.45 * h))    // diag up-right (back side)
+        path.addLine(to: CGPoint(x: 0.58 * w, y: 0.45 * h))    // kink left (inner)
+        path.closeSubpath()                                     // close to top vertex
+        return path
     }
 }
 
 #Preview {
-    LightningPulseView()
-        .frame(width: 60, height: 60)
+    LightningPulseView(image: Image(systemName: "bolt.fill"))
+        .frame(width: 28, height: 28)
         .padding()
         .background(Color.black)
 }
