@@ -224,12 +224,6 @@ struct ZapSheet: View {
             // because bottomBar is the bottom-most child it ends up
             // sitting just above the keyboard rather than scrolling off
             // with the form content.
-            //
-            // `.scrollDismissesKeyboard(.interactively)` keeps the
-            // sheet-drag → keyboard-collapse coupling that previously
-            // lived on the all-in-one ScrollView, so dragging the sheet
-            // down still drops the keyboard mid-drag and the rows move
-            // with the sheet as one unit instead of floating loose.
             VStack(spacing: 0) {
                 ScrollView {
                     VStack(spacing: 16) {
@@ -260,7 +254,20 @@ struct ZapSheet: View {
                     .padding(.top, 8)
                     .padding(.bottom, 8)
                 }
-                .scrollDismissesKeyboard(.interactively)
+                // `.immediately` not `.interactively`. With
+                // `.interactively`, the keyboard moves with the scroll
+                // position — but the keyboard rising in response to
+                // `amountFocused = true` on appear nudges the scroll
+                // position too, which the interactive mode reads as a
+                // partial-dismiss gesture, and a moment later
+                // `@FocusState` re-raises the keyboard. That fight
+                // produces a perceived "infinite loop" — the keyboard
+                // pumping in and out repeatedly with the sheet still
+                // mounted. `.immediately` only dismisses on an explicit
+                // scroll gesture, which is what we actually want — the
+                // drag-down sheet dismiss is a sheet gesture, not a
+                // scroll one, and still works.
+                .scrollDismissesKeyboard(.immediately)
                 .scrollBounceBehavior(.basedOnSize)
 
                 bottomBar
