@@ -7,6 +7,7 @@ struct NwcSetupView: View {
     @State private var status: String?
     @State private var inFlight = false
     @State private var showScanner = false
+    @State private var restoring = false
 
     private var isValidUri: Bool {
         uri.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("nostr+walletconnect://")
@@ -29,6 +30,9 @@ struct NwcSetupView: View {
                         .multilineTextAlignment(.center)
                 }
                 .padding(.top, 8)
+
+                // Restore-from-backup
+                backupSection
 
                 // Input card
                 VStack(alignment: .leading, spacing: 0) {
@@ -82,6 +86,19 @@ struct NwcSetupView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
+                if store.isRelayBackupSupported {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "lock.icloud")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                            .padding(.top, 1)
+                        Text("Connecting saves an encrypted backup to your Nostr relays so you can restore this connection on other devices.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
                 // Status
                 if let status {
                     HStack(spacing: 8) {
@@ -126,6 +143,7 @@ struct NwcSetupView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) { Button("Close", action: dismiss) }
         }
+        .task { await store.searchNwcBackup() }
         .fullScreenCover(isPresented: $showScanner) {
             QRCodeScannerView(
                 onScanned: { code in
@@ -148,5 +166,77 @@ struct NwcSetupView: View {
         } else {
             status = store.lastStatus ?? "Could not connect — check the connection string"
         }
+    }
+
+    // MARK: - Restore from backup
+
+    @ViewBuilder
+    private var backupSection: some View {
+        switch store.nwcBackupSearchState {
+        case .searching:
+            HStack(spacing: 8) {
+                ProgressView().scaleEffect(0.8)
+                Text("Checking for a saved connection…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+        case .found(let backupUri, let createdAt):
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 8) {
+                    Image(systemName: "lock.icloud")
+                        .foregroundStyle(Color.wispZapColor)
+                    Text("Backup found")
+                        .font(.subheadline.weight(.semibold))
+                }
+                Text("A connection backed up \(backupDateText(createdAt)) is available. Restore it to reconnect without pasting a string.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button {
+                    Task { await restore(backupUri) }
+                } label: {
+                    Group {
+                        if restoring {
+                            ProgressView().tint(.white)
+                        } else {
+                            Text("Restore connection")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.white)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(Color.wispZapColor, in: RoundedRectangle(cornerRadius: 12))
+                }
+                .buttonStyle(.plain)
+                .disabled(restoring || inFlight)
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.wispZapColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 14))
+
+        case .idle, .notFound, .error:
+            EmptyView()
+        }
+    }
+
+    private func restore(_ backupUri: String) async {
+        restoring = true
+        defer { restoring = false }
+        let ok = await store.connectNwc(uri: backupUri)
+        if ok {
+            dismiss()
+        } else {
+            status = store.lastStatus ?? "Couldn't restore the backed-up connection"
+        }
+    }
+
+    private func backupDateText(_ unix: Int) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        return "on " + formatter.string(from: Date(timeIntervalSince1970: TimeInterval(unix)))
     }
 }
