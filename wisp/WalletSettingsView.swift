@@ -48,6 +48,31 @@ enum WalletBalanceUnit: String, CaseIterable {
     }
 }
 
+// MARK: - Balance display mode
+
+/// Tri-state balance display for the wallet dashboard. Tapping the balance
+/// cycles sats → fiat → hidden. Persisted per wallet pubkey under the
+/// `walletBalanceDisplay_<pubkey>` key. The `fiat` state stays scoped to the
+/// wallet screen and is independent of the app-wide `fiatModeEnabled` setting.
+enum WalletBalanceDisplayMode: String, CaseIterable {
+    case sats, fiat, hidden
+
+    /// Next state in the tap cycle.
+    var next: WalletBalanceDisplayMode {
+        switch self {
+        case .sats:   return .fiat
+        case .fiat:   return .hidden
+        case .hidden: return .sats
+        }
+    }
+
+    static let storageKeyPrefix = "walletBalanceDisplay_"
+
+    static func storageKey(pubkey: String) -> String {
+        "\(storageKeyPrefix)\(pubkey)"
+    }
+}
+
 // MARK: - Settings view
 
 struct WalletSettingsView: View {
@@ -60,7 +85,7 @@ struct WalletSettingsView: View {
     @State private var showRemoveAddressAlert = false
     @State private var showNwcDetails = false
     @State private var showSparkDetails = false
-    @AppStorage private var balanceHidden: Bool
+    @AppStorage private var balanceDisplayRaw: String
     @AppStorage("walletBalanceUnit") private var balanceUnitRaw: String = WalletBalanceUnit.sats.rawValue
 
     // Lightning address management state
@@ -69,11 +94,23 @@ struct WalletSettingsView: View {
 
     init(store: WalletStore) {
         self.store = store
-        _balanceHidden = AppStorage(wrappedValue: false, "balanceHidden_\(store.keypair.pubkey)")
+        _balanceDisplayRaw = AppStorage(
+            wrappedValue: WalletBalanceDisplayMode.sats.rawValue,
+            WalletBalanceDisplayMode.storageKey(pubkey: store.keypair.pubkey))
     }
 
     private var balanceUnit: WalletBalanceUnit {
         WalletBalanceUnit(rawValue: balanceUnitRaw) ?? .sats
+    }
+
+    /// Tri-state display mode bound to a hide/show toggle: switching off
+    /// returns to the sats display (the fiat state is reached via the
+    /// dashboard balance tap).
+    private var balanceHidden: Binding<Bool> {
+        Binding(
+            get: { (WalletBalanceDisplayMode(rawValue: balanceDisplayRaw) ?? .sats) == .hidden },
+            set: { balanceDisplayRaw = ($0 ? WalletBalanceDisplayMode.hidden : .sats).rawValue }
+        )
     }
 
     var body: some View {
@@ -415,7 +452,7 @@ struct WalletSettingsView: View {
                 Text("Hide balance")
                     .font(.subheadline)
                 Spacer()
-                Toggle("", isOn: $balanceHidden)
+                Toggle("", isOn: balanceHidden)
                     .labelsHidden()
                     .tint(Color.wispZapColor)
             }

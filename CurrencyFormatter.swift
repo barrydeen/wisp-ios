@@ -63,6 +63,17 @@ enum CurrencyFormatter {
         return render(amount: amount, currency: currency)
     }
 
+    /// Renders `sats` as a fiat string for the wallet screen's own fiat mode,
+    /// independent of the app-wide `fiatModeEnabled` setting. Returns nil when
+    /// no exchange rate is cached for the selected currency yet.
+    static func walletFiat(sats: Int64) -> String? {
+        let settings = AppSettings.shared
+        guard let amount = ExchangeRateCache.shared.satsToFiat(sats, currency: settings.fiatCurrency) else {
+            return nil
+        }
+        return render(amount: amount, currency: ExchangeRateService.currency(for: settings.fiatCurrency))
+    }
+
     private static func render(amount: Double, currency: FiatCurrency) -> String {
         let abs = Swift.abs(amount)
         let formatter = NumberFormatter()

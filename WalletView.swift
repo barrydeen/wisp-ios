@@ -19,16 +19,28 @@ struct WalletView: View {
     @State private var showSend = false
     @State private var showReceive = false
     @State private var showAllTransactions = false
-    @AppStorage private var balanceHidden: Bool
+    @AppStorage private var balanceDisplayRaw: String
     @AppStorage("walletBalanceUnit") private var balanceUnitRaw: String = WalletBalanceUnit.sats.rawValue
 
     private var hasCachedDataOrConnected: Bool {
         store.balanceMsats != nil || !store.transactions.isEmpty
     }
 
+    private var balanceDisplay: WalletBalanceDisplayMode {
+        WalletBalanceDisplayMode(rawValue: balanceDisplayRaw) ?? .sats
+    }
+
     init(store: WalletStore) {
         self.store = store
-        _balanceHidden = AppStorage(wrappedValue: false, "balanceHidden_\(store.keypair.pubkey)")
+        let key = WalletBalanceDisplayMode.storageKey(pubkey: store.keypair.pubkey)
+        // Migrate the legacy boolean hide-balance preference into the
+        // tri-state display mode the first time this wallet is opened.
+        let defaults = UserDefaults.standard
+        if defaults.string(forKey: key) == nil,
+           defaults.bool(forKey: "balanceHidden_\(store.keypair.pubkey)") {
+            defaults.set(WalletBalanceDisplayMode.hidden.rawValue, forKey: key)
+        }
+        _balanceDisplayRaw = AppStorage(wrappedValue: WalletBalanceDisplayMode.sats.rawValue, key)
     }
 
     var body: some View {
@@ -285,13 +297,13 @@ struct WalletView: View {
     private var balanceCard: some View {
         let sats = store.balanceMsats.map { $0 / 1000 } ?? 0
         let unit = WalletBalanceUnit(rawValue: balanceUnitRaw) ?? .sats
-        // When fiat mode is on, the sats/btc/msats picker is overridden — we
-        // render the fiat-converted balance with the currency symbol baked
-        // into the formatted string. Falls back to sats display if the
+        let mode = balanceDisplay
+        // In fiat mode the sats/btc/msats picker is overridden — we render the
+        // fiat-converted balance with the currency symbol baked into the
+        // formatted string. Falls back to the unit display if the
         // exchange-rate cache hasn't loaded yet.
-        let fiatBalance: String? = settings.fiatModeEnabled
-            ? ExchangeRateCache.shared.satsToFiat(sats, currency: settings.fiatCurrency)
-                .map { _ in CurrencyFormatter.full(sats: sats) }
+        let fiatBalance: String? = mode == .fiat
+            ? CurrencyFormatter.walletFiat(sats: sats)
             : nil
         // Pulse while no trustworthy value exists to display: still
         // connecting, or no balance has landed yet (the just-imported
@@ -301,10 +313,12 @@ struct WalletView: View {
             && (!store.isConnected || store.balanceMsats == nil)
         return VStack(spacing: 14) {
             Button {
-                withAnimation(.easeInOut(duration: 0.15)) { balanceHidden.toggle() }
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    balanceDisplayRaw = mode.next.rawValue
+                }
             } label: {
                 VStack(spacing: 6) {
-                    if balanceHidden {
+                    if mode == .hidden {
                         Text("* * * * *")
                             .font(.system(size: 52, weight: .semibold, design: .rounded))
                             .foregroundStyle(.primary)
@@ -328,7 +342,7 @@ struct WalletView: View {
                                 .animation(syncing ? nil : .easeInOut(duration: 0.25), value: sats)
                         }
                     }
-                    if fiatBalance == nil, !unit.unitLabel.isEmpty {
+                    if mode != .hidden, fiatBalance == nil, !unit.unitLabel.isEmpty {
                         Text(unit.unitLabel)
                             .font(.callout)
                             .foregroundStyle(.secondary)
@@ -460,7 +474,7 @@ struct WalletView: View {
 
             let recent = Array(store.transactions.prefix(5))
             ForEach(recent) { tx in
-                WalletTransactionRow(tx: tx)
+                WalletTransactionRow(tx: tx, displayMode: balanceDisplay)
                     .padding(.horizontal, 16)
                 if tx.id != recent.last?.id {
                     Divider().opacity(0.12).padding(.leading, 68)
