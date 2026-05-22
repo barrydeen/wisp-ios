@@ -816,55 +816,84 @@ struct PostCardView: View {
         let isFlying = zapStore.inFlight.contains(eventId)
         let isBursting = zapStore.bursting.contains(eventId)
         let isOwnPost = (myPubkey != nil) && (myPubkey == resolveRepost().event.pubkey)
-        return Button {
-            // Tap always opens the composer. Long-press fires the
-            // configured instant-zap amount (when the user has opted in
-            // AND a wallet is set up). This matches the standard iOS
-            // pattern of "tap to inspect, long-press to act" and prevents
-            // an accidental finger from auto-zapping.
+        let isInteractive = !isFlying && !isOwnPost
+        return ZStack {
+            if isFlying {
+                LightningPulseView(image: settings.zapImage)
+                    .frame(width: 18, height: 18)
+                    .frame(height: 28)
+            } else {
+                actionItem(
+                    image: settings.zapImage,
+                    label: zapLabel(repoBox.counts.zapSats > 0 ? repoBox.counts.zapSats : (engagement?.zapSats ?? 0)),
+                    tint: iZapped ? Color.wispZapColor : nil
+                )
+            }
+        }
+        // Dim on the user's own posts — self-zapping is a no-op that just
+        // round-trips sats minus routing fees.
+        .opacity(isOwnPost ? 0.35 : 1)
+        .contentShape(Rectangle())
+        // Tap = open composer. Recorded behind the `zapLongPressFired`
+        // guard so the same touch sequence that fires an instant zap
+        // doesn't ALSO open the composer on finger-lift — SwiftUI fires
+        // both gestures by default when they're applied as siblings.
+        .onTapGesture {
+            guard isInteractive else { return }
             if zapLongPressFired {
                 zapLongPressFired = false
                 return
             }
             triggerZapOrWalletSetup()
-        } label: {
-            ZStack {
-                if isFlying {
-                    LightningPulseView(image: settings.zapImage)
-                        .frame(width: 18, height: 18)
-                        .frame(height: 28)
-                } else {
-                    actionItem(
-                        image: settings.zapImage,
-                        label: zapLabel(repoBox.counts.zapSats > 0 ? repoBox.counts.zapSats : (engagement?.zapSats ?? 0)),
-                        tint: iZapped ? Color.wispZapColor : nil
-                    )
-                }
-            }
         }
-        .buttonStyle(.plain)
-        // Disable + dim on the user's own posts — self-zapping is a
-        // no-op that just round-trips sats minus routing fees.
-        .disabled(isFlying || isOwnPost)
-        .opacity(isOwnPost ? 0.35 : 1)
-        .simultaneousGesture(
-            // Long-press fires the configured instant zap when the user
-            // has opted in and a wallet is set up. Without those, fall
-            // through to the composer — long-press shouldn't feel like
-            // a no-op for users who haven't enabled instant zaps yet.
-            // Skip entirely on the user's own posts so the dimmed state
-            // is truly inert.
-            LongPressGesture(minimumDuration: 0.4).onEnded { _ in
-                guard !isOwnPost else { return }
+        // Long-press = instant zap (if opted-in + wallet set up). Using
+        // `.onLongPressGesture(...onPressingChanged:)` instead of
+        // `.simultaneousGesture(LongPressGesture)` because the modifier
+        // form is the only public SwiftUI API that exposes a touch-down
+        // callback — `onPressingChanged(true)` fires the instant the
+        // finger lands, which is where the medium "I see your press"
+        // haptic plays. The prior `DragGesture(minimumDistance: 0)`
+        // simultaneous-gesture pattern was getting swallowed when
+        // composed with the Button's internal tap recognizer, so the
+        // touch-down haptic never fired at all. Dropping the Button
+        // (this view is now a plain ZStack with explicit tap +
+        // long-press gestures) avoids that arbitration entirely.
+        //
+        // 0.25 s recognition window is short enough that the press
+        // doesn't feel stalled but still long enough to clearly
+        // distinguish from a quick tap.
+        .onLongPressGesture(
+            minimumDuration: 0.25,
+            maximumDistance: 50,
+            perform: {
+                guard isInteractive else { return }
                 zapLongPressFired = true
-                Haptics.shared.blip()
                 if settings.quickZapEnabled,
                    let store = walletStore, store.mode != nil,
                    let amount = resolvedInstantZapSats() {
+                    // Sharp CoreHaptics tap at the moment of instant-zap
+                    // commit. CoreHaptics is used (not the UIKit
+                    // UIImpactFeedbackGenerator) because the device may
+                    // have System Haptics disabled in Settings → Sounds
+                    // & Haptics, which silences UIFeedbackGenerator but
+                    // not CHHapticEngine. Mirrors the same engine path
+                    // that the success-side `zapBuzz` already uses.
+                    Haptics.shared.zapCommitThump()
                     fireQuickZap(amountSats: amount)
                 } else {
+                    // Composer fall-through: light recognised-tap
+                    // feedback is enough because the sheet rising is
+                    // its own unmistakable visual confirmation.
+                    Haptics.shared.blip()
                     triggerZapOrWalletSetup()
                 }
+            },
+            onPressingChanged: { pressing in
+                guard pressing, isInteractive else { return }
+                // CoreHaptics-backed short tap. See `zapCommitThump`
+                // comment for why we route through CHHapticEngine
+                // instead of UIImpactFeedbackGenerator.
+                Haptics.shared.zapPressTap()
             }
         )
         .overlay(alignment: .center) {
