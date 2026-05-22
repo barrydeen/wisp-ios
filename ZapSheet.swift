@@ -758,7 +758,8 @@ private struct EditPresetsSheet: View {
 
     /// Editable preset draft. `message` is optional — empty means no default
     /// message is associated with this preset. Each draft has its own
-    /// identity so SwiftUI can keep TextField cursors stable across moves.
+    /// identity so SwiftUI can keep TextField cursors stable across
+    /// swipe-to-deletes of other rows.
     private struct Draft: Identifiable {
         let id = UUID()
         var amount: String
@@ -776,6 +777,12 @@ private struct EditPresetsSheet: View {
     var body: some View {
         NavigationStack {
             List {
+                // Swipe-left-to-delete a row. We deliberately do NOT expose
+                // an `EditButton()` here — the red minus circles iOS shows
+                // in edit mode sit right under the amount TextField and
+                // were too easy to tap accidentally while editing. Standard
+                // iOS swipe (reveal Delete on the trailing edge → tap to
+                // confirm) is the right destructive UX for this list.
                 ForEach($drafts) { $draft in
                     HStack(spacing: 8) {
                         TextField("Amount (sats)", text: $draft.amount)
@@ -785,7 +792,6 @@ private struct EditPresetsSheet: View {
                         TextField("Message (optional)", text: $draft.message)
                     }
                 }
-                .onMove { from, to in drafts.move(fromOffsets: from, toOffset: to) }
                 .onDelete { drafts.remove(atOffsets: $0) }
 
                 Button {
@@ -799,7 +805,9 @@ private struct EditPresetsSheet: View {
             .navigationTitle("Edit Presets")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { EditButton() }
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") {
                         let encoded: [String] = drafts.compactMap { d in
