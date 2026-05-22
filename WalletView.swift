@@ -342,11 +342,21 @@ struct WalletView: View {
                                 .animation(syncing ? nil : .easeInOut(duration: 0.25), value: sats)
                         }
                     }
-                    if mode != .hidden, fiatBalance == nil, !unit.unitLabel.isEmpty {
-                        Text(unit.unitLabel)
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                    }
+                    // Unit-label slot. Always rendered (placeholder space
+                    // when the active display mode doesn't have one) so
+                    // the lightning address + send/receive row below
+                    // stays anchored at the same Y position as the user
+                    // cycles sats → fiat → hidden → sats. Without the
+                    // always-reserved slot, switching out of sats mode
+                    // shifts the entire dashboard up by a `callout`'s
+                    // worth of line height and back when re-entered.
+                    let showUnitLabel = mode != .hidden
+                        && fiatBalance == nil
+                        && !unit.unitLabel.isEmpty
+                    Text(showUnitLabel ? unit.unitLabel : " ")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .opacity(showUnitLabel ? 1 : 0)
                 }
                 .frame(maxWidth: .infinity)
             }
