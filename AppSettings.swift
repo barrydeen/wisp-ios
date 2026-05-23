@@ -387,9 +387,32 @@ final class AppSettings {
         if currentPubkey == lastHandledAccountPubkey { return }
         let isFirstHandle = !hasHandledFirstAccount
         hasHandledFirstAccount = true
+
+        if isFirstHandle {
+            // First account ever on this app run — restoreOnLaunchIfNeeded
+            // handles it. Mark as handled so subsequent transitions know
+            // we've seen this pubkey.
+            lastHandledAccountPubkey = currentPubkey
+            return
+        }
+
+        guard syncSettingsToRelays else {
+            lastHandledAccountPubkey = currentPubkey
+            return
+        }
+
+        // Defer reset + restore until onboarding finishes for the new
+        // account. Running the property writes mid-onboarding triggers
+        // a RootContainer .id change that remounts OnboardingView and
+        // restarts its welcome-spinner .task — visible to the user as
+        // the avatar spinner firing a second time. ContentView re-fires
+        // this method from OnboardingView's onComplete so the deferred
+        // work happens once the user lands in .main.
+        if let pk = currentPubkey, !NostrKey.isOnboardingComplete(pubkey: pk) {
+            return
+        }
+
         lastHandledAccountPubkey = currentPubkey
-        if isFirstHandle { return }
-        guard syncSettingsToRelays else { return }
         resetSyncedSettingsToDefaults()
         if currentPubkey != nil {
             await restoreFromRelays()
@@ -406,6 +429,13 @@ final class AppSettings {
     func restoreOnLaunchIfNeeded() async {
         guard syncSettingsToRelays else { return }
         guard let keypair = NostrKey.load(), !keypair.isWatchOnly else { return }
+        // Same reasoning as the defer in handleActiveAccountChange —
+        // an applyRestored mid-onboarding would write to AppSettings
+        // properties and trigger a RootContainer .id change that
+        // remounts OnboardingView. Wait until the user is past
+        // onboarding; ContentView re-fires this path from
+        // OnboardingView's onComplete via handleActiveAccountChange.
+        guard NostrKey.isOnboardingComplete(pubkey: keypair.pubkey) else { return }
         let flagKey = "wisp_settings_restored_\(keypair.pubkey)"
         if UserDefaults.standard.bool(forKey: flagKey) { return }
         await restoreFromRelays()

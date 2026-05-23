@@ -84,6 +84,11 @@ struct ContentView: View {
                 if let keypair {
                     OnboardingView(keypair: keypair) {
                         withAnimation { currentScreen = .main }
+                        // Onboarding is now marked complete — re-fire
+                        // the account-change handler so the reset +
+                        // relay restore that we deferred during
+                        // onboarding actually runs now.
+                        Task { await AppSettings.shared.handleActiveAccountChange() }
                     }
                 }
 
