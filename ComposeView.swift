@@ -25,7 +25,6 @@ struct ComposeView: View {
     @FocusState private var contentFocused: Bool
     @State private var showScheduleSheet = false
     @State private var showCancelConfirm = false
-    @State private var showImageOnlyConfirm = false
     @State private var showGifPicker = false
     @State private var showPhotosPicker = false
     /// Drives the Drafts & Scheduled sheet launched from the composer
@@ -270,18 +269,6 @@ struct ComposeView: View {
             Button("Keep Editing", role: .cancel) {}
         } message: {
             Text("You have unsaved content.")
-        }
-        .confirmationDialog(
-            "Post without a caption?",
-            isPresented: $showImageOnlyConfirm,
-            titleVisibility: .visible
-        ) {
-            Button("Post") {
-                viewModel.publish()
-            }
-            Button("Keep Editing", role: .cancel) {}
-        } message: {
-            Text("This post has no text. Send the attachment on its own?")
         }
         .onChange(of: viewModel.draftSaved) { _, saved in
             if saved { dismiss() }
@@ -819,11 +806,7 @@ struct ComposeView: View {
                 .buttonStyle(.plain)
             } else {
                 Button {
-                    if viewModel.isImageOnlyPost {
-                        showImageOnlyConfirm = true
-                    } else {
-                        viewModel.publish()
-                    }
+                    viewModel.publish()
                 } label: {
                     Group {
                         // Only flag mining once the miner has reported real

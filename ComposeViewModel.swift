@@ -987,19 +987,6 @@ final class ComposeViewModel {
         return nil
     }
 
-    /// True when the user is about to publish a non-gallery post that contains
-    /// only media attachments and no body text. The view uses this to surface a
-    /// "post without a caption?" confirmation so an empty caption doesn't get
-    /// fired off accidentally (e.g. after clearing the draft text but leaving
-    /// the image attached).
-    var isImageOnlyPost: Bool {
-        if galleryMode || pollEnabled { return false }
-        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.isEmpty else { return false }
-        guard !attachments.isEmpty else { return false }
-        return !attachments.contains(where: { $0.url == nil })
-    }
-
     private func runPublishPipeline() async {
         isPublishing = true
         defer { isPublishing = false }
