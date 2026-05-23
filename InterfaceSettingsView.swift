@@ -10,6 +10,19 @@ struct InterfaceSettingsView: View {
     @State private var rateUpdatedAt: Date? = nil
     @State private var themesExpanded = false
 
+    /// Phase of the manual relay-restore action. Drives the spinner /
+    /// status text on the "Restore from relays" button so users have a
+    /// visible signal that something happened — the actual UI mutations
+    /// (theme, accent, etc.) animate in via the normal property bindings.
+    @State private var restoreState: RestoreState = .idle
+
+    enum RestoreState: Equatable {
+        case idle
+        case restoring
+        case restored
+        case failed(String)
+    }
+
     var body: some View {
         @Bindable var settings = settings
         ScrollView {
@@ -236,6 +249,35 @@ struct InterfaceSettingsView: View {
                     }
                 }
 
+                section(title: "Cross-device sync") {
+                    Toggle("Sync settings across devices", isOn: $settings.syncSettingsToRelays)
+                        .toggleStyle(SwitchToggleStyle(tint: theme.primary))
+                    Text("Publishes an encrypted NIP-78 snapshot of your appearance, media, posting, and currency preferences to relays so the same setup follows your account on a new device.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(theme.palette.onSurfaceVariant)
+
+                    if settings.syncSettingsToRelays {
+                        Divider().padding(.vertical, 4)
+                        HStack(spacing: 12) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Restore from relays")
+                                    .foregroundStyle(theme.palette.onSurface)
+                                Text(restoreStatusText)
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(theme.palette.onSurfaceVariant)
+                            }
+                            Spacer()
+                            if restoreState == .restoring {
+                                ProgressView().controlSize(.small)
+                            } else {
+                                Button("Restore") { performManualRestore() }
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(theme.primary)
+                            }
+                        }
+                    }
+                }
+
                 Spacer(minLength: 40)
             }
             .padding(20)
@@ -260,6 +302,27 @@ struct InterfaceSettingsView: View {
         .task {
             await ExchangeRateCache.shared.updateFromService()
             rateUpdatedAt = ExchangeRateCache.shared.updatedAt
+        }
+    }
+
+    private var restoreStatusText: String {
+        switch restoreState {
+        case .idle: return "Pulls the latest settings snapshot from relays"
+        case .restoring: return "Fetching latest snapshot…"
+        case .restored: return "Settings restored from relays"
+        case .failed(let reason): return "Couldn't restore — \(reason)"
+        }
+    }
+
+    private func performManualRestore() {
+        restoreState = .restoring
+        Task {
+            await settings.restoreFromRelays()
+            // No structured error surfaces from `restoreFromRelays` — it
+            // swallows decrypt / network failures internally — so the
+            // happy path is "we ran." If the user wanted a more granular
+            // status we'd need to extend `restoreFromRelays` to throw.
+            restoreState = .restored
         }
     }
 

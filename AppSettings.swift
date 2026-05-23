@@ -42,6 +42,7 @@ final class AppSettings {
         static let autoApproveRelayAuth = "wisp_settings_auto_approve_relay_auth"
         static let zapIconStyle = "wisp_settings_zap_icon_style"
         static let videoLoop = "wisp_settings_video_loop"
+        static let syncSettingsToRelays = "wisp_settings_sync_to_relays"
     }
 
     /// Allowed durations for the post-undo countdown. Picker shows these as
@@ -51,38 +52,75 @@ final class AppSettings {
     private static let defaultAccentARGB: Int = 0xFFFF9800
 
     var largeText: Bool {
-        didSet { UserDefaults.standard.set(largeText, forKey: Keys.largeText) }
+        didSet {
+            UserDefaults.standard.set(largeText, forKey: Keys.largeText)
+            scheduleSettingsSync()
+        }
     }
     var themeName: String {
-        didSet { UserDefaults.standard.set(themeName, forKey: Keys.themeName) }
+        didSet {
+            UserDefaults.standard.set(themeName, forKey: Keys.themeName)
+            scheduleSettingsSync()
+        }
     }
     var colorScheme: ColorSchemePreference {
-        didSet { UserDefaults.standard.set(colorScheme.rawValue, forKey: Keys.colorScheme) }
+        didSet {
+            UserDefaults.standard.set(colorScheme.rawValue, forKey: Keys.colorScheme)
+            scheduleSettingsSync()
+        }
     }
     var accentColorARGB: Int {
-        didSet { UserDefaults.standard.set(accentColorARGB, forKey: Keys.accentColorARGB) }
+        didSet {
+            UserDefaults.standard.set(accentColorARGB, forKey: Keys.accentColorARGB)
+            scheduleSettingsSync()
+        }
     }
     var autoLoadMedia: Bool {
-        didSet { UserDefaults.standard.set(autoLoadMedia, forKey: Keys.autoLoadMedia) }
+        didSet {
+            UserDefaults.standard.set(autoLoadMedia, forKey: Keys.autoLoadMedia)
+            scheduleSettingsSync()
+        }
     }
     var videoAutoplay: Bool {
-        didSet { UserDefaults.standard.set(videoAutoplay, forKey: Keys.videoAutoplay) }
+        didSet {
+            UserDefaults.standard.set(videoAutoplay, forKey: Keys.videoAutoplay)
+            scheduleSettingsSync()
+        }
     }
     var animateAvatars: Bool {
-        didSet { UserDefaults.standard.set(animateAvatars, forKey: Keys.animateAvatars) }
+        didSet {
+            UserDefaults.standard.set(animateAvatars, forKey: Keys.animateAvatars)
+            scheduleSettingsSync()
+        }
     }
     var mediaLayoutStyle: MediaLayoutStyle {
-        didSet { UserDefaults.standard.set(mediaLayoutStyle.rawValue, forKey: Keys.mediaLayoutStyle) }
+        didSet {
+            UserDefaults.standard.set(mediaLayoutStyle.rawValue, forKey: Keys.mediaLayoutStyle)
+            scheduleSettingsSync()
+        }
     }
     var clientTagEnabled: Bool {
-        didSet { UserDefaults.standard.set(clientTagEnabled, forKey: Keys.clientTagEnabled) }
+        didSet {
+            UserDefaults.standard.set(clientTagEnabled, forKey: Keys.clientTagEnabled)
+            scheduleSettingsSync()
+        }
     }
     var fiatModeEnabled: Bool {
-        didSet { UserDefaults.standard.set(fiatModeEnabled, forKey: Keys.fiatModeEnabled) }
+        didSet {
+            UserDefaults.standard.set(fiatModeEnabled, forKey: Keys.fiatModeEnabled)
+            scheduleSettingsSync()
+        }
     }
     var fiatCurrency: String {
-        didSet { UserDefaults.standard.set(fiatCurrency, forKey: Keys.fiatCurrency) }
+        didSet {
+            UserDefaults.standard.set(fiatCurrency, forKey: Keys.fiatCurrency)
+            scheduleSettingsSync()
+        }
     }
+    // Out of scope for NIP-78 cross-device sync per the settings-sync
+    // contract — notification sounds are device-local (different ringers
+    // / Do Not Disturb states on each device shouldn't be overridden by
+    // sync).
     var notificationSoundsEnabled: Bool {
         didSet { UserDefaults.standard.set(notificationSoundsEnabled, forKey: Keys.notificationSoundsEnabled) }
     }
@@ -90,28 +128,67 @@ final class AppSettings {
     /// `postUndoTimerForReplies`) waits `postUndoTimerSeconds` before sending,
     /// giving the user a chance to cancel.
     var postUndoTimerEnabled: Bool {
-        didSet { UserDefaults.standard.set(postUndoTimerEnabled, forKey: Keys.postUndoTimerEnabled) }
+        didSet {
+            UserDefaults.standard.set(postUndoTimerEnabled, forKey: Keys.postUndoTimerEnabled)
+            scheduleSettingsSync()
+        }
     }
     var postUndoTimerSeconds: Int {
-        didSet { UserDefaults.standard.set(postUndoTimerSeconds, forKey: Keys.postUndoTimerSeconds) }
+        didSet {
+            UserDefaults.standard.set(postUndoTimerSeconds, forKey: Keys.postUndoTimerSeconds)
+            scheduleSettingsSync()
+        }
     }
     /// When false, replies skip the undo countdown and publish immediately —
     /// the default. Top-level posts still respect `postUndoTimerEnabled`.
     var postUndoTimerForReplies: Bool {
-        didSet { UserDefaults.standard.set(postUndoTimerForReplies, forKey: Keys.postUndoTimerForReplies) }
+        didSet {
+            UserDefaults.standard.set(postUndoTimerForReplies, forKey: Keys.postUndoTimerForReplies)
+            scheduleSettingsSync()
+        }
     }
     /// When true (default), AUTH challenges from relays are signed and sent automatically
     /// without prompting. When false, each relay must be individually approved in relay settings.
+    // Out of scope for NIP-78 cross-device sync — auto-AUTH posture is
+    // device-local (a device on an untrusted network may want stricter
+    // per-relay prompts than another).
     var autoApproveRelayAuth: Bool {
         didSet { UserDefaults.standard.set(autoApproveRelayAuth, forKey: Keys.autoApproveRelayAuth) }
     }
     var zapIconStyle: ZapIconStyle {
-        didSet { UserDefaults.standard.set(zapIconStyle.rawValue, forKey: Keys.zapIconStyle) }
+        didSet {
+            UserDefaults.standard.set(zapIconStyle.rawValue, forKey: Keys.zapIconStyle)
+            scheduleSettingsSync()
+        }
     }
-    // TODO: Persist to NIP78 (kind 30078) when that feature is available.
+    // Out of scope for NIP-78 cross-device sync — video loop is a small
+    // device-local UX pref that doesn't merit relay round-trips.
     var videoLoop: Bool {
         didSet { UserDefaults.standard.set(videoLoop, forKey: Keys.videoLoop) }
     }
+    /// Master toggle for cross-device sync of UI preferences via NIP-78.
+    /// When off, mutations no longer schedule a relay publish and the
+    /// app skips the on-launch restore. Defaults to on — privacy-aware
+    /// users can opt out in Interface settings.
+    var syncSettingsToRelays: Bool {
+        didSet { UserDefaults.standard.set(syncSettingsToRelays, forKey: Keys.syncSettingsToRelays) }
+    }
+
+    /// Suppresses the debounced relay publish while `applyRestored` is
+    /// writing into the same properties whose didSets would otherwise
+    /// re-trigger sync. Without it, a restore feedback-loops into a
+    /// republish of the values we just received.
+    @ObservationIgnored private var isApplyingRestoredPayload = false
+
+    /// Debounced publish task. Coalesces a burst of mutations (e.g. the
+    /// user fiddles with a slider) into a single relay write.
+    @ObservationIgnored private var settingsSyncTask: Task<Void, Never>?
+
+    /// Debounce window for the relay publish. 4s comfortably outlasts a
+    /// typical interactive adjustment session (toggling a few switches,
+    /// dragging a slider to settle) while keeping the latency from
+    /// settle → published small.
+    private static let settingsSyncDebounceSeconds: UInt64 = 4
 
     private init() {
         let defaults = UserDefaults.standard
@@ -137,6 +214,157 @@ final class AppSettings {
         let zapRaw = defaults.string(forKey: Keys.zapIconStyle) ?? ZapIconStyle.bitcoin.rawValue
         self.zapIconStyle = ZapIconStyle(rawValue: zapRaw) ?? .bitcoin
         self.videoLoop = defaults.object(forKey: Keys.videoLoop) as? Bool ?? true
+        self.syncSettingsToRelays = defaults.object(forKey: Keys.syncSettingsToRelays) as? Bool ?? true
+    }
+
+    // MARK: - NIP-78 cross-device sync
+
+    /// Build a payload snapshot from the current setting values for
+    /// publication via `Nip78AppSettings.createPublishEvent`. Only the
+    /// in-scope Interface-screen preferences are included; out-of-scope
+    /// fields (notification sounds, relay auto-auth, video loop) stay
+    /// device-local by design.
+    func snapshotForBackup() -> Nip78AppSettings.AppSettingsPayload {
+        Nip78AppSettings.AppSettingsPayload(
+            version: 1,
+            largeText: largeText,
+            colorScheme: colorScheme.rawValue,
+            themeName: themeName,
+            accentColorARGB: accentColorARGB,
+            autoLoadMedia: autoLoadMedia,
+            videoAutoplay: videoAutoplay,
+            animateAvatars: animateAvatars,
+            mediaLayoutStyle: mediaLayoutStyle.rawValue,
+            clientTagEnabled: clientTagEnabled,
+            postUndoTimerEnabled: postUndoTimerEnabled,
+            postUndoTimerSeconds: postUndoTimerSeconds,
+            postUndoTimerForReplies: postUndoTimerForReplies,
+            fiatModeEnabled: fiatModeEnabled,
+            fiatCurrency: fiatCurrency,
+            zapIconStyle: zapIconStyle.rawValue
+        )
+    }
+
+    /// Apply a restored payload onto the live settings. Each field that
+    /// came through the wire overwrites the local value; missing fields
+    /// keep the local default. The suppression flag prevents the didSet
+    /// chain from echoing this restore back out as a fresh publish.
+    func applyRestored(_ payload: Nip78AppSettings.AppSettingsPayload) {
+        isApplyingRestoredPayload = true
+        defer { isApplyingRestoredPayload = false }
+
+        if let v = payload.largeText { self.largeText = v }
+        if let raw = payload.colorScheme,
+           let cs = ColorSchemePreference(rawValue: raw) { self.colorScheme = cs }
+        if let v = payload.themeName { self.themeName = v }
+        if let v = payload.accentColorARGB { self.accentColorARGB = v }
+
+        if let v = payload.autoLoadMedia { self.autoLoadMedia = v }
+        if let v = payload.videoAutoplay { self.videoAutoplay = v }
+        if let v = payload.animateAvatars { self.animateAvatars = v }
+        if let raw = payload.mediaLayoutStyle,
+           let layout = MediaLayoutStyle(rawValue: raw) { self.mediaLayoutStyle = layout }
+
+        if let v = payload.clientTagEnabled { self.clientTagEnabled = v }
+        if let v = payload.postUndoTimerEnabled { self.postUndoTimerEnabled = v }
+        if let v = payload.postUndoTimerSeconds,
+           Self.postUndoTimerOptions.contains(v) { self.postUndoTimerSeconds = v }
+        if let v = payload.postUndoTimerForReplies { self.postUndoTimerForReplies = v }
+
+        if let v = payload.fiatModeEnabled { self.fiatModeEnabled = v }
+        if let v = payload.fiatCurrency { self.fiatCurrency = v }
+        if let raw = payload.zapIconStyle,
+           let style = ZapIconStyle(rawValue: raw) { self.zapIconStyle = style }
+    }
+
+    /// Debounced publish of the current settings snapshot to the active
+    /// keypair's outbox relays. Cancels any in-flight publish task so
+    /// the most recent change wins. Becomes a no-op when sync is off,
+    /// when a restore is in progress, or when no signing keypair is
+    /// available.
+    func scheduleSettingsSync() {
+        guard syncSettingsToRelays, !isApplyingRestoredPayload else { return }
+        settingsSyncTask?.cancel()
+        settingsSyncTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: Self.settingsSyncDebounceSeconds * 1_000_000_000)
+            guard !Task.isCancelled, let self else { return }
+            await self.publishSettingsNow()
+        }
+    }
+
+    /// Immediate (non-debounced) publish. Bypasses the debounce timer —
+    /// the InterfaceSettings "Sync now" affordance uses this, and so does
+    /// any test path. Still gated on the `syncSettingsToRelays` toggle.
+    func publishSettingsNow() async {
+        guard syncSettingsToRelays else { return }
+        guard let keypair = NostrKey.load(), !keypair.isWatchOnly else { return }
+
+        do {
+            let event = try await Nip78AppSettings.createPublishEvent(
+                keypair: keypair,
+                payload: snapshotForBackup()
+            )
+            let relays = Self.syncRelays(for: keypair.pubkey)
+            guard !relays.isEmpty else { return }
+            _ = await RelayPool.publish(event: event, to: relays, timeout: 6)
+        } catch {
+            // Logged inside the Signer path; swallow here so a transient
+            // signer failure doesn't bubble up to the settings UI.
+        }
+    }
+
+    /// First-time-per-account restore. Called from the root view at
+    /// launch. Once a pubkey has been restored on this device the flag
+    /// persists in UserDefaults so subsequent launches skip the network
+    /// hit — the device's local settings then become the source of
+    /// truth and changes flow back out via the debounced publish path.
+    /// The user can still trigger a manual re-restore from the
+    /// Interface settings screen.
+    func restoreOnLaunchIfNeeded() async {
+        guard syncSettingsToRelays else { return }
+        guard let keypair = NostrKey.load(), !keypair.isWatchOnly else { return }
+        let flagKey = "wisp_settings_restored_\(keypair.pubkey)"
+        if UserDefaults.standard.bool(forKey: flagKey) { return }
+        await restoreFromRelays()
+        UserDefaults.standard.set(true, forKey: flagKey)
+    }
+
+    /// Fetch the user's latest NIP-78 settings event from relays and
+    /// apply it. Safe to call at every app launch — applyRestored is
+    /// idempotent and the suppression flag prevents a re-publish.
+    func restoreFromRelays() async {
+        guard syncSettingsToRelays else { return }
+        guard let keypair = NostrKey.load(), !keypair.isWatchOnly else { return }
+
+        let relays = Self.syncRelays(for: keypair.pubkey)
+        guard !relays.isEmpty else { return }
+
+        let events = await RelayPool.query(
+            relays: relays,
+            filter: Nip78AppSettings.filter(pubkey: keypair.pubkey),
+            timeout: 8,
+            waitForAllRelays: false
+        )
+        let matching = events.filter { Nip78AppSettings.matches($0) }
+        guard let latest = matching.max(by: { $0.createdAt < $1.createdAt }) else { return }
+        guard let payload = await Nip78AppSettings.decryptPayload(keypair: keypair, event: latest) else { return }
+        applyRestored(payload)
+    }
+
+    /// Outbox-like relay selection for settings publishes / reads. Uses
+    /// the user's top-scored relays when known; falls back to a small
+    /// set of public relays for first-time users / brand-new installs
+    /// where the scoreboard hasn't been populated yet.
+    private static func syncRelays(for pubkey: String) -> [String] {
+        if let board = RelayScoreBoard.load(pubkey: pubkey) {
+            let top = board.scoredRelays.prefix(8).map(\.url)
+            if !top.isEmpty { return top }
+        }
+        return [
+            "wss://relay.damus.io",
+            "wss://relay.primal.net",
+            "wss://nos.lol"
+        ]
     }
 
     /// SF Symbol name for the zap icon. Only valid when `fiatModeEnabled` is false.

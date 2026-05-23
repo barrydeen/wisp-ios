@@ -62,5 +62,11 @@ private struct RootContainer: View {
         return ContentView()
             .environment(\.theme, resolved)
             .id("\(settings.themeName)-\(settings.colorScheme.rawValue)-\(settings.accentColorARGB)-\(systemColorScheme == .dark)")
+            .task {
+                // Pull the cross-device NIP-78 settings snapshot once per
+                // pubkey-per-device. Fast no-op when the user has no key
+                // or the device has already restored this account.
+                await settings.restoreOnLaunchIfNeeded()
+            }
     }
 }
