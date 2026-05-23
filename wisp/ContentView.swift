@@ -21,6 +21,12 @@ struct ContentView: View {
         Group {
             switch currentScreen {
             case .splash:
+                // Force the default (orange) theme on the sign-in
+                // surface so the prior account's accent / theme
+                // never bleeds into the splash. Without this, signing
+                // out of an account with a customized theme leaves
+                // the splash painted in that account's colors until
+                // the next launch.
                 SplashView(
                     onContinueWithNostr: {
                         showNostrSheet = true
@@ -47,6 +53,7 @@ struct ContentView: View {
                             currentScreen = .signUp
                         }
                     )
+                    .environment(\.theme, .default)
                 }
                 .fullScreenCover(isPresented: $showGoogleAuth) {
                     GoogleAuthView(
@@ -66,7 +73,9 @@ struct ContentView: View {
                             }
                         }
                     )
+                    .environment(\.theme, .default)
                 }
+                .environment(\.theme, .default)
 
             case .signUp:
                 SignUpFlowView { kp in
