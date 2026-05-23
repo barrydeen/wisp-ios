@@ -383,7 +383,9 @@ final class SignUpViewModel {
         // there's nothing extra to persist on relays. Manual backup of
         // non-default (imported) wallets is unchanged. Fire-and-forget to
         // write relays only, matching Android's `relayPool.sendToWriteRelays`.
-        if let wallet = sparkWallet, !wallet.isDefaultWallet(),
+        if let wallet = sparkWallet,
+           let privkey = Hex.decode(keypair.privkey), privkey.count == 32,
+           !wallet.isDefaultWallet(privkey: privkey),
            let mnemonic = wallet.loadMnemonic(), !writeRelays.isEmpty {
             let kp = self.keypair
             Task.detached { [mnemonic, writeRelays] in
