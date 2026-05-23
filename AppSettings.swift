@@ -42,7 +42,6 @@ final class AppSettings {
         static let autoApproveRelayAuth = "wisp_settings_auto_approve_relay_auth"
         static let zapIconStyle = "wisp_settings_zap_icon_style"
         static let videoLoop = "wisp_settings_video_loop"
-        static let syncSettingsToRelays = "wisp_settings_sync_to_relays"
     }
 
     /// Allowed durations for the post-undo countdown. Picker shows these as
@@ -166,14 +165,6 @@ final class AppSettings {
     var videoLoop: Bool {
         didSet { UserDefaults.standard.set(videoLoop, forKey: Keys.videoLoop) }
     }
-    /// Master toggle for cross-device sync of UI preferences via NIP-78.
-    /// When off, mutations no longer schedule a relay publish and the
-    /// app skips the on-launch restore. Defaults to on — privacy-aware
-    /// users can opt out in Interface settings.
-    var syncSettingsToRelays: Bool {
-        didSet { UserDefaults.standard.set(syncSettingsToRelays, forKey: Keys.syncSettingsToRelays) }
-    }
-
     /// Suppresses the debounced relay publish while `applyRestored` is
     /// writing into the same properties whose didSets would otherwise
     /// re-trigger sync. Without it, a restore feedback-loops into a
@@ -214,7 +205,6 @@ final class AppSettings {
         let zapRaw = defaults.string(forKey: Keys.zapIconStyle) ?? ZapIconStyle.bitcoin.rawValue
         self.zapIconStyle = ZapIconStyle(rawValue: zapRaw) ?? .bitcoin
         self.videoLoop = defaults.object(forKey: Keys.videoLoop) as? Bool ?? true
-        self.syncSettingsToRelays = defaults.object(forKey: Keys.syncSettingsToRelays) as? Bool ?? true
     }
 
     // MARK: - NIP-78 cross-device sync
@@ -324,7 +314,7 @@ final class AppSettings {
     /// when a restore is in progress, or when no signing keypair is
     /// available.
     func scheduleSettingsSync() {
-        guard syncSettingsToRelays, !isApplyingRestoredPayload else { return }
+        guard !isApplyingRestoredPayload else { return }
         settingsSyncTask?.cancel()
         settingsSyncTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: Self.settingsSyncDebounceSeconds * 1_000_000_000)
@@ -334,10 +324,9 @@ final class AppSettings {
     }
 
     /// Immediate (non-debounced) publish. Bypasses the debounce timer —
-    /// the InterfaceSettings "Sync now" affordance uses this, and so does
-    /// any test path. Still gated on the `syncSettingsToRelays` toggle.
+    /// used by any path that needs an immediate snapshot push (tests,
+    /// future "sync now" affordances).
     func publishSettingsNow() async {
-        guard syncSettingsToRelays else { return }
         guard let keypair = NostrKey.load(), !keypair.isWatchOnly else { return }
 
         do {
@@ -396,11 +385,6 @@ final class AppSettings {
             return
         }
 
-        guard syncSettingsToRelays else {
-            lastHandledAccountPubkey = currentPubkey
-            return
-        }
-
         // Defer reset + restore until onboarding finishes for the new
         // account. Running the property writes mid-onboarding triggers
         // a RootContainer .id change that remounts OnboardingView and
@@ -427,7 +411,6 @@ final class AppSettings {
     /// The user can still trigger a manual re-restore from the
     /// Interface settings screen.
     func restoreOnLaunchIfNeeded() async {
-        guard syncSettingsToRelays else { return }
         guard let keypair = NostrKey.load(), !keypair.isWatchOnly else { return }
         // Same reasoning as the defer in handleActiveAccountChange —
         // an applyRestored mid-onboarding would write to AppSettings
@@ -446,7 +429,6 @@ final class AppSettings {
     /// apply it. Safe to call at every app launch — applyRestored is
     /// idempotent and the suppression flag prevents a re-publish.
     func restoreFromRelays() async {
-        guard syncSettingsToRelays else { return }
         guard let keypair = NostrKey.load(), !keypair.isWatchOnly else { return }
 
         let relays = Self.syncRelays(for: keypair.pubkey)

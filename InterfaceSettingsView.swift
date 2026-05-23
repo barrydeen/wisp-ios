@@ -250,32 +250,34 @@ struct InterfaceSettingsView: View {
                 }
 
                 section(title: "Cross-device sync") {
-                    Toggle("Sync settings across devices", isOn: $settings.syncSettingsToRelays)
-                        .toggleStyle(SwitchToggleStyle(tint: theme.primary))
-                    Text("Publishes an encrypted NIP-78 snapshot of your appearance, media, posting, and currency preferences to relays so the same setup follows your account on a new device.")
+                    Text("Your appearance, media, posting, and currency preferences sync to relays as an encrypted NIP-78 snapshot so the same setup follows your account on a new device.")
                         .font(.system(size: 12))
                         .foregroundStyle(theme.palette.onSurfaceVariant)
-
-                    if settings.syncSettingsToRelays {
-                        Divider().padding(.vertical, 4)
-                        HStack(spacing: 12) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Restore from relays")
-                                    .foregroundStyle(theme.palette.onSurface)
-                                Text(restoreStatusText)
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(theme.palette.onSurfaceVariant)
-                            }
-                            Spacer()
+                    Button {
+                        performManualRestore()
+                    } label: {
+                        HStack(spacing: 8) {
                             if restoreState == .restoring {
-                                ProgressView().controlSize(.small)
+                                ProgressView()
+                                    .controlSize(.small)
+                                    .tint(.white)
+                                Text("Restoring…")
                             } else {
-                                Button("Restore") { performManualRestore() }
-                                    .font(.system(size: 13, weight: .semibold))
-                                    .foregroundStyle(theme.primary)
+                                Text("Restore from relays")
                             }
                         }
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 44)
+                        .background(theme.primary, in: Capsule())
                     }
+                    .buttonStyle(.plain)
+                    .disabled(restoreState == .restoring)
+                    .padding(.top, 4)
+                    Text(restoreStatusText)
+                        .font(.system(size: 12))
+                        .foregroundStyle(theme.palette.onSurfaceVariant)
                 }
 
                 Spacer(minLength: 40)
