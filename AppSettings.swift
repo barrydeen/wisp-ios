@@ -277,6 +277,47 @@ final class AppSettings {
            let style = ZapIconStyle(rawValue: raw) { self.zapIconStyle = style }
     }
 
+    /// Reset every synced field to its default value. Called from the
+    /// logout / account-switch paths so the prior account's preferences
+    /// don't bleed into the splash / login screen or into the next
+    /// account's session. The suppression flag prevents the didSet
+    /// chain from publishing a "defaults" payload back to relays —
+    /// resets are a local operation only.
+    ///
+    /// Out-of-scope fields (notificationSoundsEnabled,
+    /// autoApproveRelayAuth, videoLoop) stay untouched: they're
+    /// device-local already and aren't tied to the account.
+    func resetSyncedSettingsToDefaults() {
+        isApplyingRestoredPayload = true
+        defer { isApplyingRestoredPayload = false }
+
+        largeText = false
+        themeName = "custom"
+        colorScheme = .dark
+        accentColorARGB = Self.defaultAccentARGB
+
+        autoLoadMedia = true
+        videoAutoplay = true
+        animateAvatars = true
+        mediaLayoutStyle = .grid
+
+        clientTagEnabled = true
+        postUndoTimerEnabled = true
+        postUndoTimerSeconds = 10
+        postUndoTimerForReplies = false
+
+        fiatModeEnabled = false
+        fiatCurrency = "USD"
+        zapIconStyle = .bitcoin
+
+        // Cancel any pending publish that was queued before the reset
+        // arrived. Without this, a debounced publish from the prior
+        // account could fire after the keypair is gone and post the
+        // defaults payload to an unrelated relay.
+        settingsSyncTask?.cancel()
+        settingsSyncTask = nil
+    }
+
     /// Debounced publish of the current settings snapshot to the active
     /// keypair's outbox relays. Cancels any in-flight publish task so
     /// the most recent change wins. Becomes a no-op when sync is off,
@@ -310,6 +351,48 @@ final class AppSettings {
         } catch {
             // Logged inside the Signer path; swallow here so a transient
             // signer failure doesn't bubble up to the settings UI.
+        }
+    }
+
+    /// Tracks the last pubkey we've handled an account-change event
+    /// for. The first transition (`nil` → first signed-in account on
+    /// app launch) is left to `restoreOnLaunchIfNeeded` — running the
+    /// reset path here too triggers a rebuild loop because writing
+    /// defaults to the synced fields changes `RootContainer`'s `.id`,
+    /// which destroys `ContentView`, which `.onAppear`s and re-loads
+    /// the saved keypair, which fires `.onChange` again, ad
+    /// infinitum.
+    @ObservationIgnored private var lastHandledAccountPubkey: String?
+    @ObservationIgnored private var hasHandledFirstAccount = false
+
+    /// Called from ContentView when the active account changes
+    /// (sign-in, sign-out, mid-session switch). With sync enabled,
+    /// wipes the prior account's synced fields and pulls the new
+    /// account's snapshot from relays so the UI flips immediately to
+    /// the new account's preferences instead of carrying the prior
+    /// account's theme into the splash / next session.
+    ///
+    /// First-bind-ever (the initial sign-in on app start) is a no-op
+    /// — `restoreOnLaunchIfNeeded` already covers that case under its
+    /// per-pubkey flag, and bypassing it here both burns relay
+    /// traffic and pulls down the rebuild-loop described in the
+    /// `lastHandledAccountPubkey` doc.
+    ///
+    /// With sync disabled, this is a no-op — the user has opted out
+    /// of cross-device sync and presumably wants device-stable
+    /// settings across account changes too. They can re-enable sync
+    /// and tap Restore manually if they change their mind.
+    func handleActiveAccountChange() async {
+        let currentPubkey = NostrKey.load()?.pubkey
+        if currentPubkey == lastHandledAccountPubkey { return }
+        let isFirstHandle = !hasHandledFirstAccount
+        hasHandledFirstAccount = true
+        lastHandledAccountPubkey = currentPubkey
+        if isFirstHandle { return }
+        guard syncSettingsToRelays else { return }
+        resetSyncedSettingsToDefaults()
+        if currentPubkey != nil {
+            await restoreFromRelays()
         }
     }
 

@@ -138,6 +138,14 @@ struct ContentView: View {
                 }
             }
         }
+        // Account changed — wipe the prior account's synced fields and
+        // pull the new account's snapshot so the UI doesn't carry the
+        // previous user's theme / fiat / media prefs into the splash or
+        // into the next signed-in session. Gated on the sync toggle
+        // inside `handleActiveAccountChange`.
+        .onChange(of: keypair?.pubkey) { _, _ in
+            Task { await AppSettings.shared.handleActiveAccountChange() }
+        }
     }
 }
 
