@@ -234,10 +234,10 @@ struct WalletView: View {
                     .foregroundStyle(Color.wispPrimary)
                     .font(.system(size: 16))
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Your default wallet is secured by your key")
+                    Text("Secured by your Nostr key")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.primary)
-                    Text("Derived from your Nostr key — restores on any device when you sign in. Tap to also save your seed phrase as a backup.")
+                    Text("Restores on any device when you sign in. Tap to also save your seed phrase as a backup.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
