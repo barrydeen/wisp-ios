@@ -59,9 +59,18 @@ private struct RootContainer: View {
     var body: some View {
         let resolved = settings.resolveTheme(systemColorScheme: systemColorScheme)
         ResolvedThemeProxy.update(resolved)
+        // Theme + accent + large-text changes propagate via the
+        // @Observable settings binding and the .environment(\.theme)
+        // chain — no full ContentView remount needed. An earlier
+        // version of this view kept a `.id("\(settings.themeName)…")`
+        // here as belt-and-braces, but that forced a complete teardown
+        // of ContentView on every theme change. Worse, the
+        // post-onboarding `handleActiveAccountChange` reset would
+        // trigger that rebuild, bounce the user .main → .splash →
+        // .loading, and surface LoadingView's avatar spinner as what
+        // looked like the onboarding spinner firing a second time.
         return ContentView()
             .environment(\.theme, resolved)
-            .id("\(settings.themeName)-\(settings.colorScheme.rawValue)-\(settings.accentColorARGB)-\(systemColorScheme == .dark)")
             .task {
                 // Pull the cross-device NIP-78 settings snapshot once per
                 // pubkey-per-device. Fast no-op when the user has no key
