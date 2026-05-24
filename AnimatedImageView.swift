@@ -148,15 +148,24 @@ enum AnimatedImageDecoder {
 /// sites to gate which renderer to pick. False negatives are tolerable —
 /// non-detected GIFs simply fall back to AsyncImage's first-frame behavior,
 /// matching the pre-fix status quo.
+///
+/// WebP is treated as potentially animated even though many WebPs are static:
+/// Giphy and other GIF hosts serve animated content with a `.webp` extension,
+/// and the alternative (rendering them through AsyncImage) freezes them on
+/// frame 0. The animated decoder handles single-frame WebPs correctly, so the
+/// only cost of a false positive is the CGImageSource round-trip.
 enum AnimatedImageHint {
     static func isLikelyAnimated(url: String, mime: String?) -> Bool {
-        if let mime = mime?.lowercased(), mime.hasPrefix("image/gif") {
+        if let mime = mime?.lowercased(),
+           mime.hasPrefix("image/gif") || mime.hasPrefix("image/webp") || mime.hasPrefix("image/apng") {
             return true
         }
         let lower = url.lowercased()
         let withoutQuery = lower.split(separator: "?").first.map(String.init) ?? lower
         let withoutFragment = withoutQuery.split(separator: "#").first.map(String.init) ?? withoutQuery
         return withoutFragment.hasSuffix(".gif")
+            || withoutFragment.hasSuffix(".webp")
+            || withoutFragment.hasSuffix(".apng")
     }
 }
 
