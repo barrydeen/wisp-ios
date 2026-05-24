@@ -231,10 +231,13 @@ struct ComposeView: View {
                 appendGifUrl(gifUrl)
             }
         )
-        .confirmationDialog(
+        // `.alert` rather than `.confirmationDialog` so the cancel-role
+        // "Keep Editing" button renders as an explicit choice. iOS 26
+        // hides the cancel button on confirmation dialogs presented over
+        // sheets, leaving only Save Draft / Discard visible.
+        .alert(
             "Discard this post?",
-            isPresented: $showCancelConfirm,
-            titleVisibility: .visible
+            isPresented: $showCancelConfirm
         ) {
             Button("Save Draft") {
                 Task {
