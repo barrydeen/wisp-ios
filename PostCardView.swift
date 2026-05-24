@@ -1506,6 +1506,17 @@ private struct NoteDetailsPanel: View {
             RoundedRectangle(cornerRadius: 10)
                 .fill(Color.secondary.opacity(0.08))
         )
+        .onAppear {
+            // Engagement actor pubkeys aren't part of kind-1 events, so
+            // MissingProfileWatcher never sees them during feed load.
+            // Submit them here so their profiles are fetched and broadcast
+            // back into FeedViewModel's profiles dict for the avatar rows.
+            let unknown = Set(zappers.map(\.pubkey) + reposters + reactors.map(\.pubkey) + quoters.map(\.pubkey))
+                .filter { profiles[$0] == nil }
+            if !unknown.isEmpty {
+                MissingProfileWatcher.shared.observePubkeys(unknown)
+            }
+        }
     }
 
     /// Multiple zaps from the same pubkey collapse into one row showing the
