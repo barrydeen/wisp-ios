@@ -455,7 +455,7 @@ struct PostCardView: View {
                 if let topZapper = engagement?.zappers.max(by: { $0.sats < $1.sats }) {
                     TopZapperPill(
                         zapper: topZapper,
-                        profile: profiles[topZapper.pubkey]
+                        profile: profiles[topZapper.pubkey] ?? ProfileRepository.shared.get(topZapper.pubkey)
                     ) {
                         onProfileTap?(topZapper.pubkey)
                     }
