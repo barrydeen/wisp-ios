@@ -108,6 +108,11 @@ struct MediaGridView: View {
                 }
             }
             .frame(width: galleryWidth, height: tileHeight, alignment: .leading)
+            // ScrollView's `.frame(width:)` constrains layout size but
+            // doesn't clip — without this, the trailing tile's peek paints
+            // past the gallery rect and bleeds through the host card's
+            // right padding.
+            .clipped()
         }
         .frame(height: tileHeightForNested)
         .fullScreenCover(item: Binding(
@@ -238,6 +243,7 @@ private struct MediaTileImage: View {
                 AnimatedImageView(
                     url: URL(string: item.url),
                     aspect: item.aspect,
+                    contentMode: .fill,
                     placeholder: { placeholder },
                     failure: { placeholder }
                 )

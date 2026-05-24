@@ -16,6 +16,12 @@ struct AnimatedImageView<Placeholder: View, Failure: View>: View {
     /// space at this ratio so layout doesn't jump on load. When absent, the
     /// natural aspect ratio of the decoded image is used after load.
     let aspect: CGFloat?
+    /// `.fit` (default) preserves the source aspect inside an inline layout.
+    /// `.fill` lets a parent-supplied explicit `.frame(width:, height:)`
+    /// crop the frames edge-to-edge — used by the gallery tile so an
+    /// animated thumbnail crops like the static `.scaledToFill()` path
+    /// instead of letterboxing inside the tile.
+    var contentMode: ContentMode = .fit
     @ViewBuilder let placeholder: () -> Placeholder
     @ViewBuilder let failure: () -> Failure
 
@@ -42,9 +48,21 @@ struct AnimatedImageView<Placeholder: View, Failure: View>: View {
                 // `isUserInteractionEnabled = false` so it doesn't intercept
                 // touches at the UIKit layer either — gestures pass cleanly
                 // up to the SwiftUI parent.
-                AnimatedImageRenderer(payload: payload)
-                    .aspectRatio(aspect ?? payload.aspect, contentMode: .fit)
-                    .frame(maxWidth: .infinity)
+                switch contentMode {
+                case .fit:
+                    AnimatedImageRenderer(payload: payload)
+                        .aspectRatio(aspect ?? payload.aspect, contentMode: .fit)
+                        .frame(maxWidth: .infinity)
+                case .fill:
+                    // No SwiftUI aspectRatio wrapper — let UIImageView's
+                    // `.scaleAspectFill` crop into the parent's explicit
+                    // frame. `.clipped()` on the parent (gallery tile)
+                    // keeps the bleed inside the corner-radius rect.
+                    AnimatedImageRenderer(
+                        payload: payload,
+                        contentMode: .scaleAspectFill
+                    )
+                }
             }
         }
         .task(id: url) {
