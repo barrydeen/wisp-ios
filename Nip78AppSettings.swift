@@ -52,6 +52,10 @@ nonisolated enum Nip78AppSettings {
         var fiatModeEnabled: Bool?
         var fiatCurrency: String?
         var zapIconStyle: String?
+
+        // Emoji reactions
+        var quickReactions: [String]?
+        var emojiFrequency: [String: Int]?
     }
 
     /// NIP-44-encrypt the JSON payload to the user's own pubkey and sign

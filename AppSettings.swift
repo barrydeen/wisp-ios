@@ -231,7 +231,9 @@ final class AppSettings {
             postUndoTimerForReplies: postUndoTimerForReplies,
             fiatModeEnabled: fiatModeEnabled,
             fiatCurrency: fiatCurrency,
-            zapIconStyle: zapIconStyle.rawValue
+            zapIconStyle: zapIconStyle.rawValue,
+            quickReactions: EmojiRepository.shared.quickReactions,
+            emojiFrequency: EmojiRepository.shared.frequency
         )
     }
 
@@ -265,6 +267,9 @@ final class AppSettings {
         if let v = payload.fiatCurrency { self.fiatCurrency = v }
         if let raw = payload.zapIconStyle,
            let style = ZapIconStyle(rawValue: raw) { self.zapIconStyle = style }
+
+        if let list = payload.quickReactions { EmojiRepository.shared.setQuickList(list) }
+        if let freq = payload.emojiFrequency { EmojiRepository.shared.setFrequency(freq) }
     }
 
     /// Reset every synced field to its default value. Called from the

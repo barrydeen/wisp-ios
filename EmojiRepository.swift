@@ -187,12 +187,16 @@ final class EmojiRepository {
         guard !key.isEmpty, !quickReactions.contains(key) else { return }
         quickReactions.append(key)
         persist()
+        AppSettings.shared.scheduleSettingsSync()
     }
 
     func removeFromQuickList(_ key: String) {
         let before = quickReactions.count
         quickReactions.removeAll { $0 == key }
-        if quickReactions.count != before { persist() }
+        if quickReactions.count != before {
+            persist()
+            AppSettings.shared.scheduleSettingsSync()
+        }
     }
 
     func setQuickList(_ keys: [String]) {
@@ -200,10 +204,25 @@ final class EmojiRepository {
         persist()
     }
 
-    /// Bump the usage counter for an emoji key (unicode char or `:shortcode:`). Persisted.
+    /// Apply a frequency map restored from a NIP-78 payload. Does not
+    /// trigger a sync publish — the caller (AppSettings.applyRestored)
+    /// already suppresses the didSet chain.
+    func setFrequency(_ map: [String: Int]) {
+        frequency = map
+        persist()
+    }
+
+    /// Bump the usage counter for an emoji key (unicode char or `:shortcode:`).
+    /// Auto-adds to the quick list on first use so the picker adapts without
+    /// requiring manual curation. Triggers a debounced NIP-78 publish so the
+    /// updated list and frequency map sync across devices.
     func recordUse(_ key: String) {
         frequency[key, default: 0] += 1
+        if !key.isEmpty && !quickReactions.contains(key) {
+            quickReactions.append(key)
+        }
         persist()
+        AppSettings.shared.scheduleSettingsSync()
     }
 
     // MARK: - Direct-emoji mutators (publish kind 10030)
