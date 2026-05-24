@@ -205,6 +205,13 @@ struct MediaGridView: View {
                         .shadow(radius: 4)
                 }
             }
+            // Animated tiles render via a UIImageView (UIViewRepresentable),
+            // which doesn't contribute to the Button's derived hit-test
+            // region the way a SwiftUI Image does. Without an explicit
+            // content shape, taps on a GIF / animated WebP tile fall
+            // through and the gallery only opens from static tiles.
+            .frame(width: width, height: height)
+            .contentShape(RoundedRectangle(cornerRadius: cornerRadius))
         }
         .buttonStyle(.plain)
     }
