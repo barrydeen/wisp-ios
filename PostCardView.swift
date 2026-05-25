@@ -844,6 +844,7 @@ struct PostCardView: View {
                 zapLongPressFired = false
                 return
             }
+            Haptics.shared.blip()
             triggerZapOrWalletSetup()
         }
         // Long-press = instant zap (if opted-in + wallet set up). Using
@@ -888,13 +889,7 @@ struct PostCardView: View {
                     triggerZapOrWalletSetup()
                 }
             },
-            onPressingChanged: { pressing in
-                guard pressing, isInteractive else { return }
-                // CoreHaptics-backed short tap. See `zapCommitThump`
-                // comment for why we route through CHHapticEngine
-                // instead of UIImpactFeedbackGenerator.
-                Haptics.shared.zapPressTap()
-            }
+            onPressingChanged: { _ in }
         )
         .overlay(alignment: .center) {
             ZapBurstView(isActive: isBursting)
