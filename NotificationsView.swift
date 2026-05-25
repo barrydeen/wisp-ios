@@ -30,7 +30,7 @@ struct NotificationsView: View {
             }
             .sheet(isPresented: $showFilterSheet) {
                 NotificationFilterSheet(viewModel: viewModel)
-                    .presentationDetents([.medium, .large])
+                    .presentationDetents([.fraction(0.85)])
             }
             .onAppear {
                 Task {
@@ -232,11 +232,25 @@ private struct DailySummaryBar: View {
 /// `NotificationFilterSheet`.
 private struct NotificationFilterSheet: View {
     @Bindable var viewModel: NotificationsViewModel
-    @Environment(\.dismiss) private var dismiss
+
+    private var allEnabled: Bool {
+        NotificationFilter.allCases.allSatisfy { viewModel.enabledTypes.contains($0) }
+    }
 
     var body: some View {
         NavigationStack {
             List {
+                // Single "Enable All" affordance — the per-type toggles
+                // below already cover individual disabling. Disabled
+                // (greyed) when every type is already on, since there's
+                // nothing to do; no separate "Disable All" needed.
+                Section {
+                    Button("Enable All") { viewModel.enableAll() }
+                        .buttonStyle(.borderless)
+                        .frame(maxWidth: .infinity)
+                        .tint(Color.wispPrimary)
+                        .disabled(allEnabled)
+                }
                 Section {
                     ForEach(NotificationFilter.allCases, id: \.self) { filter in
                         FilterRow(
@@ -248,23 +262,11 @@ private struct NotificationFilterSheet: View {
                         )
                     }
                 }
-                Section {
-                    HStack(spacing: 0) {
-                        Button("Enable All") { viewModel.enableAll() }
-                            .frame(maxWidth: .infinity)
-                        Divider()
-                        Button("Disable All") { viewModel.disableAll() }
-                            .frame(maxWidth: .infinity)
-                    }
-                }
             }
             .navigationTitle("Filter notifications")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { dismiss() }
-                }
-            }
+            // No Done button — the sheet dismisses via swipe-down or
+            // the drag indicator at the top.
         }
     }
 }
