@@ -108,6 +108,11 @@ struct MediaGridView: View {
                 }
             }
             .frame(width: galleryWidth, height: tileHeight, alignment: .leading)
+            // ScrollView's `.frame(width:)` constrains layout size but
+            // doesn't clip — without this, the trailing tile's peek paints
+            // past the gallery rect and bleeds through the host card's
+            // right padding.
+            .clipped()
         }
         .frame(height: tileHeightForNested)
         .fullScreenCover(item: Binding(
@@ -200,6 +205,13 @@ struct MediaGridView: View {
                         .shadow(radius: 4)
                 }
             }
+            // Animated tiles render via a UIImageView (UIViewRepresentable),
+            // which doesn't contribute to the Button's derived hit-test
+            // region the way a SwiftUI Image does. Without an explicit
+            // content shape, taps on a GIF / animated WebP tile fall
+            // through and the gallery only opens from static tiles.
+            .frame(width: width, height: height)
+            .contentShape(RoundedRectangle(cornerRadius: cornerRadius))
         }
         .buttonStyle(.plain)
     }
@@ -238,6 +250,7 @@ private struct MediaTileImage: View {
                 AnimatedImageView(
                     url: URL(string: item.url),
                     aspect: item.aspect,
+                    contentMode: .fill,
                     placeholder: { placeholder },
                     failure: { placeholder }
                 )
