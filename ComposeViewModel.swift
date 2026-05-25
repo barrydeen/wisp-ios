@@ -1483,11 +1483,18 @@ final class ComposeViewModel {
     private func autoPrefixBareBech32(_ s: String) -> String {
         let pattern = "(?<![a-z0-9:./])(?<!nostr:)(nevent1|note1|nprofile1|naddr1|npub1)([a-z0-9]{20,})"
         guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return s }
-        let range = NSRange(s.startIndex..<s.endIndex, in: s)
-        let matches = regex.matches(in: s, range: range)
+        let nsRange = NSRange(s.startIndex..<s.endIndex, in: s)
+        let matches = regex.matches(in: s, range: nsRange)
         if matches.isEmpty { return s }
+        // Skip tokens that appear inside a URL (e.g. ?npub=npub1... query params).
+        var urlRanges: [NSRange] = []
+        if let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) {
+            urlRanges = detector.matches(in: s, range: nsRange).map(\.range)
+        }
         var out = s
         for m in matches.reversed() {
+            let insideURL = urlRanges.contains { NSIntersectionRange($0, m.range).length > 0 }
+            guard !insideURL else { continue }
             guard let r = Range(m.range, in: out) else { continue }
             let token = String(out[r])
             if Nip19.decodeNostrUri(token) != nil {
@@ -1521,16 +1528,23 @@ final class ComposeViewModel {
         let pattern = #"nostr:(npub1[acdefghjklmnpqrstuvwxyz023456789]+|nprofile1[acdefghjklmnpqrstuvwxyz023456789]+)"#
         guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return }
         let ns = content as NSString
-        let matches = regex.matches(in: content, range: NSRange(location: 0, length: ns.length))
+        let fullRange = NSRange(location: 0, length: ns.length)
+        let matches = regex.matches(in: content, range: fullRange)
         guard !matches.isEmpty else { return }
-
+        // Skip nostr: tokens that are embedded inside a URL (e.g. a relay URL
+        // whose path or query string happens to contain a bech32 identifier).
+        var urlRanges: [NSRange] = []
+        if let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) {
+            urlRanges = detector.matches(in: content, range: fullRange).map(\.range)
+        }
         var rewritten = ""
         var lastEnd = 0
         var added: [String: String] = [:]   // pubkey → displayName
         for match in matches {
             rewritten += ns.substring(with: NSRange(location: lastEnd, length: match.range.location - lastEnd))
             let token = ns.substring(with: match.range)
-            if let decoded = Nip19.decodeNostrUri(token), case .profileRef(let pubkey, _) = decoded {
+            let insideURL = urlRanges.contains { NSIntersectionRange($0, match.range).length > 0 }
+            if !insideURL, let decoded = Nip19.decodeNostrUri(token), case .profileRef(let pubkey, _) = decoded {
                 let displayName: String
                 if let existing = added[pubkey] {
                     displayName = existing

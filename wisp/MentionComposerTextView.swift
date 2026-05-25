@@ -420,6 +420,13 @@ struct MentionComposerTextView: UIViewRepresentable {
             // Walk backwards allowing at most one regular space so multi-word
             // display names (e.g. "The Daniel") can be queried as "@the daniel".
             // A second space, a newline, or any other whitespace terminates the scan.
+            //
+            // `@` and `#` always terminate too — they're the start of a NEW
+            // token. Without that condition the one-space allowance lets the
+            // walk gobble across a preceding token (e.g. `#test @mish` →
+            // token = `#test @mish`, which doesn't start with `@`, so the
+            // mention popup never fires). Stop at the trigger character and
+            // include it in the token.
             var idx = prefix.endIndex
             var regularSpacesSeen = 0
             while idx > prefix.startIndex {
@@ -428,6 +435,11 @@ struct MentionComposerTextView: UIViewRepresentable {
                 if ch == "\u{00A0}" {
                     // NBSP: always part of the token
                 } else if ch.isNewline || (ch.isWhitespace && ch != " ") {
+                    break
+                } else if ch == "@" || ch == "#" {
+                    // Include the trigger character, then stop — anything
+                    // earlier in the text belongs to a different token.
+                    idx = p
                     break
                 } else if ch == " " {
                     regularSpacesSeen += 1
