@@ -338,6 +338,7 @@ struct EmojiLibrarySheet: View {
     private func handleUnicodePick(_ emoji: String) {
         switch mode {
         case .pickForReaction(let cb):
+            emojiRepo.addToQuickList(emoji)
             cb(.unicode(emoji))
         case .pickForQuickList:
             emojiRepo.addToQuickList(emoji)
@@ -351,6 +352,7 @@ struct EmojiLibrarySheet: View {
     private func handleCustomPick(shortcode: String, url: String) {
         switch mode {
         case .pickForReaction(let cb):
+            emojiRepo.addToQuickList(":\(shortcode):")
             cb(.custom(shortcode: shortcode, url: url))
         case .pickForQuickList:
             emojiRepo.addToQuickList(":\(shortcode):")
