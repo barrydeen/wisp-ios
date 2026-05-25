@@ -452,10 +452,11 @@ struct PostCardView: View {
                     )
                 }
 
-                if let topZapper = engagement?.zappers.max(by: { $0.sats < $1.sats }) {
+                let effectiveZappers = repoBox.counts.zappers.isEmpty ? (engagement?.zappers ?? []) : repoBox.counts.zappers
+                if let topZapper = effectiveZappers.max(by: { $0.sats < $1.sats }) {
                     TopZapperPill(
                         zapper: topZapper,
-                        profile: profiles[topZapper.pubkey]
+                        profile: profiles[topZapper.pubkey] ?? ProfileRepository.shared.get(topZapper.pubkey)
                     ) {
                         onProfileTap?(topZapper.pubkey)
                     }
@@ -1506,21 +1507,78 @@ private struct NoteDetailsPanel: View {
             RoundedRectangle(cornerRadius: 10)
                 .fill(Color.secondary.opacity(0.08))
         )
+        .onAppear {
+            // Engagement actor pubkeys aren't part of kind-1 events, so
+            // MissingProfileWatcher never sees them during feed load.
+            // Submit them here so their profiles are fetched and broadcast
+            // back into FeedViewModel's profiles dict for the avatar rows.
+            let unknown = Set(zappers.map(\.pubkey) + reposters + reactors.map(\.pubkey) + quoters.map(\.pubkey))
+                .filter { profiles[$0] == nil }
+            if !unknown.isEmpty {
+                MissingProfileWatcher.shared.observePubkeys(unknown)
+            }
+        }
+    }
+
+    /// Multiple zaps from the same pubkey collapse into one row showing the
+    /// combined sat total. Same shape as the notifications-side same-actor
+    /// collapse — without this, a sender spamming N small zaps takes up N
+    /// rows in the drawer and pushes legitimate zappers off the screen.
+    private struct ZapperGroup: Identifiable {
+        let pubkey: String
+        let totalSats: Int64
+        let count: Int
+        /// First non-empty message from any zap in the group, used as the
+        /// row label when present. We deliberately don't try to merge
+        /// distinct messages — picking one keeps the row compact, and the
+        /// `(×N)` suffix signals that more exist.
+        let primaryMessage: String
+        var id: String { pubkey }
+    }
+
+    private var groupedZappers: [ZapperGroup] {
+        var order: [String] = []
+        var totals: [String: Int64] = [:]
+        var counts: [String: Int] = [:]
+        var messages: [String: String] = [:]
+        for z in zappers {
+            if totals[z.pubkey] == nil {
+                order.append(z.pubkey)
+            }
+            totals[z.pubkey, default: 0] += z.sats
+            counts[z.pubkey, default: 0] += 1
+            if messages[z.pubkey]?.isEmpty != false, !z.message.isEmpty {
+                messages[z.pubkey] = z.message
+            }
+        }
+        return order
+            .map {
+                ZapperGroup(
+                    pubkey: $0,
+                    totalSats: totals[$0] ?? 0,
+                    count: counts[$0] ?? 0,
+                    primaryMessage: messages[$0] ?? ""
+                )
+            }
+            .sorted { $0.totalSats > $1.totalSats }
     }
 
     private var zapsSection: some View {
         VStack(alignment: .leading, spacing: 6) {
-            ForEach(zappers.sorted(by: { $0.sats > $1.sats }), id: \.self) { zap in
-                let zapProfile = profiles[zap.pubkey] ?? ProfileRepository.shared.get(zap.pubkey)
+            ForEach(groupedZappers) { group in
+                let zapProfile = profiles[group.pubkey] ?? ProfileRepository.shared.get(group.pubkey)
                 Button {
-                    onProfileTap?(zap.pubkey)
+                    onProfileTap?(group.pubkey)
                 } label: {
                     HStack(spacing: 8) {
                         CachedAvatarView(url: zapProfile?.picture, size: 30)
                         VStack(alignment: .leading, spacing: 1) {
-                            let label = !zap.message.isEmpty
-                                ? zap.message
-                                : (zapProfile?.displayString ?? short(zap.pubkey))
+                            let baseLabel = group.primaryMessage.isEmpty
+                                ? (zapProfile?.displayString ?? short(group.pubkey))
+                                : group.primaryMessage
+                            let label = group.count > 1
+                                ? "\(baseLabel) (×\(group.count))"
+                                : baseLabel
                             Text(label)
                                 .font(.caption)
                                 .foregroundStyle(.primary)
@@ -1530,7 +1588,7 @@ private struct NoteDetailsPanel: View {
                         HStack(spacing: 3) {
                             Image(systemName: "bolt.fill")
                                 .font(.system(size: 11))
-                            Text(CurrencyFormatter.short(sats: zap.sats))
+                            Text(CurrencyFormatter.short(sats: group.totalSats))
                                 .font(.caption.weight(.semibold))
                         }
                         .foregroundStyle(Color.wispZapColor)

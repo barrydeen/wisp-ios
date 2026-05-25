@@ -33,6 +33,18 @@ struct FlatNotificationItem: Identifiable, Hashable {
     /// Index of the option zapped on a kind-6969 zap poll (annotates `.zap` items
     /// whose target is one of our zap polls).
     var zapPollOptionIndex: Int? = nil
+    /// Additional zaps from the same actor against the same referenced event,
+    /// folded into this row so a spammer can't push everything else off-screen.
+    /// Populated by the view model at display time; always empty on freshly
+    /// classified items in the repository.
+    var mergedZaps: [FlatNotificationItem] = []
+
+    /// Total sats across the primary zap and every merged duplicate. Used by
+    /// the row + bolt-icon label so the displayed amount reflects the full
+    /// contribution from this actor on this note.
+    var totalZapSats: Int64 {
+        mergedZaps.reduce(zapSats) { $0 + $1.zapSats }
+    }
 }
 
 struct NotificationSummary: Hashable {

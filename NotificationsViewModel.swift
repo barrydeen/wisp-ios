@@ -67,6 +67,12 @@ final class NotificationsViewModel {
     /// `repo.flatItems`, `enabledTypes`, or `hiddenSpamPubkeys` change — under
     /// `@Observable` the dependency tracking happens automatically when the
     /// View reads `viewModel.filteredItems`.
+    ///
+    /// Consecutive zaps from the same actor targeting the same note get folded
+    /// into one row so a sender spamming 1-sat zaps can't drown out everything
+    /// else. The most-recent zap becomes the primary; older duplicates ride
+    /// along in `mergedZaps` and surface behind a "+N more" disclosure in the
+    /// expanded view.
     var filteredItems: [FlatNotificationItem] {
         // Bind to `safetyGeneration` so this view re-evaluates when a
         // block / mute edit lands. Without the read, `@Observable` has no
@@ -76,11 +82,25 @@ final class NotificationsViewModel {
         let hidden = hiddenSpamPubkeys
         let allowed = enabledTypes
         let blocked = SafetyFilter.shared.snapshot.blockedPubkeys
-        return repo.flatItems.filter { item in
-            !hidden.contains(item.actorPubkey)
-                && !blocked.contains(item.actorPubkey)
-                && allowed.contains(NotificationFilter.bucket(for: item.kind))
+        var result: [FlatNotificationItem] = []
+        var zapIndexByKey: [String: Int] = [:]
+        for item in repo.flatItems {
+            if hidden.contains(item.actorPubkey) { continue }
+            if blocked.contains(item.actorPubkey) { continue }
+            if !allowed.contains(NotificationFilter.bucket(for: item.kind)) { continue }
+            if item.kind == .zap && !item.referencedEventId.isEmpty {
+                let key = "\(item.actorPubkey)|\(item.referencedEventId)"
+                if let idx = zapIndexByKey[key] {
+                    result[idx].mergedZaps.append(item)
+                } else {
+                    zapIndexByKey[key] = result.count
+                    result.append(item)
+                }
+            } else {
+                result.append(item)
+            }
         }
+        return result
     }
 
     var summary: NotificationSummary { repo.summary }
