@@ -17,7 +17,9 @@ struct DmListView: View {
                 Spacer()
                 HStack {
                     Spacer()
-                    composeButton.padding(20)
+                    composeButton
+                        .padding(.trailing, 18)
+                        .padding(.bottom, 32)
                 }
             }
         }
@@ -56,14 +58,15 @@ struct DmListView: View {
 
     private var composeButton: some View {
         Button(action: onCompose) {
-            Image(systemName: "square.and.pencil")
+            Image(systemName: "paperplane.fill")
                 .font(.system(size: 22, weight: .semibold))
                 .foregroundStyle(.white)
-                .padding(16)
+                .frame(width: 56, height: 56)
                 .background(Color.wispPrimary, in: Circle())
-                .shadow(radius: 6)
+                .shadow(color: .black.opacity(0.25), radius: 8, x: 0, y: 4)
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("New message")
     }
 }
 

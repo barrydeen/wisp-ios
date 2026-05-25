@@ -962,6 +962,29 @@ final class ComposeViewModel {
         scheduleAt = date
     }
 
+    /// True when the composer has enough content to publish. Drives the
+    /// Publish button's enabled state — the user shouldn't be able to
+    /// tap a button that will immediately error out with "Type something
+    /// first." Mirrors the success conditions in `validate()`, minus the
+    /// transitional "Wait for uploads to finish" case: a partial upload
+    /// counts as content (the user clearly intends to post something);
+    /// the validator catches the not-ready-yet state on tap.
+    var canPublish: Bool {
+        if pollEnabled {
+            let nonBlank = pollOptions
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            if nonBlank.count < 2 { return false }
+            if content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return false }
+            return true
+        }
+        if galleryMode {
+            return !attachments.isEmpty
+        }
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !trimmed.isEmpty || !attachments.isEmpty
+    }
+
     // MARK: - Internals
 
     private func validate() -> String? {

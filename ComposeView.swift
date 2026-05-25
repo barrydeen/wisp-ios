@@ -818,6 +818,13 @@ struct ComposeView: View {
                 }
                 .buttonStyle(.plain)
             } else {
+                // Grey the button out when the composer has no content to
+                // publish (no text, no attachments). Visual feedback matches
+                // the disabled state — tapping while empty errors out with
+                // "Type something first.", which a greyed-out button heads
+                // off before the user discovers it.
+                let inFlight = viewModel.isPublishing || viewModel.isMining
+                let isInactive = !viewModel.canPublish
                 Button {
                     if viewModel.isImageOnlyPost {
                         showImageOnlyConfirm = true
@@ -838,7 +845,7 @@ struct ComposeView: View {
                                 Text("Mining \(viewModel.miningAttempts)")
                                     .font(.subheadline.weight(.semibold))
                             }
-                        } else if viewModel.isPublishing || viewModel.isMining {
+                        } else if inFlight {
                             HStack(spacing: 6) {
                                 ProgressView().controlSize(.small).tint(.white)
                                 Text(viewModel.scheduleEnabled ? "Scheduling" : "Publishing")
@@ -852,9 +859,12 @@ struct ComposeView: View {
                     .frame(maxWidth: .infinity)
                     .frame(height: 44)
                 }
-                .background(Color.wispPrimary, in: Capsule())
-                .foregroundStyle(.white)
-                .disabled(viewModel.isPublishing || viewModel.isMining)
+                .background(
+                    isInactive ? Color.wispSurfaceVariant : Color.wispPrimary,
+                    in: Capsule()
+                )
+                .foregroundStyle(isInactive ? Color.secondary : Color.white)
+                .disabled(inFlight || isInactive)
             }
         }
         .padding(.horizontal, 16)

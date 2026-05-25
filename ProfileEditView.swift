@@ -23,30 +23,41 @@ struct ProfileEditView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                bannerWithAvatar
-                    .padding(.bottom, 24)
+        // GeometryReader pins the ScrollView's content to the viewport
+        // width. Without an explicit upper bound, a long unbroken string
+        // in a TextField (e.g. a 70-char nostr.build URL pasted into
+        // Picture / Banner URL) reports an intrinsic content width
+        // larger than the screen, which ScrollView happily honors —
+        // pulling the entire VStack wider than the viewport and
+        // shifting every label / field leftward off-screen.
+        GeometryReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    bannerWithAvatar
+                        .padding(.bottom, 24)
+                        .frame(maxWidth: .infinity)
 
-                if let status = viewModel.uploadStatus {
-                    HStack(spacing: 8) {
-                        ProgressView().controlSize(.small)
-                        Text(status)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                    if let status = viewModel.uploadStatus {
+                        HStack(spacing: 8) {
+                            ProgressView().controlSize(.small)
+                            Text(status)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
-                }
 
-                if let error = viewModel.lastError {
-                    Text(error)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                }
+                    if let error = viewModel.lastError {
+                        Text(error)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
 
-                fields
+                    fields
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 32)
+                .frame(width: proxy.size.width, alignment: .leading)
             }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 32)
         }
         .background(Color.wispBackground.ignoresSafeArea())
         .navigationTitle("Edit Profile")
@@ -166,10 +177,11 @@ struct ProfileEditView: View {
                 .foregroundStyle(.secondary)
             TextEditor(text: $viewModel.about)
                 .scrollContentBackground(.hidden)
-                .frame(minHeight: 90)
+                .frame(maxWidth: .infinity, minHeight: 90)
                 .padding(10)
                 .background(Color.wispSurfaceVariant.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
 
         field(label: "NIP-05", text: $viewModel.nip05, placeholder: "you@example.com", keyboard: .emailAddress, autocaps: false)
         VStack(alignment: .leading, spacing: 6) {
@@ -247,10 +259,12 @@ struct ProfileEditView: View {
                 .keyboardType(keyboard)
                 .textInputAutocapitalization(autocaps ? .sentences : .never)
                 .autocorrectionDisabled(!autocaps)
+                .frame(maxWidth: .infinity)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
                 .background(Color.wispSurfaceVariant.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
