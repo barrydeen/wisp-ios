@@ -79,6 +79,7 @@ struct PostCardView: View {
     /// with `.presentationCompactAdaptation(.popover)` keeps the
     /// anchored-popup feel without animating the launching icon.
     @State private var showRepostMenu = false
+    @State private var showRemoveReactionMenu = false
     @State private var showOverflowMenu = false
     /// True when the user tapped Zap but no wallet is configured. Surfaces a
     /// confirmation prompt that can launch the Wallet tab to set one up.
@@ -1059,7 +1060,7 @@ struct PostCardView: View {
         let alreadyReacted = iReactedEmoji != nil
         return Button {
             if alreadyReacted {
-                undoReaction()
+                showRemoveReactionMenu = true
             } else {
                 let frame = heartFrameTracker.frame
                 let screenHeight = UIScreen.main.bounds.height
@@ -1125,6 +1126,25 @@ struct PostCardView: View {
                     }
             }
         )
+        .popover(isPresented: $showRemoveReactionMenu) {
+            Button(role: .destructive) {
+                showRemoveReactionMenu = false
+                undoReaction()
+            } label: {
+                HStack {
+                    Spacer()
+                    Label("Remove Reaction", systemImage: "minus.circle")
+                    Spacer()
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Color.red)
+            .frame(minWidth: 200)
+            .presentationCompactAdaptation(.popover)
+        }
         .popover(isPresented: $showReactionPicker, arrowEdge: reactionArrowEdge) {
             EmojiReactionPicker(
                 onSelect: { picked in
