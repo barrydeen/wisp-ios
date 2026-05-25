@@ -205,10 +205,17 @@ struct WalletView: View {
     @ViewBuilder
     private var walletLogo: some View {
         if store.mode == .spark {
+            // The SparkBreezLogo asset renders as a template, so a
+            // foregroundStyle is required for the logo to be visible.
+            // Without it the all-white SVG paths sit invisible against
+            // the light-mode surface; tinting to `wispOnSurface` gives
+            // us auto-adapting contrast (light grey on dark, near-black
+            // on light) the same way the rest of the wallet UI does.
             Image("SparkBreezLogo")
                 .resizable()
                 .scaledToFit()
                 .frame(height: 18)
+                .foregroundStyle(Color.wispOnSurface)
         } else {
             HStack(spacing: 8) {
                 Image("NwcLogo")

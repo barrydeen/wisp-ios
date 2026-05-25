@@ -392,10 +392,16 @@ struct WalletSettingsView: View {
                 withAnimation(.easeInOut(duration: 0.2)) { showSparkDetails.toggle() }
             } label: {
                 HStack(spacing: 12) {
+                    // Template-rendered SVG — needs a foregroundStyle or
+                    // the all-white paths are invisible in light mode.
+                    // `wispOnSurface` auto-adapts (light grey on dark,
+                    // near-black on light) the way the rest of the
+                    // settings UI does.
                     Image("SparkBreezLogo")
                         .resizable()
                         .scaledToFit()
                         .frame(height: 22)
+                        .foregroundStyle(Color.wispOnSurface)
                     Spacer(minLength: 0)
                     Image(systemName: showSparkDetails ? "chevron.up" : "chevron.down")
                         .font(.system(size: 12, weight: .semibold))
@@ -725,12 +731,16 @@ struct WalletSettingsView: View {
                         .foregroundStyle(.tertiary)
                 }
             } else if store.mode == .spark {
+                // Template-rendered SVG tinted to match the "Powered by
+                // Breez SDK" caption next to it. `.saturation(0)` is no
+                // longer needed (template rendering already strips the
+                // SVG's own colors); the foregroundStyle = .tertiary
+                // pairs the logo with the caption's muted tone.
                 Image("SparkBreezLogo")
                     .resizable()
                     .scaledToFit()
                     .frame(height: 18)
-                    .saturation(0)
-                    .opacity(0.55)
+                    .foregroundStyle(.tertiary)
                 Text("Powered by Breez SDK v\(BreezConfig.sdkVersion)")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)

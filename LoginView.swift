@@ -36,7 +36,7 @@ struct LoginView: View {
 
                 Text("Log In")
                     .font(.title.bold())
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.wispOnSurface)
 
                 Text("Enter your nsec key")
                     .foregroundStyle(.secondary)
