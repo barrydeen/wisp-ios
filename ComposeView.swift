@@ -27,13 +27,7 @@ struct ComposeView: View {
     @State private var showCancelConfirm = false
     @State private var showImageOnlyConfirm = false
     @State private var showGifPicker = false
-    @State private var showPhotosPicker = false
-    /// Drives the Drafts & Scheduled sheet launched from the composer
-    /// toolbar. Tapping a draft inside the sheet opens it in a *nested*
-    /// `ComposeView`, leaving the in-progress composer behind it untouched
-    /// — no risk of losing unsaved text just by peeking at drafts.
     @State private var showDraftsSheet = false
-    @State private var photosPickerMaxCount: Int = 8
 
     /// Draft to load on first appear. Nil for `.new` and `.reply`/`.quote` composers.
     /// Loaded from `.task` rather than `init` to defeat SwiftUI's State preservation
@@ -237,22 +231,13 @@ struct ComposeView: View {
                 appendGifUrl(gifUrl)
             }
         )
-        // Photos picker presented as a real UIKit modal via PHPickerViewController.
-        // SwiftUI's `.photosPicker(...)` modifier and inline `PhotosPicker` were
-        // both observed to dismiss the compose sheet mid-scroll or right after
-        // selection on iOS 26 — the UIKit bridge avoids that coordination path.
-        .background(
-            PhotosPickerPresenter(
-                isPresented: $showPhotosPicker,
-                maxCount: photosPickerMaxCount
-            ) { providers in
-                Task { await viewModel.addMediaProviders(providers) }
-            }
-        )
-        .confirmationDialog(
+        // `.alert` rather than `.confirmationDialog` so the cancel-role
+        // "Keep Editing" button renders as an explicit choice. iOS 26
+        // hides the cancel button on confirmation dialogs presented over
+        // sheets, leaving only Save Draft / Discard visible.
+        .alert(
             "Discard this post?",
-            isPresented: $showCancelConfirm,
-            titleVisibility: .visible
+            isPresented: $showCancelConfirm
         ) {
             Button("Save Draft") {
                 Task {
@@ -345,6 +330,24 @@ struct ComposeView: View {
 
     /// Discard-confirmation pivot used by both the leading chevron and any
     /// programmatic dismiss. Confirms before dropping unsaved content.
+    /// Open the system photo picker via the imperative service rather
+    /// than a SwiftUI `.background(PhotosPickerPresenter)` host. The
+    /// service walks to the topmost presented VC and presents the
+    /// picker directly, bypassing the unreliable representable/host
+    /// plumbing that was tearing down the picker after ~1s on
+    /// iPhone 13 Pro Max.
+    private func presentPhotoPicker(max: Int) {
+        contentFocused = false
+        PhotoPickerService.present(maxCount: max) { providers in
+            // Synchronous progress flip so the dismiss-disabled guard
+            // catches before the addMedia task hops onto a runloop.
+            viewModel.uploadProgress = providers.count > 1
+                ? "Loading \(providers.count) items…"
+                : "Loading…"
+            Task { await viewModel.addMediaProviders(providers) }
+        }
+    }
+
     private func cancelTapped() {
         if viewModel.hasUnsavedContent {
             showCancelConfirm = true
@@ -490,8 +493,7 @@ struct ComposeView: View {
         VStack(spacing: 8) {
             if viewModel.attachments.isEmpty {
                 Button {
-                    photosPickerMaxCount = 8
-                    showPhotosPicker = true
+                    presentPhotoPicker(max: 8)
                 } label: {
                     VStack(spacing: 6) {
                         Image(systemName: "photo.on.rectangle.angled")
@@ -516,8 +518,7 @@ struct ComposeView: View {
                             attachmentThumb(attachment, size: 140)
                         }
                         Button {
-                            photosPickerMaxCount = 8
-                            showPhotosPicker = true
+                            presentPhotoPicker(max: 8)
                         } label: {
                             VStack(spacing: 4) {
                                 Image(systemName: "plus")
@@ -711,8 +712,7 @@ struct ComposeView: View {
         HStack(spacing: 22) {
             if !viewModel.galleryMode, !viewModel.pollEnabled {
                 Button {
-                    photosPickerMaxCount = 4
-                    showPhotosPicker = true
+                    presentPhotoPicker(max: 4)
                 } label: {
                     Image(systemName: "photo.on.rectangle")
                         .font(.system(size: 22))
@@ -737,7 +737,16 @@ struct ComposeView: View {
 
             if !viewModel.pollEnabled {
                 Button {
-                    showGifPicker = true
+                    // Resign the compose text field before presenting so the
+                    // keyboard animation finishes ahead of the modal. Without
+                    // the hop, the keyboard collapse mid-present can cancel
+                    // the in-flight UIKit modal and SwiftUI flips
+                    // `showGifPicker` back to false — same shape as the
+                    // drafts-sheet keyboard race.
+                    contentFocused = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                        showGifPicker = true
+                    }
                 } label: {
                     Text("GIF")
                         .font(.system(size: 11, weight: .bold))

@@ -129,10 +129,11 @@ enum MediaPicker {
 
 extension MediaPicker {
     /// Equivalent of `loadAll(_ items: [PhotosPickerItem])` but for `NSItemProvider`
-    /// inputs delivered by `PHPickerViewController`. Used by `PhotosPickerPresenter`
-    /// so the picker can be presented as a real UIKit modal without going through
-    /// SwiftUI's `.photosPicker` modifier (which dismisses its parent sheet on
-    /// some iOS versions when used from a sheet-hosted view).
+    /// inputs delivered by `PHPickerViewController` — fed in by
+    /// `PhotoPickerService` so the picker can be presented as a real UIKit
+    /// modal from the topmost presented controller, bypassing the SwiftUI
+    /// sheet + representable plumbing that proved unreliable when hosted
+    /// inside an existing sheet on real hardware.
     static func loadAll(providers: [NSItemProvider]) async -> [PickedMedia] {
         var out: [PickedMedia] = []
         for provider in providers {
@@ -238,70 +239,10 @@ extension MediaPicker {
     }
 }
 
-/// SwiftUI bridge to `PHPickerViewController`.
-///
-/// SwiftUI's `.photosPicker(isPresented:)` modifier and inline `PhotosPicker`
-/// view both go through SwiftUI's sheet machinery to host the picker. When the
-/// caller is already inside a `.sheet` / `.fullScreenCover` (e.g. compose),
-/// iOS sometimes dismisses the host modal mid-scroll or after selection — the
-/// gallery-picker-closes-compose bug we kept fighting. Presenting
-/// `PHPickerViewController` directly through UIKit (`present(_:animated:)` on
-/// a headless host) bypasses SwiftUI modal coordination entirely.
-///
-/// Caller is expected to attach this view as a `.background` of any visible
-/// SwiftUI view in the same window:
-///
-///     .background(
-///         PhotosPickerPresenter(isPresented: $showPicker, maxCount: 8) { providers in … }
-///     )
-struct PhotosPickerPresenter: UIViewControllerRepresentable {
-    @Binding var isPresented: Bool
-    var maxCount: Int
-    var onPick: ([NSItemProvider]) -> Void
 
-    func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
-
-    func makeUIViewController(context: Context) -> UIViewController {
-        let host = UIViewController()
-        host.view.backgroundColor = .clear
-        return host
-    }
-
-    func updateUIViewController(_ host: UIViewController, context: Context) {
-        if isPresented {
-            guard host.presentedViewController == nil else { return }
-            var config = PHPickerConfiguration(photoLibrary: .shared())
-            config.selectionLimit = maxCount
-            config.filter = .any(of: [.images, .videos])
-            config.preferredAssetRepresentationMode = .current
-            let picker = PHPickerViewController(configuration: config)
-            picker.delegate = context.coordinator
-            DispatchQueue.main.async {
-                host.present(picker, animated: true)
-            }
-        } else if let presented = host.presentedViewController {
-            presented.dismiss(animated: true)
-        }
-    }
-
-    final class Coordinator: NSObject, PHPickerViewControllerDelegate {
-        var parent: PhotosPickerPresenter
-
-        init(parent: PhotosPickerPresenter) {
-            self.parent = parent
-        }
-
-        func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
-            let providers = results.map(\.itemProvider)
-            picker.dismiss(animated: true) {
-                self.parent.isPresented = false
-                if !providers.isEmpty {
-                    self.parent.onPick(providers)
-                }
-            }
-        }
-    }
-}
+// PhotosPickerPresenter was removed in favour of the imperative
+// PhotoPickerService — see wisp/PhotoPickerService.swift and
+// docs/MODAL_PRESENTATION_FROM_SWIFTUI_SHEETS.md.
 
 /// Movie transferable that copies the picked video to a temp file we can pass to AVFoundation.
 struct MovieTransferable: Transferable {
