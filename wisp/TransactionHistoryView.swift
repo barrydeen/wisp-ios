@@ -3,6 +3,18 @@ import SwiftUI
 struct TransactionHistoryView: View {
     @Bindable var store: WalletStore
     @State private var isLoadingMore = false
+    @AppStorage private var balanceDisplayRaw: String
+
+    init(store: WalletStore) {
+        self.store = store
+        _balanceDisplayRaw = AppStorage(
+            wrappedValue: WalletBalanceDisplayMode.sats.rawValue,
+            WalletBalanceDisplayMode.storageKey(pubkey: store.keypair.pubkey))
+    }
+
+    private var balanceDisplay: WalletBalanceDisplayMode {
+        WalletBalanceDisplayMode(rawValue: balanceDisplayRaw) ?? .sats
+    }
 
     var body: some View {
         Group {
@@ -22,7 +34,7 @@ struct TransactionHistoryView: View {
     private var transactionList: some View {
         List {
             ForEach(store.transactions) { tx in
-                WalletTransactionRow(tx: tx)
+                WalletTransactionRow(tx: tx, displayMode: balanceDisplay)
                     .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
                     .listRowBackground(Color.wispBackground)
                     .listRowSeparatorTint(Color.wispSurfaceVariant.opacity(0.4))

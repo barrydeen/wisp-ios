@@ -4,7 +4,9 @@ import SwiftUI
 /// recent-strip and the full TransactionHistoryView.
 struct WalletTransactionRow: View {
     let tx: WalletTransaction
-    @Environment(AppSettings.self) private var settings
+    /// Wallet-screen balance display mode. `.fiat` renders amounts in the
+    /// user's fiat currency; `.hidden` masks every number in the row.
+    let displayMode: WalletBalanceDisplayMode
 
     var body: some View {
         let isIncoming = tx.type == .incoming
@@ -23,18 +25,14 @@ struct WalletTransactionRow: View {
         let sats = abs(tx.amountMsats) / 1000
         let feeSats = tx.feeMsats / 1000
         let sign = isIncoming ? "+" : "-"
-        // Use fiat formatting only when the rate cache has actually loaded —
-        // otherwise `CurrencyFormatter.full` falls back to a "X sats" string
-        // and the layout would render that inline next to a stale "sats"
-        // suffix label. Checking the cache directly keeps the two-Text
-        // sats layout intact while the rate is in flight.
-        let fiatAmount: String? = settings.fiatModeEnabled
-            ? ExchangeRateCache.shared.satsToFiat(sats, currency: settings.fiatCurrency)
-                .map { _ in CurrencyFormatter.full(sats: sats) }
+        let hidden = displayMode == .hidden
+        // `walletFiat` returns nil until the rate cache has loaded, so the
+        // two-Text sats layout stays intact while the rate is in flight.
+        let fiatAmount: String? = displayMode == .fiat
+            ? CurrencyFormatter.walletFiat(sats: sats)
             : nil
-        let fiatFee: String? = (settings.fiatModeEnabled && feeSats > 0)
-            ? ExchangeRateCache.shared.satsToFiat(feeSats, currency: settings.fiatCurrency)
-                .map { _ in CurrencyFormatter.full(sats: feeSats) }
+        let fiatFee: String? = (displayMode == .fiat && feeSats > 0)
+            ? CurrencyFormatter.walletFiat(sats: feeSats)
             : nil
 
         HStack(alignment: .center, spacing: 12) {
@@ -60,7 +58,11 @@ struct WalletTransactionRow: View {
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 2) {
-                if let fiatAmount {
+                if hidden {
+                    Text("\(sign)•••")
+                        .font(.subheadline.weight(.semibold).monospacedDigit())
+                        .foregroundStyle(amountColor)
+                } else if let fiatAmount {
                     Text("\(sign)\(fiatAmount)")
                         .font(.subheadline.weight(.semibold).monospacedDigit())
                         .foregroundStyle(amountColor)
@@ -74,7 +76,7 @@ struct WalletTransactionRow: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-                if !isIncoming, feeSats > 0 {
+                if !hidden, !isIncoming, feeSats > 0 {
                     if let fiatFee {
                         Text("Fee: \(fiatFee)")
                             .font(.caption2)
