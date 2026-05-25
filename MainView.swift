@@ -718,6 +718,7 @@ struct MainView: View {
     private var topBar: some View {
         HStack(spacing: 12) {
             profileAvatar
+            contentFilterButton
 
             Spacer()
 
@@ -767,6 +768,32 @@ struct MainView: View {
             CachedAvatarView(url: viewModel.userProfile?.picture, size: 32)
         }
         .buttonStyle(.plain)
+    }
+
+    /// Cycles the feed's client-side content filter: ALL → notes →
+    /// gallery → polls → ALL. Icon reflects the active filter. While
+    /// any non-default filter is active the icon picks up the primary
+    /// tint so it's obvious the feed is filtered. Mirrors Wisp Android's
+    /// `ContentFilter` toggle next to the feed selector — see
+    /// barrydeen/wisp commit a6a4a4a for the cross-platform shape.
+    private var contentFilterButton: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                viewModel.cycleContentFilter()
+            }
+        } label: {
+            Image(systemName: viewModel.contentFilter.iconName)
+                .font(.system(size: 17, weight: .medium))
+                .foregroundStyle(
+                    viewModel.contentFilter == .all
+                        ? AnyShapeStyle(.secondary)
+                        : AnyShapeStyle(Color.wispPrimary)
+                )
+                .frame(width: 32, height: 32)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Content filter — \(viewModel.contentFilter.rawValue)")
     }
 
     private var feedPicker: some View {
@@ -848,6 +875,14 @@ struct MainView: View {
     // MARK: - Feed Content
 
     private var emptyStateTitle: String {
+        // When a content filter is engaged and the underlying feed has
+        // events (just none of the active type), use the filter-specific
+        // caption — saying "No posts yet" while the user is staring at
+        // a filtered view is misleading. The base-state titles below
+        // apply when the raw feed itself is still empty.
+        if viewModel.contentFilter != .all && !viewModel.events.isEmpty {
+            return viewModel.contentFilter.emptyStateCaption
+        }
         switch viewModel.currentKind {
         case .follows: return "No posts yet"
         case .relay: return "Connecting…"
@@ -941,7 +976,7 @@ struct MainView: View {
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if viewModel.events.isEmpty {
+            } else if viewModel.filteredEvents.isEmpty {
                 VStack(spacing: 16) {
                     Image(systemName: "text.bubble")
                         .font(.system(size: 48))
@@ -986,7 +1021,18 @@ struct MainView: View {
                         // wrapper changed every row's underlying tuple
                         // identity on every prepend, forcing SwiftUI to
                         // re-instantiate every visible PostCardView.
-                        ForEach(viewModel.events, id: \.id) { event in
+                        // `filteredEvents` applies the content-filter
+                        // toggle (`viewModel.contentFilter`). Identity is
+                        // still `\.id` so row reuse is unaffected by the
+                        // filter swap — flipping the filter dissolves
+                        // rows rather than tearing down PostCardView
+                        // state. Load-more uses index in the filtered
+                        // list so reaching the bottom of what the user
+                        // sees triggers a fetch even when the underlying
+                        // `events` list is much longer (most events
+                        // were rejected by the filter).
+                        let visible = viewModel.filteredEvents
+                        ForEach(visible, id: \.id) { event in
                             PostCardView(
                                 event: event,
                                 profile: viewModel.profiles[event.pubkey],
@@ -1014,8 +1060,8 @@ struct MainView: View {
                             }
                             .onAppear {
                                 engagementRepo.markVisible(event: event)
-                                if let idx = viewModel.events.firstIndex(where: { $0.id == event.id }),
-                                   idx >= viewModel.events.count - 5 {
+                                if let idx = visible.firstIndex(where: { $0.id == event.id }),
+                                   idx >= visible.count - 5 {
                                     switch viewModel.currentKind {
                                     case .follows: break
                                     case .relay, .relaySet, .extendedNetwork: viewModel.loadMore()
