@@ -12,6 +12,7 @@ struct ContentView: View {
     @State private var currentScreen: AppScreen = .splash
     @State private var showNostrSheet = false
     @State private var showGoogleAuth = false
+    @State private var showAppleAuth = false
     @State private var keypair: Keypair?
     @State private var checkedSavedAccount = false
     @State private var accountSwitchInProgress = false
@@ -27,6 +28,9 @@ struct ContentView: View {
                     },
                     onContinueWithGoogle: {
                         showGoogleAuth = true
+                    },
+                    onContinueWithApple: {
+                        showAppleAuth = true
                     }
                 )
                 .sheet(isPresented: $showNostrSheet) {
@@ -59,6 +63,25 @@ struct ContentView: View {
                             // relays-per-author before MainView mounts.
                             // `OnboardingView`'s watch-only fast path is
                             // skipped because we always have a privkey here.
+                            if NostrKey.isOnboardingComplete(pubkey: kp.pubkey) {
+                                currentScreen = .loading
+                            } else {
+                                currentScreen = .onboarding
+                            }
+                        }
+                    )
+                }
+                .fullScreenCover(isPresented: $showAppleAuth) {
+                    AppleAuthView(
+                        onCancel: { showAppleAuth = false },
+                        onDone: { _, kp in
+                            keypair = kp
+                            showAppleAuth = false
+                            // Same onboarding routing as the Google path:
+                            // outbox-builder must populate relays-per-author
+                            // before MainView mounts, regardless of whether
+                            // the account is brand new or restored from
+                            // iCloud.
                             if NostrKey.isOnboardingComplete(pubkey: kp.pubkey) {
                                 currentScreen = .loading
                             } else {
