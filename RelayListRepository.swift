@@ -16,8 +16,20 @@ final class RelayListRepository {
         let updatedAt: Int
     }
 
+    /// A peer's kind-10050 list, cached the same way as kind-10002. `nil` ←→
+    /// "never queried"; `[]` ←→ "fetched, peer has no DM relays". The distinction
+    /// matters: an empty list is a definitive signal that DMs to this peer can't
+    /// be routed via kind-10050, so callers should fall through to the kind-10002
+    /// inbox set rather than re-querying.
+    private struct DmEntry {
+        let relays: [String]
+        let updatedAt: Int
+    }
+
     private var cache: [String: Entry] = [:]
     private var inflight: [String: Task<Entry?, Never>] = [:]
+    private var dmCache: [String: DmEntry] = [:]
+    private var dmInflight: [String: Task<DmEntry?, Never>] = [:]
 
     private static let indexerRelays = RelayDefaults.indexers
 
@@ -34,6 +46,27 @@ final class RelayListRepository {
         let entry = await loadEntry(pubkey)
         if let write = entry?.write, !write.isEmpty { return write }
         return entry?.read ?? []
+    }
+
+    /// Peer's kind-10050 DM inbox relays. Returns `nil` only when the lookup
+    /// failed (no indexer response, network error). Returns `[]` when the
+    /// fetch definitively confirmed the peer has no kind-10050 — callers
+    /// should treat this as "fall through to NIP-65 inbox" rather than retry.
+    func getDmRelays(_ pubkey: String) async -> [String]? {
+        if let entry = dmCache[pubkey] { return entry.relays }
+        if let entry = loadDmFromDefaults(pubkey) {
+            dmCache[pubkey] = entry
+            return entry.relays
+        }
+        if let task = dmInflight[pubkey] { return await task.value?.relays }
+
+        let task = Task<DmEntry?, Never> { [weak self] in
+            await self?.fetchDmFromRelays(pubkey)
+        }
+        dmInflight[pubkey] = task
+        let result = await task.value
+        dmInflight[pubkey] = nil
+        return result?.relays
     }
 
     /// Synchronous lookup against the in-memory + UserDefaults cache only. Returns nil on miss.
@@ -112,6 +145,41 @@ final class RelayListRepository {
         return cache[pubkey]
     }
 
+    // MARK: - DM relay ingest + fetch
+
+    /// Update the DM relay cache from a kind-10050 event. Newer `createdAt` wins.
+    @discardableResult
+    func ingestDm(_ event: NostrEvent) -> Bool {
+        guard event.kind == Nip51Lists.kindDmRelays else { return false }
+        if let existing = dmCache[event.pubkey], event.createdAt <= existing.updatedAt { return false }
+        let relays = Nip51Lists.parseRelaySetList(event)
+        let entry = DmEntry(relays: relays, updatedAt: event.createdAt)
+        dmCache[event.pubkey] = entry
+        saveDmToDefaults(event.pubkey, entry)
+        return true
+    }
+
+    private func fetchDmFromRelays(_ pubkey: String) async -> DmEntry? {
+        let events = await RelayPool.query(
+            relays: Self.indexerRelays,
+            filter: NostrFilter(kinds: [Nip51Lists.kindDmRelays], authors: [pubkey], limit: 1),
+            timeout: 5
+        )
+        let best = events
+            .filter({ $0.kind == Nip51Lists.kindDmRelays })
+            .max(by: { $0.createdAt < $1.createdAt })
+        if let best {
+            ingestDm(best)
+            return dmCache[pubkey]
+        }
+        // No event found — cache the negative result so we don't repeatedly
+        // hit the network for peers without a published DM relay list.
+        let empty = DmEntry(relays: [], updatedAt: Int(Date().timeIntervalSince1970))
+        dmCache[pubkey] = empty
+        saveDmToDefaults(pubkey, empty)
+        return empty
+    }
+
     // MARK: - Persistence
 
     private func saveToDefaults(_ pubkey: String, _ entry: Entry) {
@@ -130,5 +198,20 @@ final class RelayListRepository {
         let updatedAt = dict["t"] as? Int ?? 0
         guard !read.isEmpty || !write.isEmpty else { return nil }
         return Entry(read: read, write: write, updatedAt: updatedAt)
+    }
+
+    private func saveDmToDefaults(_ pubkey: String, _ entry: DmEntry) {
+        let dict: [String: Any] = [
+            "relays": entry.relays,
+            "t": entry.updatedAt
+        ]
+        UserDefaults.standard.set(dict, forKey: "peer_dm_relays_\(pubkey)")
+    }
+
+    private func loadDmFromDefaults(_ pubkey: String) -> DmEntry? {
+        guard let dict = UserDefaults.standard.dictionary(forKey: "peer_dm_relays_\(pubkey)") else { return nil }
+        let relays = dict["relays"] as? [String] ?? []
+        let updatedAt = dict["t"] as? Int ?? 0
+        return DmEntry(relays: relays, updatedAt: updatedAt)
     }
 }

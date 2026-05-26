@@ -27,6 +27,13 @@ struct PostCardView: View {
     /// is a reply. Used for stacked nested replies in ThreadView where the
     /// visual indentation already communicates the reply relationship.
     var showReplyContext: Bool = true
+    /// When true, the card renders a lock chip in the header and hides
+    /// repost / quote actions (they would re-publish the rumor id as a public
+    /// kind-6 or kind-1 with `q` tag, breaking the encryption invariant).
+    /// Replies, reactions, zaps, bookmarks stay visible — those can stay
+    /// inside the encrypted chain, with Phase 3 routing reactions/zaps to
+    /// their private equivalents.
+    var isPrivate: Bool = false
     var onProfileTap: ((String) -> Void)? = nil
     var onNoteTap: ((String) -> Void)? = nil
     var onHashtagTap: ((String) -> Void)? = nil
@@ -272,6 +279,22 @@ struct PostCardView: View {
                                 }
                                 .buttonStyle(.plain)
                             }
+                        }
+
+                        if isPrivate {
+                            HStack(spacing: 3) {
+                                Image(systemName: "lock.fill")
+                                    .font(.caption2)
+                                Text("Private")
+                                    .font(.caption2.weight(.semibold))
+                            }
+                            .foregroundStyle(Color.wispPrimary)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(
+                                Capsule().fill(Color.wispPrimary.opacity(0.12))
+                            )
+                            .accessibilityLabel("Private reply")
                         }
 
                         Spacer(minLength: 0)
@@ -525,6 +548,7 @@ struct PostCardView: View {
                         recipientName: targetProfile?.displayString,
                         eventId: target.id,
                         extraTags: extraTags,
+                        forcePrivate: isPrivate,
                         onSuccess: { sats in
                             if target.kind == Nip69.kindZapPoll, let idx = pollOptionIdx,
                                let me = NostrKey.load() {
@@ -769,8 +793,13 @@ struct PostCardView: View {
             Spacer()
             heartAction
             Spacer()
-            repostAction
-            Spacer()
+            // Hide repost/quote on private rumors — both would re-publish the
+            // rumor id as a public kind-6 / kind-1 with q-tag, leaking the
+            // encrypted chain. Reply, react, zap, bookmark stay visible.
+            if !isPrivate {
+                repostAction
+                Spacer()
+            }
             zapAction
             Spacer()
             Button {

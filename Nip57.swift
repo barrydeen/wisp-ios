@@ -43,6 +43,18 @@ nonisolated enum Nip57 {
 
     /// Build + sign a kind 9734 zap request via the Signer facade
     /// (local key or remote NIP-46).
+    ///
+    /// - `isAnonymous`: random ephemeral signs outer, empty `["anon", ""]` tag —
+    ///   sender is hidden from public observation but not from the LNURL
+    ///   operator (the LNURL receipt still references the relays + amount).
+    /// - `isPrivate`: DIP-03 (https://github.com/damus-io/dips/blob/master/03.md).
+    ///   Requires `eventId != nil` (the ephemeral key derives from it). Real
+    ///   sender signs an inner kind-9733; that inner is encrypted to the
+    ///   recipient and packed into the outer's `anon` tag. Outer is signed
+    ///   by a deterministic ephemeral key, so only the sender can later
+    ///   self-attribute. DIP-03 is unavailable for remote-signer (NIP-46)
+    ///   accounts — the ephemeral derivation needs raw access to the user's
+    ///   real privkey. Callers must gate the toggle accordingly.
     @MainActor
     static func buildZapRequest(
         keypair: Keypair,
@@ -63,44 +75,99 @@ nonisolated enum Nip57 {
         tags.append(["lnurl", lnurl])
         tags.append(contentsOf: extraTags)
 
-        // Anonymous or private: sign with an ephemeral random keypair so the
-        // user's real pubkey doesn't appear as the kind-9734 author. Private
-        // additionally encrypts the real sender identity in the `anon` tag
-        // (NIP-04 between the ephemeral key and the recipient) so only the
-        // recipient can reveal the sender. The ephemeral key is generated
-        // locally and the encryption needs only the ephemeral privkey +
-        // recipient pubkey, so this works for both local and remote-signer
-        // accounts.
-        let signingKeypair: Keypair
-        if isAnonymous || isPrivate {
+        // Private (DIP-03) requires a target event id. Profile zaps and live-
+        // stream a-tag zaps can't derive the deterministic ephemeral key.
+        if isPrivate && eventId == nil {
+            throw ZapBuildError.privateRequiresEventId
+        }
+        // Private also requires the user's real privkey (for inner signing +
+        // ephemeral derivation). Watch-only / remote-signer keypairs must have
+        // been gated at the UI layer; defensively reject here too.
+        if isPrivate && (keypair.privkey.isEmpty || Hex.decode(keypair.privkey) == nil) {
+            throw ZapBuildError.privateRequiresLocalKey
+        }
+
+        let createdAt = Int(Date().timeIntervalSince1970)
+
+        // DIP-03 private path: build inner 9733 (signed by real sender),
+        // encrypt to recipient, pack into anon tag, sign outer with derived
+        // ephemeral. Done in this order so we can reuse the same createdAt
+        // across inner + outer + ephemeral derivation — receivers re-derive
+        // the ephemeral key from the same triple to verify outer authorship.
+        if isPrivate, let eventId,
+           let senderPriv = Hex.decode(keypair.privkey),
+           let recipientPub32 = Hex.decode(recipientPubkey) {
+            // 1. Build + sign inner kind-9733 with real sender. Inner tags
+            //    include only `p` (recipient) — no e/relays/amount, that's
+            //    the outer's job.
+            let innerTags: [[String]] = [["p", recipientPubkey]]
+            let inner = try await Signer.sign(
+                keypair: keypair,
+                kind: Dip03.kindPrivateZapRequest,
+                tags: innerTags,
+                content: message,
+                createdAt: createdAt
+            )
+
+            // 2. Derive ephemeral key + encrypt inner.
+            let ephemeralPriv = Dip03.deriveEphemeralPrivkey(
+                senderPrivkey32: senderPriv,
+                targetEventId: eventId,
+                createdAt: createdAt
+            )
+            let anonValue = try Dip03.encryptInner(
+                innerJSON: inner.toJSON(),
+                ephemeralPrivkey32: ephemeralPriv,
+                recipientPubkey32: recipientPub32
+            )
+            tags.append(["anon", anonValue])
+
+            // 3. Sign outer with ephemeral. NostrEvent.sign is the local path
+            //    since we have the raw 32-byte privkey here.
+            let ephemeralPub = try Schnorr.xonlyPubkey(privkey32: ephemeralPriv)
+            return try NostrEvent.sign(
+                privkey32: ephemeralPriv,
+                pubkey: Hex.encode(ephemeralPub),
+                kind: 9734,
+                createdAt: createdAt,
+                tags: tags,
+                content: message
+            )
+        }
+
+        // Anonymous (non-private): sign with a fresh random ephemeral key so
+        // the user's real pubkey doesn't appear on the outer. Empty `anon`
+        // tag signals "sender hidden, no decryption envelope".
+        if isAnonymous {
             var bytes = [UInt8](repeating: 0, count: 32)
             _ = SecRandomCopyBytes(kSecRandomDefault, 32, &bytes)
             let ephemeralPriv = Data(bytes)
-            let ephemeralPub = Secp256k1.publicKey(from: ephemeralPriv).map { Hex.encode($0) } ?? keypair.pubkey
-            signingKeypair = Keypair(privkey: Hex.encode(ephemeralPriv), pubkey: ephemeralPub)
-
-            if isPrivate {
-                let plaintext = "{\"pubkey\":\"\(keypair.pubkey)\"}"
-                if let recipientPub32 = Hex.decode(recipientPubkey),
-                   let secret = try? Nip04.sharedSecret(privkey32: ephemeralPriv, peerXonlyPubkey32: recipientPub32),
-                   let encrypted = try? Nip04.encrypt(plaintext, sharedSecret: secret) {
-                    tags.append(["anon", encrypted])
-                } else {
-                    tags.append(["anon", ""])
-                }
-            } else {
-                tags.append(["anon", ""])
-            }
-        } else {
-            signingKeypair = keypair
+            let ephemeralPub = (try? Schnorr.xonlyPubkey(privkey32: ephemeralPriv)).map { Hex.encode($0) } ?? keypair.pubkey
+            tags.append(["anon", ""])
+            return try NostrEvent.sign(
+                privkey32: ephemeralPriv,
+                pubkey: ephemeralPub,
+                kind: 9734,
+                createdAt: createdAt,
+                tags: tags,
+                content: message
+            )
         }
 
+        // Public zap: sign with the user's real keypair via the Signer facade
+        // (remote-signer compatible).
         return try await Signer.sign(
-            keypair: signingKeypair,
+            keypair: keypair,
             kind: 9734,
             tags: tags,
-            content: message
+            content: message,
+            createdAt: createdAt
         )
+    }
+
+    enum ZapBuildError: Swift.Error {
+        case privateRequiresEventId
+        case privateRequiresLocalKey
     }
 
     /// GET the LNURL callback with the signed zap request and return the bolt11 invoice (`pr`).
@@ -145,6 +212,88 @@ nonisolated enum Nip57 {
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
         let content = json["content"] as? String
         return (content?.isEmpty == false) ? content : nil
+    }
+
+    /// Resolve the real sender + message of a possibly-DIP-03 zap receipt.
+    /// Falls back to the embedded kind-9734's pubkey/content when the anon
+    /// tag is absent or unparseable, so public zaps and DIP-03 zaps go through
+    /// the same accessor. Pass the active user's privkey when called as the
+    /// recipient; the function will attempt to decrypt the inner kind-9733.
+    /// Returns `nil` when the receipt isn't a kind-9735.
+    static func resolveZapSender(receipt: NostrEvent, recipientPrivkey32: Data?) -> (pubkey: String, message: String, isPrivate: Bool)? {
+        guard receipt.kind == 9735 else { return nil }
+        guard let desc = receipt.tags.first(where: { $0.count >= 2 && $0[0] == "description" })?[1],
+              let data = desc.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        let publicPubkey = (json["pubkey"] as? String) ?? receipt.pubkey
+        let publicMessage = (json["content"] as? String) ?? ""
+
+        // DIP-03 detection: the embedded kind-9734 has an ["anon", ...] tag
+        // whose value structurally matches the bech32 pack. If it does and
+        // we have a privkey, try to recover the inner kind-9733.
+        let descTags = json["tags"] as? [[String]] ?? []
+        guard let anonTag = descTags.first(where: { $0.count >= 2 && $0[0] == "anon" }) else {
+            return (publicPubkey, publicMessage, false)
+        }
+        let anonValue = anonTag[1]
+        if anonValue.isEmpty {
+            // Anonymous (NIP-57 plain) — sender hidden, no decryption envelope.
+            return (publicPubkey, publicMessage, true)
+        }
+        guard Dip03.isDip03AnonValue(anonValue),
+              let privkey = recipientPrivkey32,
+              let ephemeralPub32 = Hex.decode(publicPubkey) else {
+            return (publicPubkey, publicMessage, true)
+        }
+        do {
+            let inner = try Dip03.decryptInner(
+                anonValue: anonValue,
+                recipientPrivkey32: privkey,
+                ephemeralPubkey32: ephemeralPub32
+            )
+            let message = inner.content.isEmpty ? publicMessage : inner.content
+            return (inner.pubkey, message, true)
+        } catch {
+            return (publicPubkey, publicMessage, true)
+        }
+    }
+
+    /// Self-attribution: given our own outgoing DIP-03 receipt, re-derive the
+    /// ephemeral key and decrypt the inner. Returns the recipient's pubkey on
+    /// success — the caller already knows that's "me" via the receipt's `p`
+    /// tag, but the inner kind-9733's `pubkey` confirms it's a zap *we* sent.
+    static func resolveOwnOutgoingZap(receipt: NostrEvent, senderPrivkey32: Data) -> (pubkey: String, message: String)? {
+        guard receipt.kind == 9735 else { return nil }
+        guard let desc = receipt.tags.first(where: { $0.count >= 2 && $0[0] == "description" })?[1],
+              let data = desc.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        let descTags = json["tags"] as? [[String]] ?? []
+        guard let anonTag = descTags.first(where: { $0.count >= 2 && $0[0] == "anon" }),
+              Dip03.isDip03AnonValue(anonTag[1]) else { return nil }
+
+        guard let eTag = descTags.first(where: { $0.count >= 2 && $0[0] == "e" })?[1],
+              let pTag = descTags.first(where: { $0.count >= 2 && $0[0] == "p" })?[1],
+              let createdAtRaw = json["created_at"] as? Int,
+              let outerPub32 = Hex.decode((json["pubkey"] as? String) ?? receipt.pubkey),
+              let recipientPub32 = Hex.decode(pTag) else { return nil }
+
+        do {
+            let inner = try Dip03.decryptInnerSelfAttribution(
+                anonValue: anonTag[1],
+                senderPrivkey32: senderPrivkey32,
+                targetEventId: eTag,
+                createdAt: createdAtRaw,
+                receiptOuterPubkey32: outerPub32,
+                recipientPubkey32: recipientPub32
+            )
+            return (inner.pubkey, inner.content)
+        } catch {
+            return nil
+        }
     }
 
     /// Validate a kind 9735 receipt against the LNURL server's nostrPubkey and the expected amount.

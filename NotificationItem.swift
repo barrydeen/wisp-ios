@@ -23,6 +23,11 @@ struct FlatNotificationItem: Identifiable, Hashable {
     var zapSats: Int64 = 0
     var zapMessage: String = ""
     var isPrivateZap: Bool = false
+    /// True when this row was materialized from a gift-wrapped rumor (private
+    /// reply or private reaction). Drives the lock-icon overlay in
+    /// `NotificationRowView`. Independent of `isPrivateZap`, which only flags
+    /// zap receipts routed through DM relays.
+    var isPrivate: Bool = false
     var quoteEventId: String? = nil
     var actorEventId: String? = nil
     var dmPeerPubkey: String? = nil

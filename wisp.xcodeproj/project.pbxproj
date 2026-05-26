@@ -17,6 +17,12 @@
 		4CABCD010000000000060000 /* ProfileEditViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000060000 /* ProfileEditViewModel.swift */; };
 		4CABCD010000000000070000 /* ProfileEditView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000070000 /* ProfileEditView.swift */; };
 		4CABCD010000000000080000 /* FollowSender.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000080000 /* FollowSender.swift */; };
+		4CABCD010000000000F30001 /* PrivateInteractionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30001 /* PrivateInteractionStore.swift */; };
+		4CABCD010000000000F30002 /* PrivateInteractionRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30002 /* PrivateInteractionRouter.swift */; };
+		4CABCD010000000000F30003 /* PeerRelayResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30003 /* PeerRelayResolver.swift */; };
+		4CABCD010000000000F30004 /* PrivateReplyPublisher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30004 /* PrivateReplyPublisher.swift */; };
+		4CABCD010000000000F30005 /* PrivateReactionPublisher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30005 /* PrivateReactionPublisher.swift */; };
+		4CABCD010000000000F30006 /* Dip03.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30006 /* Dip03.swift */; };
 		4CABCD0100000000000F2001 /* RepostSender.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD0000000000000F2001 /* RepostSender.swift */; };
 		4CABCD0100000000000F2002 /* Nip10001.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD0000000000000F2002 /* Nip10001.swift */; };
 		4CABCD0100000000000F2003 /* PinNoteSender.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD0000000000000F2003 /* PinNoteSender.swift */; };
@@ -305,6 +311,12 @@
 		4CABCD000000000000060000 /* ProfileEditViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileEditViewModel.swift; sourceTree = "<group>"; };
 		4CABCD000000000000070000 /* ProfileEditView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileEditView.swift; sourceTree = "<group>"; };
 		4CABCD000000000000080000 /* FollowSender.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowSender.swift; sourceTree = "<group>"; };
+		4CABCD000000000000F30001 /* PrivateInteractionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateInteractionStore.swift; sourceTree = "<group>"; };
+		4CABCD000000000000F30002 /* PrivateInteractionRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateInteractionRouter.swift; sourceTree = "<group>"; };
+		4CABCD000000000000F30003 /* PeerRelayResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeerRelayResolver.swift; sourceTree = "<group>"; };
+		4CABCD000000000000F30004 /* PrivateReplyPublisher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateReplyPublisher.swift; sourceTree = "<group>"; };
+		4CABCD000000000000F30005 /* PrivateReactionPublisher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateReactionPublisher.swift; sourceTree = "<group>"; };
+		4CABCD000000000000F30006 /* Dip03.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Dip03.swift; sourceTree = "<group>"; };
 		4CABCD0000000000000F2001 /* RepostSender.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepostSender.swift; sourceTree = "<group>"; };
 		4CABCD0000000000000F2002 /* Nip10001.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Nip10001.swift; sourceTree = "<group>"; };
 		4CABCD0000000000000F2003 /* PinNoteSender.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PinNoteSender.swift; sourceTree = "<group>"; };
@@ -884,6 +896,12 @@
 				4CABCD000000000000060000 /* ProfileEditViewModel.swift */,
 				4CABCD000000000000070000 /* ProfileEditView.swift */,
 				4CABCD000000000000080000 /* FollowSender.swift */,
+				4CABCD000000000000F30001 /* PrivateInteractionStore.swift */,
+				4CABCD000000000000F30002 /* PrivateInteractionRouter.swift */,
+				4CABCD000000000000F30003 /* PeerRelayResolver.swift */,
+				4CABCD000000000000F30004 /* PrivateReplyPublisher.swift */,
+				4CABCD000000000000F30005 /* PrivateReactionPublisher.swift */,
+				4CABCD000000000000F30006 /* Dip03.swift */,
 				4CABCD000000000000050000 /* BackChevronButton.swift */,
 				4CABCD000000000000F2010 /* NewPostsPill.swift */,
 				4CABCE0000000000000F4607 /* Signer.swift */,
@@ -1316,6 +1334,12 @@
 				4CABCD010000000000060000 /* ProfileEditViewModel.swift in Sources */,
 				4CABCD010000000000070000 /* ProfileEditView.swift in Sources */,
 				4CABCD010000000000080000 /* FollowSender.swift in Sources */,
+				4CABCD010000000000F30001 /* PrivateInteractionStore.swift in Sources */,
+				4CABCD010000000000F30002 /* PrivateInteractionRouter.swift in Sources */,
+				4CABCD010000000000F30003 /* PeerRelayResolver.swift in Sources */,
+				4CABCD010000000000F30004 /* PrivateReplyPublisher.swift in Sources */,
+				4CABCD010000000000F30005 /* PrivateReactionPublisher.swift in Sources */,
+				4CABCD010000000000F30006 /* Dip03.swift in Sources */,
 				4CABCD010000000000050000 /* BackChevronButton.swift in Sources */,
 				4CABCD010000000000F2010 /* NewPostsPill.swift in Sources */,
 				4CABCE0100000000000F4607 /* Signer.swift in Sources */,

@@ -116,8 +116,9 @@ final class ThreadViewModel {
             queue: .main
         ) { [weak self] note in
             guard let event = note.userInfo?["event"] as? NostrEvent else { return }
+            let isPrivate = note.userInfo?["isPrivate"] as? Bool ?? false
             Task { @MainActor [weak self] in
-                self?.handleExternalPublish(event)
+                self?.handleExternalPublish(event, isPrivate: isPrivate)
             }
         }
         // Drop any cached/loaded reply from a freshly-blocked author so the
@@ -156,8 +157,10 @@ final class ThreadViewModel {
 
     /// Ingest a kind-1 the user just published from outside this thread (typically the
     /// shared compose sheet) when it references something we already track. Reposts
-    /// (kind-6) of the root or a known reply also count.
-    private func handleExternalPublish(_ event: NostrEvent) {
+    /// (kind-6) of the root or a known reply also count. `isPrivate` is set when the
+    /// broadcast originated from `PrivateReplyPublisher` — the event is then a synthetic
+    /// rumor (empty sig) and `PrivateInteractionStore` has already marked it.
+    private func handleExternalPublish(_ event: NostrEvent, isPrivate: Bool = false) {
         guard event.kind == 1 || event.kind == 6 else { return }
         let etags = event.tags.compactMap { tag -> String? in
             guard tag.count >= 2, tag[0] == "e" else { return nil }
@@ -166,6 +169,11 @@ final class ThreadViewModel {
         let known = etags.contains(where: { events.keys.contains($0) || $0 == rootId })
         guard known else { return }
         if event.kind == 1 {
+            // The router/publisher already calls `markPrivate`; this is a
+            // belt-and-suspenders defence so a synthetic event ingested via
+            // the broadcast path never renders without the lock chip even if
+            // the marking races behind this dispatch on the main actor.
+            if isPrivate { PrivateInteractionStore.shared.markPrivate(event.id) }
             ingestReply(event)
             scrollTargetId = event.id
         }
@@ -376,6 +384,35 @@ final class ThreadViewModel {
         isSending = true
         defer { isSending = false }
 
+        // If the focal (or the specifically-targeted parent) is itself a
+        // private rumor, force the inline reply through `PrivateReplyPublisher`
+        // — the user opened the reply input on a private chain, so we must
+        // not leak this reply as a public kind-1. The publisher handles the
+        // synthetic-event broadcast back to the thread via
+        // `.nostrEventPublished`, which our publishObserver picks up.
+        if PrivateInteractionStore.shared.contains(parent.id) {
+            var extras: [[String]] = []
+            if let clientTag = NostrEvent.clientTagIfEnabled() { extras.append(clientTag) }
+            do {
+                _ = try await PrivateReplyPublisher.send(
+                    keypair: keypair,
+                    parent: parent,
+                    root: root,
+                    content: trimmed,
+                    extraTags: extras
+                )
+            } catch PrivateReplyPublisher.SendError.noRecipientRelays {
+                errorMessage = "Recipient has no DM relays."
+            } catch PrivateReplyPublisher.SendError.noOwnRelays {
+                errorMessage = "Add a DM relay in settings to send private replies."
+            } catch let PrivateReplyPublisher.SendError.publishFailed(recipientTried, ownTried) {
+                errorMessage = "No relay accepted the private reply (tried \(recipientTried) recipient, \(ownTried) own)."
+            } catch {
+                errorMessage = "Failed to send private reply."
+            }
+            return
+        }
+
         let createdAt = Int(Date().timeIntervalSince1970)
         var tags = Nip10.buildReplyTags(replyTo: parent, relayHint: "")
         if let clientTag = NostrEvent.clientTagIfEnabled() { tags.append(clientTag) }
@@ -504,7 +541,13 @@ final class ThreadViewModel {
                     blockedEventIds.insert(event.id)
                     continue
                 }
-                if SafetyFilter.shared.shouldDrop(event: event, context: .thread(rootId: rootId)) {
+                // Private rumors (gift-wrap-materialized kind-1s) bypass the
+                // shared SafetyFilter — kind-1 isn't in `wotExemptKinds`, so
+                // `shouldDrop(.thread)` would otherwise silently swallow every
+                // private reply whose sender isn't in the user's WoT network.
+                // Block list already applied above; that's enough for rumors.
+                let isPrivate = PrivateInteractionStore.shared.contains(event.id)
+                if !isPrivate, SafetyFilter.shared.shouldDrop(event: event, context: .thread(rootId: rootId)) {
                     continue
                 }
             }
@@ -886,10 +929,22 @@ final class ThreadViewModel {
 
     // MARK: - Slices
 
+    /// Single construction site for `ThreadRow` — keeps the `isPrivate` lookup
+    /// against `PrivateInteractionStore` consistent across focal / ancestors /
+    /// replies / nested replies. Missing the lookup on any site would render a
+    /// private reply as a public card with repost/quote actions exposed.
+    private func makeRow(_ event: NostrEvent, isBlocked: Bool? = nil) -> ThreadRow {
+        ThreadRow(
+            event: event,
+            isBlocked: isBlocked ?? blockedEventIds.contains(event.id),
+            isPrivate: PrivateInteractionStore.shared.contains(event.id)
+        )
+    }
+
     /// Recompute `ancestors`, `focal`, `replies`, `childCounts`, and `hiddenSpamReplies`
     /// from the current `events` map. Called whenever events change.
     private func rebuildSlices() {
-        focal = events[focalEventId].map { ThreadRow(event: $0, isBlocked: blockedEventIds.contains($0.id)) }
+        focal = events[focalEventId].map { makeRow($0) }
         let (chain, newMissingId) = computeAncestors()
         ancestors = chain
         // Only surface the missing-ancestor state after all fetch attempts have
@@ -920,13 +975,13 @@ final class ThreadViewModel {
             .sorted { $0.createdAt < $1.createdAt }
 
         if hiddenSpamPubkeys.isEmpty {
-            replies = directReplies.map { ThreadRow(event: $0, isBlocked: blockedEventIds.contains($0.id)) }
+            replies = directReplies.map { makeRow($0) }
             hiddenSpamReplies = []
         } else {
             var visible: [ThreadRow] = []
             var hidden: [ThreadRow] = []
             for event in directReplies {
-                let row = ThreadRow(event: event, isBlocked: blockedEventIds.contains(event.id))
+                let row = makeRow(event)
                 if row.isBlocked { visible.append(row); continue }
                 if hiddenSpamPubkeys.contains(event.pubkey) { hidden.append(row) }
                 else { visible.append(row) }
@@ -972,7 +1027,7 @@ final class ThreadViewModel {
                 if blockedEventIds.contains(kid.id) { continue }
                 if hiddenSpamPubkeys.contains(kid.pubkey) { continue }
                 result.append(NestedReplyRow(
-                    row: ThreadRow(event: kid, isBlocked: false),
+                    row: makeRow(kid, isBlocked: false),
                     depth: depth
                 ))
                 walk(parentId: kid.id, depth: depth + 1)
@@ -995,13 +1050,13 @@ final class ThreadViewModel {
             guard let parentId = Nip10.replyTarget(of: current),
                   seen.insert(parentId).inserted else { break }
             guard let parent = events[parentId] else {
-                let rows = chain.reversed().map { ThreadRow(event: $0, isBlocked: blockedEventIds.contains($0.id)) }
+                let rows = chain.reversed().map { makeRow($0) }
                 return (rows, parentId)
             }
             chain.append(parent)
             current = parent
         }
-        return (chain.reversed().map { ThreadRow(event: $0, isBlocked: blockedEventIds.contains($0.id)) }, nil)
+        return (chain.reversed().map { makeRow($0) }, nil)
     }
 
     // MARK: - NSpam
@@ -1043,6 +1098,9 @@ final class ThreadViewModel {
 struct ThreadRow: Identifiable {
     let event: NostrEvent
     var isBlocked: Bool = false
+    /// True when the event is a gift-wrap-materialized private reply — drives
+    /// the lock chip in `PostCardView` and the suppression of repost/quote.
+    var isPrivate: Bool = false
     var id: String { event.id }
 }
 

@@ -367,12 +367,22 @@ struct ComposeView: View {
 
     private func replyContextRow(parent: NostrEvent) -> some View {
         let profile = ProfileRepository.shared.get(parent.pubkey)
+        let recipientName = profile?.displayString ?? Nip19.shortNpub(hex: parent.pubkey)
         return HStack(alignment: .top, spacing: 8) {
             CachedAvatarView(url: profile?.picture, size: 28)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Replying to \(profile?.displayString ?? Nip19.shortNpub(hex: parent.pubkey))")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 4) {
+                    if viewModel.isPrivate {
+                        Image(systemName: "lock.fill")
+                            .font(.caption2)
+                            .foregroundStyle(Color.wispPrimary)
+                    }
+                    Text(viewModel.isPrivate
+                         ? "Replying privately to \(recipientName)"
+                         : "Replying to \(recipientName)")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
                 Text(previewContent(parent.content, max: 140))
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -777,6 +787,21 @@ struct ComposeView: View {
                 .accessibilityLabel(viewModel.pollEnabled ? "Disable poll" : "Create poll")
             }
 
+            // Private-reply toggle — only meaningful for `.reply` mode. Locked
+            // (no-op) when the parent is itself a private rumor; the icon stays
+            // filled to signal the chain stays encrypted.
+            if case .reply = viewModel.mode {
+                Button {
+                    viewModel.togglePrivate()
+                } label: {
+                    Image(systemName: viewModel.isPrivate ? "lock.fill" : "lock")
+                        .font(.system(size: 22))
+                        .foregroundStyle(viewModel.isPrivate ? Color.wispPrimary : .secondary)
+                }
+                .disabled(viewModel.isPrivateLocked)
+                .accessibilityLabel(viewModel.isPrivate ? "Disable private reply" : "Send privately")
+            }
+
             Button {
                 showScheduleSheet = true
             } label: {
@@ -784,6 +809,7 @@ struct ComposeView: View {
                     .font(.system(size: 22))
                     .foregroundStyle(viewModel.scheduleEnabled ? Color.wispPrimary : .secondary)
             }
+            .disabled(viewModel.isPrivate)
 
             Spacer()
         }
