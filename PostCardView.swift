@@ -63,13 +63,6 @@ struct PostCardView: View {
     /// heart's current scroll position.
     @State private var heartFrameTracker = HeartFrameTracker()
     @State private var reactionArrowEdge: Edge = .top
-    /// Cap passed to the reaction picker's inner scroll view so the popover
-    /// shrinks to whatever vertical space is actually available between the
-    /// heart button and the screen edge it's anchored against. Without this,
-    /// a heart placed near both top and bottom edges (notification rows, a
-    /// short note pinned near a tab bar) ended up clipping the picker
-    /// because the popover gave it less space than the picker's natural size.
-    @State private var reactionPickerMaxHeight: CGFloat = 192
     @State private var showDeleteConfirm = false
     @State private var showMuteUserConfirm = false
     /// Tap-anchored menus on the action bar. We use `Button` + `.popover`
@@ -1069,10 +1062,7 @@ struct PostCardView: View {
                 let popoverChrome: CGFloat = 32
                 let availableBelow = max(0, screenHeight - bottomReserve - frame.maxY - popoverChrome)
                 let availableAbove = max(0, frame.minY - topReserve - popoverChrome)
-                let preferBelow = availableBelow >= availableAbove
-                reactionArrowEdge = preferBelow ? .top : .bottom
-                let chosenSpace = preferBelow ? availableBelow : availableAbove
-                reactionPickerMaxHeight = min(192, max(80, chosenSpace))
+                reactionArrowEdge = availableBelow >= availableAbove ? .top : .bottom
                 showReactionPicker = true
             }
         } label: {
@@ -1159,9 +1149,9 @@ struct PostCardView: View {
                         activeSheet = .emojiLibrary
                     }
                 },
-                maxGridHeight: reactionPickerMaxHeight
             )
             .presentationCompactAdaptation(.popover)
+            .presentationBackground(.ultraThinMaterial)
         }
     }
 

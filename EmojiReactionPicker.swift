@@ -3,48 +3,46 @@ import SwiftUI
 /// Compact reaction picker shown as a popover when the user taps the heart on a
 /// post card.
 ///
-/// Renders the user's frequency-sorted **quick-reactions** list as a 6-column
-/// grid of size-32 cells, followed by a trailing "+" tile that opens the full
-/// `EmojiLibrarySheet`. Long-press a cell to remove that emoji from the quick
-/// list. Tapping a cell invokes `onSelect(_:)`; the `+` tile fires `onPlus()`.
-/// The parent owns dismissal in both cases.
+/// Renders up to 18 of the user's frequency-sorted quick-reactions as a fixed
+/// 6-column grid (no scrolling), followed by a pinned "More reactions" footer
+/// that always opens the full `EmojiLibrarySheet`. Long-press a cell to remove
+/// that emoji from the quick list. Tapping a cell invokes `onSelect(_:)`; the
+/// footer row fires `onPlus()`. The parent owns dismissal in both cases.
 struct EmojiReactionPicker: View {
     @State private var emojiRepo = EmojiRepository.shared
     @ObservedObject private var emojiCache = EmojiImageCache.shared
 
     let onSelect: (PickedEmoji) -> Void
     let onPlus: () -> Void
-    /// Maximum height the inner scrolling grid is allowed to occupy.
-    /// Provided by the caller because the available space depends on
-    /// where the heart button sits relative to the screen edges —
-    /// passing it in lets `PostCardView` shrink the picker to whatever
-    /// fits and rely on internal scrolling for overflow instead of the
-    /// popover clipping content. Default is generous for the common case.
-    var maxGridHeight: CGFloat = 192
 
     private let cellSize: CGFloat = 36
     private let columns: Int = 6
+    private let maxVisible: Int = 18  // 3 rows × 6 columns
 
     var body: some View {
-        let entries = emojiRepo.sortedQuickReactions
+        let entries = Array(emojiRepo.sortedQuickReactions.prefix(maxVisible))
         let grid = Array(repeating: GridItem(.fixed(cellSize), spacing: 8), count: columns)
         VStack(alignment: .leading, spacing: 0) {
-            ScrollView(.vertical, showsIndicators: false) {
-                LazyVGrid(columns: grid, spacing: 8) {
-                    ForEach(entries, id: \.self) { key in
-                        cell(for: key)
-                    }
-                    plusCell
+            LazyVGrid(columns: grid, spacing: 8) {
+                ForEach(entries, id: \.self) { key in
+                    cell(for: key)
                 }
-                .padding(12)
             }
-            .frame(maxHeight: maxGridHeight)
+            .padding(12)
+
+            Button { onPlus() } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "plus.circle")
+                        .font(.system(size: 15))
+                    Text("More reactions")
+                        .font(.subheadline)
+                }
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+                .frame(height: 36)
+            }
+            .buttonStyle(.plain)
         }
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16)
-                .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
-        )
         .frame(width: CGFloat(columns) * cellSize + CGFloat(columns - 1) * 8 + 24)
         .onAppear {
             for key in entries {
@@ -105,22 +103,6 @@ struct EmojiReactionPicker: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
         }
-    }
-
-    private var plusCell: some View {
-        Button {
-            onPlus()
-        } label: {
-            ZStack {
-                Circle()
-                    .fill(Color.primary.opacity(0.06))
-                Image(systemName: "plus")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(.secondary)
-            }
-            .frame(width: cellSize, height: cellSize)
-        }
-        .buttonStyle(.plain)
     }
 
     private func pickedEmoji(for key: String) -> PickedEmoji? {
