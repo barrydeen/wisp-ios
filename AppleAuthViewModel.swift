@@ -1,27 +1,29 @@
 import Foundation
 import UIKit
+import CloudKit
 
-/// Orchestrates the "Continue with Google" flow:
-///   1. Sign in via `GoogleSignInManager` → keep the JWT `sub` claim around.
-///   2. List backups in the user's appData folder. Filenames are opaque
-///      (`wisp_bk_<uuid>.bin`); the npub is recovered by decrypting.
-///   3. Branch on what we find:
-///        - Files exist → prompt for the user's PIN, try to decrypt each file,
-///          and show the recovered accounts in the chooser. Files that fail
-///          to decrypt are treated as belonging to a different (or wrong) PIN.
-///        - No files → walk the user through setting a new PIN (enter, then
-///          confirm) and create their first account.
-///   4. From the chooser the user can restore one of the listed accounts or
-///      add another account under the same Google login (PIN already known).
+/// Orchestrates the "Continue with Apple" flow. Mirrors `GoogleAuthViewModel`
+/// state-for-state with two structural differences:
+///   - The identity layer is `AppleSignInManager` (Sign in with Apple) instead
+///     of Google sign-in. We surface the stable `appleIDCredential.user`
+///     identifier — Apple's analogue of Google's JWT `sub` claim — and feed
+///     it into `BackupCrypto.deriveBackupKey(appleUserID:pin:)`.
+///   - The storage layer is `CloudKitBackupService` instead of Drive.
+///     CloudKit's modern API returns the payload inline in the list call,
+///     so the restore-PIN decryption loop reads each `BackupFile.payload`
+///     directly rather than issuing a separate download per file.
+///
+/// State machine, error handling, and the decoy-profile fetch privacy
+/// mitigation are otherwise identical to the Google flow.
 @Observable
 @MainActor
-final class GoogleAuthViewModel {
+final class AppleAuthViewModel {
     enum SetupStep: Equatable { case enter, confirm }
 
     enum State {
         case idle
         case signingIn
-        case checkingDrive
+        case checkingICloud
         case enterPinForRestore(attemptFailed: Bool)
         case setupPin(step: SetupStep, mismatch: Bool)
         case choose(backups: [AuthBackupSummary])
@@ -32,13 +34,12 @@ final class GoogleAuthViewModel {
 
     private(set) var state: State = .idle
 
-    private let signInManager = GoogleSignInManager()
-    private let driveService = DriveBackupService()
+    private let signInManager = AppleSignInManager()
+    private let cloudKitService = CloudKitBackupService()
 
-    private var pendingSub: String?
-    private var pendingAccessToken: String?
+    private var pendingUserID: String?
     private var pendingBackupKey: Data?
-    private var pendingFiles: [DriveBackupService.BackupFile] = []
+    private var pendingFiles: [CloudKitBackupService.BackupFile] = []
     private var pendingSetupFirstPin: String?
     private var profileFetchTask: Task<Void, Never>?
 
@@ -53,23 +54,23 @@ final class GoogleAuthViewModel {
         Task { @MainActor in
             do {
                 let result = try await signInManager.signIn(presenting: presenting)
-                pendingSub = result.sub
-                pendingAccessToken = result.accessToken
+                pendingUserID = result.userID
 
-                state = .checkingDrive
-                let files = try await listBackupsWithRefresh()
+                state = .checkingICloud
+                let files = try await cloudKitService.listBackups()
                 pendingFiles = files
 
                 state = files.isEmpty
                     ? .setupPin(step: .enter, mismatch: false)
                     : .enterPinForRestore(attemptFailed: false)
-            } catch let e as GoogleSignInManager.SignInError {
+            } catch let e as AppleSignInManager.SignInError {
                 if case .cancelled = e {
-                    // Treat cancel as a return-to-splash, not an error screen.
                     reset()
                 } else {
-                    state = .error(message: e.errorDescription ?? "Google sign-in failed.")
+                    state = .error(message: e.errorDescription ?? "Apple sign-in failed.")
                 }
+            } catch let e as CloudKitBackupError {
+                state = .error(message: Self.message(for: e))
             } catch {
                 state = .error(message: error.localizedDescription)
             }
@@ -77,33 +78,32 @@ final class GoogleAuthViewModel {
     }
 
     func submitRestorePin(_ pin: String) {
-        guard BackupCrypto.isValidPin(pin), let sub = pendingSub else { return }
+        guard BackupCrypto.isValidPin(pin), let userID = pendingUserID else { return }
         let files = pendingFiles
         guard !files.isEmpty else { return }
         state = .working
         Task { @MainActor in
             do {
-                let key = try await deriveKeyOffMain(sub: sub, pin: pin)
+                let key = try await deriveKeyOffMain(appleUserID: userID, pin: pin)
                 var summaries: [AuthBackupSummary] = []
                 var seen = Set<String>()
                 for file in files {
                     do {
-                        let payload = try await downloadWithRefresh(fileId: file.fileId)
-                        let nsec = try BackupCrypto.decryptNsec(payload: payload, key32: key)
+                        let nsec = try BackupCrypto.decryptNsec(payload: file.payload, key32: key)
                         let pubkey = try Schnorr.xonlyPubkey(privkey32: nsec)
                         let pubkeyHex = Hex.encode(pubkey)
                         guard let npub = Nip19.npubEncode(pubkey: Array(pubkey)) else { continue }
                         if seen.contains(npub) { continue }
                         seen.insert(npub)
                         summaries.append(AuthBackupSummary(
-                            backupID: file.fileId,
+                            backupID: file.recordID.recordName,
                             npub: npub,
                             pubkeyHex: pubkeyHex
                         ))
                     } catch {
-                        // Likely wrong PIN or an unrelated file in the folder —
-                        // mirror Android: silently skip and let the empty-set
-                        // check below surface "incorrect PIN".
+                        // Likely wrong PIN or an unrelated record — mirror
+                        // Google flow: silently skip; if every file fails,
+                        // the empty-set check surfaces "incorrect PIN".
                         continue
                     }
                 }
@@ -135,14 +135,16 @@ final class GoogleAuthViewModel {
             state = .setupPin(step: .enter, mismatch: true)
             return
         }
-        guard let sub = pendingSub else { return }
+        guard let userID = pendingUserID else { return }
         pendingSetupFirstPin = nil
         state = .working
         Task { @MainActor in
             do {
-                let key = try await deriveKeyOffMain(sub: sub, pin: pin)
+                let key = try await deriveKeyOffMain(appleUserID: userID, pin: pin)
                 pendingBackupKey = key
                 try await createAndStoreNewAccount()
+            } catch let e as CloudKitBackupError {
+                state = .error(message: Self.message(for: e))
             } catch {
                 state = .error(message: error.localizedDescription)
             }
@@ -155,12 +157,12 @@ final class GoogleAuthViewModel {
     }
 
     func restoreAccount(backupID: String) {
-        guard let key = pendingBackupKey, let accessToken = pendingAccessToken else { return }
+        guard let key = pendingBackupKey else { return }
+        guard let file = pendingFiles.first(where: { $0.recordID.recordName == backupID }) else { return }
         state = .working
         Task { @MainActor in
             do {
-                let payload = try await downloadWithToken(fileId: backupID, token: accessToken)
-                let nsec = try BackupCrypto.decryptNsec(payload: payload, key32: key)
+                let nsec = try BackupCrypto.decryptNsec(payload: file.payload, key32: key)
                 let pubkey = try Schnorr.xonlyPubkey(privkey32: nsec)
                 let pubkeyHex = Hex.encode(pubkey)
                 let keypair = Keypair(privkey: Hex.encode(nsec), pubkey: pubkeyHex)
@@ -174,7 +176,7 @@ final class GoogleAuthViewModel {
     }
 
     /// Called from the choose screen when the user wants to add another
-    /// account to a Google login that already has backups. PIN is already
+    /// account to an Apple login that already has backups. PIN is already
     /// known (we still have `pendingBackupKey`).
     func createAnotherAccount() {
         guard pendingBackupKey != nil else { return }
@@ -182,6 +184,8 @@ final class GoogleAuthViewModel {
         Task { @MainActor in
             do {
                 try await createAndStoreNewAccount()
+            } catch let e as CloudKitBackupError {
+                state = .error(message: Self.message(for: e))
             } catch {
                 state = .error(message: error.localizedDescription)
             }
@@ -191,8 +195,7 @@ final class GoogleAuthViewModel {
     func reset() {
         profileFetchTask?.cancel()
         profileFetchTask = nil
-        pendingSub = nil
-        pendingAccessToken = nil
+        pendingUserID = nil
         pendingBackupKey = nil
         pendingFiles = []
         pendingSetupFirstPin = nil
@@ -202,80 +205,50 @@ final class GoogleAuthViewModel {
     // MARK: - Internals
 
     private func createAndStoreNewAccount() async throws {
-        guard let key = pendingBackupKey else { throw GoogleSignInManager.SignInError.notSignedIn }
+        guard let key = pendingBackupKey else { throw AppleSignInManager.SignInError.missingUserIdentifier }
         let privkey = Schnorr.randomPrivkey()
         let pubkey = try Schnorr.xonlyPubkey(privkey32: privkey)
         let pubkeyHex = Hex.encode(pubkey)
         let payload = try BackupCrypto.encryptNsec(nsec32: privkey, key32: key)
-        try await uploadWithRefresh(payload: payload)
+        try await cloudKitService.uploadBackup(payload: payload)
         let keypair = Keypair(privkey: Hex.encode(privkey), pubkey: pubkeyHex)
         NostrKey.save(keypair)
         NostrKey.registerInAccountList(pubkeyHex)
         state = .done(isNewAccount: true, keypair: keypair)
     }
 
-    private func deriveKeyOffMain(sub: String, pin: String) async throws -> Data {
+    private func deriveKeyOffMain(appleUserID: String, pin: String) async throws -> Data {
         try await Task.detached(priority: .userInitiated) {
-            try BackupCrypto.deriveBackupKey(sub: sub, pin: pin)
+            try BackupCrypto.deriveBackupKey(appleUserID: appleUserID, pin: pin)
         }.value
     }
 
-    // MARK: - Drive call wrappers with 401 refresh
-
-    private func listBackupsWithRefresh() async throws -> [DriveBackupService.BackupFile] {
-        guard let token = pendingAccessToken else { throw GoogleSignInManager.SignInError.notSignedIn }
-        do {
-            return try await driveService.listBackups(accessToken: token)
-        } catch is DriveAuthorizationExpiredError {
-            let fresh = try await refreshToken()
-            return try await driveService.listBackups(accessToken: fresh)
+    private static func message(for error: CloudKitBackupError) -> String {
+        switch error.kind {
+        case .accountUnavailable:
+            return "iCloud isn\u{2019}t available. Sign in to iCloud in Settings and try again."
+        case .schemaMissing:
+            // Surfaces only if the dev/prod schema deploy was skipped — the
+            // view-model normally swallows this as "empty list" during the
+            // list call. Reach this branch via the upload path only.
+            return "iCloud backup isn\u{2019}t set up yet. Try again in a moment."
+        case .quotaExceeded:
+            return "Your iCloud storage is full. Free up space and try again."
+        case .networkUnavailable:
+            return "Couldn\u{2019}t reach iCloud. Check your connection."
+        case .underlying(let err):
+            return err.localizedDescription
         }
-    }
-
-    private func downloadWithRefresh(fileId: String) async throws -> String {
-        guard let token = pendingAccessToken else { throw GoogleSignInManager.SignInError.notSignedIn }
-        do {
-            return try await driveService.downloadBackup(accessToken: token, fileId: fileId)
-        } catch is DriveAuthorizationExpiredError {
-            let fresh = try await refreshToken()
-            return try await driveService.downloadBackup(accessToken: fresh, fileId: fileId)
-        }
-    }
-
-    private func downloadWithToken(fileId: String, token: String) async throws -> String {
-        do {
-            return try await driveService.downloadBackup(accessToken: token, fileId: fileId)
-        } catch is DriveAuthorizationExpiredError {
-            let fresh = try await refreshToken()
-            return try await driveService.downloadBackup(accessToken: fresh, fileId: fileId)
-        }
-    }
-
-    private func uploadWithRefresh(payload: String) async throws {
-        guard let token = pendingAccessToken else { throw GoogleSignInManager.SignInError.notSignedIn }
-        do {
-            try await driveService.uploadBackup(accessToken: token, payload: payload)
-        } catch is DriveAuthorizationExpiredError {
-            let fresh = try await refreshToken()
-            try await driveService.uploadBackup(accessToken: fresh, payload: payload)
-        }
-    }
-
-    private func refreshToken() async throws -> String {
-        let fresh = try await signInManager.refreshDriveAccessToken()
-        pendingAccessToken = fresh
-        return fresh
     }
 
     // MARK: - Profile decoy fetch
+    //
+    // Same privacy mitigation as the Google flow: pull a handful of decoy
+    // profiles from a popular relay first, then issue one combined REQ
+    // covering (real + decoys). The relay sees a mix of real backup pubkeys
+    // and unrelated recent ones — blunting the "this Apple ID corresponds
+    // to these npubs" correlation.
 
-    /// Pulls decoy profiles from a popular relay first, then issues one
-    /// combined REQ for (real + decoys) against the profile relays. From a
-    /// relay operator's perspective the real backup pubkeys are mixed in
-    /// with random recent profiles, blunting the "this Google account
-    /// corresponds to these npubs" linkage. UI updates filter to only the
-    /// real pubkeys. Mirrors `fetchProfilesInBackground` from the Android
-    /// `GoogleAuthViewModel`.
     private func fetchProfilesInBackground(realPubkeys: [String]) {
         profileFetchTask?.cancel()
         let real = Array(Set(realPubkeys))
@@ -311,7 +284,7 @@ final class GoogleAuthViewModel {
 
     private static func fetchDecoyPubkeys(count: Int, timeoutMs: Int) async -> [String] {
         await withCheckedContinuation { (cont: CheckedContinuation<[String], Never>) in
-            let subId = "wisp-google-decoys"
+            let subId = "wisp-apple-decoys"
             let req = #"["REQ","\#(subId)",{"kinds":[0],"limit":\#(count)}]"#
             let url = URL(string: decoyRelay)!
             let task = URLSession.shared.webSocketTask(with: url)
@@ -377,7 +350,7 @@ final class GoogleAuthViewModel {
         onProfile: @MainActor @escaping (_ pubkey: String, _ name: String?, _ picture: String?) -> Void
     ) async {
         guard !authors.isEmpty else { return }
-        let subId = "wisp-google-profiles"
+        let subId = "wisp-apple-profiles"
         let authorsJson = authors.map { "\"\($0)\"" }.joined(separator: ",")
         let req = #"["REQ","\#(subId)",{"kinds":[0],"authors":[\#(authorsJson)]}]"#
 
@@ -419,7 +392,6 @@ final class GoogleAuthViewModel {
         }
     }
 
-    /// Returns the pubkey of any kind:0 EVENT in the relay frame, otherwise nil.
     private static func parseProfileEventPubkey(_ text: String) -> String? {
         guard let data = text.data(using: .utf8),
               let arr = try? JSONSerialization.jsonObject(with: data) as? [Any],

@@ -63,6 +63,12 @@
 		4CDA9000000000000A100004 /* DriveBackupService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA9000000000000B100004 /* DriveBackupService.swift */; };
 		4CDA9000000000000A100005 /* GoogleAuthViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA9000000000000B100005 /* GoogleAuthViewModel.swift */; };
 		4CDA9000000000000A100006 /* GoogleAuthView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA9000000000000B100006 /* GoogleAuthView.swift */; };
+		4CDA9000000000000A100007 /* AppleAuthConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA9000000000000B100007 /* AppleAuthConfig.swift */; };
+		4CDA9000000000000A100008 /* AppleSignInManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA9000000000000B100008 /* AppleSignInManager.swift */; };
+		4CDA9000000000000A100009 /* CloudKitBackupService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA9000000000000B100009 /* CloudKitBackupService.swift */; };
+		4CDA9000000000000A10000A /* AppleAuthViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA9000000000000B10000A /* AppleAuthViewModel.swift */; };
+		4CDA9000000000000A10000B /* AppleAuthView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA9000000000000B10000B /* AppleAuthView.swift */; };
+		4CDA9000000000000A10000C /* AuthFlowComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA9000000000000B10000C /* AuthFlowComponents.swift */; };
 		4CDAD8F42FBE7EB30079A1BA /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = 4CDAD8F32FBE7EB30079A1BA /* GoogleSignIn */; };
 		4CDD000100000000000000B1 /* P256K in Frameworks */ = {isa = PBXBuildFile; productRef = 4CDD000000000000000000B1 /* P256K */; };
 		4CDFAB0000000000000DF101 /* Nip37.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDFAB0000000000000DF001 /* Nip37.swift */; };
@@ -349,6 +355,13 @@
 		4CDA9000000000000B100004 /* DriveBackupService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DriveBackupService.swift; sourceTree = "<group>"; };
 		4CDA9000000000000B100005 /* GoogleAuthViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoogleAuthViewModel.swift; sourceTree = "<group>"; };
 		4CDA9000000000000B100006 /* GoogleAuthView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoogleAuthView.swift; sourceTree = "<group>"; };
+		4CDA9000000000000B100007 /* AppleAuthConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleAuthConfig.swift; sourceTree = "<group>"; };
+		4CDA9000000000000B100008 /* AppleSignInManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleSignInManager.swift; sourceTree = "<group>"; };
+		4CDA9000000000000B100009 /* CloudKitBackupService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKitBackupService.swift; sourceTree = "<group>"; };
+		4CDA9000000000000B10000A /* AppleAuthViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleAuthViewModel.swift; sourceTree = "<group>"; };
+		4CDA9000000000000B10000B /* AppleAuthView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleAuthView.swift; sourceTree = "<group>"; };
+		4CDA9000000000000B10000C /* AuthFlowComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthFlowComponents.swift; sourceTree = "<group>"; };
+		4CDA9000000000000B10000D /* wisp.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = wisp.entitlements; sourceTree = "<group>"; };
 		4CDFAB0000000000000DF001 /* Nip37.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Nip37.swift; sourceTree = "<group>"; };
 		4CDFAB0000000000000DF002 /* Nip09.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Nip09.swift; sourceTree = "<group>"; };
 		4CDFAB0000000000000DF003 /* DraftsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftsViewModel.swift; sourceTree = "<group>"; };
@@ -614,6 +627,13 @@
 				4CDA9000000000000B100004 /* DriveBackupService.swift */,
 				4CDA9000000000000B100005 /* GoogleAuthViewModel.swift */,
 				4CDA9000000000000B100006 /* GoogleAuthView.swift */,
+				4CDA9000000000000B100007 /* AppleAuthConfig.swift */,
+				4CDA9000000000000B100008 /* AppleSignInManager.swift */,
+				4CDA9000000000000B100009 /* CloudKitBackupService.swift */,
+				4CDA9000000000000B10000A /* AppleAuthViewModel.swift */,
+				4CDA9000000000000B10000B /* AppleAuthView.swift */,
+				4CDA9000000000000B10000C /* AuthFlowComponents.swift */,
+				4CDA9000000000000B10000D /* wisp.entitlements */,
 				4CDA87D92F9C546F0079A1BA /* Hex.swift */,
 				4CDA87DB2F9C546F0079A1BA /* Bech32.swift */,
 				4CDA87DD2F9C54700079A1BA /* Secp256k1.swift */,
@@ -1042,6 +1062,12 @@
 				4CDA9000000000000A100004 /* DriveBackupService.swift in Sources */,
 				4CDA9000000000000A100005 /* GoogleAuthViewModel.swift in Sources */,
 				4CDA9000000000000A100006 /* GoogleAuthView.swift in Sources */,
+				4CDA9000000000000A100007 /* AppleAuthConfig.swift in Sources */,
+				4CDA9000000000000A100008 /* AppleSignInManager.swift in Sources */,
+				4CDA9000000000000A100009 /* CloudKitBackupService.swift in Sources */,
+				4CDA9000000000000A10000A /* AppleAuthViewModel.swift in Sources */,
+				4CDA9000000000000A10000B /* AppleAuthView.swift in Sources */,
+				4CDA9000000000000A10000C /* AuthFlowComponents.swift in Sources */,
 				4CDA87F42F9C5CC60079A1BA /* PostCardView.swift in Sources */,
 				4CDA880C2F9C70D80079A1BA /* EntityInfo-wisp.generated.swift in Sources */,
 				4CDA87DE2F9C54700079A1BA /* Secp256k1.swift in Sources */,
@@ -1448,9 +1474,10 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = wisp.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = PK6543767Z;
+				DEVELOPMENT_TEAM = G738XL8P49;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
@@ -1475,7 +1502,7 @@
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 26.4;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = danielmodell.wisp;
+				PRODUCT_BUNDLE_IDENTIFIER = barrydeen.wisp;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				SDKROOT = auto;
@@ -1497,6 +1524,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = wisp.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = G738XL8P49;

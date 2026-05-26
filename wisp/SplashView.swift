@@ -17,9 +17,9 @@ struct SplashView: View {
     /// safe-area inset changes — the cause of the buttons jumping during
     /// launch and sheet animations.
     @State private var lockedHeight: CGFloat?
-
     var onContinueWithNostr: () -> Void = {}
     var onContinueWithGoogle: () -> Void = {}
+    var onContinueWithApple: () -> Void = {}
 
     var body: some View {
         GeometryReader { geo in
@@ -85,6 +85,22 @@ struct SplashView: View {
                     Spacer().frame(height: 32)
 
                     VStack(spacing: 8) {
+                        // Apple HIG: when other third-party sign-in
+                        // options are present, the Sign in with Apple
+                        // button must be at least as prominent. Top of
+                        // the stack is the standard placement.
+                        //
+                        // We gate on `isConfigured` (entitlement present
+                        // in this build) — not on a live iCloud status
+                        // check — so the button mirrors Google's
+                        // always-on-when-configured behaviour. If iCloud
+                        // isn't signed in or the container isn't
+                        // provisioned, AppleAuthView surfaces a friendly
+                        // error after tap.
+                        if AppleAuthConfig.isConfigured {
+                            ContinueWithAppleButton(action: onContinueWithApple)
+                        }
+
                         if GoogleAuthConfig.isConfigured {
                             ContinueWithGoogleButton(action: onContinueWithGoogle)
                         }
@@ -117,6 +133,32 @@ struct SplashView: View {
             withAnimation(.easeOut(duration: 0.35)) { actionsVisible = true }
         }
         .onDisappear { viewModel.cancel() }
+    }
+}
+
+/// Apple HIG-compliant "Continue with Apple" button. We don't use SwiftUI's
+/// built-in `SignInWithAppleButton` because it triggers its own
+/// `ASAuthorizationController` internally — we want our `AppleSignInManager`
+/// to own that so the async/await bridge lives in one place. The visual
+/// styling (white background, black logo, black "Continue with Apple"
+/// wording in a capsule, ≥ 44pt height) follows the HIG so this still
+/// passes review.
+private struct ContinueWithAppleButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: "applelogo")
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(.black)
+                Text("Continue with Apple")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(.black)
+            }
+            .frame(maxWidth: .infinity, minHeight: 44)
+        }
+        .background(Color.white, in: Capsule())
     }
 }
 

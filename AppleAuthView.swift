@@ -1,11 +1,11 @@
 import SwiftUI
 import UIKit
 
-/// SwiftUI screen mirroring the Android `GoogleAuthScreen`. Drives the
-/// view-model state machine through sign-in → check Drive → (set/enter PIN)
-/// → choose/restore/create → done.
-struct GoogleAuthView: View {
-    @State var viewModel = GoogleAuthViewModel()
+/// SwiftUI screen for the "Continue with Apple" flow. Direct port of
+/// `GoogleAuthView`: same state machine, same shared subviews, only the
+/// provider-name copy and the underlying view-model differ.
+struct AppleAuthView: View {
+    @State var viewModel = AppleAuthViewModel()
     var onCancel: () -> Void
     var onDone: (_ isNewAccount: Bool, _ keypair: Keypair) -> Void
 
@@ -13,7 +13,6 @@ struct GoogleAuthView: View {
         ZStack(alignment: .topLeading) {
             Color.wispBackground.ignoresSafeArea()
 
-            // Back arrow — Android equivalent: IconButton at TopStart.
             Button {
                 viewModel.reset()
                 onCancel()
@@ -52,13 +51,12 @@ struct GoogleAuthView: View {
     }
 
     /// `State` isn't `Equatable` (associated values include a `Keypair`), so
-    /// give `onChange` something cheap and stable to diff against. Any state
-    /// transition flips this key.
+    /// give `onChange` something cheap and stable to diff against.
     private var stateKey: String {
         switch viewModel.state {
         case .idle: return "idle"
         case .signingIn: return "signingIn"
-        case .checkingDrive: return "checkingDrive"
+        case .checkingICloud: return "checkingICloud"
         case .enterPinForRestore(let failed): return "enterPin:\(failed)"
         case .setupPin(let step, let mismatch): return "setupPin:\(step):\(mismatch)"
         case .choose(let backups): return "choose:\(backups.map { $0.npub }.joined(separator: ","))"
@@ -71,11 +69,11 @@ struct GoogleAuthView: View {
     @ViewBuilder
     private var contentBlock: some View {
         switch viewModel.state {
-        case .idle, .signingIn, .checkingDrive, .working, .done:
+        case .idle, .signingIn, .checkingICloud, .working, .done:
             let label: String = {
                 switch viewModel.state {
-                case .signingIn: return "Signing in with Google\u{2026}"
-                case .checkingDrive: return "Checking your Google Drive backup\u{2026}"
+                case .signingIn: return "Signing in with Apple\u{2026}"
+                case .checkingICloud: return "Checking your iCloud backup\u{2026}"
                 case .working, .done: return "Almost there\u{2026}"
                 default: return "Starting\u{2026}"
                 }
@@ -93,14 +91,14 @@ struct GoogleAuthView: View {
 
         case .enterPinForRestore(let attemptFailed):
             AuthFlowRestorePinBlock(
-                providerName: "Google",
+                providerName: "Apple",
                 attemptFailed: attemptFailed,
                 onSubmit: { viewModel.submitRestorePin($0) }
             )
 
         case .choose(let backups):
             AuthFlowChooseBlock(
-                providerStorageName: "Google Drive",
+                providerStorageName: "iCloud",
                 backups: backups,
                 onRestore: { viewModel.restoreAccount(backupID: $0.backupID) },
                 onCreate: { viewModel.createAnotherAccount() }
