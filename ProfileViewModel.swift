@@ -472,7 +472,7 @@ final class ProfileViewModel {
 
         galleryStreamTask = Task { [weak self] in
             guard let self else { return }
-            var seen = Set<String>()
+            var seen = Set(self.galleryPosts.map(\.id))
             for await (event, _) in RelayPool.stream(queries: queries, timeout: 12) {
                 if Task.isCancelled { return }
                 if SafetyFilter.shared.shouldDrop(event: event, context: .feed) { continue }
