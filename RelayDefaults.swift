@@ -11,11 +11,19 @@ enum RelayDefaults {
     /// events when we don't yet know an author's outbox. Treat as a discovery
     /// pool — feed/notification queries should route through the user's
     /// scoreboard, not these.
+    ///
+    /// `purplepag.es` is the canonical profiles relay other clients (Amethyst,
+    /// Coracle, Snort) write kind-0 to specifically for cross-client discovery,
+    /// so it carries authors whose write relays we don't otherwise reach.
+    /// `nos.lol` is a high-volume general relay that picks up profiles missing
+    /// from the indexer-branded set.
     nonisolated static let indexers: [String] = [
+        "wss://purplepag.es",
         "wss://indexer.nostrarchives.com",
         "wss://indexer.coracle.social",
         "wss://relay.damus.io",
-        "wss://relay.primal.net"
+        "wss://relay.primal.net",
+        "wss://nos.lol"
     ]
 
     /// Generic fallback relays for paths where we have no scoreboard hint and

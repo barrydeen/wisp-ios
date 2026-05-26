@@ -266,8 +266,7 @@ final class FeedViewModel {
             seenIds.formUnion(ids)
             events = Self.consolidateReposts(filtered)
 
-            let pubkeysInCache = Set(filtered.map(\.pubkey))
-            profiles = profileRepo.getAll(Array(pubkeysInCache))
+            hydrateProfiles(for: events)
             isLoading = false
         }
 
@@ -346,6 +345,34 @@ final class FeedViewModel {
         }
     }
 
+    /// Eagerly populate `self.profiles` from any code path that publishes events
+    /// to the UI. Pulls cached profiles synchronously (in-memory + UserDefaults
+    /// via `ProfileRepository.get`) and fires an immediate indexer fetch for
+    /// the rest. Bypasses MissingProfileWatcher so visible feed rows don't wait
+    /// on the watcher's debounce or get silenced by its exhausted set.
+    private func hydrateProfiles(for events: [NostrEvent]) {
+        var missing: Set<String> = []
+        for event in events {
+            for pk in event.referencedAuthorPubkeys {
+                if profiles[pk] != nil { continue }
+                if let cached = profileRepo.get(pk) {
+                    profiles[pk] = cached
+                } else {
+                    missing.insert(pk)
+                }
+            }
+        }
+        guard !missing.isEmpty else { return }
+        let pks = Array(missing)
+        Task { @MainActor [weak self] in
+            let dict = await ProfileRepository.shared.ensure(pks)
+            guard let self else { return }
+            for (pk, profile) in dict {
+                self.profiles[pk] = profile
+            }
+        }
+    }
+
     /// Register `events` as a periodic-sweep source so the watcher can revisit
     /// what's currently rendered (catches ObjectBox-seeded events that landed
     /// before the watcher started, plus nostr:npub mentions resolved at render
@@ -391,6 +418,7 @@ final class FeedViewModel {
             }.value
             seenIds.formUnion(reIds)
             events = Self.consolidateReposts(reFiltered)
+            hydrateProfiles(for: events)
             await refresh()
             isLoading = false
         }
@@ -503,6 +531,7 @@ final class FeedViewModel {
         withTransaction(Transaction(animation: nil)) {
             events = Self.consolidateReposts(Self.mergeSortedDesc(events, sortedBatch))
         }
+        hydrateProfiles(for: batch)
         pendingNewCount = 0
 
         if relayFeedStatus != .streaming {
@@ -780,10 +809,13 @@ final class FeedViewModel {
             profiles[pubkey] = local
         }
 
-        // Fetch from relays for freshness
+        // Fetch from relays for freshness. `waitForAllRelays` so a fast empty
+        // relay doesn't cancel a slower one holding the newest kind-0 — same
+        // reason `ProfileRepository.runFetch` waits for all of them.
         let results = await RelayPool.query(
             relays: Self.indexerRelays,
-            filter: NostrFilter(kinds: [0], authors: [pubkey], limit: 5)
+            filter: NostrFilter(kinds: [0], authors: [pubkey], limit: 5),
+            waitForAllRelays: true
         )
         if let best = results.filter({ $0.kind == 0 }).max(by: { $0.createdAt < $1.createdAt }),
            let updated = profileRepo.updateFromEvent(best) {
