@@ -1,0 +1,440 @@
+import Foundation
+import UIKit
+
+/// Orchestrates the "Continue with Apple" flow. Mirrors `GoogleAuthViewModel`
+/// state-for-state with two structural differences:
+///   - The identity layer is `AppleSignInManager` (Sign in with Apple) instead
+///     of Google sign-in. We surface the stable `appleIDCredential.user`
+///     identifier — Apple's analogue of Google's JWT `sub` claim — and feed
+///     it into `BackupCrypto.deriveBackupKey(appleUserID:pin:)`.
+///   - The storage layer is iCloud Keychain (`KeychainBackupService`)
+///     instead of Drive. Items are returned with the payload inline, so the
+///     restore-PIN decryption loop reads `BackupFile.payload` directly
+///     rather than issuing a separate download per file.
+///
+/// State machine, error handling, and the decoy-profile fetch privacy
+/// mitigation are otherwise identical to the Google flow.
+@Observable
+@MainActor
+final class AppleAuthViewModel {
+    enum SetupStep: Equatable { case enter, confirm }
+
+    enum State {
+        case idle
+        case signingIn
+        case checkingICloud
+        case enterPinForRestore(attemptFailed: Bool)
+        case setupPin(step: SetupStep, mismatch: Bool)
+        case choose(backups: [AuthBackupSummary])
+        case working
+        case done(isNewAccount: Bool, keypair: Keypair)
+        case error(message: String)
+    }
+
+    private(set) var state: State = .idle
+
+    private let signInManager = AppleSignInManager()
+    private let keychainService = KeychainBackupService()
+
+    private var pendingUserID: String?
+    private var pendingBackupKey: Data?
+    private var pendingFiles: [KeychainBackupService.BackupFile] = []
+    private var pendingSetupFirstPin: String?
+    private var profileFetchTask: Task<Void, Never>?
+
+    // MARK: - Public entry points
+
+    func beginSignIn(presenting: UIViewController) {
+        switch state {
+        case .idle, .error: break
+        default: return
+        }
+        state = .signingIn
+        Task { @MainActor in
+            do {
+                let result = try await signInManager.signIn(presenting: presenting)
+                pendingUserID = result.userID
+
+                state = .checkingICloud
+                let files = try await keychainService.listBackups()
+                pendingFiles = files
+
+                state = files.isEmpty
+                    ? .setupPin(step: .enter, mismatch: false)
+                    : .enterPinForRestore(attemptFailed: false)
+            } catch let e as AppleSignInManager.SignInError {
+                if case .cancelled = e {
+                    reset()
+                } else {
+                    state = .error(message: e.errorDescription ?? "Apple sign-in failed.")
+                }
+            } catch let e as KeychainBackupError {
+                state = .error(message: Self.message(for: e))
+            } catch {
+                state = .error(message: error.localizedDescription)
+            }
+        }
+    }
+
+    func submitRestorePin(_ pin: String) {
+        guard BackupCrypto.isValidPin(pin), let userID = pendingUserID else { return }
+        let files = pendingFiles
+        guard !files.isEmpty else { return }
+        state = .working
+        Task { @MainActor in
+            do {
+                let key = try await deriveKeyOffMain(appleUserID: userID, pin: pin)
+                var summaries: [AuthBackupSummary] = []
+                var seen = Set<String>()
+                for file in files {
+                    do {
+                        let nsec = try BackupCrypto.decryptNsec(payload: file.payload, key32: key)
+                        let pubkey = try Schnorr.xonlyPubkey(privkey32: nsec)
+                        let pubkeyHex = Hex.encode(pubkey)
+                        guard let npub = Nip19.npubEncode(pubkey: Array(pubkey)) else { continue }
+                        if seen.contains(npub) { continue }
+                        seen.insert(npub)
+                        summaries.append(AuthBackupSummary(
+                            backupID: file.backupID,
+                            npub: npub,
+                            pubkeyHex: pubkeyHex
+                        ))
+                    } catch {
+                        // Likely wrong PIN or an unrelated record — mirror
+                        // Google flow: silently skip; if every file fails,
+                        // the empty-set check surfaces "incorrect PIN".
+                        continue
+                    }
+                }
+
+                if summaries.isEmpty {
+                    state = .enterPinForRestore(attemptFailed: true)
+                    return
+                }
+
+                pendingBackupKey = key
+                state = .choose(backups: summaries)
+                fetchProfilesInBackground(realPubkeys: summaries.map { $0.pubkeyHex })
+            } catch {
+                state = .error(message: error.localizedDescription)
+            }
+        }
+    }
+
+    func submitSetupPinEntry(_ pin: String) {
+        guard BackupCrypto.isValidPin(pin) else { return }
+        pendingSetupFirstPin = pin
+        state = .setupPin(step: .confirm, mismatch: false)
+    }
+
+    func submitSetupPinConfirm(_ pin: String) {
+        guard BackupCrypto.isValidPin(pin) else { return }
+        guard let first = pendingSetupFirstPin, first == pin else {
+            pendingSetupFirstPin = nil
+            state = .setupPin(step: .enter, mismatch: true)
+            return
+        }
+        guard let userID = pendingUserID else { return }
+        pendingSetupFirstPin = nil
+        state = .working
+        Task { @MainActor in
+            do {
+                let key = try await deriveKeyOffMain(appleUserID: userID, pin: pin)
+                pendingBackupKey = key
+                try await createAndStoreNewAccount()
+            } catch let e as KeychainBackupError {
+                state = .error(message: Self.message(for: e))
+            } catch {
+                state = .error(message: error.localizedDescription)
+            }
+        }
+    }
+
+    func backToSetupEntry() {
+        pendingSetupFirstPin = nil
+        state = .setupPin(step: .enter, mismatch: false)
+    }
+
+    func restoreAccount(backupID: String) {
+        guard let key = pendingBackupKey else { return }
+        guard let file = pendingFiles.first(where: { $0.backupID == backupID }) else { return }
+        state = .working
+        Task { @MainActor in
+            do {
+                let nsec = try BackupCrypto.decryptNsec(payload: file.payload, key32: key)
+                let pubkey = try Schnorr.xonlyPubkey(privkey32: nsec)
+                let pubkeyHex = Hex.encode(pubkey)
+                let keypair = Keypair(privkey: Hex.encode(nsec), pubkey: pubkeyHex)
+                NostrKey.save(keypair)
+                NostrKey.registerInAccountList(pubkeyHex)
+                state = .done(isNewAccount: false, keypair: keypair)
+            } catch {
+                state = .error(message: error.localizedDescription)
+            }
+        }
+    }
+
+    /// Called from the choose screen when the user wants to add another
+    /// account to an Apple login that already has backups. PIN is already
+    /// known (we still have `pendingBackupKey`).
+    func createAnotherAccount() {
+        guard pendingBackupKey != nil else { return }
+        state = .working
+        Task { @MainActor in
+            do {
+                try await createAndStoreNewAccount()
+            } catch let e as KeychainBackupError {
+                state = .error(message: Self.message(for: e))
+            } catch {
+                state = .error(message: error.localizedDescription)
+            }
+        }
+    }
+
+    func reset() {
+        profileFetchTask?.cancel()
+        profileFetchTask = nil
+        pendingUserID = nil
+        pendingBackupKey = nil
+        pendingFiles = []
+        pendingSetupFirstPin = nil
+        state = .idle
+    }
+
+    // MARK: - Internals
+
+    private func createAndStoreNewAccount() async throws {
+        guard let key = pendingBackupKey else { throw AppleSignInManager.SignInError.missingUserIdentifier }
+        let privkey = Schnorr.randomPrivkey()
+        let pubkey = try Schnorr.xonlyPubkey(privkey32: privkey)
+        let pubkeyHex = Hex.encode(pubkey)
+        let payload = try BackupCrypto.encryptNsec(nsec32: privkey, key32: key)
+        try await keychainService.uploadBackup(payload: payload)
+        let keypair = Keypair(privkey: Hex.encode(privkey), pubkey: pubkeyHex)
+        NostrKey.save(keypair)
+        NostrKey.registerInAccountList(pubkeyHex)
+        state = .done(isNewAccount: true, keypair: keypair)
+    }
+
+    private func deriveKeyOffMain(appleUserID: String, pin: String) async throws -> Data {
+        try await Task.detached(priority: .userInitiated) {
+            try BackupCrypto.deriveBackupKey(appleUserID: appleUserID, pin: pin)
+        }.value
+    }
+
+    private static func message(for error: KeychainBackupError) -> String {
+        switch error.kind {
+        case .iCloudUnavailable:
+            return "iCloud isn\u{2019}t available. Sign in to iCloud in Settings and try again."
+        case .underlying(let status):
+            return "iCloud Keychain error (\(status)). Try again."
+        }
+    }
+
+    // MARK: - Profile decoy fetch
+    //
+    // Same privacy mitigation as the Google flow: pull a handful of decoy
+    // profiles from a popular relay first, then issue one combined REQ
+    // covering (real + decoys). The relay sees a mix of real backup pubkeys
+    // and unrelated recent ones — blunting the "this Apple ID corresponds
+    // to these npubs" correlation.
+
+    private func fetchProfilesInBackground(realPubkeys: [String]) {
+        profileFetchTask?.cancel()
+        let real = Array(Set(realPubkeys))
+        guard !real.isEmpty else { return }
+
+        profileFetchTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let decoys = await Self.fetchDecoyPubkeys(count: Self.decoyCount, timeoutMs: Self.decoyFetchTimeoutMs)
+                .filter { !real.contains($0) }
+            let combined = (real + decoys).shuffled()
+            let realSet = Set(real)
+
+            await Self.queryProfiles(
+                relays: Self.profileRelays,
+                authors: combined,
+                timeoutMs: Self.profileFetchTimeoutMs
+            ) { [weak self] pubkey, name, picture in
+                guard let self else { return }
+                guard realSet.contains(pubkey) else { return }
+                guard case .choose(let backups) = self.state else { return }
+                let updated = backups.map { backup -> AuthBackupSummary in
+                    guard backup.pubkeyHex == pubkey,
+                          (backup.displayName == nil || backup.picture == nil) else { return backup }
+                    var copy = backup
+                    if copy.displayName == nil { copy.displayName = name }
+                    if copy.picture == nil { copy.picture = picture }
+                    return copy
+                }
+                self.state = .choose(backups: updated)
+            }
+        }
+    }
+
+    private static func fetchDecoyPubkeys(count: Int, timeoutMs: Int) async -> [String] {
+        await withCheckedContinuation { (cont: CheckedContinuation<[String], Never>) in
+            let subId = "wisp-apple-decoys"
+            let req = #"["REQ","\#(subId)",{"kinds":[0],"limit":\#(count)}]"#
+            let url = URL(string: decoyRelay)!
+            let task = URLSession.shared.webSocketTask(with: url)
+            let collected = NSMutableOrderedSet()
+            let resumed = NSLock()
+            var didResume = false
+
+            func resumeOnce(_ result: [String]) {
+                resumed.lock()
+                let shouldResume = !didResume
+                if shouldResume { didResume = true }
+                resumed.unlock()
+                guard shouldResume else { return }
+                task.send(.string(#"["CLOSE","\#(subId)"]"#)) { _ in }
+                task.cancel(with: .normalClosure, reason: nil)
+                cont.resume(returning: result)
+            }
+
+            func listen() {
+                task.receive { msg in
+                    switch msg {
+                    case .success(.string(let text)):
+                        if let pubkey = parseProfileEventPubkey(text) {
+                            collected.add(pubkey)
+                            if collected.count >= count {
+                                let arr = collected.array.compactMap { $0 as? String }
+                                resumeOnce(arr)
+                                return
+                            }
+                        } else if isEose(text) {
+                            let arr = collected.array.compactMap { $0 as? String }
+                            resumeOnce(arr)
+                            return
+                        }
+                        listen()
+                    case .success(.data):
+                        listen()
+                    case .failure:
+                        let arr = collected.array.compactMap { $0 as? String }
+                        resumeOnce(arr)
+                    @unknown default:
+                        listen()
+                    }
+                }
+            }
+
+            task.resume()
+            task.send(.string(req)) { _ in }
+            listen()
+
+            Task {
+                try? await Task.sleep(nanoseconds: UInt64(timeoutMs) * 1_000_000)
+                let arr = collected.array.compactMap { $0 as? String }
+                resumeOnce(arr)
+            }
+        }
+    }
+
+    private static func queryProfiles(
+        relays: [String],
+        authors: [String],
+        timeoutMs: Int,
+        onProfile: @MainActor @escaping (_ pubkey: String, _ name: String?, _ picture: String?) -> Void
+    ) async {
+        guard !authors.isEmpty else { return }
+        let subId = "wisp-apple-profiles"
+        let authorsJson = authors.map { "\"\($0)\"" }.joined(separator: ",")
+        let req = #"["REQ","\#(subId)",{"kinds":[0],"authors":[\#(authorsJson)]}]"#
+
+        let tasks: [URLSessionWebSocketTask] = relays.compactMap { urlString in
+            guard let url = URL(string: urlString) else { return nil }
+            let t = URLSession.shared.webSocketTask(with: url)
+            t.resume()
+            t.send(.string(req)) { _ in }
+            listenForProfileEvents(task: t, onProfile: onProfile)
+            return t
+        }
+
+        try? await Task.sleep(nanoseconds: UInt64(timeoutMs) * 1_000_000)
+
+        for t in tasks {
+            t.send(.string(#"["CLOSE","\#(subId)"]"#)) { _ in }
+            t.cancel(with: .normalClosure, reason: nil)
+        }
+    }
+
+    private static func listenForProfileEvents(
+        task: URLSessionWebSocketTask,
+        onProfile: @MainActor @escaping (_ pubkey: String, _ name: String?, _ picture: String?) -> Void
+    ) {
+        task.receive { msg in
+            switch msg {
+            case .success(.string(let text)):
+                if let (pubkey, name, picture) = parseKind0Event(text) {
+                    Task { @MainActor in onProfile(pubkey, name, picture) }
+                }
+                listenForProfileEvents(task: task, onProfile: onProfile)
+            case .success(.data):
+                listenForProfileEvents(task: task, onProfile: onProfile)
+            case .failure:
+                return
+            @unknown default:
+                return
+            }
+        }
+    }
+
+    private static func parseProfileEventPubkey(_ text: String) -> String? {
+        guard let data = text.data(using: .utf8),
+              let arr = try? JSONSerialization.jsonObject(with: data) as? [Any],
+              arr.count >= 3,
+              let tag = arr[0] as? String, tag == "EVENT",
+              let event = arr[2] as? [String: Any],
+              let pubkey = event["pubkey"] as? String else { return nil }
+        return pubkey
+    }
+
+    private static func isEose(_ text: String) -> Bool {
+        guard let data = text.data(using: .utf8),
+              let arr = try? JSONSerialization.jsonObject(with: data) as? [Any],
+              arr.count >= 1,
+              let tag = arr[0] as? String else { return false }
+        return tag == "EOSE"
+    }
+
+    private static func parseKind0Event(_ text: String) -> (String, String?, String?)? {
+        guard let data = text.data(using: .utf8),
+              let arr = try? JSONSerialization.jsonObject(with: data) as? [Any],
+              arr.count >= 3,
+              let tag = arr[0] as? String, tag == "EVENT",
+              let event = arr[2] as? [String: Any],
+              let pubkey = event["pubkey"] as? String,
+              let content = event["content"] as? String,
+              let contentData = content.data(using: .utf8),
+              let profile = try? JSONSerialization.jsonObject(with: contentData) as? [String: Any] else {
+            return nil
+        }
+        let kindAny = event["kind"]
+        let kindOk: Bool = {
+            if let n = kindAny as? Int { return n == 0 }
+            if let n = kindAny as? NSNumber { return n.intValue == 0 }
+            return false
+        }()
+        guard kindOk else { return nil }
+
+        let name = (profile["display_name"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            ?? (profile["name"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        let picture = (profile["picture"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        if name == nil && picture == nil { return nil }
+        return (pubkey, name, picture)
+    }
+
+    // MARK: - Constants
+
+    private static let profileRelays = [
+        "wss://relay.damus.io",
+        "wss://relay.primal.net",
+    ]
+    private static let decoyRelay = "wss://relay.primal.net"
+    private static let decoyCount = 10
+    private static let decoyFetchTimeoutMs = 4_000
+    private static let profileFetchTimeoutMs = 8_000
+}

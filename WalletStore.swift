@@ -61,6 +61,17 @@ final class WalletStore {
         case error(String)
     }
 
+    /// Search progress for the NWC connection-string relay backup, surfaced
+    /// on the NWC setup screen so the user can restore an existing backup.
+    enum NwcBackupSearchState {
+        case idle
+        case searching
+        case found(uri: String, createdAt: Int)
+        case notFound
+        case error(String)
+    }
+    private(set) var nwcBackupSearchState: NwcBackupSearchState = .idle
+
     init(keypair: Keypair) {
         self.keypair = keypair
         self.mode = WalletMode.load(for: keypair.pubkey)
@@ -83,7 +94,9 @@ final class WalletStore {
 
     /// True when this wallet was derived from the user's nsec (recoverable from the key).
     var isDefaultWallet: Bool {
-        (wallet as? SparkWallet)?.isDefaultWallet() ?? false
+        guard let spark = wallet as? SparkWallet else { return false }
+        guard let privkey = Hex.decode(keypair.privkey), privkey.count == 32 else { return false }
+        return spark.isDefaultWallet(privkey: privkey)
     }
 
     /// Mnemonic for the active Spark wallet, nil for NWC or nsec-derived.
@@ -318,6 +331,9 @@ final class WalletStore {
             Task { await self.refreshTransactions() }
             Task { await self.refreshNwcNodeAlias() }
             Task { await self.refreshLightningAddress() }
+            // Persist an encrypted backup of the connection so it can be
+            // restored on another device. Best-effort, off the connect path.
+            Task { await self.publishNwcBackup() }
         }
         return isConnected
     }
@@ -592,6 +608,11 @@ final class WalletStore {
         relayBackupSearchState = .idle
     }
 
+    /// Whether this account is eligible for relay-side encrypted backups
+    /// (kind 30078 Spark seed + NWC connection). Returns `true` for every
+    /// account today — the property is kept as a forward-extensibility
+    /// hook in case a future signer integration needs to opt out (e.g.
+    /// to avoid an extra NIP-44 round-trip on every connect).
     var isRelayBackupSupported: Bool { true }
 
     /// Encrypt the active Spark mnemonic and publish a kind 30078 backup event.
@@ -620,6 +641,67 @@ final class WalletStore {
 
     func resetRelayBackupPublish() {
         relayBackupPublishState = .idle
+    }
+
+    // MARK: - NWC relay backup
+
+    /// Search relays for a previously-published encrypted NWC connection
+    /// backup. Newest non-deleted kind 30078 event at the `nwc-wallet-backup`
+    /// d-tag wins. Restore is always offered when a backup exists.
+    func searchNwcBackup() async {
+        nwcBackupSearchState = .searching
+
+        let relays = backupRelays()
+        guard !relays.isEmpty else {
+            nwcBackupSearchState = .error("No relays configured")
+            return
+        }
+
+        // `waitForAllRelays: true` so a slow relay holding the only copy of
+        // the backup gets a chance to respond — matches the Spark search.
+        let events = await RelayPool.query(
+            relays: relays,
+            filter: NwcBackup.backupFilter(pubkey: keypair.pubkey),
+            timeout: 10,
+            waitForAllRelays: true
+        )
+        let candidate = events
+            .filter { NwcBackup.extractDTag($0) == NwcBackup.dTag && !NwcBackup.isDeletedBackup($0) }
+            .max(by: { $0.createdAt < $1.createdAt })
+
+        guard let candidate else {
+            nwcBackupSearchState = .notFound
+            return
+        }
+
+        switch await NwcBackup.decryptBackup(keypair: keypair, event: candidate) {
+        case .ok(let uri):
+            nwcBackupSearchState = .found(uri: uri, createdAt: candidate.createdAt)
+        case .skip:
+            nwcBackupSearchState = .notFound
+        case .failed(let error):
+            nwcBackupSearchState = .error("Found a backup but couldn't decrypt it — \(error.localizedDescription)")
+        }
+    }
+
+    func resetNwcBackupSearch() {
+        nwcBackupSearchState = .idle
+    }
+
+    /// Encrypt the stored NWC connection string and publish it as a kind
+    /// 30078 backup event. Best-effort: failures are logged, not surfaced,
+    /// since the connection itself still works. Gated on
+    /// `isRelayBackupSupported` to match the Spark backup write path.
+    func publishNwcBackup() async {
+        guard isRelayBackupSupported else { return }
+        guard let uri = WalletKeychain.loadNwcUri(for: keypair.pubkey) else { return }
+        do {
+            let event = try await NwcBackup.createBackupEvent(keypair: keypair, uri: uri)
+            let accepted = await RelayPool.publish(event: event, to: backupRelays(), timeout: 6)
+            backupSearchLog.notice("nwc backup published to \(accepted.count, privacy: .public) relays")
+        } catch {
+            backupSearchLog.error("nwc backup publish failed: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     /// The relay set we use for backup publish/search. Use the user's scored write relays

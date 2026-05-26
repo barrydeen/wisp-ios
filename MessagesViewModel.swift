@@ -29,6 +29,7 @@ final class MessagesViewModel {
     func start() async {
         guard subscription == nil else { return }
         repo.bind(activePubkey: keypair.pubkey)
+        PrivateInteractionStore.shared.bind(activePubkey: keypair.pubkey)
         isLoading = true
 
         // 1. Resolve the DM subscription relay set: kind-10050 DM relays unioned with the
@@ -99,9 +100,21 @@ final class MessagesViewModel {
             return
         }
 
-        // v1 scope: chat messages only. Reactions/files arrive as different rumor kinds and are
-        // dropped silently for now.
-        guard rumor.kind == Nip17.Kind.chatMessage else { return }
+        // Dispatch non-chat rumor kinds (kind-1 private replies, kind-7 private
+        // reactions) through the shared router. Chat messages (kind-14) and file
+        // shares (kind-15 — TODO) stay inline below since they need to mutate
+        // MessagesViewModel's per-conversation snapshot. Reactions to DM
+        // messages (kind-7 with k=14) are also routed to PrivateInteractionRouter
+        // for Phase 3 — for now they drop silently inside the router.
+        guard rumor.kind == Nip17.Kind.chatMessage else {
+            await PrivateInteractionRouter.handleRumor(
+                rumor: rumor,
+                giftWrap: event,
+                relayUrl: relayUrl,
+                keypair: keypair
+            )
+            return
+        }
 
         // Safety check on the inner rumor — kind:1059 wrappers are pure transport so we filter
         // on what's actually inside.

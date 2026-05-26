@@ -25,15 +25,20 @@ final class MissingProfileWatcher {
     @ObservationIgnored private var inflightLocal: Set<String> = []
     @ObservationIgnored private var attempts: [String: Int] = [:]
     @ObservationIgnored private var exhausted: Set<String> = []
+    @ObservationIgnored private var exhaustedAt: [String: Date] = [:]
     @ObservationIgnored private var flushTask: Task<Void, Never>?
     @ObservationIgnored private var sweepTask: Task<Void, Never>?
     @ObservationIgnored private var continuations: [UUID: AsyncStream<String>.Continuation] = [:]
     @ObservationIgnored private var sources: [UUID: @MainActor () -> [NostrEvent]] = [:]
     @ObservationIgnored private var activePubkey: String?
 
-    private static let maxAttempts = 2
+    private static let maxAttempts = 5
     private static let maxBatch = 200
     private static let debounceMs: UInt64 = 100
+    /// How long a pubkey stays in `exhausted` before we'll retry the indexer.
+    /// A brief indexer outage at launch used to silence those profiles for the
+    /// rest of the session — a TTL lets them recover once the network is back.
+    private static let exhaustedTTL: TimeInterval = 600
 
     private init() {}
 
@@ -67,6 +72,7 @@ final class MissingProfileWatcher {
         inflightLocal.removeAll(keepingCapacity: true)
         attempts.removeAll(keepingCapacity: true)
         exhausted.removeAll(keepingCapacity: true)
+        exhaustedAt.removeAll(keepingCapacity: true)
     }
 
     // MARK: - Ingest
@@ -92,7 +98,13 @@ final class MissingProfileWatcher {
         var added = 0
         for pk in pubkeys {
             if pk.isEmpty { continue }
-            if exhausted.contains(pk) { continue }
+            if exhausted.contains(pk) {
+                if let when = exhaustedAt[pk], Date().timeIntervalSince(when) < Self.exhaustedTTL {
+                    continue
+                }
+                exhausted.remove(pk)
+                exhaustedAt.removeValue(forKey: pk)
+            }
             if inflightLocal.contains(pk) { continue }
             if pending.contains(pk) { continue }
             if ProfileRepository.shared.get(pk) != nil { continue }
@@ -122,6 +134,7 @@ final class MissingProfileWatcher {
         if pubkey.isEmpty { return nil }
         if let cached = ProfileRepository.shared.get(pubkey) { return cached }
         exhausted.remove(pubkey)
+        exhaustedAt.removeValue(forKey: pubkey)
         attempts.removeValue(forKey: pubkey)
         let dict = await ProfileRepository.shared.ensure([pubkey])
         let resolved = dict[pubkey]
@@ -220,6 +233,7 @@ final class MissingProfileWatcher {
                 broadcast(pk)
             } else if (attempts[pk] ?? 0) >= Self.maxAttempts {
                 exhausted.insert(pk)
+                exhaustedAt[pk] = Date()
                 attempts.removeValue(forKey: pk)
             }
         }

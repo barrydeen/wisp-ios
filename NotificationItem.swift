@@ -9,6 +9,7 @@ enum NotificationKind: String, Hashable {
     case mention
     case dm
     case pollVote
+    case pollEnded
 }
 
 struct FlatNotificationItem: Identifiable, Hashable {
@@ -22,6 +23,11 @@ struct FlatNotificationItem: Identifiable, Hashable {
     var zapSats: Int64 = 0
     var zapMessage: String = ""
     var isPrivateZap: Bool = false
+    /// True when this row was materialized from a gift-wrapped rumor (private
+    /// reply or private reaction). Drives the lock-icon overlay in
+    /// `NotificationRowView`. Independent of `isPrivateZap`, which only flags
+    /// zap receipts routed through DM relays.
+    var isPrivate: Bool = false
     var quoteEventId: String? = nil
     var actorEventId: String? = nil
     var dmPeerPubkey: String? = nil
@@ -33,6 +39,18 @@ struct FlatNotificationItem: Identifiable, Hashable {
     /// Index of the option zapped on a kind-6969 zap poll (annotates `.zap` items
     /// whose target is one of our zap polls).
     var zapPollOptionIndex: Int? = nil
+    /// Additional zaps from the same actor against the same referenced event,
+    /// folded into this row so a spammer can't push everything else off-screen.
+    /// Populated by the view model at display time; always empty on freshly
+    /// classified items in the repository.
+    var mergedZaps: [FlatNotificationItem] = []
+
+    /// Total sats across the primary zap and every merged duplicate. Used by
+    /// the row + bolt-icon label so the displayed amount reflects the full
+    /// contribution from this actor on this note.
+    var totalZapSats: Int64 {
+        mergedZaps.reduce(zapSats) { $0 + $1.zapSats }
+    }
 }
 
 struct NotificationSummary: Hashable {
@@ -45,6 +63,7 @@ struct NotificationSummary: Hashable {
     var quoteCount: Int = 0
     var dmCount: Int = 0
     var pollVoteCount: Int = 0
+    var pollEndedCount: Int = 0
 }
 
 /// Set-based filter: each type independently toggleable. Mirrors Android.
@@ -58,16 +77,16 @@ enum NotificationFilter: String, CaseIterable, Hashable {
     case dms
 
     /// Map a `NotificationKind` to its filter bucket.
-    /// Quote+mention collapse to .mentions; pollVote → .votes (matches Android).
+    /// Quote+mention collapse to .mentions; pollVote and pollEnded → .votes.
     static func bucket(for kind: NotificationKind) -> NotificationFilter {
         switch kind {
-        case .reply:           .replies
-        case .reaction:        .reactions
-        case .zap:             .zaps
-        case .repost:          .reposts
-        case .quote, .mention: .mentions
-        case .pollVote:        .votes
-        case .dm:              .dms
+        case .reply:               .replies
+        case .reaction:            .reactions
+        case .zap:                 .zaps
+        case .repost:              .reposts
+        case .quote, .mention:     .mentions
+        case .pollVote, .pollEnded: .votes
+        case .dm:                  .dms
         }
     }
 

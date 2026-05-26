@@ -38,6 +38,16 @@ final class NotificationRepository {
     private static let flatCap = 500
 
     private var activePubkey: String = ""
+    /// Active user's raw 32-byte privkey, set by `NotificationsViewModel` after
+    /// `bind(activePubkey:)`. Required for DIP-03 zap receipt decoding — the
+    /// classifier attempts to decrypt the inner kind-9733 with this privkey
+    /// and falls back to the public kind-9734 pubkey on failure. nil for
+    /// remote-signer / watch-only accounts.
+    private var activePrivkey32: Data? = nil
+
+    func setActivePrivkey32(_ data: Data?) {
+        activePrivkey32 = data
+    }
 
     /// Wall-clock floor for firing notification sounds/haptics. Initialized to
     /// app-launch and bumped to `now` every time the app re-enters the
@@ -59,6 +69,34 @@ final class NotificationRepository {
             }
         }
         #endif
+        // Track user-authored kind-1 / poll publishes in real time so a reply
+        // landing seconds later classifies as `.reply` instead of falling
+        // through to `.mention`. Without this hook, `selfEventIds` only learns
+        // about new own-events when the 5-min `refreshSelfEventIds` cycle
+        // queries relays — long enough that an early reply gets misclassified
+        // and locked in by the `insertSeen` dedup.
+        NotificationCenter.default.addObserver(
+            forName: .nostrEventPublished,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            MainActor.assumeIsolated {
+                self?.trackOwnPublish(note)
+            }
+        }
+    }
+
+    private func trackOwnPublish(_ note: Notification) {
+        guard let event = note.userInfo?["event"] as? NostrEvent else { return }
+        guard !activePubkey.isEmpty, event.pubkey == activePubkey else { return }
+        switch event.kind {
+        case 1, Nip88.kindPoll, Nip69.kindZapPoll:
+            if selfEventIds.insert(event.id).inserted {
+                persistSelfEventIds()
+            }
+        default:
+            return
+        }
     }
 
     func bind(activePubkey: String) {
@@ -81,9 +119,11 @@ final class NotificationRepository {
 
     /// Returns true if the event produced a notification (was relevant + not duplicate).
     /// Pass `persist: false` when re-ingesting events that came *from* the local cache to
-    /// avoid pointless write-back churn.
+    /// avoid pointless write-back churn. Pass `isPrivate: true` when the event was
+    /// materialized from an unwrapped gift wrap (private reply / reaction); the resulting
+    /// `FlatNotificationItem.isPrivate` drives the lock icon in the row.
     @discardableResult
-    func ingest(_ event: NostrEvent, relayUrl: String, isFromDmRelay: Bool = false, persist: Bool = true) -> Bool {
+    func ingest(_ event: NostrEvent, relayUrl: String, isFromDmRelay: Bool = false, isPrivate: Bool = false, persist: Bool = true) -> Bool {
         guard !activePubkey.isEmpty else { return false }
         guard insertSeen(event.id) else { return false }
 
@@ -92,7 +132,7 @@ final class NotificationRepository {
         // pubkey inside `classifyZap`, since the receipt's `pubkey` is the LN service.
         if event.kind != 9735 && event.pubkey == activePubkey { return false }
 
-        let item: FlatNotificationItem?
+        var item: FlatNotificationItem?
         switch event.kind {
         case 1:    item = classifyKind1(event)
         case 6:    item = classifyRepost(event)
@@ -101,6 +141,8 @@ final class NotificationRepository {
         case Nip88.kindPollResponse: item = classifyPollVote(event)
         default:   item = nil
         }
+
+        if isPrivate { item?.isPrivate = true }
 
         guard let item else { return false }
         // Self-zap (zapping your own note from your own wallet) — drop after
@@ -153,9 +195,32 @@ final class NotificationRepository {
         case .zap:
             if soundsOn { NotificationSounds.shared.play(.zap) }
             Haptics.shared.zapBuzz()
-        case .pollVote, .dm:
+        case .pollVote, .pollEnded, .dm:
             break
         }
+    }
+
+    /// Insert a synthetic `.pollEnded` row. Called by `NotificationsViewModel`'s
+    /// poll-end scan once a poll's `endsAt` / `closed_at` is in the past and we
+    /// haven't already surfaced it. Caller is responsible for dedup via
+    /// `selfPollEndedNotified` so the row doesn't re-appear after relaunch.
+    func insertPollEnded(pollEvent: NostrEvent, endedAt: Int) -> Bool {
+        let syntheticId = "poll-ended:\(pollEvent.id)"
+        guard insertSeen(syntheticId) else { return false }
+        let item = FlatNotificationItem(
+            id: syntheticId,
+            kind: .pollEnded,
+            actorPubkey: pollEvent.pubkey,
+            referencedEventId: pollEvent.id,
+            timestamp: endedAt
+        )
+        eventCache[pollEvent.id] = pollEvent
+        let insertIdx = flatItems.firstIndex(where: { $0.timestamp < item.timestamp }) ?? flatItems.count
+        flatItems.insert(item, at: insertIdx)
+        if flatItems.count > Self.flatCap { flatItems.removeLast(flatItems.count - Self.flatCap) }
+        summary = computeSummary24h()
+        bumpLatestTimestamp(item.timestamp)
+        return true
     }
 
     func addInlineReply(_ event: NostrEvent, targetEventId: String) {
@@ -179,6 +244,35 @@ final class NotificationRepository {
     }
 
     // MARK: - Classification
+
+    /// Re-run `classifyKind1` over every in-memory `.mention` row and promote
+    /// any whose source event actually targets one of the user's notes to
+    /// `.reply` (or `.quote`). Called by `NotificationsViewModel` after
+    /// `refreshSelfEventIds` discovers ids that weren't in the warm-load /
+    /// publish-time set — without this, the row's icon stays frozen at "@"
+    /// and the 24h summary counters undercount replies until cold relaunch.
+    /// Promotion is one-way (mention → reply / quote); the set only grows
+    /// within a refresh, so a row already classified as `.reply` can never
+    /// legitimately reverse.
+    func reclassifyKind1Mentions() {
+        guard !flatItems.isEmpty else { return }
+        var changed = false
+        withTransaction(Transaction(animation: nil)) {
+            for idx in flatItems.indices {
+                let item = flatItems[idx]
+                guard item.kind == .mention else { continue }
+                guard let event = eventCache[item.id] else { continue }
+                guard let replacement = classifyKind1(event), replacement.kind != .mention else { continue }
+                var updated = replacement
+                updated.isPrivate = item.isPrivate
+                flatItems[idx] = updated
+                changed = true
+            }
+        }
+        if changed {
+            summary = computeSummary24h()
+        }
+    }
 
     private func classifyKind1(_ event: NostrEvent) -> FlatNotificationItem? {
         // Reply: any "e" tag pointing at one of my notes wins.
@@ -281,14 +375,17 @@ final class NotificationRepository {
             sats = amt
         }
 
-        var actor = event.pubkey
-        var message = ""
-        if let descTag = event.tags.first(where: { $0.first == "description" && $0.count >= 2 }),
-           let descData = descTag[1].data(using: .utf8),
-           let descJson = try? JSONSerialization.jsonObject(with: descData) as? [String: Any] {
-            if let p = descJson["pubkey"] as? String { actor = p }
-            if let c = descJson["content"] as? String { message = c }
-        }
+        // DIP-03 resolution: when the embedded kind-9734 carries a bech32-packed
+        // anon tag (`pzap1..._iv1...`) and we have a privkey, decrypt the inner
+        // kind-9733 to reveal the real sender + message. Public zaps fall back
+        // to the embedded description's pubkey/content. `isFromDmRelay` is kept
+        // as a defensive fallback signal for legacy receipts published via the
+        // homegrown private-zap path; new DIP-03 receipts arrive on DM relays
+        // *and* set the explicit isPrivate flag here.
+        let resolved = Nip57.resolveZapSender(receipt: event, recipientPrivkey32: activePrivkey32)
+        let actor = resolved?.pubkey ?? event.pubkey
+        let message = resolved?.message ?? ""
+        let isPrivate = resolved?.isPrivate ?? false
 
         // If the receipt targets one of our zap polls, surface the chosen option index.
         var zapPollOptionIndex: Int? = nil
@@ -304,7 +401,7 @@ final class NotificationRepository {
             timestamp: event.createdAt,
             zapSats: sats,
             zapMessage: message,
-            isPrivateZap: isFromDmRelay,
+            isPrivateZap: isPrivate || isFromDmRelay,
             zapPollOptionIndex: zapPollOptionIndex
         )
     }
@@ -356,7 +453,8 @@ final class NotificationRepository {
             case .mention:  s.mentionCount += 1
             case .quote:    s.quoteCount += 1
             case .dm:       s.dmCount += 1
-            case .pollVote: s.pollVoteCount += 1
+            case .pollVote:  s.pollVoteCount += 1
+            case .pollEnded: s.pollEndedCount += 1
             }
         }
         return s

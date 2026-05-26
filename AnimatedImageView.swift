@@ -16,6 +16,12 @@ struct AnimatedImageView<Placeholder: View, Failure: View>: View {
     /// space at this ratio so layout doesn't jump on load. When absent, the
     /// natural aspect ratio of the decoded image is used after load.
     let aspect: CGFloat?
+    /// `.fit` (default) preserves the source aspect inside an inline layout.
+    /// `.fill` lets a parent-supplied explicit `.frame(width:, height:)`
+    /// crop the frames edge-to-edge — used by the gallery tile so an
+    /// animated thumbnail crops like the static `.scaledToFill()` path
+    /// instead of letterboxing inside the tile.
+    var contentMode: ContentMode = .fit
     @ViewBuilder let placeholder: () -> Placeholder
     @ViewBuilder let failure: () -> Failure
 
@@ -42,9 +48,21 @@ struct AnimatedImageView<Placeholder: View, Failure: View>: View {
                 // `isUserInteractionEnabled = false` so it doesn't intercept
                 // touches at the UIKit layer either — gestures pass cleanly
                 // up to the SwiftUI parent.
-                AnimatedImageRenderer(payload: payload)
-                    .aspectRatio(aspect ?? payload.aspect, contentMode: .fit)
-                    .frame(maxWidth: .infinity)
+                switch contentMode {
+                case .fit:
+                    AnimatedImageRenderer(payload: payload)
+                        .aspectRatio(aspect ?? payload.aspect, contentMode: .fit)
+                        .frame(maxWidth: .infinity)
+                case .fill:
+                    // No SwiftUI aspectRatio wrapper — let UIImageView's
+                    // `.scaleAspectFill` crop into the parent's explicit
+                    // frame. `.clipped()` on the parent (gallery tile)
+                    // keeps the bleed inside the corner-radius rect.
+                    AnimatedImageRenderer(
+                        payload: payload,
+                        contentMode: .scaleAspectFill
+                    )
+                }
             }
         }
         .task(id: url) {
@@ -148,15 +166,24 @@ enum AnimatedImageDecoder {
 /// sites to gate which renderer to pick. False negatives are tolerable —
 /// non-detected GIFs simply fall back to AsyncImage's first-frame behavior,
 /// matching the pre-fix status quo.
+///
+/// WebP is treated as potentially animated even though many WebPs are static:
+/// Giphy and other GIF hosts serve animated content with a `.webp` extension,
+/// and the alternative (rendering them through AsyncImage) freezes them on
+/// frame 0. The animated decoder handles single-frame WebPs correctly, so the
+/// only cost of a false positive is the CGImageSource round-trip.
 enum AnimatedImageHint {
     static func isLikelyAnimated(url: String, mime: String?) -> Bool {
-        if let mime = mime?.lowercased(), mime.hasPrefix("image/gif") {
+        if let mime = mime?.lowercased(),
+           mime.hasPrefix("image/gif") || mime.hasPrefix("image/webp") || mime.hasPrefix("image/apng") {
             return true
         }
         let lower = url.lowercased()
         let withoutQuery = lower.split(separator: "?").first.map(String.init) ?? lower
         let withoutFragment = withoutQuery.split(separator: "#").first.map(String.init) ?? withoutQuery
         return withoutFragment.hasSuffix(".gif")
+            || withoutFragment.hasSuffix(".webp")
+            || withoutFragment.hasSuffix(".apng")
     }
 }
 

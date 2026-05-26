@@ -19,16 +19,28 @@ struct WalletView: View {
     @State private var showSend = false
     @State private var showReceive = false
     @State private var showAllTransactions = false
-    @AppStorage private var balanceHidden: Bool
+    @AppStorage private var balanceDisplayRaw: String
     @AppStorage("walletBalanceUnit") private var balanceUnitRaw: String = WalletBalanceUnit.sats.rawValue
 
     private var hasCachedDataOrConnected: Bool {
         store.balanceMsats != nil || !store.transactions.isEmpty
     }
 
+    private var balanceDisplay: WalletBalanceDisplayMode {
+        WalletBalanceDisplayMode(rawValue: balanceDisplayRaw) ?? .sats
+    }
+
     init(store: WalletStore) {
         self.store = store
-        _balanceHidden = AppStorage(wrappedValue: false, "balanceHidden_\(store.keypair.pubkey)")
+        let key = WalletBalanceDisplayMode.storageKey(pubkey: store.keypair.pubkey)
+        // Migrate the legacy boolean hide-balance preference into the
+        // tri-state display mode the first time this wallet is opened.
+        let defaults = UserDefaults.standard
+        if defaults.string(forKey: key) == nil,
+           defaults.bool(forKey: "balanceHidden_\(store.keypair.pubkey)") {
+            defaults.set(WalletBalanceDisplayMode.hidden.rawValue, forKey: key)
+        }
+        _balanceDisplayRaw = AppStorage(wrappedValue: WalletBalanceDisplayMode.sats.rawValue, key)
     }
 
     var body: some View {
@@ -193,10 +205,17 @@ struct WalletView: View {
     @ViewBuilder
     private var walletLogo: some View {
         if store.mode == .spark {
+            // The SparkBreezLogo asset renders as a template, so a
+            // foregroundStyle is required for the logo to be visible.
+            // Without it the all-white SVG paths sit invisible against
+            // the light-mode surface; tinting to `wispOnSurface` gives
+            // us auto-adapting contrast (light grey on dark, near-black
+            // on light) the same way the rest of the wallet UI does.
             Image("SparkBreezLogo")
                 .resizable()
                 .scaledToFit()
                 .frame(height: 18)
+                .foregroundStyle(Color.wispOnSurface)
         } else {
             HStack(spacing: 8) {
                 Image("NwcLogo")
@@ -234,10 +253,10 @@ struct WalletView: View {
                     .foregroundStyle(Color.wispPrimary)
                     .font(.system(size: 16))
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Your default wallet is secured by your key")
+                    Text("Secured by your Nostr key")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.primary)
-                    Text("Derived from your Nostr key — restores on any device when you sign in. Tap to also save your seed phrase as a backup.")
+                    Text("Restores on any device when you sign in. Tap to also save your seed phrase as a backup.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -285,13 +304,13 @@ struct WalletView: View {
     private var balanceCard: some View {
         let sats = store.balanceMsats.map { $0 / 1000 } ?? 0
         let unit = WalletBalanceUnit(rawValue: balanceUnitRaw) ?? .sats
-        // When fiat mode is on, the sats/btc/msats picker is overridden — we
-        // render the fiat-converted balance with the currency symbol baked
-        // into the formatted string. Falls back to sats display if the
+        let mode = balanceDisplay
+        // In fiat mode the sats/btc/msats picker is overridden — we render the
+        // fiat-converted balance with the currency symbol baked into the
+        // formatted string. Falls back to the unit display if the
         // exchange-rate cache hasn't loaded yet.
-        let fiatBalance: String? = settings.fiatModeEnabled
-            ? ExchangeRateCache.shared.satsToFiat(sats, currency: settings.fiatCurrency)
-                .map { _ in CurrencyFormatter.full(sats: sats) }
+        let fiatBalance: String? = mode == .fiat
+            ? CurrencyFormatter.walletFiat(sats: sats)
             : nil
         // Pulse while no trustworthy value exists to display: still
         // connecting, or no balance has landed yet (the just-imported
@@ -301,10 +320,12 @@ struct WalletView: View {
             && (!store.isConnected || store.balanceMsats == nil)
         return VStack(spacing: 14) {
             Button {
-                withAnimation(.easeInOut(duration: 0.15)) { balanceHidden.toggle() }
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    balanceDisplayRaw = mode.next.rawValue
+                }
             } label: {
                 VStack(spacing: 6) {
-                    if balanceHidden {
+                    if mode == .hidden {
                         Text("* * * * *")
                             .font(.system(size: 52, weight: .semibold, design: .rounded))
                             .foregroundStyle(.primary)
@@ -328,11 +349,21 @@ struct WalletView: View {
                                 .animation(syncing ? nil : .easeInOut(duration: 0.25), value: sats)
                         }
                     }
-                    if fiatBalance == nil, !unit.unitLabel.isEmpty {
-                        Text(unit.unitLabel)
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                    }
+                    // Unit-label slot. Always rendered (placeholder space
+                    // when the active display mode doesn't have one) so
+                    // the lightning address + send/receive row below
+                    // stays anchored at the same Y position as the user
+                    // cycles sats → fiat → hidden → sats. Without the
+                    // always-reserved slot, switching out of sats mode
+                    // shifts the entire dashboard up by a `callout`'s
+                    // worth of line height and back when re-entered.
+                    let showUnitLabel = mode != .hidden
+                        && fiatBalance == nil
+                        && !unit.unitLabel.isEmpty
+                    Text(showUnitLabel ? unit.unitLabel : " ")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .opacity(showUnitLabel ? 1 : 0)
                 }
                 .frame(maxWidth: .infinity)
             }
@@ -460,7 +491,7 @@ struct WalletView: View {
 
             let recent = Array(store.transactions.prefix(5))
             ForEach(recent) { tx in
-                WalletTransactionRow(tx: tx)
+                WalletTransactionRow(tx: tx, displayMode: balanceDisplay)
                     .padding(.horizontal, 16)
                 if tx.id != recent.last?.id {
                     Divider().opacity(0.12).padding(.leading, 68)

@@ -504,16 +504,17 @@ final class EngagementRepository {
             current.zapSats += sats
             current.zapCount += 1
 
-            // Extract the true zapper pubkey + message from the description tag (NIP-57):
-            // event.pubkey is the LNURL server publishing the receipt, not the actual zapper.
-            var zapperPubkey = event.pubkey
-            var message = ""
-            if let descTag = event.tags.first(where: { $0.first == "description" && $0.count >= 2 }),
-               let descData = descTag[1].data(using: .utf8),
-               let descJson = try? JSONSerialization.jsonObject(with: descData) as? [String: Any] {
-                if let p = descJson["pubkey"] as? String { zapperPubkey = p }
-                if let c = descJson["content"] as? String { message = c }
-            }
+            // Resolve the real zapper via `Nip57.resolveZapSender`, which handles
+            // both public zaps (description.pubkey path) and DIP-03 private zaps
+            // (decrypt inner kind-9733 with the recipient's privkey, fall back
+            // to ephemeral pubkey when decryption fails). For DIP-03 receipts
+            // arriving for a note that isn't ours (we're a third-party observer)
+            // we can't decrypt — those still surface with the ephemeral pubkey,
+            // which is the correct privacy-preserving behavior.
+            let privkey32 = NostrKey.load().flatMap { Hex.decode($0.privkey) }
+            let resolved = Nip57.resolveZapSender(receipt: event, recipientPrivkey32: privkey32)
+            let zapperPubkey = resolved?.pubkey ?? event.pubkey
+            let message = resolved?.message ?? ""
             current.zappers.append(Zapper(pubkey: zapperPubkey, sats: sats, message: message))
             // Zapper pubkey is sourced from the description tag (the actual
             // sender), not event.pubkey (the LNURL server). Always observe it

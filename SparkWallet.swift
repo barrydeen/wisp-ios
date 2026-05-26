@@ -54,7 +54,6 @@ final class SparkWallet: Wallet {
     func clearMnemonic() {
         WalletKeychain.deleteSparkMnemonic(for: pubkey)
         UserDefaults.standard.removeObject(forKey: "spark_seed_acked_\(pubkey)")
-        UserDefaults.standard.removeObject(forKey: "spark_is_default_\(pubkey)")
         balanceMsats = nil
         isConnected = false
     }
@@ -71,16 +70,24 @@ final class SparkWallet: Wallet {
         let entropy = Self.deriveSparkEntropy(privkey: privkey)
         let mnemonic = try Bip39.mnemonic(fromEntropy: entropy)
         saveMnemonic(mnemonic)
-        UserDefaults.standard.set(true, forKey: "spark_is_default_\(pubkey)")
         return mnemonic
     }
 
-    /// True when the current wallet was derived from the user's nsec via
-    /// `generateDefaultFromPrivkey`. Such wallets need no NIP-78 relay backup —
-    /// the seed is recoverable from the key and Breez retains the lightning
-    /// address registration server-side.
-    func isDefaultWallet() -> Bool {
-        UserDefaults.standard.bool(forKey: "spark_is_default_\(pubkey)")
+    /// True when the currently-saved mnemonic matches the deterministic
+    /// `Bip39.mnemonic(fromEntropy: deriveSparkEntropy(privkey))` for this
+    /// account — i.e. the wallet is recoverable on any device by signing
+    /// in with the same key. Computed by comparing the stored mnemonic
+    /// against the deterministic derivation rather than reading a sticky
+    /// flag, so a wallet restored from a non-default NIP-78 backup
+    /// correctly reports `false` even on a device where the user had
+    /// previously generated the default wallet (a stale flag was
+    /// surfacing the "default wallet" banner over a non-default
+    /// restored wallet).
+    func isDefaultWallet(privkey: Data) -> Bool {
+        guard let current = loadMnemonic() else { return false }
+        let entropy = Self.deriveSparkEntropy(privkey: privkey)
+        guard let derived = try? Bip39.mnemonic(fromEntropy: entropy) else { return false }
+        return Nip78Backup.normalizeMnemonic(current) == Nip78Backup.normalizeMnemonic(derived)
     }
 
     /// HKDF-SHA256 entropy derivation. Byte-for-byte equivalent to Android

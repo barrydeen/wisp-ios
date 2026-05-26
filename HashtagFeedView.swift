@@ -136,6 +136,10 @@ struct HashtagFeedView: View {
                     }
                 }
             }
+            // Stable feed layout while sheets presented from a PostCardView
+            // row raise the keyboard — see NoteListFeedView for the full
+            // rationale.
+            .ignoresSafeArea(.keyboard, edges: .bottom)
             .refreshable { await viewModel.refresh() }
         }
     }

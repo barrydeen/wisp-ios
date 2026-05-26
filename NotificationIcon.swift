@@ -3,14 +3,15 @@ import SwiftUI
 enum NotificationStyle {
     static func actionText(_ kind: NotificationKind) -> String {
         switch kind {
-        case .reply:    "replied"
-        case .reaction: "reacted"
-        case .repost:   "reposted"
-        case .zap:      "zapped"
-        case .quote:    "quoted"
-        case .mention:  "mentioned you"
-        case .dm:       "messaged you"
-        case .pollVote: "voted on your poll"
+        case .reply:     "replied"
+        case .reaction:  "reacted"
+        case .repost:    "reposted"
+        case .zap:       "zapped"
+        case .quote:     "quoted"
+        case .mention:   "mentioned you"
+        case .dm:        "messaged you"
+        case .pollVote:  "voted on your poll"
+        case .pollEnded: "poll ended"
         }
     }
 
@@ -60,8 +61,9 @@ struct NotificationTypeIcon: View {
                 VStack(spacing: 0) {
                     BoltIcon(tint: .wispZapColor)
                         .frame(width: 22, height: 22)
-                    if showSats, item.zapSats > 0 {
-                        Text(NotificationStyle.formatSats(item.zapSats))
+                    let displaySats = item.totalZapSats
+                    if showSats, displaySats > 0 {
+                        Text(NotificationStyle.formatSats(displaySats))
                             .font(.caption2.weight(.semibold))
                             .foregroundStyle(Color.wispZapColor)
                             .lineLimit(1)
@@ -97,6 +99,10 @@ struct NotificationTypeIcon: View {
                     .foregroundStyle(Color.wispPrimary)
             case .pollVote:
                 Image(systemName: "chart.bar")
+                    .font(.system(size: 18))
+                    .foregroundStyle(Color.wispPrimary)
+            case .pollEnded:
+                Image(systemName: "flag.checkered")
                     .font(.system(size: 18))
                     .foregroundStyle(Color.wispPrimary)
             }

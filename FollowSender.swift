@@ -35,6 +35,42 @@ final class FollowSender {
         try await publish(follows: current, keypair: keypair)
     }
 
+    /// Republish a recovered contact list verbatim and make it the local
+    /// source of truth. Unlike `follow`/`unfollow` this preserves the
+    /// recovered ordering instead of round-tripping through a `Set`, so a
+    /// restored list reads the same as the original.
+    func restore(follows: [String], keypair: Keypair) async throws {
+        var seen = Set<String>()
+        var ordered: [String] = []
+        for pk in follows where !pk.isEmpty && seen.insert(pk).inserted {
+            ordered.append(pk)
+        }
+        if seen.insert(keypair.pubkey).inserted { ordered.append(keypair.pubkey) }
+
+        var tags: [[String]] = ordered.map { ["p", $0] }
+        if let clientTag = NostrEvent.clientTagIfEnabled() {
+            tags.append(clientTag)
+        }
+
+        let event = try await Signer.sign(
+            keypair: keypair,
+            kind: 3,
+            tags: tags,
+            content: ""
+        )
+
+        let relays = await publishRelays(for: keypair.pubkey)
+        guard !relays.isEmpty else { throw SendError.noRelays }
+
+        FollowsCache.shared.update(pubkey: keypair.pubkey, follows: ordered)
+        await EventStore.shared.persist([event])
+
+        let succeeded = await RelayPool.publish(event: event, to: relays, timeout: 8)
+        if succeeded.isEmpty {
+            throw SendError.publishFailed
+        }
+    }
+
     private func currentFollows(for pubkey: String) -> Set<String> {
         FollowsCache.shared.followsSet(for: pubkey)
     }

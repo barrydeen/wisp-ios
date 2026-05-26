@@ -34,6 +34,7 @@ struct MainView: View {
     @State private var showCustomEmojis = false
     @State private var showHashtagSets = false
     @State private var showLists = false
+    @State private var showPolls = false
     @State private var showCompose = false
     @State private var showDraftsScheduled = false
     @State private var showRelayPicker = false
@@ -69,12 +70,26 @@ struct MainView: View {
     private let drawerWidth: CGFloat = 320
 
     var onAddAccount: () -> Void = {}
+    var onForceRerunOnboarding: () -> Void = {}
 
-    init(keypair: Keypair, onLogout: @escaping () -> Void = {}, onSwitchAccount: @escaping (Keypair) -> Void = { _ in }, onAddAccount: @escaping () -> Void = {}) {
+    /// Restore-prompt candidate when a returning user arrives with a follow
+    /// list that looks clobbered relative to the largest version still
+    /// recoverable from relay history. Set by `runFollowGuardOnce()` on the
+    /// first appearance of MainView per account session.
+    @State private var followRestoreOffer: FollowRestoreCandidate?
+    /// Snapshot of the relay-published follow count at the moment the
+    /// candidate was found. Used by the restore sheet so its "right now" copy
+    /// matches what the guard evaluated against — `FollowsCache` can hold
+    /// stale data from before another client clobbered the on-relay kind-3.
+    @State private var followGuardCurrentCount: Int = 0
+    @State private var followGuardChecked = false
+
+    init(keypair: Keypair, onLogout: @escaping () -> Void = {}, onSwitchAccount: @escaping (Keypair) -> Void = { _ in }, onAddAccount: @escaping () -> Void = {}, onForceRerunOnboarding: @escaping () -> Void = {}) {
         self.keypair = keypair
         self.onLogout = onLogout
         self.onSwitchAccount = onSwitchAccount
         self.onAddAccount = onAddAccount
+        self.onForceRerunOnboarding = onForceRerunOnboarding
         _viewModel = State(initialValue: FeedViewModel(keypair: keypair))
         _messagesVM = State(initialValue: MessagesViewModel(keypair: keypair))
         _notificationsVM = State(initialValue: NotificationsViewModel(keypair: keypair))
@@ -158,6 +173,10 @@ struct MainView: View {
                 onOpenLists: {
                     closeDrawer()
                     showLists = true
+                },
+                onOpenPolls: {
+                    closeDrawer()
+                    showPolls = true
                 },
                 onOpenHashtagSets: {
                     closeDrawer()
@@ -255,6 +274,7 @@ struct MainView: View {
                 keypair: keypair
             )
             SafetyPreferences.shared.bind(activePubkey: keypair.pubkey)
+            PrivateInteractionStore.shared.bind(activePubkey: keypair.pubkey)
             await ExtendedNetworkRepository.shared.bind(activePubkey: keypair.pubkey)
             await SafetyFilter.shared.rebuildSnapshot()
             Task.detached { try? await SpamScorer.shared.warmUp() }
@@ -289,7 +309,27 @@ struct MainView: View {
             // instead of waiting for the user to land on it before kicking off the
             // 3-8s Spark SDK init or NWC relay handshake.
             async let wallet: Void = walletStore.startIfConfigured()
-            _ = await (feed, messages, notifications, groups, emoji, hashtagSets, peopleLists, noteLists, relaySettings, wallet)
+            async let followGuard: Void = runFollowGuardOnce()
+            _ = await (feed, messages, notifications, groups, emoji, hashtagSets, peopleLists, noteLists, relaySettings, wallet, followGuard)
+        }
+        .sheet(item: $followRestoreOffer) { candidate in
+            FollowRestorePromptSheet(
+                candidate: candidate,
+                currentCount: followGuardCurrentCount,
+                onRestore: {
+                    Task { await acceptFollowRestore(candidate) }
+                },
+                onKeep: {
+                    FollowHistoryGuard.didDecline(
+                        pubkey: keypair.pubkey,
+                        currentCount: followGuardCurrentCount,
+                        candidateCount: candidate.count
+                    )
+                    followRestoreOffer = nil
+                }
+            )
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
         }
         .onDisappear {
             viewModel.stop()
@@ -440,6 +480,16 @@ struct MainView: View {
         }
         .sheet(isPresented: $showDraftsScheduled) {
             DraftsScheduledView(keypair: keypair)
+        }
+        .sheet(isPresented: $showPolls) {
+            PollsView(keypair: keypair, onOpenPoll: { eventId, authorPubkey in
+                showPolls = false
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(350))
+                    feedPath.append(ThreadRoute(eventId: eventId, authorPubkey: authorPubkey))
+                    selectedTab = .home
+                }
+            })
         }
         .sheet(isPresented: $showOnlineSheet) {
             OnlineNowSheet(
@@ -718,6 +768,7 @@ struct MainView: View {
     private var topBar: some View {
         HStack(spacing: 12) {
             profileAvatar
+            contentFilterButton
 
             Spacer()
 
@@ -767,6 +818,32 @@ struct MainView: View {
             CachedAvatarView(url: viewModel.userProfile?.picture, size: 32)
         }
         .buttonStyle(.plain)
+    }
+
+    /// Cycles the feed's client-side content filter: ALL → notes →
+    /// gallery → polls → ALL. Icon reflects the active filter. While
+    /// any non-default filter is active the icon picks up the primary
+    /// tint so it's obvious the feed is filtered. Mirrors Wisp Android's
+    /// `ContentFilter` toggle next to the feed selector — see
+    /// barrydeen/wisp commit a6a4a4a for the cross-platform shape.
+    private var contentFilterButton: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                viewModel.cycleContentFilter()
+            }
+        } label: {
+            Image(systemName: viewModel.contentFilter.iconName)
+                .font(.system(size: 17, weight: .medium))
+                .foregroundStyle(
+                    viewModel.contentFilter == .all
+                        ? AnyShapeStyle(.secondary)
+                        : AnyShapeStyle(Color.wispPrimary)
+                )
+                .frame(width: 32, height: 32)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Content filter — \(viewModel.contentFilter.rawValue)")
     }
 
     private var feedPicker: some View {
@@ -848,6 +925,14 @@ struct MainView: View {
     // MARK: - Feed Content
 
     private var emptyStateTitle: String {
+        // When a content filter is engaged and the underlying feed has
+        // events (just none of the active type), use the filter-specific
+        // caption — saying "No posts yet" while the user is staring at
+        // a filtered view is misleading. The base-state titles below
+        // apply when the raw feed itself is still empty.
+        if viewModel.contentFilter != .all && !viewModel.events.isEmpty {
+            return viewModel.contentFilter.emptyStateCaption
+        }
         switch viewModel.currentKind {
         case .follows: return "No posts yet"
         case .relay: return "Connecting…"
@@ -941,7 +1026,7 @@ struct MainView: View {
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if viewModel.events.isEmpty {
+            } else if viewModel.filteredEvents.isEmpty {
                 VStack(spacing: 16) {
                     Image(systemName: "text.bubble")
                         .font(.system(size: 48))
@@ -986,7 +1071,18 @@ struct MainView: View {
                         // wrapper changed every row's underlying tuple
                         // identity on every prepend, forcing SwiftUI to
                         // re-instantiate every visible PostCardView.
-                        ForEach(viewModel.events, id: \.id) { event in
+                        // `filteredEvents` applies the content-filter
+                        // toggle (`viewModel.contentFilter`). Identity is
+                        // still `\.id` so row reuse is unaffected by the
+                        // filter swap — flipping the filter dissolves
+                        // rows rather than tearing down PostCardView
+                        // state. Load-more uses index in the filtered
+                        // list so reaching the bottom of what the user
+                        // sees triggers a fetch even when the underlying
+                        // `events` list is much longer (most events
+                        // were rejected by the filter).
+                        let visible = viewModel.filteredEvents
+                        ForEach(visible, id: \.id) { event in
                             PostCardView(
                                 event: event,
                                 profile: viewModel.profiles[event.pubkey],
@@ -1014,8 +1110,8 @@ struct MainView: View {
                             }
                             .onAppear {
                                 engagementRepo.markVisible(event: event)
-                                if let idx = viewModel.events.firstIndex(where: { $0.id == event.id }),
-                                   idx >= viewModel.events.count - 5 {
+                                if let idx = visible.firstIndex(where: { $0.id == event.id }),
+                                   idx >= visible.count - 5 {
                                     switch viewModel.currentKind {
                                     case .follows: break
                                     case .relay, .relaySet, .extendedNetwork: viewModel.loadMore()
@@ -1181,6 +1277,80 @@ struct MainView: View {
         case 1_000_000...: String(format: "%.1fM", Double(n) / 1_000_000)
         case 1_000...: String(format: "%.1fk", Double(n) / 1_000)
         default: "\(n)"
+        }
+    }
+
+    // MARK: - Follow history guard
+
+    /// Onboarding's outbox-build path runs the follow-history guard once, but
+    /// only on first-launch onboarding. The clobber case this feature
+    /// actually targets — user away from Wisp while another client overwrote
+    /// their kind-3 with a tiny list — is missed because onboarding doesn't
+    /// re-run on subsequent cold launches or account switches. Run a
+    /// lightweight check here on every MainView appearance for an
+    /// already-onboarded account. Cheap when the current count isn't a
+    /// substantial drop from the recorded high-water; the deep relay sweep
+    /// only fires when suspicion is real.
+    private func runFollowGuardOnce() async {
+        guard !followGuardChecked else { return }
+        followGuardChecked = true
+
+        let pubkey = keypair.pubkey
+        guard NostrKey.isOnboardingComplete(pubkey: pubkey) else {
+            NSLog("[FollowGuard] skip — onboarding not complete for \(pubkey.prefix(8))")
+            return
+        }
+        guard !isWatchOnly else {
+            NSLog("[FollowGuard] skip — watch-only account")
+            return
+        }
+
+        let highWater = FollowHistoryGuard.recordedHighWater(for: pubkey)
+        NSLog("[FollowGuard] starting for \(pubkey.prefix(8)) — recorded high-water = \(highWater)")
+
+        let fetched = await RelayPool.query(
+            relays: RelayDefaults.indexers,
+            filter: NostrFilter(kinds: [3], authors: [pubkey])
+        )
+        let kind3s = fetched.filter { $0.kind == 3 }
+        let currentFollows = kind3s
+            .max(by: { $0.createdAt < $1.createdAt })
+            .map(FollowHistoryGuard.followedPubkeys) ?? []
+
+        NSLog("[FollowGuard] indexer fetch: \(kind3s.count) kind-3 event(s), latest has \(currentFollows.count) follows")
+
+        let candidate = await FollowHistoryGuard.evaluateRestore(
+            pubkey: pubkey,
+            currentFollows: currentFollows,
+            fetched: kind3s
+        )
+
+        if let candidate {
+            NSLog("[FollowGuard] candidate: \(candidate.count) follows from createdAt=\(candidate.createdAt) — presenting sheet")
+            followGuardCurrentCount = currentFollows.count
+            followRestoreOffer = candidate
+        } else {
+            NSLog("[FollowGuard] no candidate — no restore offered")
+        }
+    }
+
+    /// User tapped Restore: republish the recovered list as the active
+    /// kind-3, then hand off to ContentView to re-route through
+    /// OnboardingView so the relay scoreboard gets rebuilt from the
+    /// restored follows. The brief onboarding splash is the right UX here —
+    /// it surfaces the rebuild progress and lands the user back in MainView
+    /// with a working feed.
+    private func acceptFollowRestore(_ candidate: FollowRestoreCandidate) async {
+        do {
+            try await FollowSender.shared.restore(
+                follows: candidate.pubkeys,
+                keypair: keypair
+            )
+            FollowHistoryGuard.didRestore(pubkey: keypair.pubkey, to: candidate.count)
+            followRestoreOffer = nil
+            onForceRerunOnboarding()
+        } catch {
+            followRestoreOffer = nil
         }
     }
 

@@ -21,6 +21,15 @@ final class ComposeViewModel {
     var galleryMode: Bool = false
     var explicit: Bool = false
     var powEnabled: Bool = PowPreferences.snapshot().noteEnabled
+    /// True when the user has toggled "Private" in a reply composer. Routes
+    /// publish through `PrivateReplyPublisher` (NIP-17 gift wrap) instead of
+    /// the public kind-1 pipeline. Only meaningful in `.reply` mode — the
+    /// view hides the toggle in `.new` / `.quote`.
+    var isPrivate: Bool = false
+    /// True when the parent of a reply is itself private — the toggle is then
+    /// pre-set to ON and the user can't toggle it off (turning the chain
+    /// public mid-thread would leak the rumor id into a public kind-1).
+    var isPrivateLocked: Bool = false
 
     var attachments: [ComposeAttachment] = []
     var mentions: [InsertedMention] = []
@@ -110,6 +119,15 @@ final class ComposeViewModel {
         self.keypair = keypair
         self.signingKeypair = keypair
         self.mode = mode
+        // If we're composing a reply to a rumor the user already has marked
+        // private, force the privacy toggle on and lock it. This keeps the
+        // whole chain encrypted — a public reply mid-chain would leak the
+        // rumor id into a publicly indexed kind-1 event.
+        if case .reply(let parent, _) = mode,
+           PrivateInteractionStore.shared.contains(parent.id) {
+            isPrivate = true
+            isPrivateLocked = true
+        }
         // Reply / quote drafts are keyed per-parent so closing a half-typed reply
         // and reopening the same parent restores the body. The quote URI is still
         // spliced at publish time, and reply context still lives in tags — only
@@ -145,6 +163,11 @@ final class ComposeViewModel {
         // and writes go through `saveDraft()`. Otherwise opening a draft would clobber
         // the composer's autosave with the draft's content.
         guard currentDraftId == nil else { return }
+        // Private replies never persist a local draft. The buffer disappears on
+        // sheet dismissal — sending a private reply later means retyping. The
+        // alternative (a UserDefaults bucket holding the intended-private body)
+        // would survive cleartext on disk, which violates the privacy intent.
+        if isPrivate { return }
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
         let uploaded = attachments.filter { $0.url != nil }
         guard !trimmed.isEmpty || !uploaded.isEmpty else {
@@ -312,6 +335,12 @@ final class ComposeViewModel {
 
     func toggleNsfw() { explicit.toggle() }
     func togglePow() { powEnabled.toggle() }
+    /// Toggle the "Private" reply state. No-op when locked (replying to a
+    /// rumor that's already private) — the chain stays encrypted end-to-end.
+    func togglePrivate() {
+        guard !isPrivateLocked else { return }
+        isPrivate.toggle()
+    }
 
     // MARK: - Poll mutation
 
@@ -891,6 +920,10 @@ final class ComposeViewModel {
     /// draft to wire a "Draft saved → tap to reopen" toast.
     @discardableResult
     func saveDraft() async -> Nip37.Draft? {
+        // Drafts publish a kind 31234 NIP-37 wrapper to the user's relays. A
+        // private reply explicitly opted out of that — refuse to save a draft
+        // whose intent was to never touch public infrastructure.
+        if isPrivate { return nil }
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
         let uploaded = attachments.filter { $0.url != nil }
         guard !trimmed.isEmpty || !uploaded.isEmpty else { return nil }
@@ -1010,6 +1043,29 @@ final class ComposeViewModel {
         scheduleAt = date
     }
 
+    /// True when the composer has enough content to publish. Drives the
+    /// Publish button's enabled state — the user shouldn't be able to
+    /// tap a button that will immediately error out with "Type something
+    /// first." Mirrors the success conditions in `validate()`, minus the
+    /// transitional "Wait for uploads to finish" case: a partial upload
+    /// counts as content (the user clearly intends to post something);
+    /// the validator catches the not-ready-yet state on tap.
+    var canPublish: Bool {
+        if pollEnabled {
+            let nonBlank = pollOptions
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            if nonBlank.count < 2 { return false }
+            if content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return false }
+            return true
+        }
+        if galleryMode {
+            return !attachments.isEmpty
+        }
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !trimmed.isEmpty || !attachments.isEmpty
+    }
+
     // MARK: - Internals
 
     private func validate() -> String? {
@@ -1035,22 +1091,19 @@ final class ComposeViewModel {
         return nil
     }
 
-    /// True when the user is about to publish a non-gallery post that contains
-    /// only media attachments and no body text. The view uses this to surface a
-    /// "post without a caption?" confirmation so an empty caption doesn't get
-    /// fired off accidentally (e.g. after clearing the draft text but leaving
-    /// the image attached).
-    var isImageOnlyPost: Bool {
-        if galleryMode || pollEnabled { return false }
-        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.isEmpty else { return false }
-        guard !attachments.isEmpty else { return false }
-        return !attachments.contains(where: { $0.url == nil })
-    }
-
     private func runPublishPipeline() async {
         isPublishing = true
         defer { isPublishing = false }
+
+        // Private-reply branch: skip the public kind-1 pipeline entirely. We
+        // also skip PoW (gift wraps don't benefit from spam mining the same
+        // way), scheduling (no scheduler relay accepts kind-1059 wraps), and
+        // attachment URL splicing (the rumor body == typed content, with any
+        // URLs already inline via the composer).
+        if case .reply(let parent, let root) = mode, isPrivate {
+            await runPrivateReplyPipeline(parent: parent, root: root)
+            return
+        }
 
         let kind = determineKind()
         let materialized = materializeMentions(content)
@@ -1144,6 +1197,63 @@ final class ComposeViewModel {
             )
             publishedEventId = event.id
             Haptics.shared.pulse()
+        }
+    }
+
+    /// Send a private reply via NIP-17 gift wrap. Bypasses the public kind-1
+    /// publish path entirely — the synthetic rumor event is delivered to the
+    /// recipient's + sender's DM relays only. The local thread / notification
+    /// surfaces pick up the rumor via `PrivateInteractionRouter` (on echo) and
+    /// via the `.nostrEventPublished` broadcast the publisher emits.
+    private func runPrivateReplyPipeline(parent: NostrEvent, root: NostrEvent?) async {
+        let materialized = materializeMentions(content)
+        let body = appendQuoteUri(to: appendAttachmentUrls(to: materialized))
+
+        // Build the rumor's extra tag set: mentions, pubkey refs from inline
+        // nostr URIs, hashtags, and the client tag. NIP-10 e/p tags are added
+        // inside the publisher via `Nip10.buildReplyTags` — passing them here
+        // would just be deduplicated against the canonical set.
+        var extras: [[String]] = []
+        var existingP = Set<String>()
+        for tag in Nip10.buildReplyTags(replyTo: parent, relayHint: "") where tag.count >= 2 && tag[0] == "p" {
+            existingP.insert(tag[1])
+        }
+        for mention in mentions where !existingP.contains(mention.pubkey) {
+            extras.append(["p", mention.pubkey])
+            existingP.insert(mention.pubkey)
+        }
+        for pk in extractProfilePubkeys(materialized) where !existingP.contains(pk) {
+            extras.append(["p", pk])
+            existingP.insert(pk)
+        }
+        for tag in hashtags { extras.append(["t", tag]) }
+        if let clientTag = NostrEvent.clientTagIfEnabled() { extras.append(clientTag) }
+
+        do {
+            let synthetic = try await PrivateReplyPublisher.send(
+                keypair: keypair,
+                parent: parent,
+                root: root,
+                content: body,
+                extraTags: extras
+            )
+            clearLocalAutosave()
+            // Drafts and private replies don't mix — but if a user toggled
+            // private on top of a draft-restored composer, surface the same
+            // post-publish cleanup so the draft entry doesn't linger.
+            await clearDraftOnPublish()
+            publishedEventId = synthetic.id
+            Haptics.shared.pulse()
+        } catch PrivateReplyPublisher.SendError.noRecipientRelays {
+            lastError = "Recipient has no DM relays."
+        } catch PrivateReplyPublisher.SendError.noOwnRelays {
+            lastError = "Add a DM relay in settings to send private replies."
+        } catch PrivateReplyPublisher.SendError.wrapFailed {
+            lastError = "Failed to encrypt the private reply."
+        } catch let PrivateReplyPublisher.SendError.publishFailed(recipientTried, ownTried) {
+            lastError = "No relay accepted the private reply (tried \(recipientTried) recipient relays, \(ownTried) own relays). Check the Xcode console for per-relay rejection reasons."
+        } catch {
+            lastError = "Failed to send private reply: \(error)"
         }
     }
 
@@ -1508,11 +1618,18 @@ final class ComposeViewModel {
     private func autoPrefixBareBech32(_ s: String) -> String {
         let pattern = "(?<![a-z0-9:./])(?<!nostr:)(nevent1|note1|nprofile1|naddr1|npub1)([a-z0-9]{20,})"
         guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return s }
-        let range = NSRange(s.startIndex..<s.endIndex, in: s)
-        let matches = regex.matches(in: s, range: range)
+        let nsRange = NSRange(s.startIndex..<s.endIndex, in: s)
+        let matches = regex.matches(in: s, range: nsRange)
         if matches.isEmpty { return s }
+        // Skip tokens that appear inside a URL (e.g. ?npub=npub1... query params).
+        var urlRanges: [NSRange] = []
+        if let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) {
+            urlRanges = detector.matches(in: s, range: nsRange).map(\.range)
+        }
         var out = s
         for m in matches.reversed() {
+            let insideURL = urlRanges.contains { NSIntersectionRange($0, m.range).length > 0 }
+            guard !insideURL else { continue }
             guard let r = Range(m.range, in: out) else { continue }
             let token = String(out[r])
             if Nip19.decodeNostrUri(token) != nil {
@@ -1546,16 +1663,23 @@ final class ComposeViewModel {
         let pattern = #"nostr:(npub1[acdefghjklmnpqrstuvwxyz023456789]+|nprofile1[acdefghjklmnpqrstuvwxyz023456789]+)"#
         guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return }
         let ns = content as NSString
-        let matches = regex.matches(in: content, range: NSRange(location: 0, length: ns.length))
+        let fullRange = NSRange(location: 0, length: ns.length)
+        let matches = regex.matches(in: content, range: fullRange)
         guard !matches.isEmpty else { return }
-
+        // Skip nostr: tokens that are embedded inside a URL (e.g. a relay URL
+        // whose path or query string happens to contain a bech32 identifier).
+        var urlRanges: [NSRange] = []
+        if let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) {
+            urlRanges = detector.matches(in: content, range: fullRange).map(\.range)
+        }
         var rewritten = ""
         var lastEnd = 0
         var added: [String: String] = [:]   // pubkey → displayName
         for match in matches {
             rewritten += ns.substring(with: NSRange(location: lastEnd, length: match.range.location - lastEnd))
             let token = ns.substring(with: match.range)
-            if let decoded = Nip19.decodeNostrUri(token), case .profileRef(let pubkey, _) = decoded {
+            let insideURL = urlRanges.contains { NSIntersectionRange($0, match.range).length > 0 }
+            if !insideURL, let decoded = Nip19.decodeNostrUri(token), case .profileRef(let pubkey, _) = decoded {
                 let displayName: String
                 if let existing = added[pubkey] {
                     displayName = existing

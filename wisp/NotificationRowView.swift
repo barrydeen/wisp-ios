@@ -42,7 +42,7 @@ struct NotificationRowView: View {
                 .quickFollowOnLongPress(pubkey: item.actorPubkey)
 
             VStack(alignment: .leading, spacing: 2) {
-                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(displayName(item.actorPubkey))
                         .font(.subheadline.weight(.semibold))
                         .lineLimit(1)
@@ -51,6 +51,13 @@ struct NotificationRowView: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                    if item.isPrivate || item.isPrivateZap {
+                        Image(systemName: "lock.fill")
+                            .font(.caption2)
+                            .foregroundStyle(Color.wispPrimary)
+                            .accessibilityLabel("Private")
+                    }
+                    mergedZapsBadge
                 }
                 voteOptionLabel
                 if let snippet = referencedSnippet {
@@ -66,6 +73,25 @@ struct NotificationRowView: View {
             Text(relativeTime(from: item.timestamp))
                 .font(.caption)
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    /// Pill shown next to "zapped" when this row stands in for multiple zaps
+    /// from the same actor against the same note. Visual hint only — tapping
+    /// the row expands the breakdown.
+    @ViewBuilder
+    private var mergedZapsBadge: some View {
+        if item.kind == .zap, !item.mergedZaps.isEmpty {
+            let extra = item.mergedZaps.count
+            Text("+\(extra) more")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(Color.wispZapColor)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(
+                    Capsule().fill(Color.wispZapColor.opacity(0.15))
+                )
+                .accessibilityLabel("\(extra) more zaps")
         }
     }
 
@@ -112,7 +138,7 @@ struct NotificationRowView: View {
                 quoteExpansion
             case .mention:
                 mentionExpansion
-            case .reaction, .repost, .pollVote:
+            case .reaction, .repost, .pollVote, .pollEnded:
                 referencedNoteExpansion
             case .zap:
                 zapExpansion
@@ -265,15 +291,52 @@ struct NotificationRowView: View {
                     onNoteTap: { id in onNoteTap?(id, nil) }
                 )
             }
-            let msg = item.zapMessage.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !msg.isEmpty {
-                Text("\u{201C}\(msg)\u{201D}")
-                    .font(.subheadline)
-                    .foregroundStyle(.primary)
+            if item.mergedZaps.isEmpty {
+                let msg = item.zapMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !msg.isEmpty {
+                    Text("\u{201C}\(msg)\u{201D}")
+                        .font(.subheadline)
+                        .foregroundStyle(.primary)
+                }
+            } else {
+                mergedZapBreakdown
             }
         }
         .padding(.leading, Self.captionLeadingIndent)
         .padding(.trailing, 12)
+    }
+
+    /// Stacked list of every individual zap folded into this row, primary
+    /// first then duplicates in timestamp-desc order. Each line shows the
+    /// individual amount + optional comment so a real conversation isn't
+    /// lost inside the rollup.
+    @ViewBuilder
+    private var mergedZapBreakdown: some View {
+        let all = [item] + item.mergedZaps
+        VStack(alignment: .leading, spacing: 6) {
+            Text("\(all.count) zaps · \(NotificationStyle.formatSats(item.totalZapSats)) sats total")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Color.wispZapColor)
+            ForEach(all, id: \.id) { entry in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("\(NotificationStyle.formatSats(entry.zapSats)) sats")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.wispZapColor)
+                        .frame(minWidth: 56, alignment: .leading)
+                    let msg = entry.zapMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !msg.isEmpty {
+                        Text("\u{201C}\(msg)\u{201D}")
+                            .font(.caption)
+                            .foregroundStyle(.primary)
+                    } else {
+                        Text(relativeTime(from: entry.timestamp))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
+        }
     }
 
     @ViewBuilder
@@ -317,7 +380,7 @@ struct NotificationRowView: View {
             raw = repo.event(forId: item.id)?.content
         case .quote:
             raw = repo.event(forId: item.actorEventId ?? item.id)?.content
-        case .pollVote:
+        case .pollVote, .pollEnded:
             raw = repo.event(forId: item.referencedEventId)?.content
         case .dm, .reaction, .repost, .zap:
             return nil

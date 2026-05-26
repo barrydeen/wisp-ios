@@ -2,24 +2,28 @@ import Foundation
 import CryptoKit
 import CommonCrypto
 
-/// Backup encryption for the Google Drive nsec backup blob. Mirrors the
-/// Android implementation byte-for-byte so a backup written on either
-/// platform can be restored on the other.
+/// Backup encryption for the cloud-stored nsec backup blob. Mirrors the
+/// Android implementation byte-for-byte for the Google variant so a backup
+/// written on either platform can be restored on the other.
 ///
 /// Two factors gate decryption:
-///   1. The Google ID token's `sub` claim — stable per Google account, used
-///      only to derive a per-account salt. By itself it is not a secret; we
-///      assume Google can see the user's `sub`.
+///   1. A stable per-account identifier (Google JWT `sub` claim, or Apple
+///      `appleIDCredential.user`) — used only to derive a per-account salt.
+///      By itself not a secret; we assume the provider can see it.
 ///   2. A 4–8 digit numeric PIN the user sets at first sign-in. PBKDF2 with
 ///      600k iterations stretches it. ~26 bits of raw PIN entropy is not
-///      enough on its own, but combined with Drive access control and the
+///      enough on its own, but combined with cloud access control and the
 ///      slow KDF an attacker needs ~weeks of compute *after* compromising
-///      the Google account.
+///      the cloud account.
 ///
 /// The encrypted payload is NIP-44 v2 over the hex-encoded nsec, with the
 /// PBKDF2 output in place of the usual ECDH conversation key.
+///
+/// Google and Apple backups use different salt context strings so the same
+/// `(accountID, PIN)` pair can never cross-decrypt between providers.
 nonisolated enum BackupCrypto {
-    private static let salt = "wisp-google-backup"
+    private static let googleSalt = "wisp-google-backup"
+    private static let appleSalt = "wisp-apple-backup"
     private static let pbkdf2Iterations: UInt32 = 600_000
     private static let keyBytes = 32
 
@@ -40,7 +44,21 @@ nonisolated enum BackupCrypto {
         guard !sub.isEmpty else { throw Error.invalidSub }
         guard isValidPin(pin) else { throw Error.invalidPin }
 
-        let saltBytes = perAccountSalt(sub: sub)
+        let saltBytes = perAccountSalt(context: googleSalt, accountID: sub)
+        return try pbkdf2(password: pin, salt: saltBytes, iterations: pbkdf2Iterations, keyLength: keyBytes)
+    }
+
+    /// PBKDF2 key derived from the team-scoped Apple user identifier
+    /// (`ASAuthorizationAppleIDCredential.user`) and the user's PIN. Uses a
+    /// distinct salt context from `deriveBackupKey(sub:pin:)` so the same
+    /// `(accountID, PIN)` pair cannot cross-decrypt between providers — an
+    /// iCloud Keychain item cannot accidentally decrypt with a Drive-derived
+    /// key (or vice versa).
+    static func deriveBackupKey(appleUserID: String, pin: String) throws -> Data {
+        guard !appleUserID.isEmpty else { throw Error.invalidSub }
+        guard isValidPin(pin) else { throw Error.invalidPin }
+
+        let saltBytes = perAccountSalt(context: appleSalt, accountID: appleUserID)
         return try pbkdf2(password: pin, salt: saltBytes, iterations: pbkdf2Iterations, keyLength: keyBytes)
     }
 
@@ -59,9 +77,9 @@ nonisolated enum BackupCrypto {
         return bytes
     }
 
-    private static func perAccountSalt(sub: String) -> Data {
-        let saltKey = SymmetricKey(data: Data(salt.utf8))
-        let mac = HMAC<SHA256>.authenticationCode(for: Data(sub.utf8), using: saltKey)
+    private static func perAccountSalt(context: String, accountID: String) -> Data {
+        let saltKey = SymmetricKey(data: Data(context.utf8))
+        let mac = HMAC<SHA256>.authenticationCode(for: Data(accountID.utf8), using: saltKey)
         return Data(mac)
     }
 

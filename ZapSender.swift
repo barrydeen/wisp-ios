@@ -58,14 +58,46 @@ enum ZapSender {
             return .failure(.amountOutOfRange(minSats: payInfo.minSendable / 1000, maxSats: payInfo.maxSendable / 1000))
         }
 
-        // Receipt routing: for private zaps, route exclusively to the sender's DM inbox
-        // relays so the receipt is not visible in public feeds. Otherwise use the
-        // recipient's read relays + our scored relays. Cap at 5.
+        // Receipt routing.
+        //
+        // Private (DIP-03) zaps: receipt must reach a relay both sides can read.
+        // Pull *both* the recipient's kind-10050 (peer fallback to kind-10002
+        // inbox) AND the sender's own kind-10050. The LNURL operator publishes
+        // the receipt to whatever URLs we put in the zap request's `relays` tag,
+        // so this is also what the recipient observes. Fail if either side has
+        // nothing — silently leaking the receipt to a default public relay
+        // would defeat the whole privacy story. Cap at 8 to fit both sides.
+        //
+        // Public + anonymous zaps: keep the existing recipient-reads + sender-
+        // scored routing. Receipts are discoverable on public infrastructure.
         var relays: [String] = []
         relays.append(contentsOf: relayHints)
         if isPrivate {
-            let dmRelays = RelaySettingsRepository.shared.dmRelays
-            relays.append(contentsOf: dmRelays.isEmpty ? ["wss://relay.damus.io"] : dmRelays)
+            // DIP-03 needs the target event id to derive the deterministic
+            // ephemeral key. Profile zaps and a-tag stream zaps can't.
+            guard eventId != nil else { return .failure(.nostrZapsNotSupported) }
+            // Prefer DM relays for receipt routing (kind-10050 on both sides),
+            // but never refuse to send when they're empty — DIP-03's sender
+            // anonymity property holds even when the receipt lands on public
+            // relays (the outer kind-9734 author is the ephemeral pubkey, the
+            // inner kind-9733 is encrypted to the recipient). Fall back to
+            // recipient's NIP-65 inbox + user's own write relays + scoreboard
+            // — matches PrivateReplyPublisher.
+            var recipientDm = await PeerRelayResolver.resolveDmTargets(pubkey: recipientPubkey)
+            if recipientDm.isEmpty {
+                recipientDm = await RelayListRepository.shared.getReadRelays(recipientPubkey)
+            }
+            var ownDm = RelaySettingsRepository.shared.dmRelays
+            if ownDm.isEmpty {
+                ownDm = await RelayListRepository.shared.getWriteRelays(keypair.pubkey)
+                if let board = RelayScoreBoard.load(pubkey: keypair.pubkey) {
+                    for entry in board.scoredRelays.prefix(5) {
+                        if !ownDm.contains(entry.url) { ownDm.append(entry.url) }
+                    }
+                }
+            }
+            relays.append(contentsOf: recipientDm)
+            relays.append(contentsOf: ownDm)
         } else {
             let recipientReads = await RelayListRepository.shared.getReadRelays(recipientPubkey)
             relays.append(contentsOf: recipientReads)
@@ -74,7 +106,8 @@ enum ZapSender {
             }
         }
         var seen = Set<String>()
-        let dedupedRelays = relays.filter { seen.insert($0).inserted }.prefix(5)
+        let cap = isPrivate ? 8 : 5
+        let dedupedRelays = relays.filter { seen.insert($0).inserted }.prefix(cap)
         let finalRelays = dedupedRelays.isEmpty
             ? ["wss://relay.damus.io", "wss://nos.lol"]
             : Array(dedupedRelays)
@@ -119,7 +152,12 @@ enum ZapSender {
             // count + zapper now; the inbound receipt is deduped against
             // this same `paymentHash` so it doesn't double-count.
             if let eventId, !paymentHash.isEmpty {
-                let zapperPubkey = isAnonymous ? "" : keypair.pubkey
+                // For DIP-03 private zaps the sender locally knows they sent it
+                // (the encryption is *for outside observers*, not the sender's
+                // own UI), so we attribute the optimistic bump to ourselves.
+                // For plain anonymous zaps we deliberately leave the zapper
+                // pubkey empty — those are anonymous to *us* on the card too.
+                let zapperPubkey = (isAnonymous && !isPrivate) ? "" : keypair.pubkey
                 await MainActor.run {
                     EngagementRepository.shared.applyOptimisticZap(
                         eventId: eventId,

@@ -58,6 +58,11 @@ final class NotificationsViewModel {
         // Without this, the repo isn't cleared until `start()` runs inside
         // `.task`, which fires *after* the view's initial layout pass.
         repo.bind(activePubkey: keypair.pubkey)
+        // Hand the user's privkey to the classifier so DIP-03 zap receipts
+        // can be decrypted on the inbound classify path. Watch-only / NIP-46
+        // accounts have an empty/non-hex privkey — `Hex.decode` returns nil
+        // and DIP-03 decode falls back to the public kind-9734 pubkey.
+        repo.setActivePrivkey32(Hex.decode(keypair.privkey))
         loadFilterFromDefaults()
     }
 
@@ -67,6 +72,12 @@ final class NotificationsViewModel {
     /// `repo.flatItems`, `enabledTypes`, or `hiddenSpamPubkeys` change — under
     /// `@Observable` the dependency tracking happens automatically when the
     /// View reads `viewModel.filteredItems`.
+    ///
+    /// Consecutive zaps from the same actor targeting the same note get folded
+    /// into one row so a sender spamming 1-sat zaps can't drown out everything
+    /// else. The most-recent zap becomes the primary; older duplicates ride
+    /// along in `mergedZaps` and surface behind a "+N more" disclosure in the
+    /// expanded view.
     var filteredItems: [FlatNotificationItem] {
         // Bind to `safetyGeneration` so this view re-evaluates when a
         // block / mute edit lands. Without the read, `@Observable` has no
@@ -76,11 +87,25 @@ final class NotificationsViewModel {
         let hidden = hiddenSpamPubkeys
         let allowed = enabledTypes
         let blocked = SafetyFilter.shared.snapshot.blockedPubkeys
-        return repo.flatItems.filter { item in
-            !hidden.contains(item.actorPubkey)
-                && !blocked.contains(item.actorPubkey)
-                && allowed.contains(NotificationFilter.bucket(for: item.kind))
+        var result: [FlatNotificationItem] = []
+        var zapIndexByKey: [String: Int] = [:]
+        for item in repo.flatItems {
+            if hidden.contains(item.actorPubkey) { continue }
+            if blocked.contains(item.actorPubkey) { continue }
+            if !allowed.contains(NotificationFilter.bucket(for: item.kind)) { continue }
+            if item.kind == .zap && !item.referencedEventId.isEmpty {
+                let key = "\(item.actorPubkey)|\(item.referencedEventId)"
+                if let idx = zapIndexByKey[key] {
+                    result[idx].mergedZaps.append(item)
+                } else {
+                    zapIndexByKey[key] = result.count
+                    result.append(item)
+                }
+            } else {
+                result.append(item)
+            }
         }
+        return result
     }
 
     var summary: NotificationSummary { repo.summary }
@@ -324,10 +349,10 @@ final class NotificationsViewModel {
             limit: 100
         )
         let events = await RelayPool.query(relays: Array(relays), filter: filter, timeout: 6)
-        guard !events.isEmpty else { return }
         // Union with whatever the cache had so we don't shrink the horizon if a relay temporarily
         // returned a partial set.
-        var ids = repo.selfEventIds
+        let before = repo.selfEventIds
+        var ids = before
         for e in events { ids.insert(e.id) }
         // Cap at the most recent 100 by createdAt so the e-tag filter payload stays bounded.
         var ranked = events
@@ -338,8 +363,28 @@ final class NotificationsViewModel {
             // Keep the most recent 100 from this fetch + drop older cached ids.
             ids = Set(top)
         }
+        // Restore local synthetic kind-1 events (gift-wrap-materialized private
+        // replies the user authored). These never exist on any relay as signed
+        // kind-1s, so the network query above can't find them — but their ids
+        // must be in `selfEventIds` for `classifyZap` / `classifyReaction` /
+        // `classifyKind1` to recognize incoming notifications targeting them.
+        // Done AFTER the cap so the cap can't evict private rumors when the
+        // user has a large public-event history.
+        let localOwn = await EventStore.shared.loadRecentByAuthor(
+            pubkey: keypair.pubkey, kinds: [1], limit: 200
+        )
+        for e in localOwn where PrivateInteractionStore.shared.contains(e.id) {
+            ids.insert(e.id)
+        }
         repo.selfEventIds = ids
         repo.persistSelfEventIds()
+        // Promote any in-memory `.mention` rows whose source event now matches
+        // a freshly-known self id to `.reply` / `.quote`. Cheap when nothing
+        // grew (early-out on equal sets) but essential when the warm-load /
+        // publish-time path missed an id and a reply already landed.
+        if ids != before {
+            repo.reclassifyKind1Mentions()
+        }
     }
 
     private func startSelfIdsRefreshCycle() {
@@ -399,7 +444,76 @@ final class NotificationsViewModel {
         for e in pollVotes {
             _ = repo.ingest(e, relayUrl: "", isFromDmRelay: false)
         }
+        await scanForEndedPolls()
         await prefetchActorProfilesIfNeeded()
+    }
+
+    /// Scan polls the user authored or voted in and surface a `.pollEnded`
+    /// notification row for any whose `endsAt` / `closed_at` is now in the
+    /// past. Persisted dedup via UserDefaults keeps the row from re-appearing
+    /// after relaunch.
+    private func scanForEndedPolls() async {
+        let pubkey = keypair.pubkey
+        let now = Int(Date().timeIntervalSince1970)
+
+        // Polls I authored — from cache (any kind 1068 / 6969 by me).
+        let mine = await EventStore.shared.loadRecentByAuthor(
+            pubkey: pubkey,
+            kinds: [Nip88.kindPoll, Nip69.kindZapPoll],
+            limit: 200
+        )
+
+        // Polls I voted in — find my kind-1018 responses in cache, resolve
+        // their referenced poll ids, then load those poll events.
+        let myVotes = await EventStore.shared.loadRecentByAuthor(
+            pubkey: pubkey,
+            kinds: [Nip88.kindPollResponse],
+            limit: 300
+        )
+        let votedPollIds = Set(myVotes.compactMap { Nip88.getPollEventId($0) })
+        let voted: [NostrEvent]
+        if !votedPollIds.isEmpty {
+            voted = await EventStore.shared.eventsByIds(Array(votedPollIds))
+                .filter { $0.kind == Nip88.kindPoll || $0.kind == Nip69.kindZapPoll }
+        } else {
+            voted = []
+        }
+
+        var byId: [String: NostrEvent] = [:]
+        for e in mine { byId[e.id] = e }
+        for e in voted { byId[e.id] = e }
+
+        var notified = pollEndedNotifiedIds
+        var added = false
+        for poll in byId.values {
+            let endsAt = poll.kind == Nip69.kindZapPoll
+                ? Nip69.parseClosedAt(poll)
+                : Nip88.parseEndsAt(poll)
+            guard let endsAt, endsAt <= now else { continue }
+            if notified.contains(poll.id) { continue }
+            if repo.insertPollEnded(pollEvent: poll, endedAt: endsAt) {
+                notified.insert(poll.id)
+                added = true
+            }
+        }
+        if added {
+            pollEndedNotifiedIds = notified
+        }
+    }
+
+    // MARK: - Persisted poll-ended dedup
+
+    private var pollEndedNotifiedKey: String { "notif_poll_ended_ids_\(keypair.pubkey)" }
+
+    private var pollEndedNotifiedIds: Set<String> {
+        get { Set(UserDefaults.standard.stringArray(forKey: pollEndedNotifiedKey) ?? []) }
+        set {
+            // Cap at 500 to keep UserDefaults small — only the most recent
+            // poll ids matter for dedup since older polls won't reappear in
+            // EventStore after prune.
+            let capped = Array(newValue).suffix(500)
+            UserDefaults.standard.set(Array(capped), forKey: pollEndedNotifiedKey)
+        }
     }
 
     // MARK: - Live subscriptions
@@ -476,9 +590,46 @@ final class NotificationsViewModel {
                     if SafetyFilter.shared.shouldDrop(event: event, context: .notifications) { continue }
                     _ = self.repo.ingest(event, relayUrl: relayUrl, isFromDmRelay: true)
                     ZapSender.recordIncomingAttribution(from: event)
+                    // Live-update the engagement card for whatever event the
+                    // receipt targets. The per-event engagement subscription
+                    // only queries the target author's read relays, never DM
+                    // relays — so DIP-03 receipts (which land on DM relays
+                    // by design) would otherwise only surface after a thread
+                    // reopen pulls them from EventStore. `applyOptimisticZap`
+                    // is idempotent via `seenZapPaymentHashes`, so this is
+                    // safe to call alongside the regular engagement ingest.
+                    self.fanInZapReceiptToEngagement(event)
                 }
             })
         }
+    }
+
+    /// Forward a kind-9735 zap receipt to `EngagementRepository` so the card's
+    /// zap-sats label updates live. Mirrors the work `classifyZap` does for the
+    /// notification row: extract sats + payment hash from bolt11, resolve the
+    /// real sender via DIP-03 decode (with fallback to the embedded kind-9734's
+    /// pubkey), and bump the per-event engagement box.
+    private func fanInZapReceiptToEngagement(_ receipt: NostrEvent) {
+        guard let eTag = receipt.tags.first(where: { $0.first == "e" && $0.count >= 2 })?[1] else { return }
+        var sats: Int64 = 0
+        var paymentHash = ""
+        if let bolt = receipt.tags.first(where: { $0.first == "bolt11" && $0.count >= 2 })?[1],
+           let decoded = Bolt11.decode(bolt) {
+            sats = decoded.amountSats ?? 0
+            paymentHash = decoded.paymentHash ?? ""
+        }
+        guard !paymentHash.isEmpty else { return }
+        let privkey32 = Hex.decode(keypair.privkey)
+        let resolved = Nip57.resolveZapSender(receipt: receipt, recipientPrivkey32: privkey32)
+        let zapperPubkey = resolved?.pubkey ?? receipt.pubkey
+        let message = resolved?.message ?? ""
+        EngagementRepository.shared.applyOptimisticZap(
+            eventId: eTag,
+            paymentHash: paymentHash,
+            sats: sats,
+            zapperPubkey: zapperPubkey,
+            message: message
+        )
     }
 
     private func reopenSubscriptions() {
@@ -507,6 +658,9 @@ final class NotificationsViewModel {
                 if relaysChanged || idsChanged {
                     self.reopenSubscriptions()
                 }
+                // Rescan in case a poll's `endsAt` passed while the app was
+                // open — picks up completions without waiting for a refresh.
+                await self.scanForEndedPolls()
             }
         }
     }

@@ -15,6 +15,7 @@ struct SidebarDrawerView: View {
     var onOpenDraftsScheduled: () -> Void = {}
     var onOpenCustomEmojis: () -> Void = {}
     var onOpenLists: () -> Void = {}
+    var onOpenPolls: () -> Void = {}
     var onOpenHashtagSets: () -> Void = {}
     var onOpenSocialGraph: () -> Void = {}
     var onOpenSafety: () -> Void = {}
@@ -376,6 +377,9 @@ struct SidebarDrawerView: View {
             }
             DrawerRow(icon: "list.bullet", label: "Lists") {
                 onOpenLists()
+            }
+            DrawerRow(icon: "chart.bar", label: "My Polls") {
+                onOpenPolls()
             }
             DrawerRow(icon: "number.square", label: "Hashtag Sets") {
                 onOpenHashtagSets()

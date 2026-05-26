@@ -37,7 +37,12 @@ struct ComposerPreviewCard: View {
                 // the pill from here. The composer's editable surface
                 // still gets the capsule via its own `.wispMentionPill`
                 // attribute pass.
-                mentionPillStyle: false
+                mentionPillStyle: false,
+                // The card has its own horizontal padding, so the gallery
+                // must size against the card's available width instead of
+                // the feed's edge-bleed math — without this, a 2+ image
+                // post paints past the card's right edge.
+                nested: true
             )
         }
         .padding(12)

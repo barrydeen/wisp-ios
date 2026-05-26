@@ -28,6 +28,12 @@ struct ZapSheet: View {
     var relayHints: [String] = []
     /// Optional extra zap-request tags (e.g. `["a", "30311:host:dTag"]` for stream zaps).
     var extraTags: [[String]] = []
+    /// When true, the picker is hidden and `zapType` is locked to `.private` —
+    /// caller (typically a thread row whose focal is a private rumor) is
+    /// asserting that any zap here must stay in the encrypted chain. The
+    /// caller is responsible for ensuring `privateZapAvailable` is true; the
+    /// sheet doesn't presented if it isn't.
+    var forcePrivate: Bool = false
     /// Fires after a successful zap, with the chosen sats amount.
     var onSuccess: ((Int64) -> Void)? = nil
     var dismiss: () -> Void
@@ -55,6 +61,27 @@ struct ZapSheet: View {
 
     private var canZap: Bool {
         recipientLud16 != nil && store.activeWallet != nil && amountSats > 0
+    }
+
+    /// DIP-03 private zaps need (a) a target event id for the deterministic
+    /// ephemeral derivation, (b) the user's real privkey to sign the inner
+    /// kind-9733 and derive the ephemeral, and (c) at least one own kind-10050
+    /// DM relay to route the receipt through. Recipient DM relays are checked
+    /// inside `ZapSender.sendZap` since they require an async lookup.
+    private var privateZapAvailable: Bool {
+        if eventId == nil { return false }
+        guard let key = NostrKey.load() else { return false }
+        if Hex.decode(key.privkey) == nil { return false }   // remote signer / watch-only
+        if RelaySettingsRepository.shared.dmRelays.isEmpty { return false }
+        return true
+    }
+
+    /// `ZapType` cases available for this recipient. `.private` is filtered
+    /// out when DIP-03 prerequisites aren't met so the user never selects an
+    /// option that's guaranteed to fail at send time.
+    private var availableZapTypes: [ZapType] {
+        if privateZapAvailable { return ZapType.allCases }
+        return ZapType.allCases.filter { $0 != .private }
     }
 
     /// Big amount shown in the hero. While typing custom in fiat mode the
@@ -355,18 +382,41 @@ struct ZapSheet: View {
                             .foregroundStyle(.secondary)
                             .textCase(.uppercase)
                             .tracking(0.5)
-                        Picker("Zap type", selection: $zapType) {
-                            ForEach(ZapType.allCases) { type in
-                                Label(type.rawValue, systemImage: type.icon).tag(type)
+                        if forcePrivate {
+                            HStack(spacing: 6) {
+                                Image(systemName: "lock.fill")
+                                    .foregroundStyle(Color.wispPrimary)
+                                Text("Private — replying to a private thread")
+                                    .font(.subheadline.weight(.semibold))
                             }
-                        }
-                        .pickerStyle(.segmented)
-                        if zapType != .public {
-                            Text(zapType == .anonymous
-                                 ? "Your identity is hidden from the lightning provider."
-                                 : "Hidden identity, receipt routed to your DM inbox relays.")
+                            .padding(10)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color.wispPrimary.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
+                            Text("End-to-end encrypted via DIP-03. Receipt routed through both sides' DM relays.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
+                        } else {
+                            Picker("Zap type", selection: Binding(
+                                get: { availableZapTypes.contains(zapType) ? zapType : .public },
+                                set: { zapType = availableZapTypes.contains($0) ? $0 : .public }
+                            )) {
+                                ForEach(availableZapTypes) { type in
+                                    Label(type.rawValue, systemImage: type.icon).tag(type)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                            if zapType != .public {
+                                Text(zapType == .anonymous
+                                     ? "Your identity is hidden from the lightning provider."
+                                     : "End-to-end encrypted via DIP-03. Receipt routed through both sides' DM relays.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            if eventId != nil && !privateZapAvailable {
+                                Text("Private zap requires DM relays on both sides.")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -420,6 +470,9 @@ struct ZapSheet: View {
 
     private func send() {
         guard let key = NostrKey.load() else { return }
+        // Force-private overrides whatever zapType the user might have left
+        // in state — the caller asserts the encrypted chain invariant.
+        let effectiveType: ZapType = forcePrivate ? .private : zapType
         // Hand off to the global store so the in-flight Task survives sheet
         // dismissal. The store fires the success haptic + thunder sound, marks
         // the eventId as bursting, and routes errors back via `errors[eventId]`.
@@ -433,8 +486,8 @@ struct ZapSheet: View {
             message: message,
             relayHints: relayHints,
             extraTags: extraTags,
-            isAnonymous: zapType == .anonymous || zapType == .private,
-            isPrivate: zapType == .private,
+            isAnonymous: effectiveType == .anonymous || effectiveType == .private,
+            isPrivate: effectiveType == .private,
             onSuccessSats: onSuccess
         )
         dismiss()

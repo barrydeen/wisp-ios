@@ -17,6 +17,12 @@
 		4CABCD010000000000060000 /* ProfileEditViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000060000 /* ProfileEditViewModel.swift */; };
 		4CABCD010000000000070000 /* ProfileEditView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000070000 /* ProfileEditView.swift */; };
 		4CABCD010000000000080000 /* FollowSender.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000080000 /* FollowSender.swift */; };
+		4CABCD010000000000F30001 /* PrivateInteractionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30001 /* PrivateInteractionStore.swift */; };
+		4CABCD010000000000F30002 /* PrivateInteractionRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30002 /* PrivateInteractionRouter.swift */; };
+		4CABCD010000000000F30003 /* PeerRelayResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30003 /* PeerRelayResolver.swift */; };
+		4CABCD010000000000F30004 /* PrivateReplyPublisher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30004 /* PrivateReplyPublisher.swift */; };
+		4CABCD010000000000F30005 /* PrivateReactionPublisher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30005 /* PrivateReactionPublisher.swift */; };
+		4CABCD010000000000F30006 /* Dip03.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30006 /* Dip03.swift */; };
 		4CABCD0100000000000F2001 /* RepostSender.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD0000000000000F2001 /* RepostSender.swift */; };
 		4CABCD0100000000000F2002 /* Nip10001.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD0000000000000F2002 /* Nip10001.swift */; };
 		4CABCD0100000000000F2003 /* PinNoteSender.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD0000000000000F2003 /* PinNoteSender.swift */; };
@@ -63,6 +69,12 @@
 		4CDA9000000000000A100004 /* DriveBackupService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA9000000000000B100004 /* DriveBackupService.swift */; };
 		4CDA9000000000000A100005 /* GoogleAuthViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA9000000000000B100005 /* GoogleAuthViewModel.swift */; };
 		4CDA9000000000000A100006 /* GoogleAuthView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA9000000000000B100006 /* GoogleAuthView.swift */; };
+		4CDA9000000000000A100007 /* AppleAuthConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA9000000000000B100007 /* AppleAuthConfig.swift */; };
+		4CDA9000000000000A100008 /* AppleSignInManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA9000000000000B100008 /* AppleSignInManager.swift */; };
+		4CDA9000000000000A100009 /* KeychainBackupService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA9000000000000B100009 /* KeychainBackupService.swift */; };
+		4CDA9000000000000A10000A /* AppleAuthViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA9000000000000B10000A /* AppleAuthViewModel.swift */; };
+		4CDA9000000000000A10000B /* AppleAuthView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA9000000000000B10000B /* AppleAuthView.swift */; };
+		4CDA9000000000000A10000C /* AuthFlowComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA9000000000000B10000C /* AuthFlowComponents.swift */; };
 		4CDAD8F42FBE7EB30079A1BA /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = 4CDAD8F32FBE7EB30079A1BA /* GoogleSignIn */; };
 		4CDD000100000000000000B1 /* P256K in Frameworks */ = {isa = PBXBuildFile; productRef = 4CDD000000000000000000B1 /* P256K */; };
 		4CDFAB0000000000000DF101 /* Nip37.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDFAB0000000000000DF001 /* Nip37.swift */; };
@@ -70,10 +82,14 @@
 		4CDFAB0000000000000DF103 /* DraftsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDFAB0000000000000DF003 /* DraftsViewModel.swift */; };
 		4CDFAB0000000000000DF104 /* ScheduleSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDFAB0000000000000DF004 /* ScheduleSheet.swift */; };
 		4CDFAB0000000000000DF105 /* DraftsScheduledView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDFAB0000000000000DF005 /* DraftsScheduledView.swift */; };
+		4CDFAB0000000000000DF107 /* PollsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDFAB0000000000000DF007 /* PollsViewModel.swift */; };
+		4CDFAB0000000000000DF109 /* PollsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDFAB0000000000000DF009 /* PollsView.swift */; };
 		4CDFAB0000000000000DF200 /* Nip38.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDFAB0000000000000DF201 /* Nip38.swift */; };
 		4CEE000100000000000000B1 /* BreezSdkSpark in Frameworks */ = {isa = PBXBuildFile; productRef = 4CEE000000000000000000B1 /* BreezSdkSpark */; };
 		4CFA00010001000000A1BA01 /* RelayDefaults.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFA00020001000000A1BA01 /* RelayDefaults.swift */; };
 		4CFA00030001000000A1BA01 /* FollowsCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFA00040001000000A1BA01 /* FollowsCache.swift */; };
+		4CFB00020001000000A1BA01 /* FollowHistoryGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFB00010001000000A1BA01 /* FollowHistoryGuard.swift */; };
+		4CFB00040001000000A1BA01 /* FollowRestorePromptSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFB00030001000000A1BA01 /* FollowRestorePromptSheet.swift */; };
 		4CFA00050001000000A1BA01 /* EventPersistQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFA00060001000000A1BA01 /* EventPersistQueue.swift */; };
 		4CFADE0100000000000F1001 /* SafetyFilter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFADE0000000000000F1001 /* SafetyFilter.swift */; };
 		4CFADE0100000000000F1002 /* SafetyPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFADE0000000000000F1002 /* SafetyPreferences.swift */; };
@@ -153,6 +169,7 @@
 		4CFF0B15000000000000020A /* NwcWallet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF0B14000000000000020A /* NwcWallet.swift */; };
 		4CFF0B17000000000000020B /* SparkWallet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF0B16000000000000020B /* SparkWallet.swift */; };
 		4CFF0B19000000000000020C /* WalletStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF0B18000000000000020C /* WalletStore.swift */; };
+		B0NWCBACKUP00000000000001 /* NwcBackup.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0NWCBACKUP00000000000002 /* NwcBackup.swift */; };
 		4CFF0B1B000000000000020D /* ZapSender.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF0B1A000000000000020D /* ZapSender.swift */; };
 		4CFF0B1D000000000000020E /* WalletView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF0B1C000000000000020E /* WalletView.swift */; };
 		4CFF0B1F000000000000020F /* NwcSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF0B1E000000000000020F /* NwcSetupView.swift */; };
@@ -295,6 +312,12 @@
 		4CABCD000000000000060000 /* ProfileEditViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileEditViewModel.swift; sourceTree = "<group>"; };
 		4CABCD000000000000070000 /* ProfileEditView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileEditView.swift; sourceTree = "<group>"; };
 		4CABCD000000000000080000 /* FollowSender.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowSender.swift; sourceTree = "<group>"; };
+		4CABCD000000000000F30001 /* PrivateInteractionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateInteractionStore.swift; sourceTree = "<group>"; };
+		4CABCD000000000000F30002 /* PrivateInteractionRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateInteractionRouter.swift; sourceTree = "<group>"; };
+		4CABCD000000000000F30003 /* PeerRelayResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeerRelayResolver.swift; sourceTree = "<group>"; };
+		4CABCD000000000000F30004 /* PrivateReplyPublisher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateReplyPublisher.swift; sourceTree = "<group>"; };
+		4CABCD000000000000F30005 /* PrivateReactionPublisher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateReactionPublisher.swift; sourceTree = "<group>"; };
+		4CABCD000000000000F30006 /* Dip03.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Dip03.swift; sourceTree = "<group>"; };
 		4CABCD0000000000000F2001 /* RepostSender.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepostSender.swift; sourceTree = "<group>"; };
 		4CABCD0000000000000F2002 /* Nip10001.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Nip10001.swift; sourceTree = "<group>"; };
 		4CABCD0000000000000F2003 /* PinNoteSender.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PinNoteSender.swift; sourceTree = "<group>"; };
@@ -345,14 +368,25 @@
 		4CDA9000000000000B100004 /* DriveBackupService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DriveBackupService.swift; sourceTree = "<group>"; };
 		4CDA9000000000000B100005 /* GoogleAuthViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoogleAuthViewModel.swift; sourceTree = "<group>"; };
 		4CDA9000000000000B100006 /* GoogleAuthView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoogleAuthView.swift; sourceTree = "<group>"; };
+		4CDA9000000000000B100007 /* AppleAuthConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleAuthConfig.swift; sourceTree = "<group>"; };
+		4CDA9000000000000B100008 /* AppleSignInManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleSignInManager.swift; sourceTree = "<group>"; };
+		4CDA9000000000000B100009 /* KeychainBackupService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainBackupService.swift; sourceTree = "<group>"; };
+		4CDA9000000000000B10000A /* AppleAuthViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleAuthViewModel.swift; sourceTree = "<group>"; };
+		4CDA9000000000000B10000B /* AppleAuthView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleAuthView.swift; sourceTree = "<group>"; };
+		4CDA9000000000000B10000C /* AuthFlowComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthFlowComponents.swift; sourceTree = "<group>"; };
+		4CDA9000000000000B10000D /* wisp.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = wisp.entitlements; sourceTree = "<group>"; };
 		4CDFAB0000000000000DF001 /* Nip37.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Nip37.swift; sourceTree = "<group>"; };
 		4CDFAB0000000000000DF002 /* Nip09.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Nip09.swift; sourceTree = "<group>"; };
 		4CDFAB0000000000000DF003 /* DraftsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftsViewModel.swift; sourceTree = "<group>"; };
 		4CDFAB0000000000000DF004 /* ScheduleSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScheduleSheet.swift; sourceTree = "<group>"; };
 		4CDFAB0000000000000DF005 /* DraftsScheduledView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftsScheduledView.swift; sourceTree = "<group>"; };
+		4CDFAB0000000000000DF007 /* PollsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PollsViewModel.swift; sourceTree = "<group>"; };
+		4CDFAB0000000000000DF009 /* PollsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PollsView.swift; sourceTree = "<group>"; };
 		4CDFAB0000000000000DF201 /* Nip38.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Nip38.swift; sourceTree = "<group>"; };
 		4CFA00020001000000A1BA01 /* RelayDefaults.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayDefaults.swift; sourceTree = "<group>"; };
 		4CFA00040001000000A1BA01 /* FollowsCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowsCache.swift; sourceTree = "<group>"; };
+		4CFB00010001000000A1BA01 /* FollowHistoryGuard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowHistoryGuard.swift; sourceTree = "<group>"; };
+		4CFB00030001000000A1BA01 /* FollowRestorePromptSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowRestorePromptSheet.swift; sourceTree = "<group>"; };
 		4CFA00060001000000A1BA01 /* EventPersistQueue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventPersistQueue.swift; sourceTree = "<group>"; };
 		4CFADE0000000000000F1001 /* SafetyFilter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafetyFilter.swift; sourceTree = "<group>"; };
 		4CFADE0000000000000F1002 /* SafetyPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafetyPreferences.swift; sourceTree = "<group>"; };
@@ -432,6 +466,7 @@
 		4CFF0B14000000000000020A /* NwcWallet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NwcWallet.swift; sourceTree = "<group>"; };
 		4CFF0B16000000000000020B /* SparkWallet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SparkWallet.swift; sourceTree = "<group>"; };
 		4CFF0B18000000000000020C /* WalletStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalletStore.swift; sourceTree = "<group>"; };
+		B0NWCBACKUP00000000000002 /* NwcBackup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NwcBackup.swift; sourceTree = "<group>"; };
 		4CFF0B1A000000000000020D /* ZapSender.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZapSender.swift; sourceTree = "<group>"; };
 		4CFF0B1C000000000000020E /* WalletView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalletView.swift; sourceTree = "<group>"; };
 		4CFF0B1E000000000000020F /* NwcSetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NwcSetupView.swift; sourceTree = "<group>"; };
@@ -606,6 +641,13 @@
 				4CDA9000000000000B100004 /* DriveBackupService.swift */,
 				4CDA9000000000000B100005 /* GoogleAuthViewModel.swift */,
 				4CDA9000000000000B100006 /* GoogleAuthView.swift */,
+				4CDA9000000000000B100007 /* AppleAuthConfig.swift */,
+				4CDA9000000000000B100008 /* AppleSignInManager.swift */,
+				4CDA9000000000000B100009 /* KeychainBackupService.swift */,
+				4CDA9000000000000B10000A /* AppleAuthViewModel.swift */,
+				4CDA9000000000000B10000B /* AppleAuthView.swift */,
+				4CDA9000000000000B10000C /* AuthFlowComponents.swift */,
+				4CDA9000000000000B10000D /* wisp.entitlements */,
 				4CDA87D92F9C546F0079A1BA /* Hex.swift */,
 				4CDA87DB2F9C546F0079A1BA /* Bech32.swift */,
 				4CDA87DD2F9C54700079A1BA /* Secp256k1.swift */,
@@ -614,6 +656,8 @@
 				4CDA87E32F9C54980079A1BA /* RelayPool.swift */,
 				4CFA00020001000000A1BA01 /* RelayDefaults.swift */,
 				4CFA00040001000000A1BA01 /* FollowsCache.swift */,
+				4CFB00010001000000A1BA01 /* FollowHistoryGuard.swift */,
+				4CFB00030001000000A1BA01 /* FollowRestorePromptSheet.swift */,
 				4CFA00060001000000A1BA01 /* EventPersistQueue.swift */,
 				4CAA00020002000000A1BA01 /* AudioTrack.swift */,
 				4CAA00040002000000A1BA01 /* AudioPlayerStore.swift */,
@@ -711,6 +755,7 @@
 				4CFF0B16000000000000020B /* SparkWallet.swift */,
 				4CFF0B270000000000000214 /* SparkUsername.swift */,
 				4CFF0B18000000000000020C /* WalletStore.swift */,
+				B0NWCBACKUP00000000000002 /* NwcBackup.swift */,
 				F8CCD16A2BD383B0A6B0F4DF /* LnurlResolver.swift */,
 				4CFF0B1A000000000000020D /* ZapSender.swift */,
 				4CFF0B1C000000000000020E /* WalletView.swift */,
@@ -811,6 +856,8 @@
 				4CDFAB0000000000000DF003 /* DraftsViewModel.swift */,
 				4CDFAB0000000000000DF004 /* ScheduleSheet.swift */,
 				4CDFAB0000000000000DF005 /* DraftsScheduledView.swift */,
+				4CDFAB0000000000000DF007 /* PollsViewModel.swift */,
+				4CDFAB0000000000000DF009 /* PollsView.swift */,
 				4CFFCC00000000000000040D /* HashtagChipsView.swift */,
 				4CFFCC00000000000000040E /* MentionCandidateRow.swift */,
 				4CFFCC00000000000000040F /* ComposerPreviewCard.swift */,
@@ -852,6 +899,12 @@
 				4CABCD000000000000060000 /* ProfileEditViewModel.swift */,
 				4CABCD000000000000070000 /* ProfileEditView.swift */,
 				4CABCD000000000000080000 /* FollowSender.swift */,
+				4CABCD000000000000F30001 /* PrivateInteractionStore.swift */,
+				4CABCD000000000000F30002 /* PrivateInteractionRouter.swift */,
+				4CABCD000000000000F30003 /* PeerRelayResolver.swift */,
+				4CABCD000000000000F30004 /* PrivateReplyPublisher.swift */,
+				4CABCD000000000000F30005 /* PrivateReactionPublisher.swift */,
+				4CABCD000000000000F30006 /* Dip03.swift */,
 				4CABCD000000000000050000 /* BackChevronButton.swift */,
 				4CABCD000000000000F2010 /* NewPostsPill.swift */,
 				4CABCE0000000000000F4607 /* Signer.swift */,
@@ -1030,6 +1083,12 @@
 				4CDA9000000000000A100004 /* DriveBackupService.swift in Sources */,
 				4CDA9000000000000A100005 /* GoogleAuthViewModel.swift in Sources */,
 				4CDA9000000000000A100006 /* GoogleAuthView.swift in Sources */,
+				4CDA9000000000000A100007 /* AppleAuthConfig.swift in Sources */,
+				4CDA9000000000000A100008 /* AppleSignInManager.swift in Sources */,
+				4CDA9000000000000A100009 /* KeychainBackupService.swift in Sources */,
+				4CDA9000000000000A10000A /* AppleAuthViewModel.swift in Sources */,
+				4CDA9000000000000A10000B /* AppleAuthView.swift in Sources */,
+				4CDA9000000000000A10000C /* AuthFlowComponents.swift in Sources */,
 				4CDA87F42F9C5CC60079A1BA /* PostCardView.swift in Sources */,
 				4CDA880C2F9C70D80079A1BA /* EntityInfo-wisp.generated.swift in Sources */,
 				4CDA87DE2F9C54700079A1BA /* Secp256k1.swift in Sources */,
@@ -1049,6 +1108,8 @@
 				4CDA87E42F9C54980079A1BA /* RelayPool.swift in Sources */,
 				4CFA00010001000000A1BA01 /* RelayDefaults.swift in Sources */,
 				4CFA00030001000000A1BA01 /* FollowsCache.swift in Sources */,
+				4CFB00020001000000A1BA01 /* FollowHistoryGuard.swift in Sources */,
+				4CFB00040001000000A1BA01 /* FollowRestorePromptSheet.swift in Sources */,
 				4CFA00050001000000A1BA01 /* EventPersistQueue.swift in Sources */,
 				4CAA00010002000000A1BA01 /* AudioTrack.swift in Sources */,
 				4CAA00030002000000A1BA01 /* AudioPlayerStore.swift in Sources */,
@@ -1135,6 +1196,7 @@
 				4CFF0B17000000000000020B /* SparkWallet.swift in Sources */,
 				4CFF0B280000000000000215 /* SparkUsername.swift in Sources */,
 				4CFF0B19000000000000020C /* WalletStore.swift in Sources */,
+				B0NWCBACKUP00000000000001 /* NwcBackup.swift in Sources */,
 				F8CCD16A2BD383B0A6B0F4E0 /* LnurlResolver.swift in Sources */,
 				4CFF0B1B000000000000020D /* ZapSender.swift in Sources */,
 				4CFF0B1D000000000000020E /* WalletView.swift in Sources */,
@@ -1235,6 +1297,8 @@
 				4CDFAB0000000000000DF103 /* DraftsViewModel.swift in Sources */,
 				4CDFAB0000000000000DF104 /* ScheduleSheet.swift in Sources */,
 				4CDFAB0000000000000DF105 /* DraftsScheduledView.swift in Sources */,
+				4CDFAB0000000000000DF107 /* PollsViewModel.swift in Sources */,
+				4CDFAB0000000000000DF109 /* PollsView.swift in Sources */,
 				4CFFCC01000000000000040D /* HashtagChipsView.swift in Sources */,
 				4CFFCC01000000000000040E /* MentionCandidateRow.swift in Sources */,
 				4CFFCC01000000000000040F /* ComposerPreviewCard.swift in Sources */,
@@ -1274,6 +1338,12 @@
 				4CABCD010000000000060000 /* ProfileEditViewModel.swift in Sources */,
 				4CABCD010000000000070000 /* ProfileEditView.swift in Sources */,
 				4CABCD010000000000080000 /* FollowSender.swift in Sources */,
+				4CABCD010000000000F30001 /* PrivateInteractionStore.swift in Sources */,
+				4CABCD010000000000F30002 /* PrivateInteractionRouter.swift in Sources */,
+				4CABCD010000000000F30003 /* PeerRelayResolver.swift in Sources */,
+				4CABCD010000000000F30004 /* PrivateReplyPublisher.swift in Sources */,
+				4CABCD010000000000F30005 /* PrivateReactionPublisher.swift in Sources */,
+				4CABCD010000000000F30006 /* Dip03.swift in Sources */,
 				4CABCD010000000000050000 /* BackChevronButton.swift in Sources */,
 				4CABCD010000000000F2010 /* NewPostsPill.swift in Sources */,
 				4CABCE0100000000000F4607 /* Signer.swift in Sources */,
@@ -1432,9 +1502,10 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = wisp.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = PK6543767Z;
+				DEVELOPMENT_TEAM = G738XL8P49;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
@@ -1459,7 +1530,7 @@
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 26.4;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = danielmodell.wisp;
+				PRODUCT_BUNDLE_IDENTIFIER = barrydeen.wisp;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				SDKROOT = auto;
@@ -1481,6 +1552,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = wisp.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = G738XL8P49;

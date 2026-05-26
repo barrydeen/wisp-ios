@@ -148,13 +148,20 @@ final class SignUpViewModel {
 
     // MARK: - Init
 
-    /// Generate a fresh keypair. Must be side-effect free: SwiftUI evaluates
-    /// the `@State` default value (`SignUpViewModel()` in `SignUpFlowView`)
-    /// on every parent-body reconstruction and discards every result except
-    /// the first. Persisting here would leak abandoned pubkeys into
-    /// `wisp_accounts`, surfacing them as phantom accounts in the sidebar.
-    /// Persistence happens once on view mount via `registerAccount()`.
-    init() {
+    /// Generate a fresh keypair, or use an injected one (when the caller has
+    /// already generated and stored it — e.g. the Apple / Google cloud
+    /// backup flows, which create the keypair as part of the backup-upload
+    /// step before the wizard runs). Must be side-effect free: SwiftUI
+    /// evaluates the `@State` default value on every parent-body
+    /// reconstruction and discards every result except the first.
+    /// Persisting here would leak abandoned pubkeys into `wisp_accounts`,
+    /// surfacing them as phantom accounts in the sidebar. Persistence
+    /// happens once on view mount via `registerAccount()`.
+    init(existingKeypair: Keypair? = nil) {
+        if let existing = existingKeypair {
+            self.keypair = existing
+            return
+        }
         let priv = Schnorr.randomPrivkey()
         let pub: Data
         do {
@@ -383,7 +390,9 @@ final class SignUpViewModel {
         // there's nothing extra to persist on relays. Manual backup of
         // non-default (imported) wallets is unchanged. Fire-and-forget to
         // write relays only, matching Android's `relayPool.sendToWriteRelays`.
-        if let wallet = sparkWallet, !wallet.isDefaultWallet(),
+        if let wallet = sparkWallet,
+           let privkey = Hex.decode(keypair.privkey), privkey.count == 32,
+           !wallet.isDefaultWallet(privkey: privkey),
            let mnemonic = wallet.loadMnemonic(), !writeRelays.isEmpty {
             let kp = self.keypair
             Task.detached { [mnemonic, writeRelays] in

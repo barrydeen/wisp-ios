@@ -55,7 +55,11 @@ struct ProfileView: View {
     var body: some View {
         VStack(spacing: 0) {
             unifiedHeader
-            Divider().overlay(Color.wispSurfaceVariant.opacity(0.5))
+            // Divider between unifiedHeader and the scroll content was
+            // removed — the back-button / username row should sit
+            // seamlessly above the pinned tab bar (Notes / Replies /
+            // Gallery / Media / Following). The pinned tab bar provides
+            // its own visual separation when the user scrolls.
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
                     ProfileHeaderView(

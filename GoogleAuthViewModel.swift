@@ -18,22 +18,13 @@ import UIKit
 final class GoogleAuthViewModel {
     enum SetupStep: Equatable { case enter, confirm }
 
-    struct BackupSummary: Identifiable, Equatable {
-        let fileId: String
-        let npub: String
-        let pubkeyHex: String
-        var displayName: String?
-        var picture: String?
-        var id: String { npub }
-    }
-
     enum State {
         case idle
         case signingIn
         case checkingDrive
         case enterPinForRestore(attemptFailed: Bool)
         case setupPin(step: SetupStep, mismatch: Bool)
-        case choose(backups: [BackupSummary])
+        case choose(backups: [AuthBackupSummary])
         case working
         case done(isNewAccount: Bool, keypair: Keypair)
         case error(message: String)
@@ -93,7 +84,7 @@ final class GoogleAuthViewModel {
         Task { @MainActor in
             do {
                 let key = try await deriveKeyOffMain(sub: sub, pin: pin)
-                var summaries: [BackupSummary] = []
+                var summaries: [AuthBackupSummary] = []
                 var seen = Set<String>()
                 for file in files {
                     do {
@@ -104,8 +95,8 @@ final class GoogleAuthViewModel {
                         guard let npub = Nip19.npubEncode(pubkey: Array(pubkey)) else { continue }
                         if seen.contains(npub) { continue }
                         seen.insert(npub)
-                        summaries.append(BackupSummary(
-                            fileId: file.fileId,
+                        summaries.append(AuthBackupSummary(
+                            backupID: file.fileId,
                             npub: npub,
                             pubkeyHex: pubkeyHex
                         ))
@@ -163,12 +154,12 @@ final class GoogleAuthViewModel {
         state = .setupPin(step: .enter, mismatch: false)
     }
 
-    func restoreAccount(fileId: String) {
+    func restoreAccount(backupID: String) {
         guard let key = pendingBackupKey, let accessToken = pendingAccessToken else { return }
         state = .working
         Task { @MainActor in
             do {
-                let payload = try await downloadWithToken(fileId: fileId, token: accessToken)
+                let payload = try await downloadWithToken(fileId: backupID, token: accessToken)
                 let nsec = try BackupCrypto.decryptNsec(payload: payload, key32: key)
                 let pubkey = try Schnorr.xonlyPubkey(privkey32: nsec)
                 let pubkeyHex = Hex.encode(pubkey)
@@ -305,7 +296,7 @@ final class GoogleAuthViewModel {
                 guard let self else { return }
                 guard realSet.contains(pubkey) else { return }
                 guard case .choose(let backups) = self.state else { return }
-                let updated = backups.map { backup -> BackupSummary in
+                let updated = backups.map { backup -> AuthBackupSummary in
                     guard backup.pubkeyHex == pubkey,
                           (backup.displayName == nil || backup.picture == nil) else { return backup }
                     var copy = backup

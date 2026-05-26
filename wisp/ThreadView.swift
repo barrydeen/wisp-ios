@@ -116,6 +116,12 @@ struct ThreadView: View {
                     }
                     viewModel.scrollTargetId = nil
                 }
+                // Stable thread layout while sheets presented from a
+                // PostCardView row raise the keyboard — see
+                // NoteListFeedView for the full rationale. The reply
+                // `composer` below is a sibling, so it still dodges the
+                // keyboard normally.
+                .ignoresSafeArea(.keyboard, edges: .bottom)
             }
             if !viewModel.keypair.isWatchOnly {
                 composer
@@ -290,6 +296,7 @@ struct ThreadView: View {
                 profiles: viewModel.profiles,
                 engagement: viewModel.engagement[row.event.id],
                 ancestorCompact: true,
+                isPrivate: row.isPrivate,
                 onProfileTap: { _ in },
                 onNoteTap: { quotedId in
                     navigateToThread(eventId: quotedId, authorPubkey: row.event.pubkey)
@@ -319,6 +326,7 @@ struct ThreadView: View {
                     profiles: viewModel.profiles,
                     engagement: engagement(for: row.event.id),
                     forcedReplyCount: viewModel.visibleRepliesCount,
+                    isPrivate: row.isPrivate,
                     onProfileTap: { pk in push(ProfileRoute(pubkey: pk)) },
                     // Tapping a quoted note inside the focal pushes that
                     // note as its own focal, same as tapping a reply row.
@@ -385,6 +393,7 @@ struct ThreadView: View {
                 profiles: viewModel.profiles,
                 engagement: engagement(for: row.event.id),
                 showReplyContext: false,
+                isPrivate: row.isPrivate,
                 onProfileTap: { pk in push(ProfileRoute(pubkey: pk)) },
                 // Tap on an embedded quoted note pushes that note as
                 // its own focal. SwiftUI's nested-Button hit-testing
@@ -558,7 +567,7 @@ struct ThreadView: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                     Spacer()
-                    Image(systemName: "square.and.pencil")
+                    Image(systemName: "pencil")
                         .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(Color.wispPrimary)
                 }

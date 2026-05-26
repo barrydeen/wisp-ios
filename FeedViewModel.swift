@@ -22,6 +22,71 @@ enum FeedKind: Equatable, Hashable {
     }
 }
 
+/// Client-side content filter applied on top of the feed's `events`.
+/// Cycles through ALL → notes → gallery → polls and back; mirrors Wisp
+/// Android's `FeedContentFilter` (see commit a6a4a4a). The toggle
+/// button in the feed top bar advances through these and the
+/// rendered feed reads `filteredEvents` instead of `events` directly.
+nonisolated enum FeedContentFilter: String, CaseIterable {
+    /// No filter — every kind the feed surfaces is shown.
+    case all
+    /// Plain text notes, reposts, and long-form articles.
+    case notes
+    /// NIP-68 / NIP-71 gallery posts.
+    case gallery
+    /// NIP-88 polls.
+    case polls
+
+    /// SF Symbol shown on the toggle button when this filter is active.
+    /// Default `.all` uses a neutral grid; the others use a glyph that
+    /// hints at the content type they isolate.
+    var iconName: String {
+        switch self {
+        case .all:     return "rectangle.grid.2x2"
+        case .notes:   return "doc.text"
+        case .gallery: return "photo"
+        case .polls:   return "checklist"
+        }
+    }
+
+    /// The next filter in the cycle. `polls` wraps back to `all`.
+    var next: FeedContentFilter {
+        switch self {
+        case .all:     return .notes
+        case .notes:   return .gallery
+        case .gallery: return .polls
+        case .polls:   return .all
+        }
+    }
+
+    /// Empty-state copy shown when this filter yields zero events.
+    var emptyStateCaption: String {
+        switch self {
+        case .all:     return "No posts in your feed yet"
+        case .notes:   return "No notes in your feed yet"
+        case .gallery: return "No gallery posts in your feed yet"
+        case .polls:   return "No polls in your feed yet"
+        }
+    }
+
+    /// True when an event of `kind` passes this filter. Matches Android's
+    /// kind-set mapping: notes = kind-1 / repost / long-form;
+    /// gallery = picture / video / audio (20 / 21 / 22);
+    /// polls = NIP-88 poll. `all` accepts everything.
+    func accepts(kind: Int) -> Bool {
+        switch self {
+        case .all:
+            return true
+        case .notes:
+            return kind == 1 || kind == 6 || kind == 30023
+        case .gallery:
+            return kind == 20 || kind == 21 || kind == 22
+        case .polls:
+            return kind == Nip88.kindPoll
+        }
+    }
+}
+
 @Observable
 @MainActor
 final class FeedViewModel {
@@ -36,6 +101,27 @@ final class FeedViewModel {
     var onlineNetworkPubkeys: [String] = []
     var userProfile: ProfileData?
     var currentKind: FeedKind = .follows
+    /// Client-side content filter — see `FeedContentFilter`. Defaults to
+    /// `.all` so the feed behaves identically to before until the user
+    /// engages the toggle. Filtering happens in `filteredEvents`; the
+    /// underlying `events` array still holds every ingested item so a
+    /// switch back to `.all` (or to a different filter) is instant.
+    var contentFilter: FeedContentFilter = .all
+
+    /// View-facing list — `events` passed through the active
+    /// `contentFilter`. Computed each access; cheap because `events` is
+    /// already capped (~500 items) and the filter is a single kind
+    /// comparison per event.
+    var filteredEvents: [NostrEvent] {
+        guard contentFilter != .all else { return events }
+        return events.filter { contentFilter.accepts(kind: $0.kind) }
+    }
+
+    /// Advance to the next filter in the cycle. Called from the toggle
+    /// button in the feed top bar.
+    func cycleContentFilter() {
+        contentFilter = contentFilter.next
+    }
     var relayFeedStatus: RelayFeedStatus = .idle
     /// Live events buffered while the user is scrolled away from the top.
     /// Drives the "N new posts" pill — counted live so the pill grows as
@@ -91,6 +177,29 @@ final class FeedViewModel {
     init(keypair: Keypair) {
         self.keypair = keypair
         observeBlocks()
+        observeOwnPublishes()
+    }
+
+    /// Listen for `.nostrEventPublished` and insert the user's own renderable
+    /// events into the in-memory feed immediately. The follows-feed live REQ
+    /// filters by `authors ∈ follows`, so own events (notably polls — kind 1068
+    /// / 6969) wouldn't otherwise round-trip back through the subscription.
+    private func observeOwnPublishes() {
+        NotificationCenter.default.addObserver(
+            forName: .nostrEventPublished, object: nil, queue: .main
+        ) { [weak self] note in
+            guard let event = note.userInfo?["event"] as? NostrEvent else { return }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                guard event.pubkey == self.keypair.pubkey else { return }
+                guard self.currentKind == .follows else { return }
+                guard Self.isFeedRenderable(event) else { return }
+                guard self.seenIds.insert(event.id).inserted else { return }
+                self.events = Self.consolidateReposts(
+                    Self.mergeSortedDesc(self.events, [event])
+                )
+            }
+        }
     }
 
     /// Listen for `userBlocked` and drop matching in-memory events. Without
@@ -129,7 +238,13 @@ final class FeedViewModel {
 
         // 1. Seed from local storage for instant display.
         //    Filter + sort run off the MainActor so the first frame isn't blocked.
-        let cached = await eventStore.seedCache(limit: 300)
+        //    Private rumors (gift-wrapped kind-1 from PrivateInteractionStore) are
+        //    excluded so they never surface in the public feed even though they
+        //    live in the same EventStore as public kind-1s.
+        let cached = await eventStore.seedCache(
+            limit: 300,
+            excludingEventIds: PrivateInteractionStore.shared.privateEventIds
+        )
         if !cached.isEmpty {
             let myPubkey = keypair.pubkey
             let follows = followsCache
@@ -151,8 +266,7 @@ final class FeedViewModel {
             seenIds.formUnion(ids)
             events = Self.consolidateReposts(filtered)
 
-            let pubkeysInCache = Set(filtered.map(\.pubkey))
-            profiles = profileRepo.getAll(Array(pubkeysInCache))
+            hydrateProfiles(for: events)
             isLoading = false
         }
 
@@ -231,6 +345,34 @@ final class FeedViewModel {
         }
     }
 
+    /// Eagerly populate `self.profiles` from any code path that publishes events
+    /// to the UI. Pulls cached profiles synchronously (in-memory + UserDefaults
+    /// via `ProfileRepository.get`) and fires an immediate indexer fetch for
+    /// the rest. Bypasses MissingProfileWatcher so visible feed rows don't wait
+    /// on the watcher's debounce or get silenced by its exhausted set.
+    private func hydrateProfiles(for events: [NostrEvent]) {
+        var missing: Set<String> = []
+        for event in events {
+            for pk in event.referencedAuthorPubkeys {
+                if profiles[pk] != nil { continue }
+                if let cached = profileRepo.get(pk) {
+                    profiles[pk] = cached
+                } else {
+                    missing.insert(pk)
+                }
+            }
+        }
+        guard !missing.isEmpty else { return }
+        let pks = Array(missing)
+        Task { @MainActor [weak self] in
+            let dict = await ProfileRepository.shared.ensure(pks)
+            guard let self else { return }
+            for (pk, profile) in dict {
+                self.profiles[pk] = profile
+            }
+        }
+    }
+
     /// Register `events` as a periodic-sweep source so the watcher can revisit
     /// what's currently rendered (catches ObjectBox-seeded events that landed
     /// before the watcher started, plus nostr:npub mentions resolved at render
@@ -256,7 +398,10 @@ final class FeedViewModel {
             isLoading = true
             // Re-seed from local cache (filtered to follows — EventStore is shared with the
             // Extended Network subscription, which persists every event it sees).
-            let cached = await eventStore.seedCache(limit: 300)
+            let cached = await eventStore.seedCache(
+                limit: 300,
+                excludingEventIds: PrivateInteractionStore.shared.privateEventIds
+            )
             let myPubkey = keypair.pubkey
             let fc = followsCache
             let (reFiltered, reIds) = await Task.detached(priority: .userInitiated) {
@@ -273,6 +418,7 @@ final class FeedViewModel {
             }.value
             seenIds.formUnion(reIds)
             events = Self.consolidateReposts(reFiltered)
+            hydrateProfiles(for: events)
             await refresh()
             isLoading = false
         }
@@ -385,6 +531,7 @@ final class FeedViewModel {
         withTransaction(Transaction(animation: nil)) {
             events = Self.consolidateReposts(Self.mergeSortedDesc(events, sortedBatch))
         }
+        hydrateProfiles(for: batch)
         pendingNewCount = 0
 
         if relayFeedStatus != .streaming {
@@ -662,10 +809,13 @@ final class FeedViewModel {
             profiles[pubkey] = local
         }
 
-        // Fetch from relays for freshness
+        // Fetch from relays for freshness. `waitForAllRelays` so a fast empty
+        // relay doesn't cancel a slower one holding the newest kind-0 — same
+        // reason `ProfileRepository.runFetch` waits for all of them.
         let results = await RelayPool.query(
             relays: Self.indexerRelays,
-            filter: NostrFilter(kinds: [0], authors: [pubkey], limit: 5)
+            filter: NostrFilter(kinds: [0], authors: [pubkey], limit: 5),
+            waitForAllRelays: true
         )
         if let best = results.filter({ $0.kind == 0 }).max(by: { $0.createdAt < $1.createdAt }),
            let updated = profileRepo.updateFromEvent(best) {

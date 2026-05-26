@@ -25,13 +25,7 @@ struct ComposeView: View {
     @FocusState private var contentFocused: Bool
     @State private var showScheduleSheet = false
     @State private var showCancelConfirm = false
-    @State private var showImageOnlyConfirm = false
     @State private var showGifPicker = false
-    @State private var showPhotosPicker = false
-    /// Drives the Drafts & Scheduled sheet launched from the composer
-    /// toolbar. Tapping a draft inside the sheet opens it in a *nested*
-    /// `ComposeView`, leaving the in-progress composer behind it untouched
-    /// — no risk of losing unsaved text just by peeking at drafts.
     @State private var showDraftsSheet = false
     @State private var photosPickerMaxCount: Int = 8
     @State private var showAccountPicker = false
@@ -259,22 +253,13 @@ struct ComposeView: View {
                 appendGifUrl(gifUrl)
             }
         )
-        // Photos picker presented as a real UIKit modal via PHPickerViewController.
-        // SwiftUI's `.photosPicker(...)` modifier and inline `PhotosPicker` were
-        // both observed to dismiss the compose sheet mid-scroll or right after
-        // selection on iOS 26 — the UIKit bridge avoids that coordination path.
-        .background(
-            PhotosPickerPresenter(
-                isPresented: $showPhotosPicker,
-                maxCount: photosPickerMaxCount
-            ) { providers in
-                Task { await viewModel.addMediaProviders(providers) }
-            }
-        )
-        .confirmationDialog(
+        // `.alert` rather than `.confirmationDialog` so the cancel-role
+        // "Keep Editing" button renders as an explicit choice. iOS 26
+        // hides the cancel button on confirmation dialogs presented over
+        // sheets, leaving only Save Draft / Discard visible.
+        .alert(
             "Discard this post?",
-            isPresented: $showCancelConfirm,
-            titleVisibility: .visible
+            isPresented: $showCancelConfirm
         ) {
             Button("Save Draft") {
                 Task {
@@ -292,18 +277,6 @@ struct ComposeView: View {
             Button("Keep Editing", role: .cancel) {}
         } message: {
             Text("You have unsaved content.")
-        }
-        .confirmationDialog(
-            "Post without a caption?",
-            isPresented: $showImageOnlyConfirm,
-            titleVisibility: .visible
-        ) {
-            Button("Post") {
-                viewModel.publish()
-            }
-            Button("Keep Editing", role: .cancel) {}
-        } message: {
-            Text("This post has no text. Send the attachment on its own?")
         }
         .onChange(of: viewModel.draftSaved) { _, saved in
             if saved { dismiss() }
@@ -367,6 +340,24 @@ struct ComposeView: View {
 
     /// Discard-confirmation pivot used by both the leading chevron and any
     /// programmatic dismiss. Confirms before dropping unsaved content.
+    /// Open the system photo picker via the imperative service rather
+    /// than a SwiftUI `.background(PhotosPickerPresenter)` host. The
+    /// service walks to the topmost presented VC and presents the
+    /// picker directly, bypassing the unreliable representable/host
+    /// plumbing that was tearing down the picker after ~1s on
+    /// iPhone 13 Pro Max.
+    private func presentPhotoPicker(max: Int) {
+        contentFocused = false
+        PhotoPickerService.present(maxCount: max) { providers in
+            // Synchronous progress flip so the dismiss-disabled guard
+            // catches before the addMedia task hops onto a runloop.
+            viewModel.uploadProgress = providers.count > 1
+                ? "Loading \(providers.count) items…"
+                : "Loading…"
+            Task { await viewModel.addMediaProviders(providers) }
+        }
+    }
+
     private func cancelTapped() {
         if viewModel.hasUnsavedContent {
             showCancelConfirm = true
@@ -399,12 +390,22 @@ struct ComposeView: View {
 
     private func replyContextRow(parent: NostrEvent) -> some View {
         let profile = ProfileRepository.shared.get(parent.pubkey)
+        let recipientName = profile?.displayString ?? Nip19.shortNpub(hex: parent.pubkey)
         return HStack(alignment: .top, spacing: 8) {
             CachedAvatarView(url: profile?.picture, size: 28)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Replying to \(profile?.displayString ?? Nip19.shortNpub(hex: parent.pubkey))")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 4) {
+                    if viewModel.isPrivate {
+                        Image(systemName: "lock.fill")
+                            .font(.caption2)
+                            .foregroundStyle(Color.wispPrimary)
+                    }
+                    Text(viewModel.isPrivate
+                         ? "Replying privately to \(recipientName)"
+                         : "Replying to \(recipientName)")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
                 Text(previewContent(parent.content, max: 140))
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -644,8 +645,7 @@ struct ComposeView: View {
         VStack(spacing: 8) {
             if viewModel.attachments.isEmpty {
                 Button {
-                    photosPickerMaxCount = 8
-                    showPhotosPicker = true
+                    presentPhotoPicker(max: 8)
                 } label: {
                     VStack(spacing: 6) {
                         Image(systemName: "photo.on.rectangle.angled")
@@ -670,8 +670,7 @@ struct ComposeView: View {
                             attachmentThumb(attachment, size: 140)
                         }
                         Button {
-                            photosPickerMaxCount = 8
-                            showPhotosPicker = true
+                            presentPhotoPicker(max: 8)
                         } label: {
                             VStack(spacing: 4) {
                                 Image(systemName: "plus")
@@ -865,8 +864,7 @@ struct ComposeView: View {
         HStack(spacing: 22) {
             if !viewModel.galleryMode, !viewModel.pollEnabled {
                 Button {
-                    photosPickerMaxCount = 4
-                    showPhotosPicker = true
+                    presentPhotoPicker(max: 4)
                 } label: {
                     Image(systemName: "photo.on.rectangle")
                         .font(.system(size: 22))
@@ -891,7 +889,16 @@ struct ComposeView: View {
 
             if !viewModel.pollEnabled {
                 Button {
-                    showGifPicker = true
+                    // Resign the compose text field before presenting so the
+                    // keyboard animation finishes ahead of the modal. Without
+                    // the hop, the keyboard collapse mid-present can cancel
+                    // the in-flight UIKit modal and SwiftUI flips
+                    // `showGifPicker` back to false — same shape as the
+                    // drafts-sheet keyboard race.
+                    contentFocused = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                        showGifPicker = true
+                    }
                 } label: {
                     Text("GIF")
                         .font(.system(size: 11, weight: .bold))
@@ -935,6 +942,21 @@ struct ComposeView: View {
                 .accessibilityLabel(viewModel.pollEnabled ? "Disable poll" : "Create poll")
             }
 
+            // Private-reply toggle — only meaningful for `.reply` mode. Locked
+            // (no-op) when the parent is itself a private rumor; the icon stays
+            // filled to signal the chain stays encrypted.
+            if case .reply = viewModel.mode {
+                Button {
+                    viewModel.togglePrivate()
+                } label: {
+                    Image(systemName: viewModel.isPrivate ? "lock.fill" : "lock")
+                        .font(.system(size: 22))
+                        .foregroundStyle(viewModel.isPrivate ? Color.wispPrimary : .secondary)
+                }
+                .disabled(viewModel.isPrivateLocked)
+                .accessibilityLabel(viewModel.isPrivate ? "Disable private reply" : "Send privately")
+            }
+
             Button {
                 showScheduleSheet = true
             } label: {
@@ -942,6 +964,7 @@ struct ComposeView: View {
                     .font(.system(size: 22))
                     .foregroundStyle(viewModel.scheduleEnabled ? Color.wispPrimary : .secondary)
             }
+            .disabled(viewModel.isPrivate)
 
             Spacer()
         }
@@ -972,12 +995,15 @@ struct ComposeView: View {
                 }
                 .buttonStyle(.plain)
             } else {
+                // Grey the button out when the composer has no content to
+                // publish (no text, no attachments). Visual feedback matches
+                // the disabled state — tapping while empty errors out with
+                // "Type something first.", which a greyed-out button heads
+                // off before the user discovers it.
+                let inFlight = viewModel.isPublishing || viewModel.isMining
+                let isInactive = !viewModel.canPublish
                 Button {
-                    if viewModel.isImageOnlyPost {
-                        showImageOnlyConfirm = true
-                    } else {
-                        viewModel.publish()
-                    }
+                    viewModel.publish()
                 } label: {
                     Group {
                         // Only flag mining once the miner has reported real
@@ -992,7 +1018,7 @@ struct ComposeView: View {
                                 Text("Mining \(viewModel.miningAttempts)")
                                     .font(.subheadline.weight(.semibold))
                             }
-                        } else if viewModel.isPublishing || viewModel.isMining {
+                        } else if inFlight {
                             HStack(spacing: 6) {
                                 ProgressView().controlSize(.small).tint(.white)
                                 Text(viewModel.scheduleEnabled ? "Scheduling" : "Publishing")
@@ -1006,9 +1032,12 @@ struct ComposeView: View {
                     .frame(maxWidth: .infinity)
                     .frame(height: 44)
                 }
-                .background(Color.wispPrimary, in: Capsule())
-                .foregroundStyle(.white)
-                .disabled(viewModel.isPublishing || viewModel.isMining)
+                .background(
+                    isInactive ? Color.wispSurfaceVariant : Color.wispPrimary,
+                    in: Capsule()
+                )
+                .foregroundStyle(isInactive ? Color.secondary : Color.white)
+                .disabled(inFlight || isInactive)
             }
         }
         .padding(.horizontal, 16)
