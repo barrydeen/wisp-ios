@@ -80,10 +80,18 @@ final class ProfileRepository {
     private func runFetch(pubkeys: [String]) async -> [String: ProfileData] {
         var out: [String: ProfileData] = [:]
         for batch in pubkeys.chunked(into: 150) {
+            // `waitForAllRelays: true` is critical here. The default fast-path in
+            // `RelayPool.query` cancels every relay 1.5s after the *first* EOSE,
+            // which silently drops profiles that only live on slower relays — a
+            // single fast empty relay (e.g. damus.io with no kind-0 for the chunk)
+            // would cancel nostrarchives.com mid-stream and we'd return partial
+            // results. Profile batches are the exact "rare event might live on
+            // any single relay" case the comment in `query` calls out.
             let events = await RelayPool.query(
                 relays: Self.indexerRelays,
                 filter: NostrFilter(kinds: [0], authors: batch),
-                timeout: 8
+                timeout: 8,
+                waitForAllRelays: true
             )
             var bestByAuthor: [String: NostrEvent] = [:]
             for event in events where event.kind == 0 {
