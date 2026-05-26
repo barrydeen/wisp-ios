@@ -351,7 +351,8 @@ final class NotificationsViewModel {
         let events = await RelayPool.query(relays: Array(relays), filter: filter, timeout: 6)
         // Union with whatever the cache had so we don't shrink the horizon if a relay temporarily
         // returned a partial set.
-        var ids = repo.selfEventIds
+        let before = repo.selfEventIds
+        var ids = before
         for e in events { ids.insert(e.id) }
         // Cap at the most recent 100 by createdAt so the e-tag filter payload stays bounded.
         var ranked = events
@@ -377,6 +378,13 @@ final class NotificationsViewModel {
         }
         repo.selfEventIds = ids
         repo.persistSelfEventIds()
+        // Promote any in-memory `.mention` rows whose source event now matches
+        // a freshly-known self id to `.reply` / `.quote`. Cheap when nothing
+        // grew (early-out on equal sets) but essential when the warm-load /
+        // publish-time path missed an id and a reply already landed.
+        if ids != before {
+            repo.reclassifyKind1Mentions()
+        }
     }
 
     private func startSelfIdsRefreshCycle() {

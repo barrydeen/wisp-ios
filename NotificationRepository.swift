@@ -69,6 +69,34 @@ final class NotificationRepository {
             }
         }
         #endif
+        // Track user-authored kind-1 / poll publishes in real time so a reply
+        // landing seconds later classifies as `.reply` instead of falling
+        // through to `.mention`. Without this hook, `selfEventIds` only learns
+        // about new own-events when the 5-min `refreshSelfEventIds` cycle
+        // queries relays — long enough that an early reply gets misclassified
+        // and locked in by the `insertSeen` dedup.
+        NotificationCenter.default.addObserver(
+            forName: .nostrEventPublished,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            MainActor.assumeIsolated {
+                self?.trackOwnPublish(note)
+            }
+        }
+    }
+
+    private func trackOwnPublish(_ note: Notification) {
+        guard let event = note.userInfo?["event"] as? NostrEvent else { return }
+        guard !activePubkey.isEmpty, event.pubkey == activePubkey else { return }
+        switch event.kind {
+        case 1, Nip88.kindPoll, Nip69.kindZapPoll:
+            if selfEventIds.insert(event.id).inserted {
+                persistSelfEventIds()
+            }
+        default:
+            return
+        }
     }
 
     func bind(activePubkey: String) {
@@ -216,6 +244,35 @@ final class NotificationRepository {
     }
 
     // MARK: - Classification
+
+    /// Re-run `classifyKind1` over every in-memory `.mention` row and promote
+    /// any whose source event actually targets one of the user's notes to
+    /// `.reply` (or `.quote`). Called by `NotificationsViewModel` after
+    /// `refreshSelfEventIds` discovers ids that weren't in the warm-load /
+    /// publish-time set — without this, the row's icon stays frozen at "@"
+    /// and the 24h summary counters undercount replies until cold relaunch.
+    /// Promotion is one-way (mention → reply / quote); the set only grows
+    /// within a refresh, so a row already classified as `.reply` can never
+    /// legitimately reverse.
+    func reclassifyKind1Mentions() {
+        guard !flatItems.isEmpty else { return }
+        var changed = false
+        withTransaction(Transaction(animation: nil)) {
+            for idx in flatItems.indices {
+                let item = flatItems[idx]
+                guard item.kind == .mention else { continue }
+                guard let event = eventCache[item.id] else { continue }
+                guard let replacement = classifyKind1(event), replacement.kind != .mention else { continue }
+                var updated = replacement
+                updated.isPrivate = item.isPrivate
+                flatItems[idx] = updated
+                changed = true
+            }
+        }
+        if changed {
+            summary = computeSummary24h()
+        }
+    }
 
     private func classifyKind1(_ event: NostrEvent) -> FlatNotificationItem? {
         // Reply: any "e" tag pointing at one of my notes wins.
