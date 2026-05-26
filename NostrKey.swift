@@ -123,7 +123,7 @@ enum NostrKey {
             // Safety: cached extended-network qualified set
             "wot_qualified_\(pubkey)"
         ]
-        for key in keys {
+        for key in keys + FollowHistoryGuard.userDefaultsKeys(for: pubkey) {
             UserDefaults.standard.removeObject(forKey: key)
         }
         FollowsCache.shared.invalidate(pubkey: pubkey)
