@@ -83,7 +83,9 @@ final class WalletStore {
 
     /// True when this wallet was derived from the user's nsec (recoverable from the key).
     var isDefaultWallet: Bool {
-        (wallet as? SparkWallet)?.isDefaultWallet() ?? false
+        guard let spark = wallet as? SparkWallet else { return false }
+        guard let privkey = Hex.decode(keypair.privkey), privkey.count == 32 else { return false }
+        return spark.isDefaultWallet(privkey: privkey)
     }
 
     /// Mnemonic for the active Spark wallet, nil for NWC or nsec-derived.
