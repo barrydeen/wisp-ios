@@ -54,6 +54,26 @@ final class ReactionSender {
         keypair: Keypair,
         picked: PickedEmoji
     ) async throws {
+        // Private targets route through the gift-wrap pipeline — a public kind-7
+        // with an `e` tag pointing at a private rumor would leak the rumor id
+        // back into publicly indexed engagement queries.
+        if PrivateInteractionStore.shared.contains(targetEvent.id) {
+            do {
+                _ = try await PrivateReactionPublisher.react(
+                    target: targetEvent,
+                    keypair: keypair,
+                    picked: picked
+                )
+                return
+            } catch PrivateReactionPublisher.SendError.noOwnRelays {
+                throw SendError.noRelays
+            } catch PrivateReactionPublisher.SendError.publishFailed {
+                throw SendError.publishFailed
+            } catch {
+                throw SendError.publishFailed
+            }
+        }
+
         let dedupKey = "\(keypair.pubkey)|\(targetEvent.id)|\(picked.frequencyKey)"
         if sent.contains(dedupKey) { throw SendError.alreadyReacted }
 

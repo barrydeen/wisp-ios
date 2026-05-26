@@ -296,6 +296,7 @@ struct ThreadView: View {
                 profiles: viewModel.profiles,
                 engagement: viewModel.engagement[row.event.id],
                 ancestorCompact: true,
+                isPrivate: row.isPrivate,
                 onProfileTap: { _ in },
                 onNoteTap: { quotedId in
                     navigateToThread(eventId: quotedId, authorPubkey: row.event.pubkey)
@@ -325,6 +326,7 @@ struct ThreadView: View {
                     profiles: viewModel.profiles,
                     engagement: engagement(for: row.event.id),
                     forcedReplyCount: viewModel.visibleRepliesCount,
+                    isPrivate: row.isPrivate,
                     onProfileTap: { pk in push(ProfileRoute(pubkey: pk)) },
                     // Tapping a quoted note inside the focal pushes that
                     // note as its own focal, same as tapping a reply row.
@@ -391,6 +393,7 @@ struct ThreadView: View {
                 profiles: viewModel.profiles,
                 engagement: engagement(for: row.event.id),
                 showReplyContext: false,
+                isPrivate: row.isPrivate,
                 onProfileTap: { pk in push(ProfileRoute(pubkey: pk)) },
                 // Tap on an embedded quoted note pushes that note as
                 // its own focal. SwiftUI's nested-Button hit-testing

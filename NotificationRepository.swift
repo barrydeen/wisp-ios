@@ -38,6 +38,16 @@ final class NotificationRepository {
     private static let flatCap = 500
 
     private var activePubkey: String = ""
+    /// Active user's raw 32-byte privkey, set by `NotificationsViewModel` after
+    /// `bind(activePubkey:)`. Required for DIP-03 zap receipt decoding — the
+    /// classifier attempts to decrypt the inner kind-9733 with this privkey
+    /// and falls back to the public kind-9734 pubkey on failure. nil for
+    /// remote-signer / watch-only accounts.
+    private var activePrivkey32: Data? = nil
+
+    func setActivePrivkey32(_ data: Data?) {
+        activePrivkey32 = data
+    }
 
     /// Wall-clock floor for firing notification sounds/haptics. Initialized to
     /// app-launch and bumped to `now` every time the app re-enters the
@@ -81,9 +91,11 @@ final class NotificationRepository {
 
     /// Returns true if the event produced a notification (was relevant + not duplicate).
     /// Pass `persist: false` when re-ingesting events that came *from* the local cache to
-    /// avoid pointless write-back churn.
+    /// avoid pointless write-back churn. Pass `isPrivate: true` when the event was
+    /// materialized from an unwrapped gift wrap (private reply / reaction); the resulting
+    /// `FlatNotificationItem.isPrivate` drives the lock icon in the row.
     @discardableResult
-    func ingest(_ event: NostrEvent, relayUrl: String, isFromDmRelay: Bool = false, persist: Bool = true) -> Bool {
+    func ingest(_ event: NostrEvent, relayUrl: String, isFromDmRelay: Bool = false, isPrivate: Bool = false, persist: Bool = true) -> Bool {
         guard !activePubkey.isEmpty else { return false }
         guard insertSeen(event.id) else { return false }
 
@@ -92,7 +104,7 @@ final class NotificationRepository {
         // pubkey inside `classifyZap`, since the receipt's `pubkey` is the LN service.
         if event.kind != 9735 && event.pubkey == activePubkey { return false }
 
-        let item: FlatNotificationItem?
+        var item: FlatNotificationItem?
         switch event.kind {
         case 1:    item = classifyKind1(event)
         case 6:    item = classifyRepost(event)
@@ -101,6 +113,8 @@ final class NotificationRepository {
         case Nip88.kindPollResponse: item = classifyPollVote(event)
         default:   item = nil
         }
+
+        if isPrivate { item?.isPrivate = true }
 
         guard let item else { return false }
         // Self-zap (zapping your own note from your own wallet) — drop after
@@ -304,14 +318,17 @@ final class NotificationRepository {
             sats = amt
         }
 
-        var actor = event.pubkey
-        var message = ""
-        if let descTag = event.tags.first(where: { $0.first == "description" && $0.count >= 2 }),
-           let descData = descTag[1].data(using: .utf8),
-           let descJson = try? JSONSerialization.jsonObject(with: descData) as? [String: Any] {
-            if let p = descJson["pubkey"] as? String { actor = p }
-            if let c = descJson["content"] as? String { message = c }
-        }
+        // DIP-03 resolution: when the embedded kind-9734 carries a bech32-packed
+        // anon tag (`pzap1..._iv1...`) and we have a privkey, decrypt the inner
+        // kind-9733 to reveal the real sender + message. Public zaps fall back
+        // to the embedded description's pubkey/content. `isFromDmRelay` is kept
+        // as a defensive fallback signal for legacy receipts published via the
+        // homegrown private-zap path; new DIP-03 receipts arrive on DM relays
+        // *and* set the explicit isPrivate flag here.
+        let resolved = Nip57.resolveZapSender(receipt: event, recipientPrivkey32: activePrivkey32)
+        let actor = resolved?.pubkey ?? event.pubkey
+        let message = resolved?.message ?? ""
+        let isPrivate = resolved?.isPrivate ?? false
 
         // If the receipt targets one of our zap polls, surface the chosen option index.
         var zapPollOptionIndex: Int? = nil
@@ -327,7 +344,7 @@ final class NotificationRepository {
             timestamp: event.createdAt,
             zapSats: sats,
             zapMessage: message,
-            isPrivateZap: isFromDmRelay,
+            isPrivateZap: isPrivate || isFromDmRelay,
             zapPollOptionIndex: zapPollOptionIndex
         )
     }

@@ -274,6 +274,7 @@ struct MainView: View {
                 keypair: keypair
             )
             SafetyPreferences.shared.bind(activePubkey: keypair.pubkey)
+            PrivateInteractionStore.shared.bind(activePubkey: keypair.pubkey)
             await ExtendedNetworkRepository.shared.bind(activePubkey: keypair.pubkey)
             await SafetyFilter.shared.rebuildSnapshot()
             Task.detached { try? await SpamScorer.shared.warmUp() }

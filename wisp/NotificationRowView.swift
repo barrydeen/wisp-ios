@@ -51,6 +51,12 @@ struct NotificationRowView: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                    if item.isPrivate || item.isPrivateZap {
+                        Image(systemName: "lock.fill")
+                            .font(.caption2)
+                            .foregroundStyle(Color.wispPrimary)
+                            .accessibilityLabel("Private")
+                    }
                     mergedZapsBadge
                 }
                 voteOptionLabel

@@ -58,6 +58,11 @@ final class NotificationsViewModel {
         // Without this, the repo isn't cleared until `start()` runs inside
         // `.task`, which fires *after* the view's initial layout pass.
         repo.bind(activePubkey: keypair.pubkey)
+        // Hand the user's privkey to the classifier so DIP-03 zap receipts
+        // can be decrypted on the inbound classify path. Watch-only / NIP-46
+        // accounts have an empty/non-hex privkey — `Hex.decode` returns nil
+        // and DIP-03 decode falls back to the public kind-9734 pubkey.
+        repo.setActivePrivkey32(Hex.decode(keypair.privkey))
         loadFilterFromDefaults()
     }
 
@@ -344,7 +349,6 @@ final class NotificationsViewModel {
             limit: 100
         )
         let events = await RelayPool.query(relays: Array(relays), filter: filter, timeout: 6)
-        guard !events.isEmpty else { return }
         // Union with whatever the cache had so we don't shrink the horizon if a relay temporarily
         // returned a partial set.
         var ids = repo.selfEventIds
@@ -357,6 +361,19 @@ final class NotificationsViewModel {
         if ids.count > 200 {
             // Keep the most recent 100 from this fetch + drop older cached ids.
             ids = Set(top)
+        }
+        // Restore local synthetic kind-1 events (gift-wrap-materialized private
+        // replies the user authored). These never exist on any relay as signed
+        // kind-1s, so the network query above can't find them — but their ids
+        // must be in `selfEventIds` for `classifyZap` / `classifyReaction` /
+        // `classifyKind1` to recognize incoming notifications targeting them.
+        // Done AFTER the cap so the cap can't evict private rumors when the
+        // user has a large public-event history.
+        let localOwn = await EventStore.shared.loadRecentByAuthor(
+            pubkey: keypair.pubkey, kinds: [1], limit: 200
+        )
+        for e in localOwn where PrivateInteractionStore.shared.contains(e.id) {
+            ids.insert(e.id)
         }
         repo.selfEventIds = ids
         repo.persistSelfEventIds()
@@ -565,9 +582,46 @@ final class NotificationsViewModel {
                     if SafetyFilter.shared.shouldDrop(event: event, context: .notifications) { continue }
                     _ = self.repo.ingest(event, relayUrl: relayUrl, isFromDmRelay: true)
                     ZapSender.recordIncomingAttribution(from: event)
+                    // Live-update the engagement card for whatever event the
+                    // receipt targets. The per-event engagement subscription
+                    // only queries the target author's read relays, never DM
+                    // relays — so DIP-03 receipts (which land on DM relays
+                    // by design) would otherwise only surface after a thread
+                    // reopen pulls them from EventStore. `applyOptimisticZap`
+                    // is idempotent via `seenZapPaymentHashes`, so this is
+                    // safe to call alongside the regular engagement ingest.
+                    self.fanInZapReceiptToEngagement(event)
                 }
             })
         }
+    }
+
+    /// Forward a kind-9735 zap receipt to `EngagementRepository` so the card's
+    /// zap-sats label updates live. Mirrors the work `classifyZap` does for the
+    /// notification row: extract sats + payment hash from bolt11, resolve the
+    /// real sender via DIP-03 decode (with fallback to the embedded kind-9734's
+    /// pubkey), and bump the per-event engagement box.
+    private func fanInZapReceiptToEngagement(_ receipt: NostrEvent) {
+        guard let eTag = receipt.tags.first(where: { $0.first == "e" && $0.count >= 2 })?[1] else { return }
+        var sats: Int64 = 0
+        var paymentHash = ""
+        if let bolt = receipt.tags.first(where: { $0.first == "bolt11" && $0.count >= 2 })?[1],
+           let decoded = Bolt11.decode(bolt) {
+            sats = decoded.amountSats ?? 0
+            paymentHash = decoded.paymentHash ?? ""
+        }
+        guard !paymentHash.isEmpty else { return }
+        let privkey32 = Hex.decode(keypair.privkey)
+        let resolved = Nip57.resolveZapSender(receipt: receipt, recipientPrivkey32: privkey32)
+        let zapperPubkey = resolved?.pubkey ?? receipt.pubkey
+        let message = resolved?.message ?? ""
+        EngagementRepository.shared.applyOptimisticZap(
+            eventId: eTag,
+            paymentHash: paymentHash,
+            sats: sats,
+            zapperPubkey: zapperPubkey,
+            message: message
+        )
     }
 
     private func reopenSubscriptions() {

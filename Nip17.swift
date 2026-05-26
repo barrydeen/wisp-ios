@@ -44,6 +44,17 @@ nonisolated enum Nip17 {
         return Rumor(pubkey: senderPubkey, createdAt: createdAt, kind: kind, content: content, tags: tags, id: id)
     }
 
+    /// Build a rumor whose tag list is exactly `tags` — no auto-prepended p-tag.
+    /// Use when the caller controls tag order explicitly (e.g., a private reply
+    /// whose tags are canonical NIP-10 markers + multiple p-tags + extras).
+    /// The rumor id is deterministic over the exact `tags` order — fan-out to
+    /// multiple recipients via `wrapRumorWithSigner(...)` reuses the same rumor.
+    static func buildRumorRaw(senderPubkey: String, kind: Int, tags: [[String]],
+                              content: String, createdAt: Int) -> Rumor {
+        let id = NostrEvent.computeId(pubkey: senderPubkey, createdAt: createdAt, kind: kind, tags: tags, content: content)
+        return Rumor(pubkey: senderPubkey, createdAt: createdAt, kind: kind, content: content, tags: tags, id: id)
+    }
+
     /// Compute the rumor id for an existing rumor (idempotent — already cached on Rumor).
     static func computeRumorId(_ r: Rumor) -> String { r.id }
 
@@ -225,6 +236,71 @@ nonisolated enum Nip17 {
                                        tags: wrapTags,
                                        content: wrapContent)
         return wrap
+    }
+
+    /// Wrap a pre-built rumor in a NIP-17 seal + kind-1059 gift wrap targeting
+    /// `recipientPubkey`. The rumor is encrypted but byte-identical across
+    /// recipients, so multiple wraps of the same rumor produce the same rumor
+    /// id on every recipient's device — required for strict thread alignment
+    /// when private replies are gift-wrapped to (author + self) simultaneously.
+    ///
+    /// PoW (NIP-13) is applied to the outer kind-1059 wrap, not the rumor —
+    /// matches Android wisp and the typical mining cost expectation for DMs.
+    static func wrapRumorWithSigner(
+        keypair: Keypair,
+        recipientPubkey: String,
+        rumor: Rumor,
+        powTargetBits: Int? = nil,
+        onPowProgress: ((Int) -> Void)? = nil
+    ) async throws -> NostrEvent {
+        // Seal: encrypt rumor JSON to recipient, sign with sender. Signer dispatches
+        // to NIP-46 for remote-signer accounts; runs in-process for local keys.
+        let sealContent = try await Signer.nip44Encrypt(
+            keypair: keypair,
+            peerPubkey: recipientPubkey,
+            plaintext: rumorJSON(rumor)
+        )
+        let sealCreatedAt = randomizeTimestamp(Int(Date().timeIntervalSince1970))
+        let seal = try await Signer.sign(
+            keypair: keypair,
+            kind: Kind.seal,
+            tags: [],
+            content: sealContent,
+            createdAt: sealCreatedAt
+        )
+
+        // Gift wrap: fresh ephemeral key per NIP-59 spec, never the user's identity key.
+        let ephemeralPriv = Schnorr.randomPrivkey()
+        let ephemeralPub = try Schnorr.xonlyPubkey(privkey32: ephemeralPriv)
+        let ephemeralPubHex = Hex.encode(ephemeralPub)
+        let wrapConvKey = try Nip44.getConversationKey(privkey32: ephemeralPriv, peerXonlyPubkey32: hexToData(recipientPubkey))
+        let wrapContent = try Nip44.encrypt(plaintext: seal.toJSON(), conversationKey: wrapConvKey)
+        let wrapCreatedAt = randomizeTimestamp(Int(Date().timeIntervalSince1970))
+        var wrapTags: [[String]] = [["p", recipientPubkey]]
+        var wrapFinalCreatedAt = wrapCreatedAt
+        if let bits = powTargetBits, bits > 0 {
+            guard let mined = Nip13.mine(
+                pubkey: ephemeralPubHex,
+                kind: Kind.giftWrap,
+                createdAt: wrapCreatedAt,
+                tags: wrapTags,
+                content: wrapContent,
+                targetBits: bits,
+                onProgress: onPowProgress
+            ) else {
+                throw Error.decryptFailed
+            }
+            wrapTags = mined.tags
+            wrapFinalCreatedAt = mined.createdAt
+        }
+        return try NostrEvent.sign(
+            privkey32: ephemeralPriv,
+            pubkey: ephemeralPubHex,
+            kind: Kind.giftWrap,
+            createdAt: wrapFinalCreatedAt,
+            tags: wrapTags,
+            content: wrapContent
+        )
     }
 
     // MARK: - Receive / unwrap

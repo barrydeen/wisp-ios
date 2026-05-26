@@ -238,7 +238,13 @@ final class FeedViewModel {
 
         // 1. Seed from local storage for instant display.
         //    Filter + sort run off the MainActor so the first frame isn't blocked.
-        let cached = await eventStore.seedCache(limit: 300)
+        //    Private rumors (gift-wrapped kind-1 from PrivateInteractionStore) are
+        //    excluded so they never surface in the public feed even though they
+        //    live in the same EventStore as public kind-1s.
+        let cached = await eventStore.seedCache(
+            limit: 300,
+            excludingEventIds: PrivateInteractionStore.shared.privateEventIds
+        )
         if !cached.isEmpty {
             let myPubkey = keypair.pubkey
             let follows = followsCache
@@ -365,7 +371,10 @@ final class FeedViewModel {
             isLoading = true
             // Re-seed from local cache (filtered to follows — EventStore is shared with the
             // Extended Network subscription, which persists every event it sees).
-            let cached = await eventStore.seedCache(limit: 300)
+            let cached = await eventStore.seedCache(
+                limit: 300,
+                excludingEventIds: PrivateInteractionStore.shared.privateEventIds
+            )
             let myPubkey = keypair.pubkey
             let fc = followsCache
             let (reFiltered, reIds) = await Task.detached(priority: .userInitiated) {

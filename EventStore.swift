@@ -64,7 +64,11 @@ actor EventStore {
 
     // MARK: - Read
 
-    func seedCache(limit: Int = 2000) -> [NostrEvent] {
+    /// Seed the home/feed cache from disk. `excludingEventIds` filters out
+    /// gift-wrap-materialized private replies/reactions so they never bleed
+    /// into the public timeline — `PrivateInteractionStore` is the source of
+    /// truth for that set and the caller passes its current snapshot.
+    func seedCache(limit: Int = 2000, excludingEventIds: Set<String> = []) -> [NostrEvent] {
         guard let box = ensureBox() else { return [] }
         do {
             let query = try box.query {
@@ -74,7 +78,9 @@ actor EventStore {
             .ordered(by: EventEntity.createdAt, flags: .descending)
             .build()
             let entities = try query.find(offset: 0, limit: limit)
-            return entities.compactMap { $0.toNostrEvent() }
+            let events = entities.compactMap { $0.toNostrEvent() }
+            if excludingEventIds.isEmpty { return events }
+            return events.filter { !excludingEventIds.contains($0.id) }
         } catch {
             return []
         }
