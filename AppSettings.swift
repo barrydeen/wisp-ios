@@ -43,10 +43,18 @@ final class AppSettings {
         static let zapIconStyle = "wisp_settings_zap_icon_style"
         static let videoLoop = "wisp_settings_video_loop"
         static let syncSettingsToRelays = "wisp_settings_sync_settings_to_relays"
-        static let quickZapEnabled = "wisp_settings_quick_zap_enabled"
-        static let quickZapAmountSats = "wisp_settings_quick_zap_amount_sats"
-        static let quickZapAmountFiat = "wisp_settings_quick_zap_amount_fiat"
-        static let quickZapMessage = "wisp_settings_quick_zap_message"
+        static func quickZapEnabled(for pubkey: String?) -> String {
+            pubkey.map { "wisp_settings_quick_zap_enabled_\($0)" } ?? "wisp_settings_quick_zap_enabled"
+        }
+        static func quickZapAmountSats(for pubkey: String?) -> String {
+            pubkey.map { "wisp_settings_quick_zap_amount_sats_\($0)" } ?? "wisp_settings_quick_zap_amount_sats"
+        }
+        static func quickZapAmountFiat(for pubkey: String?) -> String {
+            pubkey.map { "wisp_settings_quick_zap_amount_fiat_\($0)" } ?? "wisp_settings_quick_zap_amount_fiat"
+        }
+        static func quickZapMessage(for pubkey: String?) -> String {
+            pubkey.map { "wisp_settings_quick_zap_message_\($0)" } ?? "wisp_settings_quick_zap_message"
+        }
     }
 
     /// Allowed durations for the post-undo countdown. Picker shows these as
@@ -175,14 +183,16 @@ final class AppSettings {
     /// (tap → composer) is preserved unless the user opts in.
     var quickZapEnabled: Bool {
         didSet {
-            UserDefaults.standard.set(quickZapEnabled, forKey: Keys.quickZapEnabled)
+            let pk = NostrKey.load()?.pubkey
+            UserDefaults.standard.set(quickZapEnabled, forKey: Keys.quickZapEnabled(for: pk))
             EmojiRepository.shared.scheduleSettingsSync()
         }
     }
     /// Instant-zap amount in sats, used when `fiatModeEnabled` is false.
     var quickZapAmountSats: Int64 {
         didSet {
-            UserDefaults.standard.set(quickZapAmountSats, forKey: Keys.quickZapAmountSats)
+            let pk = NostrKey.load()?.pubkey
+            UserDefaults.standard.set(quickZapAmountSats, forKey: Keys.quickZapAmountSats(for: pk))
             EmojiRepository.shared.scheduleSettingsSync()
         }
     }
@@ -191,7 +201,8 @@ final class AppSettings {
     /// `ExchangeRateCache.fiatToSats`.
     var quickZapAmountFiat: Double {
         didSet {
-            UserDefaults.standard.set(quickZapAmountFiat, forKey: Keys.quickZapAmountFiat)
+            let pk = NostrKey.load()?.pubkey
+            UserDefaults.standard.set(quickZapAmountFiat, forKey: Keys.quickZapAmountFiat(for: pk))
             EmojiRepository.shared.scheduleSettingsSync()
         }
     }
@@ -200,7 +211,8 @@ final class AppSettings {
     /// as the composer's blank state would produce. Persisted + synced.
     var quickZapMessage: String {
         didSet {
-            UserDefaults.standard.set(quickZapMessage, forKey: Keys.quickZapMessage)
+            let pk = NostrKey.load()?.pubkey
+            UserDefaults.standard.set(quickZapMessage, forKey: Keys.quickZapMessage(for: pk))
             EmojiRepository.shared.scheduleSettingsSync()
         }
     }
@@ -230,12 +242,27 @@ final class AppSettings {
         self.zapIconStyle = ZapIconStyle(rawValue: zapRaw) ?? .bitcoin
         self.videoLoop = defaults.object(forKey: Keys.videoLoop) as? Bool ?? true
         self.syncSettingsToRelays = defaults.object(forKey: Keys.syncSettingsToRelays) as? Bool ?? true
-        self.quickZapEnabled = defaults.object(forKey: Keys.quickZapEnabled) as? Bool ?? false
-        let storedQuickInt = defaults.integer(forKey: Keys.quickZapAmountSats)
-        self.quickZapAmountSats = storedQuickInt > 0 ? Int64(storedQuickInt) : 100
-        let storedQuickFiat = defaults.double(forKey: Keys.quickZapAmountFiat)
+        let qzPubkey = NostrKey.load()?.pubkey
+        self.quickZapEnabled = defaults.object(forKey: Keys.quickZapEnabled(for: qzPubkey)) as? Bool ?? false
+        let storedQuickInt = defaults.integer(forKey: Keys.quickZapAmountSats(for: qzPubkey))
+        self.quickZapAmountSats = storedQuickInt > 0 ? Int64(storedQuickInt) : 21
+        let storedQuickFiat = defaults.double(forKey: Keys.quickZapAmountFiat(for: qzPubkey))
         self.quickZapAmountFiat = storedQuickFiat > 0 ? storedQuickFiat : 0.10
-        self.quickZapMessage = defaults.string(forKey: Keys.quickZapMessage) ?? ""
+        self.quickZapMessage = defaults.string(forKey: Keys.quickZapMessage(for: qzPubkey)) ?? ""
+    }
+
+    /// Load per-account instant-zap settings from UserDefaults. Falls back to
+    /// defaults (21 sats / 0.10 fiat / disabled / no message) when no value
+    /// has been stored for this pubkey yet. Call on every account switch so
+    /// each account's preferences are isolated.
+    func loadQuickZapSettings(for pubkey: String) {
+        let defaults = UserDefaults.standard
+        quickZapEnabled = defaults.object(forKey: Keys.quickZapEnabled(for: pubkey)) as? Bool ?? false
+        let storedSats = defaults.integer(forKey: Keys.quickZapAmountSats(for: pubkey))
+        quickZapAmountSats = storedSats > 0 ? Int64(storedSats) : 21
+        let storedFiat = defaults.double(forKey: Keys.quickZapAmountFiat(for: pubkey))
+        quickZapAmountFiat = storedFiat > 0 ? storedFiat : 0.10
+        quickZapMessage = defaults.string(forKey: Keys.quickZapMessage(for: pubkey)) ?? ""
     }
 
     /// Apply settings restored from a NIP-78 backup. Only non-default keys
