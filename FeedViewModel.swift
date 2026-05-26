@@ -177,6 +177,29 @@ final class FeedViewModel {
     init(keypair: Keypair) {
         self.keypair = keypair
         observeBlocks()
+        observeOwnPublishes()
+    }
+
+    /// Listen for `.nostrEventPublished` and insert the user's own renderable
+    /// events into the in-memory feed immediately. The follows-feed live REQ
+    /// filters by `authors ∈ follows`, so own events (notably polls — kind 1068
+    /// / 6969) wouldn't otherwise round-trip back through the subscription.
+    private func observeOwnPublishes() {
+        NotificationCenter.default.addObserver(
+            forName: .nostrEventPublished, object: nil, queue: .main
+        ) { [weak self] note in
+            guard let event = note.userInfo?["event"] as? NostrEvent else { return }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                guard event.pubkey == self.keypair.pubkey else { return }
+                guard self.currentKind == .follows else { return }
+                guard Self.isFeedRenderable(event) else { return }
+                guard self.seenIds.insert(event.id).inserted else { return }
+                self.events = Self.consolidateReposts(
+                    Self.mergeSortedDesc(self.events, [event])
+                )
+            }
+        }
     }
 
     /// Listen for `userBlocked` and drop matching in-memory events. Without

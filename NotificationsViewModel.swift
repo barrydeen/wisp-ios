@@ -419,7 +419,76 @@ final class NotificationsViewModel {
         for e in pollVotes {
             _ = repo.ingest(e, relayUrl: "", isFromDmRelay: false)
         }
+        await scanForEndedPolls()
         await prefetchActorProfilesIfNeeded()
+    }
+
+    /// Scan polls the user authored or voted in and surface a `.pollEnded`
+    /// notification row for any whose `endsAt` / `closed_at` is now in the
+    /// past. Persisted dedup via UserDefaults keeps the row from re-appearing
+    /// after relaunch.
+    private func scanForEndedPolls() async {
+        let pubkey = keypair.pubkey
+        let now = Int(Date().timeIntervalSince1970)
+
+        // Polls I authored — from cache (any kind 1068 / 6969 by me).
+        let mine = await EventStore.shared.loadRecentByAuthor(
+            pubkey: pubkey,
+            kinds: [Nip88.kindPoll, Nip69.kindZapPoll],
+            limit: 200
+        )
+
+        // Polls I voted in — find my kind-1018 responses in cache, resolve
+        // their referenced poll ids, then load those poll events.
+        let myVotes = await EventStore.shared.loadRecentByAuthor(
+            pubkey: pubkey,
+            kinds: [Nip88.kindPollResponse],
+            limit: 300
+        )
+        let votedPollIds = Set(myVotes.compactMap { Nip88.getPollEventId($0) })
+        let voted: [NostrEvent]
+        if !votedPollIds.isEmpty {
+            voted = await EventStore.shared.eventsByIds(Array(votedPollIds))
+                .filter { $0.kind == Nip88.kindPoll || $0.kind == Nip69.kindZapPoll }
+        } else {
+            voted = []
+        }
+
+        var byId: [String: NostrEvent] = [:]
+        for e in mine { byId[e.id] = e }
+        for e in voted { byId[e.id] = e }
+
+        var notified = pollEndedNotifiedIds
+        var added = false
+        for poll in byId.values {
+            let endsAt = poll.kind == Nip69.kindZapPoll
+                ? Nip69.parseClosedAt(poll)
+                : Nip88.parseEndsAt(poll)
+            guard let endsAt, endsAt <= now else { continue }
+            if notified.contains(poll.id) { continue }
+            if repo.insertPollEnded(pollEvent: poll, endedAt: endsAt) {
+                notified.insert(poll.id)
+                added = true
+            }
+        }
+        if added {
+            pollEndedNotifiedIds = notified
+        }
+    }
+
+    // MARK: - Persisted poll-ended dedup
+
+    private var pollEndedNotifiedKey: String { "notif_poll_ended_ids_\(keypair.pubkey)" }
+
+    private var pollEndedNotifiedIds: Set<String> {
+        get { Set(UserDefaults.standard.stringArray(forKey: pollEndedNotifiedKey) ?? []) }
+        set {
+            // Cap at 500 to keep UserDefaults small — only the most recent
+            // poll ids matter for dedup since older polls won't reappear in
+            // EventStore after prune.
+            let capped = Array(newValue).suffix(500)
+            UserDefaults.standard.set(Array(capped), forKey: pollEndedNotifiedKey)
+        }
     }
 
     // MARK: - Live subscriptions
@@ -527,6 +596,9 @@ final class NotificationsViewModel {
                 if relaysChanged || idsChanged {
                     self.reopenSubscriptions()
                 }
+                // Rescan in case a poll's `endsAt` passed while the app was
+                // open — picks up completions without waiting for a refresh.
+                await self.scanForEndedPolls()
             }
         }
     }

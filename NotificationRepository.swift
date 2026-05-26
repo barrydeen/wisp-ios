@@ -153,9 +153,32 @@ final class NotificationRepository {
         case .zap:
             if soundsOn { NotificationSounds.shared.play(.zap) }
             Haptics.shared.zapBuzz()
-        case .pollVote, .dm:
+        case .pollVote, .pollEnded, .dm:
             break
         }
+    }
+
+    /// Insert a synthetic `.pollEnded` row. Called by `NotificationsViewModel`'s
+    /// poll-end scan once a poll's `endsAt` / `closed_at` is in the past and we
+    /// haven't already surfaced it. Caller is responsible for dedup via
+    /// `selfPollEndedNotified` so the row doesn't re-appear after relaunch.
+    func insertPollEnded(pollEvent: NostrEvent, endedAt: Int) -> Bool {
+        let syntheticId = "poll-ended:\(pollEvent.id)"
+        guard insertSeen(syntheticId) else { return false }
+        let item = FlatNotificationItem(
+            id: syntheticId,
+            kind: .pollEnded,
+            actorPubkey: pollEvent.pubkey,
+            referencedEventId: pollEvent.id,
+            timestamp: endedAt
+        )
+        eventCache[pollEvent.id] = pollEvent
+        let insertIdx = flatItems.firstIndex(where: { $0.timestamp < item.timestamp }) ?? flatItems.count
+        flatItems.insert(item, at: insertIdx)
+        if flatItems.count > Self.flatCap { flatItems.removeLast(flatItems.count - Self.flatCap) }
+        summary = computeSummary24h()
+        bumpLatestTimestamp(item.timestamp)
+        return true
     }
 
     func addInlineReply(_ event: NostrEvent, targetEventId: String) {
@@ -356,7 +379,8 @@ final class NotificationRepository {
             case .mention:  s.mentionCount += 1
             case .quote:    s.quoteCount += 1
             case .dm:       s.dmCount += 1
-            case .pollVote: s.pollVoteCount += 1
+            case .pollVote:  s.pollVoteCount += 1
+            case .pollEnded: s.pollEndedCount += 1
             }
         }
         return s
