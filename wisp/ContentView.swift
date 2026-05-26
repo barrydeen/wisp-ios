@@ -17,6 +17,12 @@ struct ContentView: View {
     @State private var checkedSavedAccount = false
     @State private var accountSwitchInProgress = false
     @State private var showAddAccount = false
+    /// When the user creates a brand-new account via the Apple cloud flow,
+    /// the keypair is generated and backed up before the wizard runs. We
+    /// route them into `SignUpFlowView` with this pre-generated key so they
+    /// still get the profile / follows / hashtags steps without minting a
+    /// second key (which would leave the backed-up key abandoned).
+    @State private var signUpExistingKeypair: Keypair?
 
     var body: some View {
         Group {
@@ -74,17 +80,24 @@ struct ContentView: View {
                 .fullScreenCover(isPresented: $showAppleAuth) {
                     AppleAuthView(
                         onCancel: { showAppleAuth = false },
-                        onDone: { _, kp in
+                        onDone: { isNewAccount, kp in
                             keypair = kp
                             showAppleAuth = false
-                            // Same onboarding routing as the Google path:
-                            // outbox-builder must populate relays-per-author
-                            // before MainView mounts, regardless of whether
-                            // the account is brand new or restored from
-                            // iCloud.
-                            if NostrKey.isOnboardingComplete(pubkey: kp.pubkey) {
+                            if isNewAccount {
+                                // Brand-new account: run the same profile /
+                                // follows / hashtags / intro-note wizard as
+                                // a "Create new account" tap, passing the
+                                // already-generated, already-backed-up key
+                                // so the wizard doesn't mint a second one.
+                                signUpExistingKeypair = kp
+                                currentScreen = .signUp
+                            } else if NostrKey.isOnboardingComplete(pubkey: kp.pubkey) {
                                 currentScreen = .loading
                             } else {
+                                // Restored account: outbox-builder fetches
+                                // kind-3 / kind-10002 from relays so the
+                                // feed has follows + per-author write
+                                // relays before MainView mounts.
                                 currentScreen = .onboarding
                             }
                         }
@@ -92,8 +105,9 @@ struct ContentView: View {
                 }
 
             case .signUp:
-                SignUpFlowView { kp in
+                SignUpFlowView(existingKeypair: signUpExistingKeypair) { kp in
                     keypair = kp
+                    signUpExistingKeypair = nil
                     withAnimation { currentScreen = .main }
                 }
 

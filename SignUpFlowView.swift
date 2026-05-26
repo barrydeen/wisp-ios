@@ -8,8 +8,17 @@ import PhotosUI
 struct SignUpFlowView: View {
     var onComplete: (Keypair) -> Void
 
-    @State private var viewModel = SignUpViewModel()
+    @State private var viewModel: SignUpViewModel
     @State private var step = 0
+
+    /// `existingKeypair` lets cloud-backup flows (Apple / Google) hand the
+    /// already-generated, already-backed-up keypair to the wizard so the
+    /// user runs the same profile / follows / hashtags / intro-note flow
+    /// as a fresh "Create new account" tap, without minting a second key.
+    init(existingKeypair: Keypair? = nil, onComplete: @escaping (Keypair) -> Void) {
+        self.onComplete = onComplete
+        self._viewModel = State(initialValue: SignUpViewModel(existingKeypair: existingKeypair))
+    }
 
     var body: some View {
         // A `TabView(.page)` would let the user swipe horizontally back to
