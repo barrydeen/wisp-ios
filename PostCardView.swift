@@ -131,6 +131,23 @@ struct PostCardView: View {
     @State private var sourceTracker = NoteSourceTracker.shared
     @State private var engagementRepo = EngagementRepository.shared
     @State private var zapStore = ZapAnimationStore.shared
+    /// Inner kind-1 fetched for a kind-6 repost whose `content` is empty
+    /// (NIP-18 tag-only form). The JSON-embedded variant resolves
+    /// synchronously inside `resolveRepost()`; this state covers reposts
+    /// that only carry an `e` tag, where the inner note has to come from
+    /// the local EventStore or — failing that — a relay. Populated by the
+    /// `.task` below via `QuotedNoteCache` and read back through
+    /// `resolveRepost()` so the row re-renders with the real content.
+    @State private var resolvedInnerFromStore: NostrEvent?
+    /// Drives the fetch retry loop for tag-only reposts. 0 = first try
+    /// (cache + e-tag hint + a small default relay set); 1+ = broader
+    /// retry that also blends in the user's outbox-scored relays. Mirrors
+    /// `QuotedNoteView.attempt`.
+    @State private var innerFetchAttempt: Int = 0
+    /// True after the broader retry came back empty. Flips the placeholder
+    /// from "Loading reposted note…" to "Reposted note unavailable" with a
+    /// tap-to-retry button.
+    @State private var innerFetchFailed: Bool = false
 
     /// Height at which a post body is collapsed. ~66% of screen height gives
     /// enough context without dominating the feed.
@@ -229,19 +246,29 @@ struct PostCardView: View {
         let resolved = resolveRepost()
         let displayEvent = resolved.event
         let displayProfile = resolved.profile
+        // True when this is a kind-6 wrapper whose inner kind-1 hasn't been
+        // resolved yet (no JSON in content + relay/store fetch still
+        // pending or failed). The reposter avatar/name/timestamp, the
+        // action bar, and any reply-context row are all suppressed in this
+        // state — the placeholder under the banner stands in for the body.
+        let isUnresolvedRepost = event.kind == 6 && displayEvent.id == event.id
 
         VStack(alignment: .leading, spacing: 0) {
             if resolved.isRepost {
                 repostBanner
             }
 
-            if showReplyContext {
+            if !isUnresolvedRepost, showReplyContext {
                 replyingToRow(for: displayEvent)
             }
 
             // Header row — avatar + name + nip05 + badges/time. Indented to
             // align with the avatar. In ancestor-compact mode the inner profile
             // links are dropped so the outer ThreadRoute link owns every tap.
+            // Skipped entirely for unresolved tag-only reposts: the reposter
+            // avatar/name/timestamp would be redundant with the banner and
+            // sit above the loading/missing placeholder.
+            if !isUnresolvedRepost {
             HStack(alignment: .top, spacing: 12) {
                 if ancestorCompact {
                     CachedAvatarView(url: displayProfile?.picture, size: 24)
@@ -322,6 +349,7 @@ struct PostCardView: View {
             }
             .padding(.horizontal, 16)
             .padding(.top, 12)
+            }
 
             // Post body — full card width, not indented under the avatar. Lets
             // long text breathe and gives the media gallery room to bleed off
@@ -333,7 +361,9 @@ struct PostCardView: View {
             // inside an ancestor remains tappable — without it the inner
             // QuotedNoteView Button still consumes the touch, swallowing
             // both its own navigation AND the outer row tap.
-            if ancestorCompact {
+            if isUnresolvedRepost {
+                unresolvedRepostPlaceholder
+            } else if ancestorCompact {
                 // No height cap: the cap forced `.aspectRatio(.fit)` images to
                 // shrink, which left InlineImageView's clipShape rounding the
                 // empty parent frame instead of the image edges. Render at
@@ -532,6 +562,18 @@ struct PostCardView: View {
             if displayed.kind == Nip88.kindPoll || displayed.kind == Nip69.kindZapPoll {
                 PollTallyRepository.shared.markVisible(pollEvent: displayed)
             }
+        }
+        // Tag-only NIP-18 repost: `content` is empty so the inline JSON path
+        // in `resolveRepost()` can't recover the original note. Mirror
+        // `QuotedNoteView`'s fetch ladder — in-memory cache → local
+        // EventStore → relay fan-out (hint relays + defaults on attempt 0,
+        // user's outbox + extra fallbacks on attempt 1). On hit we seed
+        // both the static inner-event cache and `resolvedInnerFromStore`,
+        // which re-renders the row with the real kind-1. On miss after the
+        // silent retry we flip `innerFetchFailed` so the placeholder
+        // switches from spinner to a tap-to-retry button.
+        .task(id: InnerFetchTaskKey(eventId: event.id, attempt: innerFetchAttempt)) {
+            await fetchInnerForRepost()
         }
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
@@ -1381,30 +1423,135 @@ struct PostCardView: View {
     }()
 
     private func resolveRepost() -> ResolvedPost {
-        if event.kind == 6, !event.content.isEmpty {
-            let key = event.id as NSString
-            let inner: NostrEvent? = {
-                if let box = Self.innerEventCache.object(forKey: key) { return box.event }
-                guard let data = event.content.data(using: .utf8),
-                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let parsed = NostrEvent(json: json)
-                else { return nil }
-                Self.innerEventCache.setObject(InnerEventBox(parsed), forKey: key)
-                return parsed
-            }()
-            if let inner {
-                return ResolvedPost(
-                    event: inner,
-                    profile: profiles[inner.pubkey] ?? ProfileRepository.shared.get(inner.pubkey),
-                    isRepost: true
-                )
-            }
+        guard event.kind == 6 else {
+            return ResolvedPost(
+                event: event,
+                profile: profile ?? ProfileRepository.shared.get(event.pubkey),
+                isRepost: false
+            )
         }
+        let key = event.id as NSString
+        let inner: NostrEvent? = {
+            if let s = resolvedInnerFromStore { return s }
+            if let box = Self.innerEventCache.object(forKey: key) { return box.event }
+            guard !event.content.isEmpty,
+                  let data = event.content.data(using: .utf8),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let parsed = NostrEvent(json: json)
+            else { return nil }
+            Self.innerEventCache.setObject(InnerEventBox(parsed), forKey: key)
+            return parsed
+        }()
+        if let inner {
+            return ResolvedPost(
+                event: inner,
+                profile: profiles[inner.pubkey] ?? ProfileRepository.shared.get(inner.pubkey),
+                isRepost: true
+            )
+        }
+        // Kind-6 wrapper whose inner kind-1 we couldn't resolve yet (tag-only
+        // repost, async fetch hasn't returned). Mark as repost anyway so
+        // the wrapper's NIP-18 `e` tag doesn't trip `Nip10.replyTarget` and
+        // render a misleading "Replying to" row over a blank body.
         return ResolvedPost(
             event: event,
             profile: profile ?? ProfileRepository.shared.get(event.pubkey),
-            isRepost: false
+            isRepost: true
         )
+    }
+
+    /// Composite `.task` key so a retry (`innerFetchAttempt` bump) re-runs
+    /// the fetch the same way an `event.id` change does. Same idea as
+    /// `QuotedNoteView.TaskKey`.
+    private struct InnerFetchTaskKey: Hashable {
+        let eventId: String
+        let attempt: Int
+    }
+
+    /// Relay hints scraped from the kind-6 wrapper's `e` and `p` tags
+    /// (NIP-10 / NIP-18 third-element format: `["e", id, relayUrl]`). These
+    /// are the relays the reposter saw the inner note on; trying them first
+    /// is usually the fastest path to recover the original.
+    private var innerRepostRelayHints: [String] {
+        guard event.kind == 6 else { return [] }
+        var hints: [String] = []
+        var seen = Set<String>()
+        for tag in event.tags where tag.count >= 3 && (tag[0] == "e" || tag[0] == "p") {
+            let url = tag[2]
+            guard !url.isEmpty, seen.insert(url).inserted else { continue }
+            hints.append(url)
+        }
+        return hints
+    }
+
+    /// Drive the cache→store→relay ladder for tag-only kind-6 reposts.
+    /// Bails early when the inner is already resolvable (the JSON-content
+    /// or static-cache paths inside `resolveRepost` would return it
+    /// synchronously) so the relay query is reserved for reposts that
+    /// genuinely need a network round-trip.
+    private func fetchInnerForRepost() async {
+        guard event.kind == 6, resolvedInnerFromStore == nil else { return }
+        // If `resolveRepost` would already return the inner (via static
+        // cache or JSON-in-content), there's nothing to fetch.
+        if resolveRepost().event.id != event.id { return }
+        guard let innerId = FeedViewModel.innerRepostRef(of: event)?.id else { return }
+
+        innerFetchFailed = false
+        let hints = innerRepostRelayHints
+        let result: NostrEvent? = innerFetchAttempt == 0
+            ? await QuotedNoteCache.shared.fetch(eventId: innerId, relayHints: hints)
+            : await QuotedNoteCache.shared.refetch(eventId: innerId, relayHints: hints, attempt: innerFetchAttempt)
+
+        if let result {
+            Self.innerEventCache.setObject(InnerEventBox(result), forKey: event.id as NSString)
+            resolvedInnerFromStore = result
+            return
+        }
+        // One silent retry with a broader relay set before giving up — the
+        // same pattern QuotedNoteView uses for its inline embeds.
+        if innerFetchAttempt == 0 {
+            innerFetchAttempt = 1
+        } else {
+            innerFetchFailed = true
+        }
+    }
+
+    /// Body replacement shown while the tag-only repost's inner kind-1 is
+    /// either still in flight (spinner) or definitively missing after the
+    /// broader retry (tap-to-retry button). Sits under the "Reposted by"
+    /// banner; the reposter avatar/name/timestamp + action bar are all
+    /// suppressed because they'd be redundant or operate on the wrong id.
+    @ViewBuilder
+    private var unresolvedRepostPlaceholder: some View {
+        HStack(spacing: 10) {
+            if innerFetchFailed {
+                Image(systemName: "questionmark.circle")
+                    .foregroundStyle(.tertiary)
+                Text("Reposted note unavailable")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+                Button {
+                    innerFetchFailed = false
+                    innerFetchAttempt += 1
+                } label: {
+                    Text("Retry")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.wispPrimary)
+                }
+                .buttonStyle(.plain)
+            } else {
+                ProgressView()
+                    .tint(Color.wispPrimary)
+                    .scaleEffect(0.8)
+                Text("Loading reposted note…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
     }
 
     private func npubShort(_ pubkey: String) -> String {
