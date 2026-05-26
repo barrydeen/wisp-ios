@@ -490,7 +490,7 @@ struct WalletSettingsView: View {
             }
             .buttonStyle(.plain)
 
-            if store.isRelayBackupSupported {
+            if store.isRelayBackupSupported && !store.isDefaultWallet {
                 Divider().opacity(0.25).padding(.leading, 50)
 
                 // Relay backup
