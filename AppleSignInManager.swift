@@ -49,13 +49,10 @@ final class AppleSignInManager {
     private var activeCoordinator: Coordinator?
 
     /// Drives the Sign in with Apple system sheet to completion and returns
-    /// the stable opaque user identifier. Throws `.notAvailable` without
-    /// presenting any UI if iCloud is not signed in.
+    /// the stable opaque user identifier. The iCloud-sign-in check is
+    /// deferred to the storage layer (`KeychainBackupService`) — SIWA
+    /// itself only needs the Apple ID, not iCloud.
     func signIn(presenting: UIViewController) async throws -> AuthResult {
-        if AppleAuthConfig.cachedIsAvailable == false {
-            throw SignInError.notAvailable
-        }
-
         return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<AuthResult, Error>) in
             let request = ASAuthorizationAppleIDProvider().createRequest()
             // `.fullName` / `.email` are only populated on the very first

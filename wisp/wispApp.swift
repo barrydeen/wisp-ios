@@ -23,14 +23,6 @@ struct wispApp: App {
             await AvatarPrefetcher.shared.sweepPersistedProfiles()
         }
 
-        // Pre-fetch the iCloud account status so the splash has a synchronous
-        // boolean to gate the "Continue with Apple" button on the first frame,
-        // without hopping to CloudKit. The splash's `.task` refreshes again
-        // in case the user changed iCloud state between launches.
-        Task.detached(priority: .utility) {
-            _ = await AppleAuthConfig.refreshAccountStatus()
-        }
-
         // Drop UIKit's 1pt hairline shadow under every UINavigationBar so views
         // that paint a custom toolbar background (e.g. ProfileView with a pinned
         // tab strip directly under the nav bar) read as one continuous header.
