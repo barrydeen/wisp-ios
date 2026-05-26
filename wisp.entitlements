@@ -6,17 +6,5 @@
 	<array>
 		<string>Default</string>
 	</array>
-	<key>com.apple.developer.icloud-container-identifiers</key>
-	<array>
-		<string>iCloud.barrydeen.wisp</string>
-	</array>
-	<key>com.apple.developer.icloud-services</key>
-	<array>
-		<string>CloudKit</string>
-	</array>
-	<key>com.apple.developer.ubiquity-container-identifiers</key>
-	<array>
-		<string>iCloud.barrydeen.wisp</string>
-	</array>
 </dict>
 </plist>

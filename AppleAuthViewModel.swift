@@ -1,6 +1,5 @@
 import Foundation
 import UIKit
-import CloudKit
 
 /// Orchestrates the "Continue with Apple" flow. Mirrors `GoogleAuthViewModel`
 /// state-for-state with two structural differences:
@@ -8,10 +7,10 @@ import CloudKit
 ///     of Google sign-in. We surface the stable `appleIDCredential.user`
 ///     identifier — Apple's analogue of Google's JWT `sub` claim — and feed
 ///     it into `BackupCrypto.deriveBackupKey(appleUserID:pin:)`.
-///   - The storage layer is `CloudKitBackupService` instead of Drive.
-///     CloudKit's modern API returns the payload inline in the list call,
-///     so the restore-PIN decryption loop reads each `BackupFile.payload`
-///     directly rather than issuing a separate download per file.
+///   - The storage layer is iCloud Keychain (`KeychainBackupService`)
+///     instead of Drive. Items are returned with the payload inline, so the
+///     restore-PIN decryption loop reads `BackupFile.payload` directly
+///     rather than issuing a separate download per file.
 ///
 /// State machine, error handling, and the decoy-profile fetch privacy
 /// mitigation are otherwise identical to the Google flow.
@@ -35,11 +34,11 @@ final class AppleAuthViewModel {
     private(set) var state: State = .idle
 
     private let signInManager = AppleSignInManager()
-    private let cloudKitService = CloudKitBackupService()
+    private let keychainService = KeychainBackupService()
 
     private var pendingUserID: String?
     private var pendingBackupKey: Data?
-    private var pendingFiles: [CloudKitBackupService.BackupFile] = []
+    private var pendingFiles: [KeychainBackupService.BackupFile] = []
     private var pendingSetupFirstPin: String?
     private var profileFetchTask: Task<Void, Never>?
 
@@ -57,7 +56,7 @@ final class AppleAuthViewModel {
                 pendingUserID = result.userID
 
                 state = .checkingICloud
-                let files = try await cloudKitService.listBackups()
+                let files = try await keychainService.listBackups()
                 pendingFiles = files
 
                 state = files.isEmpty
@@ -69,7 +68,7 @@ final class AppleAuthViewModel {
                 } else {
                     state = .error(message: e.errorDescription ?? "Apple sign-in failed.")
                 }
-            } catch let e as CloudKitBackupError {
+            } catch let e as KeychainBackupError {
                 state = .error(message: Self.message(for: e))
             } catch {
                 state = .error(message: error.localizedDescription)
@@ -96,7 +95,7 @@ final class AppleAuthViewModel {
                         if seen.contains(npub) { continue }
                         seen.insert(npub)
                         summaries.append(AuthBackupSummary(
-                            backupID: file.recordID.recordName,
+                            backupID: file.backupID,
                             npub: npub,
                             pubkeyHex: pubkeyHex
                         ))
@@ -143,7 +142,7 @@ final class AppleAuthViewModel {
                 let key = try await deriveKeyOffMain(appleUserID: userID, pin: pin)
                 pendingBackupKey = key
                 try await createAndStoreNewAccount()
-            } catch let e as CloudKitBackupError {
+            } catch let e as KeychainBackupError {
                 state = .error(message: Self.message(for: e))
             } catch {
                 state = .error(message: error.localizedDescription)
@@ -158,7 +157,7 @@ final class AppleAuthViewModel {
 
     func restoreAccount(backupID: String) {
         guard let key = pendingBackupKey else { return }
-        guard let file = pendingFiles.first(where: { $0.recordID.recordName == backupID }) else { return }
+        guard let file = pendingFiles.first(where: { $0.backupID == backupID }) else { return }
         state = .working
         Task { @MainActor in
             do {
@@ -184,7 +183,7 @@ final class AppleAuthViewModel {
         Task { @MainActor in
             do {
                 try await createAndStoreNewAccount()
-            } catch let e as CloudKitBackupError {
+            } catch let e as KeychainBackupError {
                 state = .error(message: Self.message(for: e))
             } catch {
                 state = .error(message: error.localizedDescription)
@@ -210,7 +209,7 @@ final class AppleAuthViewModel {
         let pubkey = try Schnorr.xonlyPubkey(privkey32: privkey)
         let pubkeyHex = Hex.encode(pubkey)
         let payload = try BackupCrypto.encryptNsec(nsec32: privkey, key32: key)
-        try await cloudKitService.uploadBackup(payload: payload)
+        try await keychainService.uploadBackup(payload: payload)
         let keypair = Keypair(privkey: Hex.encode(privkey), pubkey: pubkeyHex)
         NostrKey.save(keypair)
         NostrKey.registerInAccountList(pubkeyHex)
@@ -223,21 +222,12 @@ final class AppleAuthViewModel {
         }.value
     }
 
-    private static func message(for error: CloudKitBackupError) -> String {
+    private static func message(for error: KeychainBackupError) -> String {
         switch error.kind {
-        case .accountUnavailable:
+        case .iCloudUnavailable:
             return "iCloud isn\u{2019}t available. Sign in to iCloud in Settings and try again."
-        case .schemaMissing:
-            // Surfaces only if the dev/prod schema deploy was skipped — the
-            // view-model normally swallows this as "empty list" during the
-            // list call. Reach this branch via the upload path only.
-            return "iCloud backup isn\u{2019}t set up yet. Try again in a moment."
-        case .quotaExceeded:
-            return "Your iCloud storage is full. Free up space and try again."
-        case .networkUnavailable:
-            return "Couldn\u{2019}t reach iCloud. Check your connection."
-        case .underlying(let err):
-            return err.localizedDescription
+        case .underlying(let status):
+            return "iCloud Keychain error (\(status)). Try again."
         }
     }
 

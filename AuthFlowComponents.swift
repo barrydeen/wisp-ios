@@ -8,7 +8,7 @@ import UIKit
 /// as a `providerName` parameter where it appears in user-facing text.
 
 /// One backup entry rendered in the account chooser. Provider-agnostic: the
-/// `backupID` is opaque (Drive file ID or CloudKit record name) and round
+/// `backupID` is opaque (Drive file ID or iCloud Keychain account) and round
 /// trips back to the originating view-model when the user taps a row.
 struct AuthBackupSummary: Identifiable, Equatable {
     let backupID: String

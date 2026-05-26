@@ -6,8 +6,9 @@ struct BackupCryptoTests {
 
     // The Apple and Google variants differ only in the HMAC salt context
     // string fed into PBKDF2. Same (accountID, PIN) under each must yield
-    // distinct 32-byte outputs — otherwise a CloudKit blob and a Drive blob
-    // could cross-decrypt, breaking the per-provider isolation we promise.
+    // distinct 32-byte outputs — otherwise an iCloud Keychain item and a
+    // Drive blob could cross-decrypt, breaking the per-provider isolation
+    // we promise.
     @Test func appleAndGoogleSaltsProduceDifferentKeys() throws {
         let accountID = "shared-account-id-123"
         let pin = "1234"

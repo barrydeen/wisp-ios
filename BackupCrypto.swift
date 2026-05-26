@@ -51,9 +51,9 @@ nonisolated enum BackupCrypto {
     /// PBKDF2 key derived from the team-scoped Apple user identifier
     /// (`ASAuthorizationAppleIDCredential.user`) and the user's PIN. Uses a
     /// distinct salt context from `deriveBackupKey(sub:pin:)` so the same
-    /// `(accountID, PIN)` pair cannot cross-decrypt between providers — a
-    /// CloudKit blob cannot accidentally decrypt with a Drive-derived key
-    /// (or vice versa).
+    /// `(accountID, PIN)` pair cannot cross-decrypt between providers — an
+    /// iCloud Keychain item cannot accidentally decrypt with a Drive-derived
+    /// key (or vice versa).
     static func deriveBackupKey(appleUserID: String, pin: String) throws -> Data {
         guard !appleUserID.isEmpty else { throw Error.invalidSub }
         guard isValidPin(pin) else { throw Error.invalidPin }
