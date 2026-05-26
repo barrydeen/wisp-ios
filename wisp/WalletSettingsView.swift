@@ -206,6 +206,7 @@ struct WalletSettingsView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 14)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
         }
@@ -530,10 +531,11 @@ struct WalletSettingsView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 14)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
-            if store.isRelayBackupSupported {
+            if store.isRelayBackupSupported && !store.isDefaultWallet {
                 Divider().opacity(0.25).padding(.leading, 50)
 
                 // Relay backup
