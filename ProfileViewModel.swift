@@ -827,6 +827,9 @@ struct EngagementCounts: Equatable {
     var zapCount: Int = 0
     var reactors: [Reactor] = []
     var reposters: [String] = []
+    /// Maps reposter pubkey → kind-6 event ID. Populated from both optimistic
+    /// reposts and ingested kind-6 events. Used by undo (NIP-09 deletion).
+    var reposterEventIds: [String: String] = [:]
     var zappers: [Zapper] = []
     /// Kind-1 events that reference this note via a NIP-18 `q` tag — i.e.
     /// posts that quoted it. Each row knows the quote event's id so the
@@ -846,11 +849,16 @@ struct Reactor: Equatable, Hashable {
     /// extracted from the kind-7 reaction event's NIP-30 `emoji` tag. Nil for
     /// plain Unicode reactions.
     let customEmojiUrl: String?
+    /// The event ID of the kind-7 reaction, populated once the event is signed
+    /// (for optimistic reactions) or ingested from a relay. Used for undo (NIP-09
+    /// deletion).
+    let reactionEventId: String?
 
-    init(pubkey: String, emoji: String, customEmojiUrl: String? = nil) {
+    init(pubkey: String, emoji: String, customEmojiUrl: String? = nil, reactionEventId: String? = nil) {
         self.pubkey = pubkey
         self.emoji = emoji
         self.customEmojiUrl = customEmojiUrl
+        self.reactionEventId = reactionEventId
     }
 }
 

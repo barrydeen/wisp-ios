@@ -74,6 +74,11 @@ final class RepostSender {
 
     func clear() { sent.removeAll() }
 
+    /// Remove a specific entry from the dedup set so the user can repost again after undoing.
+    func clearSent(pubkey: String, targetEventId: String) {
+        sent.remove("\(pubkey)|\(targetEventId)")
+    }
+
     private func relaySetForRepost(of targetEvent: NostrEvent, reposter: String) async -> [String] {
         var set = Set<String>()
         if let reads = RelayListRepository.shared.cachedReadRelays(targetEvent.pubkey) {

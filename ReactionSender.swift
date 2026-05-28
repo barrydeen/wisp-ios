@@ -150,6 +150,12 @@ final class ReactionSender {
 
             EngagementRepository.shared.reserveReactionEventId(event.id)
             reservedEventId = event.id
+            EngagementRepository.shared.updateReactionEventId(
+                eventId: targetEvent.id,
+                pubkey: keypair.pubkey,
+                emoji: picked.content,
+                reactionEventId: event.id
+            )
 
             let relays = await relaySetForReaction(to: targetEvent, reactor: keypair.pubkey)
             guard !relays.isEmpty else { throw SendError.noRelays }
@@ -167,6 +173,11 @@ final class ReactionSender {
     /// Drop the in-memory dedup set on logout.
     func clear() {
         sent.removeAll()
+    }
+
+    /// Remove a specific entry from the dedup set so the user can re-react after undoing.
+    func clearSent(pubkey: String, targetEventId: String, frequencyKey: String) {
+        sent.remove("\(pubkey)|\(targetEventId)|\(frequencyKey)")
     }
 
     private func relaySetForReaction(to targetEvent: NostrEvent, reactor: String) async -> [String] {
