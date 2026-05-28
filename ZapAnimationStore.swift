@@ -107,10 +107,11 @@ final class ZapAnimationStore {
                     }
                 }
             case .failure(let err):
+                let friendly = Self.friendlyMessage(for: err.localizedDescription)
                 if let eventId {
-                    self.errors[eventId] = err.localizedDescription
+                    self.errors[eventId] = friendly
                 } else {
-                    self.lastErrorBanner = err.localizedDescription
+                    self.lastErrorBanner = friendly
                 }
             }
 
@@ -154,5 +155,55 @@ final class ZapAnimationStore {
         bursting.removeAll()
         errors.removeAll()
         lastErrorBanner = nil
+    }
+
+    /// Map raw SDK / sender error strings into user-readable copy. The
+    /// underlying wallet stack (Spark, NWC) surfaces nested Swift type
+    /// descriptions like `BreezSdkSpark.SdkError.SparkError("Tree service
+    /// error: insufficient funds")` which is noise to a non-developer.
+    /// Pattern-match the well-known failure modes and fall back to a
+    /// cleaned-up version of the original string for everything else.
+    static func friendlyMessage(for raw: String) -> String {
+        let lower = raw.lowercased()
+        if lower.contains("insufficient funds") || lower.contains("insufficient balance") {
+            return "Not enough sats in your wallet."
+        }
+        if lower.contains("no route") || lower.contains("route not found") || lower.contains("unreachable") {
+            return "Couldn't find a payment route to the recipient. Try again later."
+        }
+        if lower.contains("expired") || lower.contains("invoice has expired") {
+            return "The lightning invoice expired before it could be paid. Try again."
+        }
+        if lower.contains("timeout") || lower.contains("timed out") {
+            return "The payment timed out. Check your connection and try again."
+        }
+        if lower.contains("no lud16") || lower.contains("no lightning address") {
+            return "This account doesn't have a lightning address."
+        }
+        if lower.contains("lnurl") && lower.contains("400") {
+            return "The recipient's lightning provider rejected this zap. Try a different amount."
+        }
+        if lower.contains("amount too small") || lower.contains("below minimum") {
+            return "Amount is below the recipient's minimum. Try a larger zap."
+        }
+        if lower.contains("amount too large") || lower.contains("above maximum") {
+            return "Amount is above the recipient's maximum. Try a smaller zap."
+        }
+        // Strip the SDK noise wrapper if present:
+        //   `Payment failed: BreezSdkSpark.SdkError.SparkError("…")` →  `…`
+        if let inner = extractQuotedReason(in: raw) {
+            return inner.prefix(1).uppercased() + inner.dropFirst() + (inner.hasSuffix(".") ? "" : ".")
+        }
+        return raw
+    }
+
+    /// Pull the substring between the first `("` and the matching `")` —
+    /// the conventional shape of a wrapped Swift enum description like
+    /// `Foo.Bar("the actual message")`. Returns nil when no such wrapper
+    /// is present.
+    private static func extractQuotedReason(in raw: String) -> String? {
+        guard let open = raw.range(of: "(\""),
+              let close = raw.range(of: "\")", range: open.upperBound..<raw.endIndex) else { return nil }
+        return String(raw[open.upperBound..<close.lowerBound])
     }
 }

@@ -541,18 +541,11 @@ struct WalletModeSelectionView: View {
             Spacer()
 
             VStack(spacing: 12) {
-                modeRow(
-                    title: "Spark wallet",
-                    subtitle: "Self-custody, embedded. Use your default wallet or restore from seed/relays.",
-                    logo: AnyView(
-                        Image("SparkIcon")
-                            .resizable()
-                            .scaledToFit()
-                            .foregroundStyle(Color.wispZapColor)
-                            .frame(width: 28, height: 28)
-                    ),
-                    action: { onPick(.spark) }
-                )
+                // Spark is the recommended wallet — full-bleed orange
+                // background plus an outer glow draws the eye there first.
+                // NWC stays as a peer option below so existing-wallet users
+                // can connect their setup in one tap.
+                primarySparkRow
                 modeRow(
                     title: "Nostr Wallet Connect",
                     subtitle: "Paste a connection string from Alby, Zeus, Rizful, Minibits, etc.",
@@ -569,6 +562,41 @@ struct WalletModeSelectionView: View {
             .padding(.bottom, 32)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var primarySparkRow: some View {
+        Button {
+            onPick(.spark)
+        } label: {
+            HStack(spacing: 14) {
+                Image("SparkIcon")
+                    .resizable()
+                    .scaledToFit()
+                    .foregroundStyle(.white)
+                    .frame(width: 32, height: 32)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Spark wallet")
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(.white)
+                    Text("Self-custody, embedded. Recommended.")
+                        .font(.caption)
+                        .foregroundStyle(Color.white.opacity(0.85))
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(0.85))
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 16)
+            .background(Color.wispZapColor, in: RoundedRectangle(cornerRadius: 14))
+            .contentShape(RoundedRectangle(cornerRadius: 14))
+            .shadow(color: Color.wispZapColor.opacity(0.55), radius: 16, x: 0, y: 0)
+            .shadow(color: Color.wispZapColor.opacity(0.35), radius: 28, x: 0, y: 6)
+        }
+        .buttonStyle(.plain)
     }
 
     private func modeRow(title: String, subtitle: String, logo: AnyView, action: @escaping () -> Void) -> some View {
