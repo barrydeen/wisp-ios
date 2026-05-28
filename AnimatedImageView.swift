@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 import ImageIO
+import os.signpost
 
 /// Async URL-loaded image that animates GIFs (and APNG / animated WebP).
 /// SwiftUI's `AsyncImage` rasterizes through `UIImage(data:)`, which strips
@@ -88,6 +89,9 @@ struct AnimatedImageView<Placeholder: View, Failure: View>: View {
         phase = .loading
 
         let payload: AnimatedImagePayload? = await Task.detached(priority: .utility) {
+            let signpostId = Signposts.media.makeSignpostID()
+            let signpostState = Signposts.media.beginInterval("fetchAnimated", id: signpostId)
+            defer { Signposts.media.endInterval("fetchAnimated", signpostState) }
             do {
                 let (data, _) = try await URLSession.shared.data(from: url)
                 return AnimatedImageDecoder.decode(data: data)
@@ -117,6 +121,9 @@ enum AnimatedImageDecoder {
     /// total animation duration. Returns nil if the bytes don't decode to an
     /// image. For single-frame inputs, returns one frame with duration 0.
     static func decode(data: Data) -> AnimatedImagePayload? {
+        let signpostId = Signposts.media.makeSignpostID()
+        let signpostState = Signposts.media.beginInterval("decodeAnimated", id: signpostId)
+        defer { Signposts.media.endInterval("decodeAnimated", signpostState) }
         guard let src = CGImageSourceCreateWithData(data as CFData, nil) else {
             return nil
         }

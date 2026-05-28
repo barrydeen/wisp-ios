@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import os.signpost
 
 /// Drop-in replacement for `AsyncImage` that:
 ///   - reads from `DecodedImageCache` first so a cell scrolled back into view
@@ -93,6 +94,9 @@ struct RetryingAsyncImage<Content: View, Loading: View, Failure: View>: View {
 
         phase = .loading
         let image: UIImage? = await Task.detached(priority: .utility) {
+            let signpostId = Signposts.media.makeSignpostID()
+            let signpostState = Signposts.media.beginInterval("fetchStaticImage", id: signpostId)
+            defer { Signposts.media.endInterval("fetchStaticImage", signpostState) }
             do {
                 let (data, response) = try await URLSession.shared.data(from: url)
                 if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
