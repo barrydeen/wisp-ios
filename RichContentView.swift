@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import os.signpost
 
 /// Sum of the rendered heights of a body's inline-text runs. Read by
 /// `PostCardView` to decide whether to offer "Show more": the collapse
@@ -100,6 +101,8 @@ struct RichContentView: View {
         let generation = emojiRepo.generation
         let key = "\(generation)|\(content)" as NSString
         if let box = Self.parseCache.object(forKey: key) { return box.segments }
+        let signpostState = Signposts.render.beginInterval("parseCacheMiss")
+        defer { Signposts.render.endInterval("parseCacheMiss", signpostState) }
         // Merge the user's resolved emoji packs under the note's own
         // `["emoji", shortcode, url]` tags — the inline tags carry the URL
         // the author/reactor signed for, so they win on shortcode collisions.
