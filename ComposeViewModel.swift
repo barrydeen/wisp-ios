@@ -8,6 +8,9 @@ import PhotosUI
 @MainActor
 final class ComposeViewModel {
     let keypair: Keypair
+    /// The account that will sign and publish the post. Defaults to `keypair`
+    /// but can be changed mid-compose without affecting the globally active account.
+    var signingKeypair: Keypair
     /// Mode is mutable because loading a draft can switch a `.new` composer into
     /// a `.reply` based on the draft's reconstructed `e`/`p` tags.
     var mode: ComposeMode
@@ -114,6 +117,7 @@ final class ComposeViewModel {
 
     init(keypair: Keypair, mode: ComposeMode = .new) {
         self.keypair = keypair
+        self.signingKeypair = keypair
         self.mode = mode
         // If we're composing a reply to a rumor the user already has marked
         // private, force the privacy toggle on and lock it. This keeps the
@@ -136,6 +140,14 @@ final class ComposeViewModel {
     /// Per-pubkey, per-mode UserDefaults bucket. Reply and quote drafts are keyed
     /// by the parent / quoted event id so each conversation has its own slot.
     private var autosaveKey: String {
+        // Local autosave is a "I closed the composer by accident, give
+        // me back my text" recovery mechanism — it belongs to the
+        // human at the device (the logged-in `keypair`), not to the
+        // temporary signing identity. Switching the per-compose signer
+        // doesn't move the draft. The NIP-37 published draft variant
+        // below DOES use `signingKeypair` because that draft represents
+        // a relay-side artifact attributable to whoever will sign the
+        // final post.
         switch mode {
         case .new:
             return "compose_autosave_new_\(keypair.pubkey)"
@@ -253,14 +265,41 @@ final class ComposeViewModel {
         }
     }
 
+    // MARK: - Account selection
+
+    /// All saved accounts that can sign (excludes watch-only).
+    var availableSigningAccounts: [Keypair] {
+        NostrKey.accounts()
+            .filter { !NostrKey.isWatchOnly(pubkey: $0) }
+            .compactMap { NostrKey.loadAccount(pubkey: $0) }
+    }
+
+    /// Switch the signing identity for this compose session without affecting
+    /// the globally active account. Blossom server list is refreshed for the
+    /// new account; current editor text is preserved.
+    func switchSigningAccount(_ newKeypair: Keypair) {
+        signingKeypair = newKeypair
+        blossomServers = BlossomServerList.cached(for: newKeypair.pubkey)
+        Task { [pubkey = newKeypair.pubkey] in
+            let fresh = await BlossomServerList.refresh(for: pubkey)
+            await MainActor.run { self.blossomServers = fresh }
+        }
+        // Profiles for secondary accounts may not be in the in-memory
+        // cache yet — kick a fetch so the header avatar / display name
+        // resolve instead of falling back to person.fill + short-npub.
+        Task { [pubkey = newKeypair.pubkey] in
+            _ = await ProfileRepository.shared.ensure([pubkey])
+        }
+    }
+
     // MARK: - Lifecycle
 
     func start() async {
         if !blossomLoaded {
-            blossomServers = BlossomServerList.cached(for: keypair.pubkey)
+            blossomServers = BlossomServerList.cached(for: signingKeypair.pubkey)
             blossomLoaded = true
             // Refresh in the background; first composer open after install hits the network.
-            Task { [pubkey = keypair.pubkey] in
+            Task { [pubkey = signingKeypair.pubkey] in
                 let fresh = await BlossomServerList.refresh(for: pubkey)
                 await MainActor.run { self.blossomServers = fresh }
             }
@@ -273,6 +312,15 @@ final class ComposeViewModel {
         let follows = FollowsCache.shared.follows(for: keypair.pubkey)
         if !follows.isEmpty {
             Task { _ = await ProfileRepository.shared.ensure(follows) }
+        }
+        // Pre-warm profiles for every signable account so the composer
+        // avatar (and the account-picker menu) show the right name +
+        // picture from the moment the composer opens — instead of
+        // falling through to the npub placeholder for accounts whose
+        // kind-0 hasn't landed in this install yet.
+        let signers = availableSigningAccounts.map(\.pubkey)
+        if !signers.isEmpty {
+            Task { _ = await ProfileRepository.shared.ensure(signers) }
         }
         // Default mention popup state: empty until the user types `@`.
     }
@@ -561,7 +609,7 @@ final class ComposeViewModel {
                     bytes: prepared.0,
                     mime: prepared.1,
                     servers: blossomServers,
-                    keypair: keypair
+                    keypair: signingKeypair
                 )
                 if let idx = attachments.firstIndex(where: { $0.id == pendingId }) {
                     attachments[idx] = ComposeAttachment(
@@ -666,7 +714,7 @@ final class ComposeViewModel {
                 bytes: compressed.data,
                 mime: compressed.mime,
                 servers: blossomServers,
-                keypair: keypair
+                keypair: signingKeypair
             )
             if let idx = attachments.firstIndex(where: { $0.id == pendingId }) {
                 attachments[idx] = ComposeAttachment(
@@ -693,7 +741,7 @@ final class ComposeViewModel {
         defer { uploadProgress = nil }
         let outcome = await GifBlossomUploader.rehost(
             giphyURL: giphyURL,
-            keypair: keypair,
+            keypair: signingKeypair,
             servers: blossomServers
         )
         if !content.isEmpty, !content.hasSuffix("\n") { content += "\n" }
@@ -915,7 +963,7 @@ final class ComposeViewModel {
 
         let now = Int(Date().timeIntervalSince1970)
         let innerJSON = Nip37.serializeInner(
-            pubkeyHex: keypair.pubkey, innerKind: innerKind,
+            pubkeyHex: signingKeypair.pubkey, innerKind: innerKind,
             content: materialized, tags: innerTags, createdAt: now
         )
         // NIP-37 encrypts the inner event to the user's own pubkey. For a
@@ -924,8 +972,8 @@ final class ComposeViewModel {
         let cipher: String
         do {
             cipher = try await Signer.nip44Encrypt(
-                keypair: keypair,
-                peerPubkey: keypair.pubkey,
+                keypair: signingKeypair,
+                peerPubkey: signingKeypair.pubkey,
                 plaintext: innerJSON
             )
         } catch {
@@ -936,7 +984,7 @@ final class ComposeViewModel {
         let wrapper: NostrEvent
         do {
             wrapper = try await Signer.sign(
-                keypair: keypair,
+                keypair: signingKeypair,
                 kind: Nip37.kindDraft,
                 tags: wrapperTags,
                 content: cipher,
@@ -972,15 +1020,15 @@ final class ComposeViewModel {
         currentDraftId = nil
         let now = Int(Date().timeIntervalSince1970)
         let innerJSON = Nip37.serializeInner(
-            pubkeyHex: keypair.pubkey, innerKind: 1, content: "", tags: [], createdAt: now
+            pubkeyHex: signingKeypair.pubkey, innerKind: 1, content: "", tags: [], createdAt: now
         )
         guard let cipher = try? await Signer.nip44Encrypt(
-            keypair: keypair,
-            peerPubkey: keypair.pubkey,
+            keypair: signingKeypair,
+            peerPubkey: signingKeypair.pubkey,
             plaintext: innerJSON
         ) else { return }
         guard let wrapper = try? await Signer.sign(
-            keypair: keypair,
+            keypair: signingKeypair,
             kind: Nip37.kindDraft,
             tags: Nip37.wrapperTags(dTag: dTag, innerKind: 1),
             content: cipher,
@@ -1069,7 +1117,7 @@ final class ComposeViewModel {
         if powEnabled, scheduleTimestamp == nil {
             isMining = true
             miningAttempts = 0
-            let pubkey = keypair.pubkey
+            let pubkey = signingKeypair.pubkey
             let captured = (kind, createdAt, tags, postContent, powDifficulty)
             let mined: Nip13.MineResult? = await withCheckedContinuation { cont in
                 let task = Task.detached(priority: .userInitiated) { [weak self] in
@@ -1102,7 +1150,7 @@ final class ComposeViewModel {
         let event: NostrEvent
         do {
             event = try await Signer.sign(
-                keypair: keypair,
+                keypair: signingKeypair,
                 kind: kind,
                 tags: tags,
                 content: postContent,
@@ -1115,7 +1163,7 @@ final class ComposeViewModel {
 
         if scheduleTimestamp != nil {
             let relay = DraftsViewModel.schedulerRelay
-            await GroupRelayPool.shared.ensureRelay(relay, keypair: keypair)
+            await GroupRelayPool.shared.ensureRelay(relay, keypair: signingKeypair)
             let result = await GroupRelayPool.shared.publishWithAuthRetry(event, to: relay)
             switch result {
             case .ok, .duplicate:
@@ -1663,7 +1711,7 @@ final class ComposeViewModel {
     }
 
     private func topWriteRelays() -> [String] {
-        RelayRouting.topWriteRelays(for: keypair.pubkey)
+        RelayRouting.topWriteRelays(for: signingKeypair.pubkey)
     }
 }
 

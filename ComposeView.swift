@@ -27,6 +27,8 @@ struct ComposeView: View {
     @State private var showCancelConfirm = false
     @State private var showGifPicker = false
     @State private var showDraftsSheet = false
+    @State private var photosPickerMaxCount: Int = 8
+    @State private var showAccountPicker = false
 
     /// Draft to load on first appear. Nil for `.new` and `.reply`/`.quote` composers.
     /// Loaded from `.task` rather than `init` to defeat SwiftUI's State preservation
@@ -60,7 +62,25 @@ struct ComposeView: View {
                                 galleryArea
                             }
 
-                            textEditor
+                            // Avatar + "posting as" label rendered as a slim
+                            // header row above the editor so the editor
+                            // itself can take the full content width.
+                            // Hidden entirely for single-account users —
+                            // nothing to switch to, so the row would just
+                            // be visual noise. Tapping the row (when
+                            // multi-account) opens a sheet picker —
+                            // SwiftUI `Menu` items can't render arbitrary
+                            // images, so a custom picker is the only way
+                            // to show real avatars next to names.
+                            if viewModel.availableSigningAccounts.count > 1 {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    signingAccountHeader
+                                        .padding(.horizontal, 12)
+                                    textEditor
+                                }
+                            } else {
+                                textEditor
+                            }
 
                             quoteContextHeader
 
@@ -96,7 +116,7 @@ struct ComposeView: View {
                                 ComposerPreviewCard(
                                     content: viewModel.previewContent,
                                     tags: previewTags,
-                                    userProfile: ProfileRepository.shared.get(viewModel.keypair.pubkey)
+                                    userProfile: ProfileRepository.shared.get(viewModel.signingKeypair.pubkey)
                                 )
                                 .id(previewAnchorID)
                             }
@@ -218,6 +238,9 @@ struct ComposeView: View {
         }
         .sheet(isPresented: $showDraftsSheet) {
             DraftsScheduledView(keypair: viewModel.keypair)
+        }
+        .sheet(isPresented: $showAccountPicker) {
+            accountPickerSheet
         }
         // GIF picker is presented as a true UIKit modal via a hidden
         // representable rather than a SwiftUI .sheet / .fullScreenCover.
@@ -435,32 +458,164 @@ struct ComposeView: View {
         } else {
             source = raw
         }
-        let resolved = resolveNostrMentions(source)
+        let collapsed = collapseMediaUrls(source)
+        let resolved = resolveNostrMentions(collapsed)
         return String(resolved.prefix(max))
+    }
+
+    private static let previewImageExts: Set<String> = ["jpg", "jpeg", "png", "gif", "webp", "heic", "heif", "avif", "svg"]
+    private static let previewVideoExts: Set<String> = ["mp4", "mov", "webm", "m3u8"]
+
+    private func collapseMediaUrls(_ content: String) -> String {
+        guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else { return content }
+        let ns = content as NSString
+        let matches = detector.matches(in: content, range: NSRange(location: 0, length: ns.length))
+        guard !matches.isEmpty else { return content }
+        var out = ""
+        var lastEnd = 0
+        for match in matches {
+            out += ns.substring(with: NSRange(location: lastEnd, length: match.range.location - lastEnd))
+            let urlStr = ns.substring(with: match.range)
+            let ext = (urlStr as NSString).pathExtension.lowercased()
+            if Self.previewImageExts.contains(ext) { out += "[image]" }
+            else if Self.previewVideoExts.contains(ext) { out += "[video]" }
+            else { out += urlStr }
+            lastEnd = match.range.upperBound
+        }
+        out += ns.substring(from: lastEnd)
+        return out
     }
 
     private func resolveNostrMentions(_ content: String) -> String {
         let pattern = #"nostr:(?:npub1|nprofile1)[a-z0-9]+|(?<!\w)(?:npub1|nprofile1)[a-z0-9]{50,}(?!\w)"#
         guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return content }
         let ns = content as NSString
-        let matches = regex.matches(in: content, range: NSRange(location: 0, length: ns.length))
+        let fullRange = NSRange(location: 0, length: ns.length)
+        let matches = regex.matches(in: content, range: fullRange)
         guard !matches.isEmpty else { return content }
+        var urlRanges: [NSRange] = []
+        if let linkDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) {
+            urlRanges = linkDetector.matches(in: content, range: fullRange).map(\.range)
+        }
         var out = ""
         var lastEnd = 0
         for match in matches {
             out += ns.substring(with: NSRange(location: lastEnd, length: match.range.location - lastEnd))
             let token = ns.substring(with: match.range)
-            let uri = token.lowercased().hasPrefix("nostr:") ? token : "nostr:\(token)"
-            if case .profileRef(let pk, _)? = Nip19.decodeNostrUri(uri) {
-                let name = ProfileRepository.shared.get(pk)?.displayString ?? Nip19.shortNpub(hex: pk)
-                out += "@\(name)"
-            } else {
+            let insideURL = urlRanges.contains { NSIntersectionRange($0, match.range).length > 0 }
+            if insideURL {
                 out += token
+            } else {
+                let uri = token.lowercased().hasPrefix("nostr:") ? token : "nostr:\(token)"
+                if case .profileRef(let pk, _)? = Nip19.decodeNostrUri(uri) {
+                    let name = ProfileRepository.shared.get(pk)?.displayString ?? Nip19.shortNpub(hex: pk)
+                    out += "@\(name)"
+                } else {
+                    out += token
+                }
             }
             lastEnd = match.range.upperBound
         }
         out += ns.substring(from: lastEnd)
         return out
+    }
+
+    // MARK: - Signing account header
+
+    /// Slim "posting as" header row rendered above the text editor. The
+    /// avatar + display-name combo identifies the active signing
+    /// keypair; tapping (when multiple accounts are signable) opens
+    /// `accountPickerSheet`. Single-account users see a non-tappable
+    /// row, still useful as a visual reinforcement of "this is your
+    /// post". The `.id(pubkey)` on the avatar guards against a
+    /// SwiftUI quirk where a reused `CachedAvatarView` keeps the
+    /// previous account's image when the URL changes — forces a
+    /// fresh view instance on switch as a belt-and-braces on top of
+    /// the in-view URL-change reset.
+    @ViewBuilder
+    private var signingAccountHeader: some View {
+        let pubkey = viewModel.signingKeypair.pubkey
+        let profile = ProfileRepository.shared.get(pubkey)
+        let multiAccount = viewModel.availableSigningAccounts.count > 1
+        let name = profile?.displayString ?? Nip19.shortNpub(hex: pubkey)
+
+        Button {
+            guard multiAccount else { return }
+            showAccountPicker = true
+        } label: {
+            HStack(spacing: 8) {
+                CachedAvatarView(url: profile?.picture, size: 28)
+                    .id(pubkey)
+                Text(name)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color.wispOnSurface)
+                    .lineLimit(1)
+                if multiAccount {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!multiAccount)
+    }
+
+    /// Bottom-sheet picker for the signing account. Replaces a SwiftUI
+    /// `Menu` because Menu items can only show SF Symbols — not real
+    /// avatar images — and the picker is significantly more legible
+    /// with profile pictures next to names.
+    private var accountPickerSheet: some View {
+        NavigationStack {
+            ZStack {
+                Color.wispBackground.ignoresSafeArea()
+                List {
+                    ForEach(viewModel.availableSigningAccounts, id: \.pubkey) { keypair in
+                        let kProfile = ProfileRepository.shared.get(keypair.pubkey)
+                        let active = keypair.pubkey == viewModel.signingKeypair.pubkey
+                        let kName = kProfile?.displayString ?? Nip19.shortNpub(hex: keypair.pubkey)
+                        Button {
+                            viewModel.switchSigningAccount(keypair)
+                            showAccountPicker = false
+                        } label: {
+                            HStack(spacing: 12) {
+                                CachedAvatarView(url: kProfile?.picture, size: 40)
+                                    .id(keypair.pubkey)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(kName)
+                                        .font(.subheadline.weight(.semibold))
+                                        .foregroundStyle(Color.wispOnSurface)
+                                        .lineLimit(1)
+                                    Text(Nip19.shortNpub(hex: keypair.pubkey))
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                if active {
+                                    Image(systemName: "checkmark")
+                                        .font(.system(size: 15, weight: .semibold))
+                                        .foregroundStyle(Color.wispPrimary)
+                                }
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .listRowBackground(Color.wispSurfaceVariant.opacity(0.4))
+                    }
+                }
+                .scrollContentBackground(.hidden)
+            }
+            .navigationTitle("Post as")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { showAccountPicker = false }
+                }
+            }
+        }
+        .presentationDetents([.medium])
     }
 
     private var textEditor: some View {

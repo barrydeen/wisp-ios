@@ -42,6 +42,17 @@ struct CachedAvatarView: View {
         // (e.g. tap-pfp-to-open-sidebar) keep working when the inner renderer is a
         // UIViewRepresentable with hit-testing disabled.
         .contentShape(Circle())
+        // When the URL changes on a reused view instance (same identity, new
+        // pubkey), the previously-loaded `uiImage` keeps showing because the
+        // `.task(id: url)` modifier above is only attached on the placeholder
+        // branch — a fully-loaded view never re-enters it. Reset the image
+        // caches here so a URL swap falls back through the placeholder branch
+        // and re-fetches.
+        .onChange(of: url) { _, _ in
+            uiImage = nil
+            animatedPayload = nil
+            loadFailed = false
+        }
     }
 
     private var placeholder: some View {
