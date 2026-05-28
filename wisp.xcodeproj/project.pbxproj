@@ -17,12 +17,6 @@
 		4CABCD010000000000060000 /* ProfileEditViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000060000 /* ProfileEditViewModel.swift */; };
 		4CABCD010000000000070000 /* ProfileEditView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000070000 /* ProfileEditView.swift */; };
 		4CABCD010000000000080000 /* FollowSender.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000080000 /* FollowSender.swift */; };
-		4CABCD010000000000F30001 /* PrivateInteractionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30001 /* PrivateInteractionStore.swift */; };
-		4CABCD010000000000F30002 /* PrivateInteractionRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30002 /* PrivateInteractionRouter.swift */; };
-		4CABCD010000000000F30003 /* PeerRelayResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30003 /* PeerRelayResolver.swift */; };
-		4CABCD010000000000F30004 /* PrivateReplyPublisher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30004 /* PrivateReplyPublisher.swift */; };
-		4CABCD010000000000F30005 /* PrivateReactionPublisher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30005 /* PrivateReactionPublisher.swift */; };
-		4CABCD010000000000F30006 /* Dip03.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30006 /* Dip03.swift */; };
 		4CABCD0100000000000F2001 /* RepostSender.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD0000000000000F2001 /* RepostSender.swift */; };
 		4CABCD0100000000000F2002 /* Nip10001.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD0000000000000F2002 /* Nip10001.swift */; };
 		4CABCD0100000000000F2003 /* PinNoteSender.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD0000000000000F2003 /* PinNoteSender.swift */; };
@@ -31,6 +25,12 @@
 		4CABCD0100000000000F2006 /* KeysSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD0000000000000F2006 /* KeysSettingsView.swift */; };
 		4CABCD0100000000000F2007 /* MediaGridView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD0000000000000F2007 /* MediaGridView.swift */; };
 		4CABCD010000000000F2010 /* NewPostsPill.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F2010 /* NewPostsPill.swift */; };
+		4CABCD010000000000F30001 /* PrivateInteractionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30001 /* PrivateInteractionStore.swift */; };
+		4CABCD010000000000F30002 /* PrivateInteractionRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30002 /* PrivateInteractionRouter.swift */; };
+		4CABCD010000000000F30003 /* PeerRelayResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30003 /* PeerRelayResolver.swift */; };
+		4CABCD010000000000F30004 /* PrivateReplyPublisher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30004 /* PrivateReplyPublisher.swift */; };
+		4CABCD010000000000F30005 /* PrivateReactionPublisher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30005 /* PrivateReactionPublisher.swift */; };
+		4CABCD010000000000F30006 /* Dip03.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30006 /* Dip03.swift */; };
 		4CABCE0100000000000F4607 /* Signer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCE0000000000000F4607 /* Signer.swift */; };
 		4CDA87DA2F9C546F0079A1BA /* Hex.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA87D92F9C546F0079A1BA /* Hex.swift */; };
 		4CDA87DC2F9C546F0079A1BA /* Bech32.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA87DB2F9C546F0079A1BA /* Bech32.swift */; };
@@ -88,8 +88,6 @@
 		4CEE000100000000000000B1 /* BreezSdkSpark in Frameworks */ = {isa = PBXBuildFile; productRef = 4CEE000000000000000000B1 /* BreezSdkSpark */; };
 		4CFA00010001000000A1BA01 /* RelayDefaults.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFA00020001000000A1BA01 /* RelayDefaults.swift */; };
 		4CFA00030001000000A1BA01 /* FollowsCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFA00040001000000A1BA01 /* FollowsCache.swift */; };
-		4CFB00020001000000A1BA01 /* FollowHistoryGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFB00010001000000A1BA01 /* FollowHistoryGuard.swift */; };
-		4CFB00040001000000A1BA01 /* FollowRestorePromptSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFB00030001000000A1BA01 /* FollowRestorePromptSheet.swift */; };
 		4CFA00050001000000A1BA01 /* EventPersistQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFA00060001000000A1BA01 /* EventPersistQueue.swift */; };
 		4CFADE0100000000000F1001 /* SafetyFilter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFADE0000000000000F1001 /* SafetyFilter.swift */; };
 		4CFADE0100000000000F1002 /* SafetyPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFADE0000000000000F1002 /* SafetyPreferences.swift */; };
@@ -169,7 +167,6 @@
 		4CFF0B15000000000000020A /* NwcWallet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF0B14000000000000020A /* NwcWallet.swift */; };
 		4CFF0B17000000000000020B /* SparkWallet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF0B16000000000000020B /* SparkWallet.swift */; };
 		4CFF0B19000000000000020C /* WalletStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF0B18000000000000020C /* WalletStore.swift */; };
-		B0NWCBACKUP00000000000001 /* NwcBackup.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0NWCBACKUP00000000000002 /* NwcBackup.swift */; };
 		4CFF0B1B000000000000020D /* ZapSender.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF0B1A000000000000020D /* ZapSender.swift */; };
 		4CFF0B1D000000000000020E /* WalletView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF0B1C000000000000020E /* WalletView.swift */; };
 		4CFF0B1F000000000000020F /* NwcSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF0B1E000000000000020F /* NwcSetupView.swift */; };
@@ -281,6 +278,7 @@
 		4CFFFA01000000000000F001 /* PowPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFFFA00000000000000F001 /* PowPreferences.swift */; };
 		4CFFFA01000000000000F002 /* ProofOfWorkSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFFFA00000000000000F002 /* ProofOfWorkSettingsView.swift */; };
 		4CFFFB010000000000000F10 /* BlurHash.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFFFB000000000000000F10 /* BlurHash.swift */; };
+		B0NWCBACKUP00000000000001 /* NwcBackup.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0NWCBACKUP00000000000002 /* NwcBackup.swift */; };
 		F8CCD16A2BD383B0A6B0F4E0 /* LnurlResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8CCD16A2BD383B0A6B0F4DF /* LnurlResolver.swift */; };
 /* End PBXBuildFile section */
 
@@ -312,12 +310,6 @@
 		4CABCD000000000000060000 /* ProfileEditViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileEditViewModel.swift; sourceTree = "<group>"; };
 		4CABCD000000000000070000 /* ProfileEditView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileEditView.swift; sourceTree = "<group>"; };
 		4CABCD000000000000080000 /* FollowSender.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowSender.swift; sourceTree = "<group>"; };
-		4CABCD000000000000F30001 /* PrivateInteractionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateInteractionStore.swift; sourceTree = "<group>"; };
-		4CABCD000000000000F30002 /* PrivateInteractionRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateInteractionRouter.swift; sourceTree = "<group>"; };
-		4CABCD000000000000F30003 /* PeerRelayResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeerRelayResolver.swift; sourceTree = "<group>"; };
-		4CABCD000000000000F30004 /* PrivateReplyPublisher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateReplyPublisher.swift; sourceTree = "<group>"; };
-		4CABCD000000000000F30005 /* PrivateReactionPublisher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateReactionPublisher.swift; sourceTree = "<group>"; };
-		4CABCD000000000000F30006 /* Dip03.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Dip03.swift; sourceTree = "<group>"; };
 		4CABCD0000000000000F2001 /* RepostSender.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepostSender.swift; sourceTree = "<group>"; };
 		4CABCD0000000000000F2002 /* Nip10001.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Nip10001.swift; sourceTree = "<group>"; };
 		4CABCD0000000000000F2003 /* PinNoteSender.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PinNoteSender.swift; sourceTree = "<group>"; };
@@ -328,6 +320,12 @@
 		4CABCD0000000000000F2008 /* build.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = build.xcconfig; sourceTree = "<group>"; };
 		4CABCD0000000000000F2009 /* local.xcconfig.example */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = local.xcconfig.example; sourceTree = "<group>"; };
 		4CABCD000000000000F2010 /* NewPostsPill.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewPostsPill.swift; sourceTree = "<group>"; };
+		4CABCD000000000000F30001 /* PrivateInteractionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateInteractionStore.swift; sourceTree = "<group>"; };
+		4CABCD000000000000F30002 /* PrivateInteractionRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateInteractionRouter.swift; sourceTree = "<group>"; };
+		4CABCD000000000000F30003 /* PeerRelayResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeerRelayResolver.swift; sourceTree = "<group>"; };
+		4CABCD000000000000F30004 /* PrivateReplyPublisher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateReplyPublisher.swift; sourceTree = "<group>"; };
+		4CABCD000000000000F30005 /* PrivateReactionPublisher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateReactionPublisher.swift; sourceTree = "<group>"; };
+		4CABCD000000000000F30006 /* Dip03.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Dip03.swift; sourceTree = "<group>"; };
 		4CABCE0000000000000F4607 /* Signer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Signer.swift; sourceTree = "<group>"; };
 		4CDA87AB2F9C4BC10079A1BA /* wisp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = wisp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		4CDA87B82F9C4BC20079A1BA /* wispTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = wispTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -385,8 +383,6 @@
 		4CDFAB0000000000000DF201 /* Nip38.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Nip38.swift; sourceTree = "<group>"; };
 		4CFA00020001000000A1BA01 /* RelayDefaults.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayDefaults.swift; sourceTree = "<group>"; };
 		4CFA00040001000000A1BA01 /* FollowsCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowsCache.swift; sourceTree = "<group>"; };
-		4CFB00010001000000A1BA01 /* FollowHistoryGuard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowHistoryGuard.swift; sourceTree = "<group>"; };
-		4CFB00030001000000A1BA01 /* FollowRestorePromptSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowRestorePromptSheet.swift; sourceTree = "<group>"; };
 		4CFA00060001000000A1BA01 /* EventPersistQueue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventPersistQueue.swift; sourceTree = "<group>"; };
 		4CFADE0000000000000F1001 /* SafetyFilter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafetyFilter.swift; sourceTree = "<group>"; };
 		4CFADE0000000000000F1002 /* SafetyPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafetyPreferences.swift; sourceTree = "<group>"; };
@@ -466,7 +462,6 @@
 		4CFF0B14000000000000020A /* NwcWallet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NwcWallet.swift; sourceTree = "<group>"; };
 		4CFF0B16000000000000020B /* SparkWallet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SparkWallet.swift; sourceTree = "<group>"; };
 		4CFF0B18000000000000020C /* WalletStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalletStore.swift; sourceTree = "<group>"; };
-		B0NWCBACKUP00000000000002 /* NwcBackup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NwcBackup.swift; sourceTree = "<group>"; };
 		4CFF0B1A000000000000020D /* ZapSender.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZapSender.swift; sourceTree = "<group>"; };
 		4CFF0B1C000000000000020E /* WalletView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalletView.swift; sourceTree = "<group>"; };
 		4CFF0B1E000000000000020F /* NwcSetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NwcSetupView.swift; sourceTree = "<group>"; };
@@ -577,6 +572,7 @@
 		4CFFFA00000000000000F001 /* PowPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PowPreferences.swift; sourceTree = "<group>"; };
 		4CFFFA00000000000000F002 /* ProofOfWorkSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProofOfWorkSettingsView.swift; sourceTree = "<group>"; };
 		4CFFFB000000000000000F10 /* BlurHash.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlurHash.swift; sourceTree = "<group>"; };
+		B0NWCBACKUP00000000000002 /* NwcBackup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NwcBackup.swift; sourceTree = "<group>"; };
 		F8CCD16A2BD383B0A6B0F4DF /* LnurlResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LnurlResolver.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -656,8 +652,6 @@
 				4CDA87E32F9C54980079A1BA /* RelayPool.swift */,
 				4CFA00020001000000A1BA01 /* RelayDefaults.swift */,
 				4CFA00040001000000A1BA01 /* FollowsCache.swift */,
-				4CFB00010001000000A1BA01 /* FollowHistoryGuard.swift */,
-				4CFB00030001000000A1BA01 /* FollowRestorePromptSheet.swift */,
 				4CFA00060001000000A1BA01 /* EventPersistQueue.swift */,
 				4CAA00020002000000A1BA01 /* AudioTrack.swift */,
 				4CAA00040002000000A1BA01 /* AudioPlayerStore.swift */,
@@ -1108,8 +1102,6 @@
 				4CDA87E42F9C54980079A1BA /* RelayPool.swift in Sources */,
 				4CFA00010001000000A1BA01 /* RelayDefaults.swift in Sources */,
 				4CFA00030001000000A1BA01 /* FollowsCache.swift in Sources */,
-				4CFB00020001000000A1BA01 /* FollowHistoryGuard.swift in Sources */,
-				4CFB00040001000000A1BA01 /* FollowRestorePromptSheet.swift in Sources */,
 				4CFA00050001000000A1BA01 /* EventPersistQueue.swift in Sources */,
 				4CAA00010002000000A1BA01 /* AudioTrack.swift in Sources */,
 				4CAA00030002000000A1BA01 /* AudioPlayerStore.swift in Sources */,
