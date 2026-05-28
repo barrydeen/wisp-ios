@@ -114,6 +114,9 @@ struct NoteListFeedView: View {
                         .onAppear {
                             engagementRepo.markVisible(event: event)
                         }
+                        .onDisappear {
+                            engagementRepo.markInvisible(event: event)
+                        }
                         Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
                     }
                 }

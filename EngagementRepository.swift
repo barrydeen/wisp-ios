@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import os
 
 /// Viewport-driven engagement count cache for the follow feed.
 ///
@@ -32,19 +33,34 @@ final class EngagementRepository {
         return b
     }
 
-    @ObservationIgnored private var queriedIds: Set<String> = []
+    /// Session-bounded dedup trackers. Raw `Set<String>`s grew without limit
+    /// over a long scrolling session (every kind-7/9735/6 ever ingested, every
+    /// id ever queried), driving the "feels slower the longer you scroll"
+    /// degradation. `BoundedSet` keeps the most-recent N entries; an
+    /// occasional re-query or double-count for an evicted key is far cheaper
+    /// than session-monotonic memory growth, and the working window of live
+    /// engagement is far smaller than the capacities chosen here.
+    @ObservationIgnored private var queriedIds = BoundedSet(capacity: 5_000)
     @ObservationIgnored private var pending: [(eventId: String, author: String)] = []
     @ObservationIgnored private var debounceTask: Task<Void, Never>?
     @ObservationIgnored private var liveTasks: [Task<Void, Never>] = []
     @ObservationIgnored private var liveSubs: [RelaySubscription] = []
-    @ObservationIgnored private var seenEngagementIds: Set<String> = []
-    /// Event ids we've already kicked off a lazy `#q` quoter lookup for. One
-    /// per note for the app's lifetime — re-expanding a drawer is free.
-    @ObservationIgnored private var quotersFetched: Set<String> = []
+    @ObservationIgnored private var seenEngagementIds = BoundedSet(capacity: 10_000)
+    /// Event ids we've already kicked off a lazy `#q` quoter lookup for.
+    /// Bounded so a long session can't accumulate one per ever-expanded note.
+    @ObservationIgnored private var quotersFetched = BoundedSet(capacity: 2_000)
     /// `eventId|pubkey|content` keys for kind-7 reactions already counted (via either an optimistic
     /// `apply...` call or an inbound EVENT). Prevents the round-trip duplicate when an optimistic
     /// reaction streams back from the relays under a fresh event id.
-    @ObservationIgnored private var seenReactionKeys: Set<String> = []
+    @ObservationIgnored private var seenReactionKeys = BoundedSet(capacity: 10_000)
+
+    /// Hard cap on concurrent feed-engagement subscriptions. Each open REQ
+    /// holds a relay socket slot + an active consumer task on `MainActor`;
+    /// fast scroll used to spawn dozens before the 12-s watchdog could prune,
+    /// piling MainActor ingest work behind LazyVStack recycling. Past this
+    /// cap, the oldest in-flight sub is cancelled FIFO so newer (closer to
+    /// the viewport) batches always win.
+    private let maxConcurrentSubs = 12
 
     private init() {}
 
@@ -72,6 +88,29 @@ final class EngagementRepository {
             markVisible(eventId: ref.id, author: ref.pubkey ?? event.pubkey)
         } else {
             markVisible(eventId: event.id, author: event.pubkey)
+        }
+    }
+
+    /// Called from feed row `.onDisappear`. Withdraws a not-yet-flushed
+    /// registration so an off-screen row stops contributing to the next
+    /// batch's REQ fan-out. We deliberately do NOT remove from `queriedIds`
+    /// — the REQ may already be in flight, and a re-scroll shouldn't trigger
+    /// a duplicate query within the same session window.
+    func markInvisible(eventId: String) {
+        if let idx = pending.firstIndex(where: { $0.eventId == eventId }) {
+            pending.remove(at: idx)
+        }
+        if pending.isEmpty {
+            debounceTask?.cancel()
+            debounceTask = nil
+        }
+    }
+
+    func markInvisible(event: NostrEvent) {
+        if event.kind == 6, let ref = FeedViewModel.innerRepostRef(of: event) {
+            markInvisible(eventId: ref.id)
+        } else {
+            markInvisible(eventId: event.id)
         }
     }
 
@@ -222,7 +261,7 @@ final class EngagementRepository {
     /// dedupe by the bolt11 invoice's payment hash — both sides (the
     /// optimistic apply and the inbound kind-9735 receipt) carry the same
     /// hash.
-    @ObservationIgnored private var seenZapPaymentHashes: Set<String> = []
+    @ObservationIgnored private var seenZapPaymentHashes = BoundedSet(capacity: 10_000)
 
     /// Bump the zap totals for `eventId` immediately after the wallet has
     /// successfully paid the bolt11 invoice, before the relay-broadcast
@@ -286,7 +325,6 @@ final class EngagementRepository {
 
         let board = NostrKey.load().flatMap { RelayScoreBoard.load(pubkey: $0.pubkey) }
         let userReads = NostrKey.load().flatMap { RelayListRepository.shared.cachedReadRelays($0.pubkey) } ?? []
-        let topScored = board?.scoredRelays.prefix(5).map(\.url) ?? []
 
         var relayToIds: [String: Set<String>] = [:]
         var homeless: [String] = []
@@ -312,13 +350,10 @@ final class EngagementRepository {
             }
         }
 
-        // Safety net: top scored relays receive every id from this batch.
-        let allIds = batch.map(\.eventId)
-        for relay in topScored {
-            for id in allIds {
-                relayToIds[relay, default: []].insert(id)
-            }
-        }
+        // The prior "safety net" broadcast to the top-5 scored relays of every
+        // id in the batch roughly doubled REQ volume during scroll and was the
+        // single largest source of fan-out. NIP-65 outbox routing above (each
+        // author's read relays, plus the homeless fallback) covers correctness.
 
         for (relay, ids) in relayToIds {
             for chunk in Array(ids).chunked(into: 150) {
@@ -328,10 +363,20 @@ final class EngagementRepository {
     }
 
     private func openSubscription(relay: String, eventIds: [String]) {
+        // FIFO-cap before opening: cancel the oldest in-flight sub(s) so the
+        // viewport's freshest batch always wins. The cancelled sub's watchdog
+        // still runs (idempotently) and `prune(sub:)` is a no-op once gone.
+        while liveSubs.count >= maxConcurrentSubs {
+            let oldest = liveSubs.removeFirst()
+            oldest.cancel()
+            Signposts.feed.emitEvent("engagement.req.capped")
+        }
+
         let subId = "feed-engagement-\(UUID().uuidString.prefix(6))"
         let filter = NostrFilter(kinds: [1, 6, 7, 9735], eTags: eventIds, limit: 500)
         let sub = RelayPool.subscribe(relays: [relay], filter: filter, id: subId)
         liveSubs.append(sub)
+        Signposts.feed.emitEvent("engagement.req.opened")
 
         // NIP-18 quote reposts (kind-1 with only a `q` tag) are deliberately
         // *not* fetched here: doubling every feed/thread engagement REQ to
@@ -566,5 +611,54 @@ final class EngagementRepository {
             return tag[2]
         }
         return nil
+    }
+}
+
+/// Insertion-ordered string set with FIFO eviction past `capacity`.
+/// API mirrors the `Set<String>` call sites EngagementRepository uses
+/// (`contains`, `insert(_:) -> (inserted, member)`, `remove`, `removeAll`)
+/// so this is a drop-in replacement for the unbounded dedup trackers.
+fileprivate struct BoundedSet {
+    private var members: Set<String>
+    private var order: [String]
+    private let capacity: Int
+
+    init(capacity: Int) {
+        self.capacity = capacity
+        self.members = Set(minimumCapacity: capacity)
+        self.order = []
+        self.order.reserveCapacity(capacity)
+    }
+
+    var count: Int { members.count }
+    var isEmpty: Bool { members.isEmpty }
+
+    func contains(_ element: String) -> Bool { members.contains(element) }
+
+    @discardableResult
+    mutating func insert(_ element: String) -> (inserted: Bool, memberAfterInsert: String) {
+        let result = members.insert(element)
+        guard result.inserted else { return result }
+        order.append(element)
+        if order.count > capacity {
+            let evict = order.removeFirst()
+            members.remove(evict)
+        }
+        return result
+    }
+
+    @discardableResult
+    mutating func remove(_ element: String) -> String? {
+        guard let removed = members.remove(element) else { return nil }
+        // O(n) but only on undo / optimistic-revert paths (rare).
+        if let idx = order.firstIndex(of: element) {
+            order.remove(at: idx)
+        }
+        return removed
+    }
+
+    mutating func removeAll() {
+        members.removeAll(keepingCapacity: true)
+        order.removeAll(keepingCapacity: true)
     }
 }
