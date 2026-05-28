@@ -181,6 +181,11 @@ struct ContentView: View {
                 }
             }
         }
+        .onChange(of: keypair?.pubkey) { _, newPubkey in
+            if let pk = newPubkey {
+                AppSettings.shared.loadQuickZapSettings(for: pk)
+            }
+        }
     }
 }
 

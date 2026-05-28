@@ -77,6 +77,11 @@ struct PostCardView: View {
     /// short note pinned near a tab bar) ended up clipping the picker
     /// because the popover gave it less space than the picker's natural size.
     @State private var reactionPickerMaxHeight: CGFloat = 192
+    /// Suppresses the zap button's Button tap action on the release after a
+    /// long-press completed. SwiftUI's simultaneous gestures both fire by
+    /// default; without this flag a long-press would open the composer AND
+    /// fire the configured quick-zap amount.
+    @State private var zapLongPressFired = false
     @State private var showDeleteConfirm = false
     @State private var showMuteUserConfirm = false
     /// Tap-anchored menus on the action bar. We use `Button` + `.popover`
@@ -86,6 +91,7 @@ struct PostCardView: View {
     /// with `.presentationCompactAdaptation(.popover)` keeps the
     /// anchored-popup feel without animating the launching icon.
     @State private var showRepostMenu = false
+    @State private var showRemoveReactionMenu = false
     @State private var showOverflowMenu = false
     /// True when the user tapped Zap but no wallet is configured. Surfaces a
     /// confirmation prompt that can launch the Wallet tab to set one up.
@@ -882,26 +888,82 @@ struct PostCardView: View {
         let eventId = displayEventId
         let isFlying = zapStore.inFlight.contains(eventId)
         let isBursting = zapStore.bursting.contains(eventId)
-        return Button {
-            triggerZapOrWalletSetup()
-        } label: {
-            ZStack {
-                if isFlying {
-                    LightningPulseView()
-                        .frame(width: 18, height: 18)
-                        .frame(height: 28)
-                        .foregroundStyle(Color.wispZapColor)
-                } else {
-                    actionItem(
-                        image: settings.zapImage,
-                        label: zapLabel(repoBox.counts.zapSats > 0 ? repoBox.counts.zapSats : (engagement?.zapSats ?? 0)),
-                        tint: iZapped ? Color.wispZapColor : nil
-                    )
-                }
+        let isOwnPost = (myPubkey != nil) && (myPubkey == resolveRepost().event.pubkey)
+        let isInteractive = !isFlying && !isOwnPost
+        return ZStack {
+            if isFlying {
+                LightningPulseView(image: settings.zapImage)
+                    .frame(width: 18, height: 18)
+                    .frame(height: 28)
+            } else {
+                actionItem(
+                    image: settings.zapImage,
+                    label: zapLabel(repoBox.counts.zapSats > 0 ? repoBox.counts.zapSats : (engagement?.zapSats ?? 0)),
+                    tint: iZapped ? Color.wispZapColor : nil
+                )
             }
         }
-        .buttonStyle(.plain)
-        .disabled(isFlying)
+        // Dim on the user's own posts — self-zapping is a no-op that just
+        // round-trips sats minus routing fees.
+        .opacity(isOwnPost ? 0.35 : 1)
+        .contentShape(Rectangle())
+        // Tap = open composer. Recorded behind the `zapLongPressFired`
+        // guard so the same touch sequence that fires an instant zap
+        // doesn't ALSO open the composer on finger-lift — SwiftUI fires
+        // both gestures by default when they're applied as siblings.
+        .onTapGesture {
+            guard isInteractive else { return }
+            if zapLongPressFired {
+                zapLongPressFired = false
+                return
+            }
+            Haptics.shared.blip()
+            triggerZapOrWalletSetup()
+        }
+        // Long-press = instant zap (if opted-in + wallet set up). Using
+        // `.onLongPressGesture(...onPressingChanged:)` instead of
+        // `.simultaneousGesture(LongPressGesture)` because the modifier
+        // form is the only public SwiftUI API that exposes a touch-down
+        // callback — `onPressingChanged(true)` fires the instant the
+        // finger lands, which is where the medium "I see your press"
+        // haptic plays. The prior `DragGesture(minimumDistance: 0)`
+        // simultaneous-gesture pattern was getting swallowed when
+        // composed with the Button's internal tap recognizer, so the
+        // touch-down haptic never fired at all. Dropping the Button
+        // (this view is now a plain ZStack with explicit tap +
+        // long-press gestures) avoids that arbitration entirely.
+        //
+        // 0.25 s recognition window is short enough that the press
+        // doesn't feel stalled but still long enough to clearly
+        // distinguish from a quick tap.
+        .onLongPressGesture(
+            minimumDuration: 0.25,
+            maximumDistance: 50,
+            perform: {
+                guard isInteractive else { return }
+                zapLongPressFired = true
+                if settings.quickZapEnabled,
+                   let store = walletStore, store.mode != nil,
+                   let amount = resolvedInstantZapSats() {
+                    // Sharp CoreHaptics tap at the moment of instant-zap
+                    // commit. CoreHaptics is used (not the UIKit
+                    // UIImpactFeedbackGenerator) because the device may
+                    // have System Haptics disabled in Settings → Sounds
+                    // & Haptics, which silences UIFeedbackGenerator but
+                    // not CHHapticEngine. Mirrors the same engine path
+                    // that the success-side `zapBuzz` already uses.
+                    Haptics.shared.zapCommitThump()
+                    fireQuickZap(amountSats: amount)
+                } else {
+                    // Composer fall-through: light recognised-tap
+                    // feedback is enough because the sheet rising is
+                    // its own unmistakable visual confirmation.
+                    Haptics.shared.blip()
+                    triggerZapOrWalletSetup()
+                }
+            },
+            onPressingChanged: { _ in }
+        )
         .overlay(alignment: .center) {
             ZapBurstView(isActive: isBursting)
                 .frame(width: 160, height: 160)
@@ -921,13 +983,23 @@ struct PostCardView: View {
         .buttonStyle(.plain)
         .popover(isPresented: $showRepostMenu) {
             VStack(alignment: .leading, spacing: 0) {
-                popoverMenuItem(
-                    title: iReposted ? "Reposted" : "Repost",
-                    systemImage: "arrow.2.squarepath",
-                    disabled: iReposted
-                ) {
-                    showRepostMenu = false
-                    sendRepost()
+                if iReposted {
+                    popoverMenuItem(
+                        title: "Undo Repost",
+                        systemImage: "arrow.2.squarepath",
+                        role: .destructive
+                    ) {
+                        showRepostMenu = false
+                        undoRepost()
+                    }
+                } else {
+                    popoverMenuItem(
+                        title: "Repost",
+                        systemImage: "arrow.2.squarepath"
+                    ) {
+                        showRepostMenu = false
+                        sendRepost()
+                    }
                 }
                 Divider()
                 popoverMenuItem(
@@ -1109,28 +1181,39 @@ struct PostCardView: View {
         }
     }
 
+    private var myReactionEventId: String? { myReactor?.reactionEventId }
+    private var myRepostEventId: String? {
+        guard let me = myPubkey else { return nil }
+        return repoBox.counts.reposterEventIds[me]
+    }
+
     private var heartAction: some View {
         let displayed = displayReactedEmoji
         let custom = displayReactedCustomEmoji
+        let alreadyReacted = iReactedEmoji != nil
         return Button {
-            // Pick whichever side of the heart has more usable vertical
-            // space, then size the picker to fit that space so it scrolls
-            // internally instead of getting clipped by the popover. Reserve
-            // small margins for the status bar above and the home indicator
-            // / tab bar below. Frame is read live from the tracker so the
-            // anchor is correct for the heart's current scroll position.
-            let frame = heartFrameTracker.frame
-            let screenHeight = UIScreen.main.bounds.height
-            let topReserve: CGFloat = 60
-            let bottomReserve: CGFloat = 80
-            let popoverChrome: CGFloat = 32
-            let availableBelow = max(0, screenHeight - bottomReserve - frame.maxY - popoverChrome)
-            let availableAbove = max(0, frame.minY - topReserve - popoverChrome)
-            let preferBelow = availableBelow >= availableAbove
-            reactionArrowEdge = preferBelow ? .top : .bottom
-            let chosenSpace = preferBelow ? availableBelow : availableAbove
-            reactionPickerMaxHeight = min(192, max(80, chosenSpace))
-            showReactionPicker = true
+            if alreadyReacted {
+                showRemoveReactionMenu = true
+            } else {
+                // Pick whichever side of the heart has more usable vertical
+                // space, then size the picker to fit that space so it scrolls
+                // internally instead of getting clipped by the popover. Reserve
+                // small margins for the status bar above and the home indicator
+                // / tab bar below. Frame is read live from the tracker so the
+                // anchor is correct for the heart's current scroll position.
+                let frame = heartFrameTracker.frame
+                let screenHeight = UIScreen.main.bounds.height
+                let topReserve: CGFloat = 60
+                let bottomReserve: CGFloat = 80
+                let popoverChrome: CGFloat = 32
+                let availableBelow = max(0, screenHeight - bottomReserve - frame.maxY - popoverChrome)
+                let availableAbove = max(0, frame.minY - topReserve - popoverChrome)
+                let preferBelow = availableBelow >= availableAbove
+                reactionArrowEdge = preferBelow ? .top : .bottom
+                let chosenSpace = preferBelow ? availableBelow : availableAbove
+                reactionPickerMaxHeight = min(192, max(80, chosenSpace))
+                showReactionPicker = true
+            }
         } label: {
             if let emoji = displayed {
                 HStack(spacing: 4) {
@@ -1182,6 +1265,25 @@ struct PostCardView: View {
                     }
             }
         )
+        .popover(isPresented: $showRemoveReactionMenu) {
+            Button(role: .destructive) {
+                showRemoveReactionMenu = false
+                undoReaction()
+            } label: {
+                HStack {
+                    Spacer()
+                    Label("Remove Reaction", systemImage: "minus.circle")
+                    Spacer()
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Color.red)
+            .frame(minWidth: 200)
+            .presentationCompactAdaptation(.popover)
+        }
         .popover(isPresented: $showReactionPicker, arrowEdge: reactionArrowEdge) {
             EmojiReactionPicker(
                 onSelect: { picked in
@@ -1195,8 +1297,7 @@ struct PostCardView: View {
                     } else {
                         activeSheet = .emojiLibrary
                     }
-                },
-                maxGridHeight: reactionPickerMaxHeight
+                }
             )
             .presentationCompactAdaptation(.popover)
         }
@@ -1217,6 +1318,58 @@ struct PostCardView: View {
         }
     }
 
+    /// Resolve the instant-zap amount in sats, taking fiat mode into account.
+    /// In bitcoin mode this is just `quickZapAmountSats`. In fiat mode the
+    /// configured `quickZapAmountFiat` major-unit value is converted via the
+    /// current exchange rate; returns nil when the rate cache hasn't loaded
+    /// yet, which falls the caller back to the composer sheet.
+    private func resolvedInstantZapSats() -> Int64? {
+        if settings.fiatModeEnabled {
+            guard settings.quickZapAmountFiat > 0 else { return nil }
+            guard let sats = ExchangeRateCache.shared.fiatToSats(
+                settings.quickZapAmountFiat,
+                currency: settings.fiatCurrency
+            ), sats > 0 else { return nil }
+            return sats
+        }
+        return settings.quickZapAmountSats > 0 ? settings.quickZapAmountSats : nil
+    }
+
+    /// Fire a one-tap zap of `amountSats` to the displayed post's author.
+    /// Routed through `ZapAnimationStore` so the in-flight pulse + success
+    /// burst run on the post card exactly as they do from the full composer.
+    private func fireQuickZap(amountSats: Int64) {
+        guard let keypair = NostrKey.load(), let store = walletStore else { return }
+        let target = resolveRepost().event
+        let targetProfile = resolveRepost().profile
+        let pollOptionIdx = zapPollOptionIndex
+        let extraTags: [[String]] = pollOptionIdx.map { [["poll_option", String($0)]] } ?? []
+        ZapAnimationStore.shared.send(
+            keypair: keypair,
+            wallet: store,
+            recipientPubkey: target.pubkey,
+            recipientLud16: targetProfile?.lud16,
+            eventId: target.id,
+            amountSats: amountSats,
+            message: settings.quickZapMessage.trimmingCharacters(in: .whitespacesAndNewlines),
+            relayHints: [],
+            extraTags: extraTags,
+            isAnonymous: false,
+            isPrivate: false,
+            onSuccessSats: { sats in
+                if target.kind == Nip69.kindZapPoll, let idx = pollOptionIdx {
+                    PollTallyRepository.shared.applyOptimisticZapVote(
+                        pollEvent: target,
+                        optionIndex: idx,
+                        voterPubkey: keypair.pubkey,
+                        sats: sats,
+                        ts: Int(Date().timeIntervalSince1970)
+                    )
+                }
+            }
+        )
+    }
+
     private func sendRepost() {
         guard let keypair = NostrKey.load() else { return }
         let target = resolveRepost().event
@@ -1228,6 +1381,39 @@ struct PostCardView: View {
                 // No-op: button is also disabled in this state.
             } catch {
                 actionAlert = ActionAlert(title: "Repost failed", message: String(describing: error))
+            }
+        }
+    }
+
+    private func undoReaction() {
+        guard let keypair = NostrKey.load(),
+              let me = myPubkey,
+              let reactor = myReactor,
+              let reactionEventId = myReactionEventId else { return }
+        ReactionSender.shared.clearSent(pubkey: me, targetEventId: displayEventId, frequencyKey: reactor.emoji)
+        EngagementRepository.shared.undoReaction(eventId: displayEventId, pubkey: me, emoji: reactor.emoji)
+        Haptics.shared.blip()
+        Task {
+            do {
+                try await DeletionSender.shared.deleteById(reactionEventId, kind: Nip25.kindReaction, keypair: keypair)
+            } catch {
+                NSLog("[Reaction] undo failed: %@", String(describing: error))
+            }
+        }
+    }
+
+    private func undoRepost() {
+        guard let keypair = NostrKey.load(),
+              let me = myPubkey,
+              let repostEventId = myRepostEventId else { return }
+        RepostSender.shared.clearSent(pubkey: me, targetEventId: displayEventId)
+        EngagementRepository.shared.undoRepost(eventId: displayEventId, reposterPubkey: me)
+        Haptics.shared.blip()
+        Task {
+            do {
+                try await DeletionSender.shared.deleteById(repostEventId, kind: 6, keypair: keypair)
+            } catch {
+                NSLog("[Repost] undo failed: %@", String(describing: error))
             }
         }
     }

@@ -42,6 +42,18 @@ final class AppSettings {
         static let autoApproveRelayAuth = "wisp_settings_auto_approve_relay_auth"
         static let zapIconStyle = "wisp_settings_zap_icon_style"
         static let videoLoop = "wisp_settings_video_loop"
+        static func quickZapEnabled(for pubkey: String?) -> String {
+            pubkey.map { "wisp_settings_quick_zap_enabled_\($0)" } ?? "wisp_settings_quick_zap_enabled"
+        }
+        static func quickZapAmountSats(for pubkey: String?) -> String {
+            pubkey.map { "wisp_settings_quick_zap_amount_sats_\($0)" } ?? "wisp_settings_quick_zap_amount_sats"
+        }
+        static func quickZapAmountFiat(for pubkey: String?) -> String {
+            pubkey.map { "wisp_settings_quick_zap_amount_fiat_\($0)" } ?? "wisp_settings_quick_zap_amount_fiat"
+        }
+        static func quickZapMessage(for pubkey: String?) -> String {
+            pubkey.map { "wisp_settings_quick_zap_message_\($0)" } ?? "wisp_settings_quick_zap_message"
+        }
     }
 
     /// Allowed durations for the post-undo countdown. Picker shows these as
@@ -108,9 +120,44 @@ final class AppSettings {
     var zapIconStyle: ZapIconStyle {
         didSet { UserDefaults.standard.set(zapIconStyle.rawValue, forKey: Keys.zapIconStyle) }
     }
-    // TODO: Persist to NIP78 (kind 30078) when that feature is available.
     var videoLoop: Bool {
         didSet { UserDefaults.standard.set(videoLoop, forKey: Keys.videoLoop) }
+    }
+    /// When true, a single tap of the zap button on a post sends the configured
+    /// amount immediately. Long-press still opens the zap composer. Surfaces in
+    /// settings as "Instant zaps" while in bitcoin mode and "Instant payments"
+    /// while in fiat mode. Disabled by default — the previous behaviour
+    /// (tap → composer) is preserved unless the user opts in.
+    var quickZapEnabled: Bool {
+        didSet {
+            let pk = NostrKey.load()?.pubkey
+            UserDefaults.standard.set(quickZapEnabled, forKey: Keys.quickZapEnabled(for: pk))
+        }
+    }
+    /// Instant-zap amount in sats, used when `fiatModeEnabled` is false.
+    var quickZapAmountSats: Int64 {
+        didSet {
+            let pk = NostrKey.load()?.pubkey
+            UserDefaults.standard.set(quickZapAmountSats, forKey: Keys.quickZapAmountSats(for: pk))
+        }
+    }
+    /// Instant-payment amount in `fiatCurrency` major units (e.g. 1.00 USD),
+    /// used when `fiatModeEnabled` is true. Converted to sats at fire time via
+    /// `ExchangeRateCache.fiatToSats`.
+    var quickZapAmountFiat: Double {
+        didSet {
+            let pk = NostrKey.load()?.pubkey
+            UserDefaults.standard.set(quickZapAmountFiat, forKey: Keys.quickZapAmountFiat(for: pk))
+        }
+    }
+    /// Optional default message included on an instant zap / payment. Empty
+    /// string means "no message" — the zap fires with `content: ""` exactly
+    /// as the composer's blank state would produce. Persisted + synced.
+    var quickZapMessage: String {
+        didSet {
+            let pk = NostrKey.load()?.pubkey
+            UserDefaults.standard.set(quickZapMessage, forKey: Keys.quickZapMessage(for: pk))
+        }
     }
 
     private init() {
@@ -137,6 +184,27 @@ final class AppSettings {
         let zapRaw = defaults.string(forKey: Keys.zapIconStyle) ?? ZapIconStyle.bitcoin.rawValue
         self.zapIconStyle = ZapIconStyle(rawValue: zapRaw) ?? .bitcoin
         self.videoLoop = defaults.object(forKey: Keys.videoLoop) as? Bool ?? true
+        let qzPubkey = NostrKey.load()?.pubkey
+        self.quickZapEnabled = defaults.object(forKey: Keys.quickZapEnabled(for: qzPubkey)) as? Bool ?? false
+        let storedQuickInt = defaults.integer(forKey: Keys.quickZapAmountSats(for: qzPubkey))
+        self.quickZapAmountSats = storedQuickInt > 0 ? Int64(storedQuickInt) : 21
+        let storedQuickFiat = defaults.double(forKey: Keys.quickZapAmountFiat(for: qzPubkey))
+        self.quickZapAmountFiat = storedQuickFiat > 0 ? storedQuickFiat : 0.10
+        self.quickZapMessage = defaults.string(forKey: Keys.quickZapMessage(for: qzPubkey)) ?? ""
+    }
+
+    /// Load per-account instant-zap settings from UserDefaults. Falls back to
+    /// defaults (21 sats / 0.10 fiat / disabled / no message) when no value
+    /// has been stored for this pubkey yet. Call on every account switch so
+    /// each account's preferences are isolated.
+    func loadQuickZapSettings(for pubkey: String) {
+        let defaults = UserDefaults.standard
+        quickZapEnabled = defaults.object(forKey: Keys.quickZapEnabled(for: pubkey)) as? Bool ?? false
+        let storedSats = defaults.integer(forKey: Keys.quickZapAmountSats(for: pubkey))
+        quickZapAmountSats = storedSats > 0 ? Int64(storedSats) : 21
+        let storedFiat = defaults.double(forKey: Keys.quickZapAmountFiat(for: pubkey))
+        quickZapAmountFiat = storedFiat > 0 ? storedFiat : 0.10
+        quickZapMessage = defaults.string(forKey: Keys.quickZapMessage(for: pubkey)) ?? ""
     }
 
     /// SF Symbol name for the zap icon. Only valid when `fiatModeEnabled` is false.
