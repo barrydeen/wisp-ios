@@ -139,14 +139,14 @@ struct WalletSettingsView: View {
         .background(Color.wispBackground.ignoresSafeArea())
         .navigationTitle("Wallet Settings")
         .navigationBarTitleDisplayMode(.inline)
-        .alert("Disconnect wallet?", isPresented: $showDisconnectAlert) {
-            Button("Disconnect", role: .destructive) {
+        .alert("Switch to a different wallet?", isPresented: $showDisconnectAlert) {
+            Button("Switch", role: .destructive) {
                 store.resetToNoWallet()
                 dismiss()
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Your NWC connection will be removed. You can reconnect at any time.")
+            Text("Your NWC connection will be removed. You can reconnect a different wallet at any time.")
         }
         .alert("Delete wallet?", isPresented: $showDeleteAlert) {
             Button("Delete", role: .destructive) {
@@ -631,22 +631,28 @@ struct WalletSettingsView: View {
 
     private var dangerSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Disconnect Wallet")
+            Text(dangerSectionHeader)
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 4)
 
             VStack(spacing: 0) {
                 if store.mode == .nwc {
+                    // Matches the Breez/Spark "Switch to a different
+                    // wallet" affordance below — same icon, label, and
+                    // layout — so the wallet-settings danger row reads
+                    // identically across wallet providers. The underlying
+                    // alert still confirms the NWC-specific behavior
+                    // (removing the connection string).
                     Button {
                         showDisconnectAlert = true
                     } label: {
                         HStack(spacing: 12) {
-                            Image(systemName: "xmark.circle")
+                            Image(systemName: "arrow.triangle.swap")
                                 .font(.system(size: 15))
                                 .foregroundStyle(.red)
                                 .frame(width: 22)
-                            Text("Disconnect wallet")
+                            Text("Switch to a different wallet")
                                 .font(.subheadline)
                                 .foregroundStyle(.red)
                             Spacer()
@@ -705,9 +711,16 @@ struct WalletSettingsView: View {
         }
     }
 
+    private var dangerSectionHeader: String {
+        if store.mode == .nwc || store.isDefaultWallet {
+            return "Switch Wallet"
+        }
+        return "Delete Wallet"
+    }
+
     private var dangerSectionFooter: String {
         if store.mode == .nwc {
-            return "Disconnecting removes the NWC connection string. Your wallet provider is unaffected."
+            return "Switching removes the NWC connection string. Your wallet provider is unaffected."
         }
         if store.isDefaultWallet {
             return "Your default wallet is linked to your key and can always be restored. Switching connects a different wallet instead."
