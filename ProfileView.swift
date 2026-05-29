@@ -53,33 +53,35 @@ struct ProfileView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            unifiedHeader
-            // Divider between unifiedHeader and the scroll content was
-            // removed — the back-button / username row should sit
-            // seamlessly above the pinned tab bar (Notes / Replies /
-            // Gallery / Media / Following). The pinned tab bar provides
-            // its own visual separation when the user scrolls.
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                    ProfileHeaderView(
-                        viewModel: viewModel,
-                        isMe: isMe,
-                        isWatchOnly: NostrKey.isWatchOnly(pubkey: activeUserPubkey),
-                        selectedTab: selectedTab,
-                        onEditProfile: { showEditProfile = true },
-                        onProfileTap: onProfileTap,
-                        onNoteTap: onNoteTap,
-                        onHashtagTap: onHashtagTap
-                    )
-                    Section {
-                        tabBody
-                    } header: {
-                        ProfileTabBar(selected: $selectedTab, tabs: visibleTabs)
-                            .background(Color.wispBackground.opacity(0.92))
-                    }
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+                ProfileHeaderView(
+                    viewModel: viewModel,
+                    isMe: isMe,
+                    isWatchOnly: NostrKey.isWatchOnly(pubkey: activeUserPubkey),
+                    selectedTab: selectedTab,
+                    onEditProfile: { showEditProfile = true },
+                    onProfileTap: onProfileTap,
+                    onNoteTap: onNoteTap,
+                    onHashtagTap: onHashtagTap
+                )
+                Section {
+                    tabBody
+                } header: {
+                    ProfileTabBar(selected: $selectedTab, tabs: visibleTabs)
+                        .background(Color.wispBackground.opacity(0.92))
                 }
             }
+        }
+        // The back-button / username row is attached as a top safe-area inset
+        // rather than stacked above the ScrollView, so the scroll content
+        // (banner photo, notes) slides *underneath* it. That gives the header
+        // the exact same translucent treatment as the pinned tab strip below
+        // it: both composite the same `wispBackground.opacity(0.92)` over the
+        // scrolling photos, so there is no opacity seam between the two bars.
+        // The pinned tab bar still anchors directly below this inset.
+        .safeAreaInset(edge: .top, spacing: 0) {
+            unifiedHeader
         }
         .coordinateSpace(name: "profileScroll")
         .background(Color.wispBackground)
@@ -191,7 +193,12 @@ struct ProfileView: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
-        .background(Color.wispBackground.opacity(0.92))
+        // Extend the translucent fill up through the top safe area so the
+        // status-bar region reads as the same glass, not bare scrolling photos.
+        .background(
+            Color.wispBackground.opacity(0.92)
+                .ignoresSafeArea(edges: .top)
+        )
     }
 
     @ViewBuilder
