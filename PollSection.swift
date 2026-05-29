@@ -10,6 +10,7 @@ struct PollSection: View {
 
     @State private var tallyRepo = PollTallyRepository.shared
     @State private var pendingMultiSelections: Set<String> = []
+    @State private var pendingSingleSelection: String? = nil
 
     private var isZapPoll: Bool { pollEvent.kind == Nip69.kindZapPoll }
 
@@ -54,7 +55,7 @@ struct PollSection: View {
                         label: option.label,
                         selected: pollType == .multiplechoice
                             ? pendingMultiSelections.contains(option.id)
-                            : false,
+                            : pendingSingleSelection == option.id,
                         isMulti: pollType == .multiplechoice
                     ) {
                         if pollType == .multiplechoice {
@@ -64,7 +65,7 @@ struct PollSection: View {
                                 pendingMultiSelections.insert(option.id)
                             }
                         } else {
-                            onCastVote([option.id])
+                            pendingSingleSelection = option.id
                         }
                     }
                 }
@@ -87,6 +88,20 @@ struct PollSection: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(pendingMultiSelections.isEmpty)
+            }
+
+            if !showResults, pollType != .multiplechoice, pendingSingleSelection != nil {
+                Button {
+                    if let sel = pendingSingleSelection { onCastVote([sel]) }
+                } label: {
+                    Text("Vote")
+                        .font(.subheadline.weight(.semibold))
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 6)
+                        .background(Color.wispPrimary, in: Capsule())
+                        .foregroundStyle(Color.white)
+                }
+                .buttonStyle(.plain)
             }
 
             HStack(spacing: 6) {
