@@ -896,16 +896,26 @@ struct PostCardView: View {
                     .frame(width: 18, height: 18)
                     .frame(height: 28)
             } else {
-                actionItem(
-                    image: settings.zapImage,
-                    label: zapLabel(repoBox.counts.zapSats > 0 ? repoBox.counts.zapSats : (engagement?.zapSats ?? 0)),
-                    tint: iZapped ? Color.wispZapColor : nil
-                )
+                let zapSats = repoBox.counts.zapSats > 0 ? repoBox.counts.zapSats : (engagement?.zapSats ?? 0)
+                let iconTint: Color = zapSats > 0
+                    ? (isOwnPost ? Color.wispZapColor.opacity(0.4) : Color.wispZapColor)
+                    : .secondary
+                let labelTint: Color = zapSats > 0 ? Color.wispZapColor : .secondary
+                HStack(spacing: 4) {
+                    settings.zapImage
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 18, height: 18)
+                        .foregroundStyle(iconTint)
+                    if let label = zapLabel(zapSats), !label.isEmpty {
+                        Text(label)
+                            .font(.caption)
+                            .foregroundStyle(labelTint)
+                    }
+                }
+                .frame(height: 28)
             }
         }
-        // Dim on the user's own posts — self-zapping is a no-op that just
-        // round-trips sats minus routing fees.
-        .opacity(isOwnPost ? 0.35 : 1)
         .contentShape(Rectangle())
         // Tap = open composer. Recorded behind the `zapLongPressFired`
         // guard so the same touch sequence that fires an instant zap
