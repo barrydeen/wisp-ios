@@ -19,7 +19,7 @@ struct NotificationComposer: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                 Spacer()
-                Image(systemName: "square.and.pencil")
+                Image(systemName: "pencil")
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(Color.wispPrimary)
             }
