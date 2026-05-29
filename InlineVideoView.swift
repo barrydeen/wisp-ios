@@ -29,6 +29,7 @@ struct InlineVideoView: View {
     @State private var player: AVPlayer?
     @State private var showFullScreen = false
     @State private var muteState = GlobalVideoMute.shared
+    @State private var showPhotosAlert = false
     /// Aspect ratio (W / H) detected from `AVPlayerItem.presentationSize` after
     /// the asset's tracks load. `nil` until known — many notes ship with no
     /// imeta `dim` tag, so we can't trust the static fallback.
@@ -163,6 +164,16 @@ struct InlineVideoView: View {
 
                         if !passthroughHitTests {
                             Button {
+                                Task { await saveVideo() }
+                            } label: {
+                                Image(systemName: "square.and.arrow.down")
+                                    .font(.system(size: 14))
+                                    .foregroundStyle(.white)
+                                    .padding(8)
+                                    .background(Color.black.opacity(0.55), in: Circle())
+                            }
+
+                            Button {
                                 // Pause the inline player before the fullscreen
                                 // cover takes over. SwiftUI keeps the underlying
                                 // view alive when a fullScreenCover presents, so
@@ -238,6 +249,16 @@ struct InlineVideoView: View {
             player?.seek(to: .zero)
             player?.play()
         }
+        .alert("Photos Access Required", isPresented: $showPhotosAlert) {
+            Button("Open Settings") {
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    UIApplication.shared.open(url)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Allow Wisp to add to Photos in Settings to save videos.")
+        }
         .fullScreenCover(isPresented: $showFullScreen, onDismiss: {
             // Resume the inline player on dismiss only when autoplay is on,
             // so users who disabled autoplay aren't surprised by audio
@@ -247,6 +268,17 @@ struct InlineVideoView: View {
             }
         }) {
             FullScreenVideoView(url: meta.url)
+        }
+    }
+
+    private func saveVideo() async {
+        do {
+            try await MediaSaveService.saveVideoToPhotos(url: meta.url)
+            QuickFollowToast.shared.show("Saved to Photos")
+        } catch MediaSaveService.SaveError.denied {
+            showPhotosAlert = true
+        } catch {
+            QuickFollowToast.shared.show("Save failed")
         }
     }
 

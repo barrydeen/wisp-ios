@@ -10,6 +10,7 @@ struct InlineImageView: View {
     @Environment(AppSettings.self) private var settings
     @State private var showFullScreen = false
     @State private var manualLoad = false
+    @State private var showPhotosAlert = false
 
     private func tapped() {
         if let onTap = onTap { onTap() }
@@ -93,6 +94,16 @@ struct InlineImageView: View {
         .fullScreenCover(isPresented: $showFullScreen) {
             FullScreenImageView(url: meta.url, mime: meta.mime)
         }
+        .alert("Photos Access Required", isPresented: $showPhotosAlert) {
+            Button("Open Settings") {
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    UIApplication.shared.open(url)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Allow Wisp to add to Photos in Settings to save images.")
+        }
         .contextMenu {
             Button {
                 UIPasteboard.general.string = meta.url
@@ -100,6 +111,22 @@ struct InlineImageView: View {
             } label: {
                 Label("Copy Image URL", systemImage: "doc.on.doc")
             }
+            Button {
+                Task { await saveImage() }
+            } label: {
+                Label("Save to Photos", systemImage: "square.and.arrow.down")
+            }
+        }
+    }
+
+    private func saveImage() async {
+        do {
+            try await MediaSaveService.saveImageToPhotos(url: meta.url)
+            QuickFollowToast.shared.show("Saved to Photos")
+        } catch MediaSaveService.SaveError.denied {
+            showPhotosAlert = true
+        } catch {
+            QuickFollowToast.shared.show("Save failed")
         }
     }
 
@@ -176,6 +203,7 @@ struct FullScreenImageView: View {
     /// "URL copied" toast trigger. Flipped on by the long-press handler;
     /// auto-dismisses after a short window.
     @State private var copiedToastVisible = false
+    @State private var showPhotosAlert = false
 
     /// True when this view runs standalone (handles its own dismiss) vs
     /// embedded inside `FullScreenMediaPager` (forwards drags to the pager).
@@ -247,8 +275,47 @@ struct FullScreenImageView: View {
                         .transition(.opacity)
                         .allowsHitTesting(false)
                 }
+
+                VStack {
+                    HStack {
+                        Spacer()
+                        Button {
+                            Task { await saveImageFromFullScreen() }
+                        } label: {
+                            Image(systemName: "square.and.arrow.down")
+                                .font(.system(size: 16, weight: .medium))
+                                .foregroundStyle(.white)
+                                .padding(10)
+                                .background(Color.black.opacity(0.55), in: Circle())
+                        }
+                        .padding(.top, 16)
+                        .padding(.trailing, 16)
+                    }
+                    Spacer()
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .alert("Photos Access Required", isPresented: $showPhotosAlert) {
+                Button("Open Settings") {
+                    if let url = URL(string: UIApplication.openSettingsURLString) {
+                        UIApplication.shared.open(url)
+                    }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Allow Wisp to add to Photos in Settings to save images.")
+            }
+        }
+    }
+
+    private func saveImageFromFullScreen() async {
+        do {
+            try await MediaSaveService.saveImageToPhotos(url: url)
+            QuickFollowToast.shared.show("Saved to Photos")
+        } catch MediaSaveService.SaveError.denied {
+            showPhotosAlert = true
+        } catch {
+            QuickFollowToast.shared.show("Save failed")
         }
     }
 

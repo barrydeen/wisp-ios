@@ -304,6 +304,7 @@ private struct ProfileHeaderView: View {
     /// address, follow stats, and tab bar stay above the fold; the
     /// user pulls down a "Read more" to read the rest.
     @State private var bioExpanded = false
+    @State private var showAvatarFullScreen = false
     /// Latched-largest intrinsic height of the bio's `RichContentView`,
     /// measured via a `GeometryReader` background. `bioIsLong` reads from
     /// this to decide whether to apply the collapse — only grows, so
@@ -331,6 +332,15 @@ private struct ProfileHeaderView: View {
                 CachedAvatarView(url: viewModel.profile?.picture, size: 84)
                     .overlay(Circle().stroke(Color.wispBackground, lineWidth: 4))
                     .quickFollowOnLongPress(pubkey: viewModel.pubkey)
+                    .onTapGesture {
+                        guard viewModel.profile?.picture != nil else { return }
+                        showAvatarFullScreen = true
+                    }
+                    .fullScreenCover(isPresented: $showAvatarFullScreen) {
+                        if let pictureUrl = viewModel.profile?.picture {
+                            FullScreenImageView(url: pictureUrl)
+                        }
+                    }
                     .offset(y: -28)
 
                 Spacer()
