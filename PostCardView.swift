@@ -1808,7 +1808,6 @@ private struct TopZapperPill: View {
                 if !zapper.message.isEmpty {
                     Text(zapper.message)
                         .font(.caption2)
-                        .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.tail)
                 }
