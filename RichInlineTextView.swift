@@ -1,5 +1,7 @@
 import SwiftUI
 import UIKit
+import QuartzCore
+import os
 
 extension NSAttributedString.Key {
     /// Tap-target attribute for `@mentions`, `#hashtags`, and inline URLs. We
@@ -192,8 +194,18 @@ struct RichInlineTextView: UIViewRepresentable {
         let target = CGSize(width: resolvedWidth, height: .greatestFiniteMagnitude)
         #if DEBUG
         PerfTrace.mark("richtext.sizeThatFits", url: "len=\(uiView.attributedText?.length ?? 0)")
+        let _szStart = CACurrentMediaTime()
         #endif
         let size = uiView.sizeThatFits(target)
+        #if DEBUG
+        // Decisive probe: is ONE call slow (→ TextKit cost per measure) or are
+        // there MANY fast calls (→ SwiftUI non-converging re-measure loop)?
+        // A burst of these logs with small per-call ms == a loop.
+        let _szMs = (CACurrentMediaTime() - _szStart) * 1000
+        if _szMs > 80 {
+            mainStallLog.error("sizeThatFits CALL \(Int(_szMs), privacy: .public)ms len=\(uiView.attributedText?.length ?? 0, privacy: .public) w=\(Int(resolvedWidth), privacy: .public)")
+        }
+        #endif
         return CGSize(width: resolvedWidth, height: ceil(size.height))
     }
 

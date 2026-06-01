@@ -44,6 +44,10 @@ struct PerfBreadcrumb: Sendable {
 enum PerfTrace {
     #if DEBUG
     private static let lock = OSAllocatedUnfairLock(initialState: PerfBreadcrumb())
+    /// Monotonic count of breadcrumb marks. Lets the watchdog tell a busy loop
+    /// (count climbs while the main thread spins through instrumented code)
+    /// from a block in one opaque, un-instrumented call (count frozen).
+    private static let counter = OSAllocatedUnfairLock(initialState: UInt64(0))
     #endif
 
     /// Set the current feed-row context. Sticky until the next row enters, so
@@ -51,6 +55,7 @@ enum PerfTrace {
     static func enterRow(note: String, media: String) {
         #if DEBUG
         lock.withLock { $0.note = note; $0.media = media; $0.label = "feed.row" }
+        counter.withLock { $0 &+= 1 }
         #endif
     }
 
@@ -58,6 +63,7 @@ enum PerfTrace {
     static func mark(_ label: String, url: String? = nil) {
         #if DEBUG
         lock.withLock { $0.label = label; $0.url = url }
+        counter.withLock { $0 &+= 1 }
         #endif
     }
 
@@ -66,6 +72,14 @@ enum PerfTrace {
         lock.withLock { $0 }
         #else
         PerfBreadcrumb()
+        #endif
+    }
+
+    static var markCount: UInt64 {
+        #if DEBUG
+        counter.withLock { $0 }
+        #else
+        0
         #endif
     }
 }
@@ -110,6 +124,7 @@ final class MainThreadWatchdog: NSObject, @unchecked Sendable {
         var stallSeq: UInt64 = 0
         var stallStartBeat: CFTimeInterval = 0
         var stallCrumb = PerfBreadcrumb()
+        var stallStartMarks: UInt64 = 0
 
         while true {
             Thread.sleep(forTimeInterval: pollInterval)
@@ -123,6 +138,7 @@ final class MainThreadWatchdog: NSObject, @unchecked Sendable {
                     stallSeq = seq
                     stallStartBeat = lastBeat
                     stallCrumb = PerfTrace.current
+                    stallStartMarks = PerfTrace.markCount
                     // Emit at onset too, so we still have a record if a very long
                     // stall gets the app watchdog-killed before it recovers.
                     mainStallLog.error("""
@@ -136,8 +152,13 @@ final class MainThreadWatchdog: NSObject, @unchecked Sendable {
             } else if seq != stallSeq {
                 // Main resumed — `lastBeat` is the first frame after the stall.
                 let total = lastBeat - stallStartBeat
+                // marks during the stall: ~0 ⇒ blocked in one opaque call (the
+                // real culprit is NOT breadcrumbed; `last` is just stale). Large
+                // ⇒ a busy loop spinning through instrumented code (e.g. a
+                // non-converging sizeThatFits re-measure).
+                let marks = PerfTrace.markCount &- stallStartMarks
                 mainStallLog.error("""
-                MAIN STALL \(Int(total * 1000))ms \
+                MAIN STALL \(Int(total * 1000))ms marks=\(marks, privacy: .public) \
                 last=\(stallCrumb.label, privacy: .public) \
                 note=\(stallCrumb.note ?? "-", privacy: .public) \
                 media=\(stallCrumb.media ?? "-", privacy: .public) \
