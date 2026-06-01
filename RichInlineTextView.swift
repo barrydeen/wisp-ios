@@ -158,6 +158,12 @@ struct RichInlineTextView: UIViewRepresentable {
         PerfTrace.mark("richtext.buildAttributed")
         #endif
         let attributed = buildAttributedString()
+        #if DEBUG
+        // Split build vs TextKit layout. `len` is UTF-16 length: when it dwarfs
+        // the note's grapheme count (media= clen) it points at a Unicode bomb
+        // (combining-mark / ZWJ runs) whose layout goes quadratic in TextKit.
+        PerfTrace.mark("richtext.applyAttributed", url: "len=\(attributed.length)")
+        #endif
         uiView.attributedText = attributed
         uiView.invalidateIntrinsicContentSize()
         context.coordinator.lastBuiltKey = key
@@ -184,6 +190,9 @@ struct RichInlineTextView: UIViewRepresentable {
         // Constrain the text container so wrapping happens at the resolved width.
         uiView.textContainer.size = CGSize(width: resolvedWidth, height: .greatestFiniteMagnitude)
         let target = CGSize(width: resolvedWidth, height: .greatestFiniteMagnitude)
+        #if DEBUG
+        PerfTrace.mark("richtext.sizeThatFits", url: "len=\(uiView.attributedText?.length ?? 0)")
+        #endif
         let size = uiView.sizeThatFits(target)
         return CGSize(width: resolvedWidth, height: ceil(size.height))
     }
@@ -440,17 +449,23 @@ final class ContentSizingTextView: UITextView {
         addGestureRecognizer(linkTapRecognizer)
     }
 
-    /// `pillLayout: true` wires an explicit TextKit 1 stack with
-    /// `WispPillLayoutManager` so `@mention` runs can paint a rounded pill
-    /// background. `false` keeps the stock text-container path used by every
-    /// feed / bio surface unchanged.
+    /// Build an explicit **TextKit 1** stack (`NSTextStorage` + `NSLayoutManager`
+    /// + `NSTextContainer`) for every instance.
+    ///
+    /// iOS 16+ makes `UITextView(textContainer: nil)` default to TextKit 2
+    /// (`NSTextLayoutManager`). For a non-scrolling text view, TextKit 2's
+    /// `sizeThatFits` lays out the whole document synchronously and is
+    /// pathologically slow — a plain ~1900-char feed post measured for **12s**
+    /// on every layout pass and froze the app. Handing UITextView an
+    /// `NSLayoutManager`-backed container forces the battle-tested TextKit 1
+    /// path, whose `sizeThatFits` is fast and linear.
+    ///
+    /// `pillLayout: true` swaps in `WispPillLayoutManager` (a subclass) so
+    /// `@mention` runs can paint a rounded pill background; both paths now share
+    /// the explicit TextKit 1 stack.
     convenience init(pillLayout: Bool) {
-        guard pillLayout else {
-            self.init(frame: .zero, textContainer: nil)
-            return
-        }
         let storage = NSTextStorage()
-        let layout = WispPillLayoutManager()
+        let layout: NSLayoutManager = pillLayout ? WispPillLayoutManager() : NSLayoutManager()
         storage.addLayoutManager(layout)
         let container = NSTextContainer(size: CGSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
         container.widthTracksTextView = true
