@@ -1450,7 +1450,7 @@ final class ComposeViewModel {
                 let nextIdx = r.upperBound
                 if nextIdx < out.endIndex {
                     let c = out[nextIdx]
-                    if (c >= "a" && c <= "z") || (c >= "0" && c <= "9") {
+                    if (c >= "a" && c <= "z") || (c >= "A" && c <= "Z") || (c >= "0" && c <= "9") {
                         out.insert(" ", at: nextIdx)
                         cursor = out.index(after: nextIdx)
                         continue
