@@ -248,18 +248,14 @@ final class DmConversationViewModel {
     // MARK: - Relay resolution per recipient
 
     private func resolveOwnRelays() async -> [String] {
-        // Publish the self-copy to the SAME relay set this account subscribes on for
-        // incoming DMs (MessagesViewModel.resolveDmSubscriptionRelays): kind-10050 DM
-        // relays unioned with general (NIP-65) relays, read from the loaded settings (no
-        // network round-trip). This guarantees our other devices — which listen on exactly
-        // these relays — receive what we send. Without this, a fresh kind-10050 query that
-        // times out (or an account with no kind-10050) dumped the self-copy onto public
-        // indexer relays the devices don't subscribe to, so sent messages never synced.
+        // Publish the self-copy to the SAME set this account subscribes on for incoming DMs
+        // (MessagesViewModel.resolveDmSubscriptionRelays): kind-10050 DM relays, else NIP-65
+        // read relays — read from loaded settings (no fragile network round-trip) so our
+        // other devices, which listen on exactly these relays, receive it. NOT every general
+        // relay; see resolveDmSubscriptionRelays for why that floods the pool.
         RelaySettingsRepository.shared.ensureLoaded(pubkey: keypair.pubkey)
         let dm = RelaySettingsRepository.shared.dmRelays
-        let general = RelaySettingsRepository.shared.generalRelays.map { $0.url }
-        let own = Array(Set(dm + general))
-        if !own.isEmpty { return own }
+        if !dm.isEmpty { return dm }
         let reads = await RelayListRepository.shared.getReadRelays(keypair.pubkey)
         return reads.isEmpty ? Self.indexerRelays : reads
     }
