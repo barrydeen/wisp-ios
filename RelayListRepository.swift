@@ -133,6 +133,15 @@ final class RelayListRepository {
     }
 
     private func fetchFromRelays(_ pubkey: String) async -> Entry? {
+        // Cold-start disk fallback: a kind-10002 persisted in a prior session
+        // (replaceable, newest-wins) is authoritative and saves a relay
+        // round-trip. Only reached after the in-memory + UserDefaults miss in
+        // `loadEntry`; covers a relay list persisted to `EventStore` via the
+        // feed stream that never flowed through `ingest`.
+        if let stored = await EventStore.shared.loadLatestByAuthor(pubkey: pubkey, kind: 10002) {
+            ingest(stored)
+            if let entry = cache[pubkey] { return entry }
+        }
         let events = await RelayPool.query(
             relays: Self.indexerRelays,
             filter: NostrFilter(kinds: [10002], authors: [pubkey], limit: 1),

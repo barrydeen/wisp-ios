@@ -44,6 +44,11 @@ final class SearchViewModel {
     @ObservationIgnored private var profileUpdatesTask: Task<Void, Never>?
     @ObservationIgnored private var searchCounter: Int = 0
     @ObservationIgnored private var authorCounter: Int = 0
+    /// Engagement event ids already counted for the current results. Required
+    /// because `loadEngagement` now seeds from the disk cache *and* streams from
+    /// relays; without id dedup the same kind-6/7/9735 would be counted twice.
+    /// Reset whenever a fresh notes search clears `engagement`.
+    @ObservationIgnored private var seenEngagementIds = Set<String>()
 
     static let defaultSearchRelay = "wss://search.nostrarchives.com"
 
@@ -210,8 +215,15 @@ final class SearchViewModel {
             notes = []
             engagement = [:]
             noteProfiles = [:]
+            seenEngagementIds.removeAll()
         } else {
             people = []
+            // Instant local results from cached profiles; the relay search
+            // replaces them with authoritative results when it responds.
+            if case .text(let term) = intent {
+                let local = localProfileMatches(term, limit: 20)
+                if !local.isEmpty { people = local }
+            }
         }
 
         let timeout = searchTimeout
@@ -271,6 +283,15 @@ final class SearchViewModel {
                 queryRelays = relays
             }
 
+            // Seed notes-mode results from the on-disk cache so the list isn't
+            // blank during the relay round-trip. Author-filtered searches pull
+            // that author's cached notes; unfiltered text searches scan the
+            // cached feed. Replaced by the authoritative (relevance-ordered)
+            // relay results when they arrive.
+            if mode == .notes, case .text(let term) = intent {
+                await self.seedNotesFromCache(term: term, counter: myCounter)
+            }
+
             let events = await RelayPool.query(relays: queryRelays, filter: filter, timeout: timeout)
             guard !Task.isCancelled else { return }
             await MainActor.run {
@@ -282,6 +303,36 @@ final class SearchViewModel {
                 self.isSearching = false
             }
         }
+    }
+
+    /// Seed `notes` (and their engagement/profiles) from the on-disk cache for
+    /// an instant local approximation while the relay search runs. Author-scoped
+    /// when an author filter is set, otherwise a content scan of the cached feed.
+    /// Bails if the relay results already landed (`notes` non-empty) or the
+    /// search was superseded.
+    private func seedNotesFromCache(term: String, counter: Int) async {
+        let lowered = term.lowercased()
+        guard lowered.count >= 2 else { return }
+        let authorPubkey = authorFilter?.pubkey
+        let cached: [NostrEvent]
+        if let pk = authorPubkey {
+            cached = await EventStore.shared.loadRecentByAuthor(pubkey: pk, kinds: [1], limit: 200)
+        } else {
+            cached = await EventStore.shared.seedCache(limit: 2000)
+        }
+        let matched = cached
+            .filter { $0.kind == 1 && $0.content.lowercased().contains(lowered) }
+            .sorted { $0.createdAt > $1.createdAt }
+            .prefix(50)
+        guard counter == self.searchCounter, self.notes.isEmpty, !matched.isEmpty else { return }
+        let ordered = Array(matched)
+        self.notes = ordered
+        var seedProfiles: [String: ProfileData] = [:]
+        for pk in Set(ordered.map(\.pubkey)) {
+            if let p = profileRepo.get(pk) { seedProfiles[pk] = p }
+        }
+        self.noteProfiles = seedProfiles
+        await self.loadEngagement(for: ordered.map(\.id))
     }
 
     /// Fetch a single kind-0 by pubkey after a NIP-05 lookup resolved the pubkey.
@@ -355,6 +406,12 @@ final class SearchViewModel {
 
     private func loadEngagement(for ids: [String]) async {
         guard !ids.isEmpty else { return }
+        // Seed last-known counts from disk first so results show engagement
+        // before the relay round-trip; the live query then layers on deltas.
+        // `ingestEngagement` dedups by event id so cached + relay copies of the
+        // same event don't double-count.
+        let cached = await EventStore.shared.loadEngagement(forTargetIds: Set(ids))
+        if !cached.isEmpty { ingestEngagement(cached) }
         let relays = engagementRelays()
         let kinds = [1, 6, 7, 9735]
         let chunks = ids.chunked(into: 200)
@@ -377,6 +434,7 @@ final class SearchViewModel {
 
     private func ingestEngagement(_ events: [NostrEvent]) {
         for event in events {
+            guard seenEngagementIds.insert(event.id).inserted else { continue }
             guard let target = event.tags.first(where: { $0.first == "e" && $0.count >= 2 })?[1] else { continue }
             var current = engagement[target] ?? EngagementCounts()
             switch event.kind {
@@ -411,9 +469,34 @@ final class SearchViewModel {
 
     // MARK: - Author autocomplete
 
+    /// Instant local autocomplete from the in-memory profile cache: matches
+    /// `query` against display name / handle / nip05, follows ranked first.
+    /// Used to fill results before the relay search responds.
+    private func localProfileMatches(_ query: String, limit: Int) -> [ProfileData] {
+        let q = query.lowercased()
+        guard q.count >= 2 else { return [] }
+        let follows = FollowsCache.shared.followsSet(for: keypair.pubkey)
+        let matched = profileRepo.cachedProfiles().filter { p in
+            (p.displayName?.lowercased().contains(q) ?? false)
+                || (p.name?.lowercased().contains(q) ?? false)
+                || (p.nip05?.lowercased().contains(q) ?? false)
+        }
+        return matched.sorted { lhs, rhs in
+            let lf = follows.contains(lhs.pubkey)
+            let rf = follows.contains(rhs.pubkey)
+            if lf != rf { return lf && !rf }
+            return false
+        }
+        .prefix(limit)
+        .map { $0 }
+    }
+
     private func runAuthorSearch(_ trimmed: String) {
         authorCounter += 1
         let myCounter = authorCounter
+        // Instant local results from cached profiles; relay results refine below.
+        let localMatches = localProfileMatches(trimmed, limit: 10)
+        if !localMatches.isEmpty { authorResults = localMatches }
         let relays = relaysToQuery()
         guard !relays.isEmpty else { return }
         isAuthorSearching = true

@@ -169,7 +169,7 @@ struct NotificationRowView: View {
                     .foregroundStyle(.secondary)
                 QuotedNoteView(
                     eventId: item.referencedEventId,
-                    relayHints: [],
+                    relayHints: item.relayHints,
                     profiles: profiles,
                     onProfileTap: onPeerTap,
                     onNoteTap: { id in onNoteTap?(id, nil) }
@@ -269,7 +269,7 @@ struct NotificationRowView: View {
         if !item.referencedEventId.isEmpty {
             QuotedNoteView(
                 eventId: item.referencedEventId,
-                relayHints: [],
+                relayHints: item.relayHints,
                 profiles: profiles,
                 onProfileTap: onPeerTap,
                 onNoteTap: { id in onNoteTap?(id, nil) }
@@ -285,7 +285,7 @@ struct NotificationRowView: View {
             if !item.referencedEventId.isEmpty {
                 QuotedNoteView(
                     eventId: item.referencedEventId,
-                    relayHints: [],
+                    relayHints: item.relayHints,
                     profiles: profiles,
                     onProfileTap: onPeerTap,
                     onNoteTap: { id in onNoteTap?(id, nil) }

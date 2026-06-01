@@ -111,6 +111,28 @@ final class PeopleListFeedViewModel {
             events = []
         }
 
+        // Seed from disk so the list paints instantly from members' cached
+        // notes; the relay query below then only fetches newer events because
+        // `since` derives from the newest seeded timestamp (minus slack).
+        if events.isEmpty {
+            let cached = await eventStore.loadRecentByAuthors(
+                pubkeys: members, kinds: Self.feedKinds, limit: 200
+            )
+            var seeded = false
+            for event in cached where Self.feedKinds.contains(event.kind) {
+                if seenIds.insert(event.id).inserted {
+                    events.append(event)
+                    seeded = true
+                }
+            }
+            if seeded {
+                events.sort { $0.createdAt > $1.createdAt }
+                for pk in Set(events.map(\.pubkey)) where profiles[pk] == nil {
+                    if let cachedProfile = profileRepo.get(pk) { profiles[pk] = cachedProfile }
+                }
+            }
+        }
+
         let since: Int? = {
             if let newest = events.first?.createdAt { return newest - 60 }
             return Int(Date().timeIntervalSince1970) - Self.lookbackSeconds

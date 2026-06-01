@@ -138,40 +138,84 @@ actor EventStore {
         }
     }
 
-    /// Returns cached kind:6/7/9735 engagement events whose tags include any of
-    /// `targetIds` as an `e` tag. Used to seed the engagement counts for a
-    /// thread or feed view from disk so the user sees their last-known state
-    /// instantly and the relay subscription only has to deliver deltas.
+    /// Returns cached kind:6/7/9735 engagement events whose primary target
+    /// (`engagementTargetId` — the last non-`mention` `e` tag) is any of
+    /// `targetIds`. Used to seed the engagement counts for a thread or feed view
+    /// from disk so the user sees their last-known state instantly and the relay
+    /// subscription only has to deliver deltas.
+    ///
+    /// `engagementTargetId` is an indexed column (denormalized in
+    /// `EventEntity.init(from:)`), so this is an `isIn` index lookup — cheap
+    /// enough to run on the feed scroll hot path, unlike the prior per-target
+    /// JSON-substring scan. Rows persisted before the column was added carry an
+    /// empty target until `backfillEngagementTargetsIfNeeded` rewrites them.
     func loadEngagement(forTargetIds targetIds: Set<String>) -> [NostrEvent] {
         guard let box = ensureBox(), !targetIds.isEmpty else { return [] }
-        // Tag JSON is opaque to ObjectBox queries — the cheapest pre-filter is
-        // a substring `contains` on any one target id, then per-event tag walk
-        // in Swift. For a thread of N replies that's ~N substring scans of the
-        // candidate set, which beats reading the entire engagement table.
         var out: [NostrEvent] = []
         var seenIds = Set<String>()
-        for target in targetIds {
+        // Chunk `isIn` to keep ObjectBox's OR-tree shallow (same reason as the
+        // `persist` existence check).
+        let ids = Array(targetIds)
+        let chunkSize = 100
+        var chunkStart = 0
+        while chunkStart < ids.count {
+            let chunk = Array(ids[chunkStart ..< min(chunkStart + chunkSize, ids.count)])
             do {
                 let query = try box.query {
                     (EventEntity.kind == 6 || EventEntity.kind == 7 || EventEntity.kind == 9735)
-                    && EventEntity.tags.contains(target)
+                    && EventEntity.engagementTargetId.isIn(chunk)
                 }.build()
                 let candidates = try query.find(offset: 0, limit: 5000)
                 for entity in candidates {
-                    guard let event = entity.toNostrEvent(), !seenIds.contains(event.id) else { continue }
-                    let matchesTarget = event.tags.contains { tag in
-                        tag.count >= 2 && tag[0] == "e" && targetIds.contains(tag[1])
-                    }
-                    if matchesTarget {
-                        seenIds.insert(event.id)
-                        out.append(event)
-                    }
+                    guard let event = entity.toNostrEvent(), seenIds.insert(event.id).inserted else { continue }
+                    out.append(event)
                 }
             } catch {
+                chunkStart += chunkSize
                 continue
             }
+            chunkStart += chunkSize
         }
         return out
+    }
+
+    /// One-time migration: populate `engagementTargetId` on kind 6/7/9735 rows
+    /// persisted before the indexed column existed (ObjectBox defaults the new
+    /// column to "" for existing rows, which the `isIn` index query never
+    /// matches). Runs once per install, guarded by a `UserDefaults` flag, in
+    /// chunks so a large engagement table doesn't spike memory. Until it
+    /// completes, `loadEngagement` simply returns fewer cached rows and the live
+    /// subscription backfills the rest — no correctness impact.
+    private static let engagementBackfillFlag = "eventstore_engagement_backfill_v1"
+
+    func backfillEngagementTargetsIfNeeded() {
+        guard !UserDefaults.standard.bool(forKey: Self.engagementBackfillFlag) else { return }
+        guard let box = ensureBox() else { return }
+        do {
+            let query = try box.query {
+                EventEntity.kind == 6 || EventEntity.kind == 7 || EventEntity.kind == 9735
+            }.build()
+            let pageSize = 2000
+            var offset = 0
+            while true {
+                let page = try query.find(offset: offset, limit: pageSize)
+                if page.isEmpty { break }
+                var toUpdate: [EventEntity] = []
+                for entity in page where entity.engagementTargetId.isEmpty {
+                    guard let event = entity.toNostrEvent() else { continue }
+                    let target = EventEntity.primaryEngagementTarget(of: event)
+                    guard !target.isEmpty else { continue }
+                    entity.engagementTargetId = target
+                    toUpdate.append(entity)
+                }
+                if !toUpdate.isEmpty { try box.put(toUpdate) }
+                if page.count < pageSize { break }
+                offset += pageSize
+            }
+            UserDefaults.standard.set(true, forKey: Self.engagementBackfillFlag)
+        } catch {
+            // Leave the flag unset so the next launch retries.
+        }
     }
 
     /// Returns cached kind:1 events that are part of the thread anchored at `rootId`:
@@ -301,6 +345,101 @@ actor EventStore {
         }
     }
 
+    /// Newest cached event of a single `kind` by `pubkey`. For replaceable
+    /// singletons (kind 0 profile, 3 contacts, 10002 relay list, 30000-30003
+    /// lists) this is the authoritative cached copy — lets repositories fall
+    /// back to disk on a cold mem/UserDefaults miss instead of refetching from
+    /// relays. Caller should still prefer fresher in-memory/UserDefaults copies.
+    func loadLatestByAuthor(pubkey: String, kind: Int) -> NostrEvent? {
+        guard let box = ensureBox() else { return nil }
+        do {
+            let query = try box.query {
+                EventEntity.pubkey == pubkey && EventEntity.kind == kind
+            }
+            .ordered(by: EventEntity.createdAt, flags: .descending)
+            .build()
+            return try query.findFirst()?.toNostrEvent()
+        } catch {
+            return nil
+        }
+    }
+
+    /// Newest cached event of `kind` for each of `pubkeys` (one per author).
+    /// Lets a batch profile/relay-list resolve seed many authors from disk in a
+    /// few chunked queries instead of an await-per-author loop.
+    func loadLatestByAuthors(pubkeys: [String], kind: Int) -> [NostrEvent] {
+        guard let box = ensureBox(), !pubkeys.isEmpty else { return [] }
+        var newest: [String: NostrEvent] = [:]
+        let chunkSize = 100
+        var chunkStart = 0
+        while chunkStart < pubkeys.count {
+            let chunk = Array(pubkeys[chunkStart ..< min(chunkStart + chunkSize, pubkeys.count)])
+            do {
+                let query = try box.query {
+                    EventEntity.kind == kind && EventEntity.pubkey.isIn(chunk)
+                }
+                .ordered(by: EventEntity.createdAt, flags: .descending)
+                .build()
+                // Newest-first; first sighting per author wins. Over-fetch to
+                // tolerate lingering older replaceable copies.
+                for entity in try query.find(offset: 0, limit: chunk.count * 4) {
+                    guard let event = entity.toNostrEvent() else { continue }
+                    if let existing = newest[event.pubkey], existing.createdAt >= event.createdAt { continue }
+                    newest[event.pubkey] = event
+                }
+            } catch {}
+            chunkStart += chunkSize
+        }
+        return Array(newest.values)
+    }
+
+    /// Newest cached event for each of `kinds` by `pubkey` (one per kind).
+    /// Convenience batch over `loadLatestByAuthor` for callers bootstrapping
+    /// several replaceable singletons at once.
+    func loadReplaceableEvents(pubkey: String, kinds: [Int]) -> [NostrEvent] {
+        guard ensureBox() != nil, !kinds.isEmpty else { return [] }
+        var out: [NostrEvent] = []
+        for kind in Set(kinds) {
+            if let event = loadLatestByAuthor(pubkey: pubkey, kind: kind) {
+                out.append(event)
+            }
+        }
+        return out
+    }
+
+    /// Most-recent events of the given kinds across multiple authors, newest
+    /// first. Lets member-list / people-list feeds seed from disk in one pass
+    /// instead of a per-author query loop. Chunks the `isIn(pubkeys)` predicate
+    /// to keep ObjectBox's OR-tree shallow (same reason as `persist`).
+    func loadRecentByAuthors(pubkeys: [String], kinds: [Int], limit: Int) -> [NostrEvent] {
+        guard let box = ensureBox(), !pubkeys.isEmpty, !kinds.isEmpty else { return [] }
+        let kindSet = Set(kinds)
+        var collected: [NostrEvent] = []
+        var seen = Set<String>()
+        let chunkSize = 100
+        var chunkStart = 0
+        while chunkStart < pubkeys.count {
+            let chunk = Array(pubkeys[chunkStart ..< min(chunkStart + chunkSize, pubkeys.count)])
+            do {
+                let query = try box.query { EventEntity.pubkey.isIn(chunk) }
+                    .ordered(by: EventEntity.createdAt, flags: .descending)
+                    .build()
+                let entities = try query.find(offset: 0, limit: limit * 4)
+                for entity in entities {
+                    guard let event = entity.toNostrEvent(),
+                          kindSet.contains(event.kind),
+                          seen.insert(event.id).inserted else { continue }
+                    collected.append(event)
+                }
+            } catch {}
+            chunkStart += chunkSize
+        }
+        return collected
+            .sorted { $0.createdAt > $1.createdAt }
+            .prefix(limit)
+            .map { $0 }
+    }
+
     /// Remove every cached event by `pubkey`. Called on block so the author's existing notes
     /// disappear from feed reseeds and notification hydration.
     @discardableResult
@@ -396,5 +535,20 @@ actor EventStore {
                 _ = try query.remove()
             }
         } catch {}
+    }
+}
+
+/// Standard single-event-by-id resolver. Checks local caches in the cheapest-
+/// first order before any relay round-trip, so every by-id path (thread root /
+/// ancestors, quoted notes, notification deep-links) is cache-first:
+///   1. `NotificationRepository` in-memory LRU — just-arrived events that may
+///      not be flushed to the on-disk `EventStore` yet.
+///   2. on-disk `EventStore`.
+/// Returns nil on a full local miss; the caller falls back to a relay query.
+@MainActor
+enum EventLookup {
+    static func local(id: String) async -> NostrEvent? {
+        if let cached = NotificationRepository.shared.event(forId: id) { return cached }
+        return await EventStore.shared.eventsByIds([id]).first
     }
 }

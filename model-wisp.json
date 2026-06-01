@@ -5,7 +5,7 @@
   "entities": [
     {
       "id": "1:4227522170458110720",
-      "lastPropertyId": "9:5355631664594474496",
+      "lastPropertyId": "10:1212121212121212121",
       "name": "EventEntity",
       "properties": [
         {
@@ -59,6 +59,13 @@
           "id": "9:5355631664594474496",
           "name": "insertedAt",
           "type": 6
+        },
+        {
+          "id": "10:1212121212121212121",
+          "name": "engagementTargetId",
+          "indexId": "11:1313131313131313131",
+          "type": 9,
+          "flags": 2056
         }
       ],
       "relations": []
@@ -246,7 +253,7 @@
     }
   ],
   "lastEntityId": "4:5566778899001122334",
-  "lastIndexId": "10:8888999900001111222",
+  "lastIndexId": "11:1313131313131313131",
   "lastRelationId": "0:0",
   "lastSequenceId": "0:0",
   "modelVersion": 5,

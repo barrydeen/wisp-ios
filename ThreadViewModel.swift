@@ -494,10 +494,12 @@ final class ThreadViewModel {
 
     private func seedFromCache() async {
         // Fast path: direct id lookup for the seed so we can paint the root note
-        // immediately. The thread-cache substring scan below is O(all kind-1 events)
-        // and is what made tapping a feed note feel laggy — flipping `rootEvent`
-        // synchronously here lets the UI render before we walk the replies.
-        if let seedEvent = await eventStore.eventsByIds([seedEventId]).first {
+        // immediately. Resolves through the notification LRU first (a just-tapped
+        // notification's event may not be flushed to disk yet) then on-disk
+        // EventStore. The thread-cache substring scan below is O(all kind-1
+        // events); flipping `rootEvent` synchronously here lets the UI render
+        // before we walk the replies.
+        if let seedEvent = await EventLookup.local(id: seedEventId) {
             // If a notification deep-link or a caller that didn't resolve
             // through `displayEventId` handed us a kind-6 repost as the
             // seed, the focal would render the kind-6 (inner content +
@@ -522,7 +524,7 @@ final class ThreadViewModel {
         // If the seed was a reply, pull its true root by id too so the header
         // renders without waiting on the network.
         if rootEvent == nil, rootId != focalEventId,
-           let cachedRoot = await eventStore.eventsByIds([rootId]).first {
+           let cachedRoot = await EventLookup.local(id: rootId) {
             events[cachedRoot.id] = cachedRoot
             rootEvent = cachedRoot
             isLoading = false
@@ -645,6 +647,12 @@ final class ThreadViewModel {
     /// Fetch a single event by ID, with one automatic retry after a short delay
     /// to handle relay race conditions or slow relays that miss the first query.
     private func fetchEvent(id: String, from relays: [String]) async -> NostrEvent? {
+        // Cache-first: a root/ancestor already on disk (scrolled past in the
+        // feed) or just-arrived in the notification LRU resolves with no relay
+        // round-trip — the user's primary complaint that opening a thread
+        // refetches the parent. Events are immutable + addressed by id, so a
+        // local hit is byte-identical to the relay copy.
+        if let local = await EventLookup.local(id: id) { return local }
         var filter = NostrFilter()
         filter.ids = [id]
         filter.limit = 1
@@ -797,9 +805,18 @@ final class ThreadViewModel {
 
     private func queueEngagement<S: Sequence>(ids: S) where S.Element == String {
         for id in ids {
-            if !engagedIds.contains(id) {
-                pendingEngagementIds.insert(id)
+            guard !engagedIds.contains(id) else { continue }
+            // If the feed already queried this note's engagement, its shared
+            // `EngagementRepository` box is populated and `PostCardView` renders
+            // the counts from there — so a duplicate thread-relay REQ is wasted.
+            // Always re-query the focal + root, where comprehensive, current
+            // counts matter most for the screen's focus.
+            if id != focalEventId, id != rootId,
+               EngagementRepository.shared.hasCounts(for: id) {
+                engagedIds.insert(id)
+                continue
             }
+            pendingEngagementIds.insert(id)
         }
     }
 

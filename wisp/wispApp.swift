@@ -28,6 +28,12 @@ struct wispApp: App {
         Task.detached(priority: .utility) {
             await AvatarPrefetcher.shared.sweepPersistedProfiles()
         }
+        // One-time migration to populate the indexed `engagementTargetId` column
+        // on engagement rows persisted before it existed, so cache-first
+        // engagement seeding can serve them. Idempotent + flag-guarded.
+        Task.detached(priority: .utility) {
+            await EventStore.shared.backfillEngagementTargetsIfNeeded()
+        }
 
         // Drop UIKit's 1pt hairline shadow under every UINavigationBar so views
         // that paint a custom toolbar background (e.g. ProfileView with a pinned

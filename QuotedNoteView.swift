@@ -39,7 +39,8 @@ final class QuotedNoteCache {
     /// and finally fans out to the embedded hint + default relays.
     func fetch(eventId: String, relayHints: [String]) async -> NostrEvent? {
         if let cached = cache[eventId] { return cached }
-        if let stored = await EventStore.shared.eventsByIds([eventId]).first {
+        // notification LRU (just-arrived, maybe unflushed) → on-disk EventStore.
+        if let stored = await EventLookup.local(id: eventId) {
             cache[eventId] = stored
             return stored
         }
@@ -53,6 +54,13 @@ final class QuotedNoteCache {
     /// the view's one automatic redundancy retry.
     func refetch(eventId: String, relayHints: [String], attempt: Int) async -> NostrEvent? {
         if let cached = cache[eventId] { return cached }
+        // Parity with `fetch`: a retry shouldn't skip the on-disk/notification
+        // caches and pound relays for an event we already hold (e.g. scrolled
+        // past in the feed but evicted from this in-memory map).
+        if let stored = await EventLookup.local(id: eventId) {
+            cache[eventId] = stored
+            return stored
+        }
         if let existing = inflight[eventId] { return await existing.value }
         return await runFetch(eventId: eventId, relayHints: relayHints, attempt: attempt)
     }

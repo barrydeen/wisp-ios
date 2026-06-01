@@ -26,6 +26,16 @@ nonisolated class EventEntity {
     var sig: String = ""
     var insertedAt: Int = 0
 
+    /// Denormalized engagement target: the primary note an engagement event
+    /// (kind 6/7/9735) is about — the last non-`mention` `e`-tag, the same
+    /// "most-specific tag wins" rule `EngagementProcessor.ingest` /
+    /// `ThreadViewModel.ingestEngagement` aggregate by. Empty for every other
+    /// kind. Indexed so `EventStore.loadEngagement` is an `isIn` lookup instead
+    /// of an O(table) JSON-substring scan — cheap enough to seed engagement
+    /// counts from disk on the scroll hot path.
+    // objectbox: index
+    var engagementTargetId: String = ""
+
     required init() {}
 
     convenience init(from event: NostrEvent) {
@@ -43,6 +53,23 @@ nonisolated class EventEntity {
         }
         self.sig = event.sig
         self.insertedAt = Int(Date().timeIntervalSince1970)
+        self.engagementTargetId = Self.primaryEngagementTarget(of: event)
+    }
+
+    /// Last non-`mention` `e`-tag for engagement kinds (6/7/9735); "" otherwise.
+    /// Kept in sync with the aggregation rule in `EngagementProcessor.ingest`.
+    nonisolated static func primaryEngagementTarget(of event: NostrEvent) -> String {
+        switch event.kind {
+        case 6, 7, 9735:
+            var last = ""
+            for tag in event.tags where tag.count >= 2 && tag[0] == "e" {
+                if tag.count >= 4, tag[3] == "mention" { continue }
+                last = tag[1]
+            }
+            return last
+        default:
+            return ""
+        }
     }
 
     func toNostrEvent() -> NostrEvent? {

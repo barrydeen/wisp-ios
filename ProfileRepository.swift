@@ -20,6 +20,21 @@ final class ProfileRepository {
         return loadFromDefaults(pubkey)
     }
 
+    /// `createdAt` of the cached kind-0 for `pubkey` (in-memory, else loaded
+    /// from UserDefaults), or nil if none. Lets callers TTL-gate a profile
+    /// refetch instead of re-querying relays on every profile open.
+    func cachedTimestamp(_ pubkey: String) -> Int? {
+        if let ts = timestamps[pubkey] { return ts }
+        _ = loadFromDefaults(pubkey)
+        return timestamps[pubkey]
+    }
+
+    /// Snapshot of every profile currently in the in-memory cache. Lets search
+    /// offer instant local autocomplete from profiles already loaded this
+    /// session before a relay round-trip. In-memory only — deliberately not a
+    /// full UserDefaults scan (that would be O(all-ever-seen) on the hot path).
+    func cachedProfiles() -> [ProfileData] { Array(cache.values) }
+
     func getAll(_ pubkeys: [String]) -> [String: ProfileData] {
         var result: [String: ProfileData] = [:]
         for pk in pubkeys {
@@ -49,22 +64,41 @@ final class ProfileRepository {
         }
 
         if !missing.isEmpty {
-            let fetchTask = Task { [weak self] () -> [String: ProfileData] in
-                guard let self else { return [:] }
-                return await self.runFetch(pubkeys: missing)
-            }
-            // Register a per-pubkey continuation task so concurrent callers asking
-            // for the same key just await the shared fetch.
-            for pk in missing {
-                inflight[pk] = Task { [weak self] in
-                    let dict = await fetchTask.value
-                    self?.inflight[pk] = nil
-                    return dict[pk]
+            // Cold-start disk fallback: resolve kind-0 already persisted on disk
+            // (e.g. seen in a prior session's feed) before any indexer
+            // round-trip. Only the genuinely-uncached pubkeys hit relays.
+            var stillMissing = missing
+            let diskEvents = await EventStore.shared.loadLatestByAuthors(pubkeys: missing, kind: 0)
+            if !diskEvents.isEmpty {
+                var resolved = Set<String>()
+                for event in diskEvents {
+                    if let profile = updateFromEvent(event) {
+                        result[event.pubkey] = profile
+                        resolved.insert(event.pubkey)
+                    }
                 }
+                if !resolved.isEmpty { stillMissing = missing.filter { !resolved.contains($0) } }
             }
-            let dict = await fetchTask.value
-            for pk in missing {
-                if let p = dict[pk] { result[pk] = p }
+
+            if !stillMissing.isEmpty {
+                let toFetch = stillMissing
+                let fetchTask = Task { [weak self] () -> [String: ProfileData] in
+                    guard let self else { return [:] }
+                    return await self.runFetch(pubkeys: toFetch)
+                }
+                // Register a per-pubkey continuation task so concurrent callers asking
+                // for the same key just await the shared fetch.
+                for pk in toFetch {
+                    inflight[pk] = Task { [weak self] in
+                        let dict = await fetchTask.value
+                        self?.inflight[pk] = nil
+                        return dict[pk]
+                    }
+                }
+                let dict = await fetchTask.value
+                for pk in toFetch {
+                    if let p = dict[pk] { result[pk] = p }
+                }
             }
         }
 

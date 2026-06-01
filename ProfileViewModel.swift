@@ -157,7 +157,23 @@ final class ProfileViewModel {
 
     // MARK: - Header
 
+    /// How long a cached kind-0 is considered fresh enough to skip the header
+    /// refetch on profile open. Profiles change rarely; a day-old copy is fine
+    /// and pull-to-refresh / a post-TTL revisit still refetches.
+    private static let profileHeaderTTLSeconds = 24 * 3600
+
     private func loadProfileHeader() async {
+        // Skip the kind-0 relay fetch when we already hold a recent cached copy.
+        // `init` seeded `profile` from ProfileRepository, and feed/search paths
+        // persist kind-0 via `updateFromEvent`, so revisiting a profile (or
+        // opening one straight from search results) shouldn't reload the header
+        // and re-download the avatar every time.
+        if profile != nil,
+           let ts = profileRepo.cachedTimestamp(pubkey),
+           Int(Date().timeIntervalSince1970) - ts < Self.profileHeaderTTLSeconds {
+            await loadAboutMentionProfiles(from: profile?.about ?? "")
+            return
+        }
         let results = await RelayPool.query(
             relays: Self.indexerRelays,
             filter: NostrFilter(kinds: [0], authors: [pubkey], limit: 5),
@@ -175,8 +191,11 @@ final class ProfileViewModel {
         let referenced = Self.extractProfilePubkeys(in: about)
         let missing = referenced.filter { profiles[$0] == nil }
         guard !missing.isEmpty else { return }
-        let fetched = await fetchProfilesFromIndexers(missing)
-        for (k, v) in fetched { profiles[k] = v }
+        // `ensure` checks the disk cache first, coalesces concurrent fetches,
+        // and persists results into the shared cache (unlike a one-off indexer
+        // query) so the same mentions aren't refetched elsewhere.
+        let resolved = await profileRepo.ensure(missing)
+        for (k, v) in resolved { profiles[k] = v }
     }
 
     private static func extractProfilePubkeys(in s: String) -> [String] {
@@ -521,18 +540,15 @@ final class ProfileViewModel {
             return
         }
 
-        var local = profileRepo.getAll(pubkeys)
-        let missing = pubkeys.filter { local[$0] == nil }
+        // `ensure` checks the disk cache first (cold-start fallback), coalesces
+        // concurrent fetches per pubkey, and persists results — replacing the
+        // local getAll + ad-hoc indexer query that missed all three.
+        let resolved = await profileRepo.ensure(pubkeys)
+        for (k, v) in resolved { profiles[k] = v }
 
-        if !missing.isEmpty {
-            let fetched = await fetchProfilesFromIndexers(missing)
-            for (k, v) in fetched { local[k] = v }
-        }
-
-        for (k, v) in local { profiles[k] = v }
-
-        // Preserve original follow order.
-        followingProfiles = pubkeys.compactMap { local[$0] ?? ProfileData(pubkey: $0) }
+        // Preserve original follow order; fall back to a bare placeholder so a
+        // pubkey whose kind-0 didn't resolve still renders a row.
+        followingProfiles = pubkeys.compactMap { resolved[$0] ?? profileRepo.get($0) ?? ProfileData(pubkey: $0) }
         followingLoaded = true
     }
 
@@ -654,6 +670,30 @@ final class ProfileViewModel {
             return
         }
 
+        // Seed from disk: public kind-1 notes between the two participants we've
+        // already cached, so the tab isn't blank during the relay round-trip.
+        // `loadRecentByAuthor(kinds:[1])` never returns kind-1059 wrapped DMs,
+        // so private messages can't leak into the public conversation.
+        let cachedSeed = await withTaskGroup(of: [NostrEvent].self) { group -> [NostrEvent] in
+            let them = pubkey
+            let me = activeUserPubkey
+            group.addTask { await self.eventStore.loadRecentByAuthor(pubkey: them, kinds: [1], limit: 100) }
+            group.addTask { await self.eventStore.loadRecentByAuthor(pubkey: me, kinds: [1], limit: 100) }
+            var out: [NostrEvent] = []
+            for await batch in group { out.append(contentsOf: batch) }
+            return out
+        }
+        let seedMatches = cachedSeed.filter { ev in
+            guard ev.kind == 1 else { return false }
+            let other = ev.pubkey == pubkey ? activeUserPubkey : pubkey
+            return ev.tags.contains { $0.count >= 2 && $0[0] == "p" && $0[1] == other }
+        }
+        if !seedMatches.isEmpty {
+            var seedById: [String: NostrEvent] = [:]
+            for ev in seedMatches { seedById[ev.id] = ev }
+            conversationNotes = seedById.values.sorted { $0.createdAt > $1.createdAt }
+        }
+
         let relays = queryRelays()
         let theirs = NostrFilter(kinds: [1], authors: [pubkey], pTags: [activeUserPubkey], limit: 100)
         let mine = NostrFilter(kinds: [1], authors: [activeUserPubkey], pTags: [pubkey], limit: 100)
@@ -668,6 +708,10 @@ final class ProfileViewModel {
         }
 
         var byId: [String: NostrEvent] = [:]
+        // Keep the disk seed, then layer relay results (newest copy wins by id).
+        for event in conversationNotes where event.kind == 1 {
+            byId[event.id] = event
+        }
         for event in collected where event.kind == 1 {
             byId[event.id] = event
         }
@@ -837,6 +881,22 @@ struct EngagementCounts: Equatable {
     /// to the quoter's profile.
     var quoters: [Quoter] = []
     var seenRelays: Set<String> = []
+
+    /// True when a real engagement *count* has been recorded. Drives the
+    /// `EngagementRepository` scroll-back dedup gate: a note whose box already
+    /// holds counts (from a live query this session or a disk seed) is not
+    /// re-queried when it re-enters the viewport after rotating out of the
+    /// bounded `queriedIds` window.
+    ///
+    /// Deliberately checks only the numeric counters, NOT the reactor/reposter
+    /// lists: `EngagementRepository.seedReposter` cosmetically appends a kind-6
+    /// wrapper's author to `reposters` (to paint the avatar on first frame)
+    /// without bumping `reposts` — counting that as "has engagement" would make
+    /// the dedup gate skip the engagement query for every repost row. The cache
+    /// seed and live ingest both bump these counters, so they still register.
+    var hasEngagement: Bool {
+        replies > 0 || reactions > 0 || reposts > 0 || zapCount > 0
+    }
 }
 
 struct Reactor: Equatable, Hashable {

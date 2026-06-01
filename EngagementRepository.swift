@@ -33,6 +33,15 @@ final class EngagementRepository {
         return b
     }
 
+    /// True when a populated engagement box already exists for `eventId` (some
+    /// surface queried it this session). Does NOT allocate a box, so callers can
+    /// cheaply probe whether the shared box already covers a note before opening
+    /// their own query. Used by `ThreadViewModel` to skip duplicate per-thread
+    /// engagement REQs for notes the feed already fetched.
+    func hasCounts(for eventId: String) -> Bool {
+        boxes[eventId]?.counts.hasEngagement ?? false
+    }
+
     /// Session-bounded dedup trackers. Raw `Set<String>`s grew without limit
     /// over a long scrolling session (every kind-7/9735/6 ever ingested, every
     /// id ever queried), driving the "feels slower the longer you scroll"
@@ -69,6 +78,14 @@ final class EngagementRepository {
     /// Called from feed row `.onAppear`. Idempotent per event id within a session.
     func markVisible(eventId: String, author: String) {
         guard !queriedIds.contains(eventId) else { return }
+        // Scroll-back dedup gate: if this note's box already holds engagement —
+        // from a live query earlier this session that has since rotated out of
+        // the bounded `queriedIds` window, or from the disk seed in
+        // `flushBatch` — don't re-open a relay REQ when it re-enters the
+        // viewport. The first appearance still opens one live query (the box is
+        // empty until `flushBatch` seeds it). Reads `boxes` directly so a probe
+        // never allocates a box for an id we won't query.
+        if let existing = boxes[eventId], existing.counts.hasEngagement { return }
         // Avoid double-queueing while debounce is pending.
         if pending.contains(where: { $0.eventId == eventId }) { return }
         pending.append((eventId, author))
@@ -323,6 +340,20 @@ final class EngagementRepository {
         guard !batch.isEmpty else { return }
         for (id, _) in batch { queriedIds.insert(id) }
 
+        // Seed last-known counts from disk so cards paint their engagement on
+        // the first frame instead of after a relay round-trip. Runs alongside
+        // the live subscription below — feeding cached events through the same
+        // `ingest` path primes the shared dedup sets (`seenEngagementIds` etc.)
+        // so a relay re-delivery of a cached event is skipped, never
+        // double-counted. Cheap now that `engagementTargetId` is indexed.
+        let batchIds = Set(batch.map(\.eventId))
+        Task { [weak self] in
+            guard let self else { return }
+            let cached = await EventStore.shared.loadEngagement(forTargetIds: batchIds)
+            guard !cached.isEmpty else { return }
+            for event in cached { self.ingest(event, relayUrl: "") }
+        }
+
         let board = NostrKey.load().flatMap { RelayScoreBoard.load(pubkey: $0.pubkey) }
         let userReads = NostrKey.load().flatMap { RelayListRepository.shared.cachedReadRelays($0.pubkey) } ?? []
 
@@ -411,6 +442,9 @@ final class EngagementRepository {
     /// id (regardless of whether it returned any results), so rapid
     /// expand/collapse / scroll-back doesn't multiply REQs.
     func fetchQuoters(eventId: String, authorPubkey: String?) {
+        // Already populated (live engagement subscription delivered `#q`
+        // matches, or a prior fetch) — don't re-query on a drawer re-open.
+        if !box(for: eventId).counts.quoters.isEmpty { return }
         guard quotersFetched.insert(eventId).inserted else { return }
         Task { [weak self] in
             guard let self else { return }
@@ -502,7 +536,7 @@ final class EngagementRepository {
                 for quotedId in Set(quotedNotes) {
                     let qb = box(for: quotedId)
                     var qCurrent = qb.counts
-                    qCurrent.seenRelays.insert(relayUrl)
+                    if !relayUrl.isEmpty { qCurrent.seenRelays.insert(relayUrl) }
                     if !qCurrent.quoters.contains(where: { $0.eventId == event.id }) {
                         qCurrent.quoters.append(Quoter(
                             eventId: event.id,
@@ -530,7 +564,9 @@ final class EngagementRepository {
 
         let b = box(for: primary)
         var current = b.counts
-        current.seenRelays.insert(relayUrl)
+        // Empty relayUrl == cache-seed replay (see `flushBatch`); don't pollute
+        // the per-card "seen on N relays" set with a synthetic source.
+        if !relayUrl.isEmpty { current.seenRelays.insert(relayUrl) }
         switch event.kind {
         case 1:
             current.replies += 1

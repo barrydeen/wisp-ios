@@ -46,8 +46,9 @@ nonisolated extension EventEntity: ObjectBox.EntityInspectable {
         try entityBuilder.addProperty(name: "tags", type: PropertyType.string, id: 7, uid: 7578578939852631040)
         try entityBuilder.addProperty(name: "sig", type: PropertyType.string, id: 8, uid: 1086054297639166208)
         try entityBuilder.addProperty(name: "insertedAt", type: PropertyType.long, id: 9, uid: 5355631664594474496)
+        try entityBuilder.addProperty(name: "engagementTargetId", type: PropertyType.string, flags: [.indexHash, .indexed], id: 10, uid: 1212121212121212121, indexId: 11, indexUid: 1313131313131313131)
 
-        try entityBuilder.lastProperty(id: 9, uid: 5355631664594474496)
+        try entityBuilder.lastProperty(id: 10, uid: 1212121212121212121)
     }
 }
 
@@ -106,6 +107,12 @@ nonisolated extension EventEntity {
     ///
     ///     box.query { EventEntity.insertedAt > 1234 }
     internal static var insertedAt: Property<EventEntity, Int, Void> { return Property<EventEntity, Int, Void>(propertyId: 9, isPrimaryKey: false) }
+    /// Generated entity property information.
+    ///
+    /// You may want to use this in queries to specify fetch conditions, for example:
+    ///
+    ///     box.query { EventEntity.engagementTargetId.startsWith("X") }
+    internal static var engagementTargetId: Property<EventEntity, String, Void> { return Property<EventEntity, String, Void>(propertyId: 10, isPrimaryKey: false) }
 
     fileprivate func __setId(identifier: ObjectBox.Id) {
         self.id = Id(identifier)
@@ -185,6 +192,14 @@ nonisolated extension ObjectBox.Property where E == EventEntity {
 
     internal static var insertedAt: Property<EventEntity, Int, Void> { return Property<EventEntity, Int, Void>(propertyId: 9, isPrimaryKey: false) }
 
+    /// Generated entity property information.
+    ///
+    /// You may want to use this in queries to specify fetch conditions, for example:
+    ///
+    ///     box.query { .engagementTargetId.startsWith("X") }
+
+    internal static var engagementTargetId: Property<EventEntity, String, Void> { return Property<EventEntity, String, Void>(propertyId: 10, isPrimaryKey: false) }
+
 }
 
 
@@ -212,6 +227,7 @@ nonisolated internal final class EventEntityBinding: ObjectBox.EntityBinding, Se
         let propertyOffset_content = propertyCollector.prepare(string: entity.content)
         let propertyOffset_tags = propertyCollector.prepare(string: entity.tags)
         let propertyOffset_sig = propertyCollector.prepare(string: entity.sig)
+        let propertyOffset_engagementTargetId = propertyCollector.prepare(string: entity.engagementTargetId)
 
         propertyCollector.collect(id, at: 2 + 2 * 1)
         propertyCollector.collect(entity.createdAt, at: 2 + 2 * 4)
@@ -222,6 +238,7 @@ nonisolated internal final class EventEntityBinding: ObjectBox.EntityBinding, Se
         propertyCollector.collect(dataOffset: propertyOffset_content, at: 2 + 2 * 6)
         propertyCollector.collect(dataOffset: propertyOffset_tags, at: 2 + 2 * 7)
         propertyCollector.collect(dataOffset: propertyOffset_sig, at: 2 + 2 * 8)
+        propertyCollector.collect(dataOffset: propertyOffset_engagementTargetId, at: 2 + 2 * 10)
     }
 
     internal func createEntity(entityReader: ObjectBox.FlatBufferReader, store: ObjectBox.Store) -> EntityType {
@@ -236,6 +253,7 @@ nonisolated internal final class EventEntityBinding: ObjectBox.EntityBinding, Se
         entity.tags = entityReader.read(at: 2 + 2 * 7)
         entity.sig = entityReader.read(at: 2 + 2 * 8)
         entity.insertedAt = entityReader.read(at: 2 + 2 * 9)
+        entity.engagementTargetId = entityReader.read(at: 2 + 2 * 10)
 
         return entity
     }
@@ -888,7 +906,7 @@ nonisolated fileprivate func cModel() throws -> OpaquePointer {
     try GroupMetaEntity.buildEntity(modelBuilder: modelBuilder)
     try DmMessageEntity.buildEntity(modelBuilder: modelBuilder)
     modelBuilder.lastEntity(id: 4, uid: 5566778899001122334)
-    modelBuilder.lastIndex(id: 10, uid: 8888999900001111222)
+    modelBuilder.lastIndex(id: 11, uid: 1313131313131313131)
     return modelBuilder.finish()
 }
 
