@@ -9,6 +9,12 @@ struct wispApp: App {
     @State private var audioPlayer = AudioPlayerStore.shared
 
     init() {
+        #if DEBUG
+        // Diagnostics for the once-per-session feed freeze: logs any >250ms
+        // main-thread stall + the breadcrumb/note that triggered it. See
+        // MainThreadWatchdog.swift. No-op in release.
+        MainThreadWatchdog.shared.start()
+        #endif
         NsecPasteGuard.setUp()
         try? ObjectBoxSetup.setUp()
         GiphyConfig.bootstrap()

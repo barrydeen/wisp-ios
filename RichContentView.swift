@@ -103,6 +103,9 @@ struct RichContentView: View {
         if let box = Self.parseCache.object(forKey: key) { return box.segments }
         let signpostState = Signposts.render.beginInterval("parseCacheMiss")
         defer { Signposts.render.endInterval("parseCacheMiss", signpostState) }
+        #if DEBUG
+        PerfTrace.mark("content.parse")
+        #endif
         // Merge the user's resolved emoji packs under the note's own
         // `["emoji", shortcode, url]` tags — the inline tags carry the URL
         // the author/reactor signed for, so they win on shortcode collisions.

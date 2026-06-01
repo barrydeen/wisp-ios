@@ -1,4 +1,6 @@
 import SwiftUI
+import QuartzCore
+import os
 
 @MainActor
 final class QuotedNoteCache {
@@ -70,7 +72,17 @@ final class QuotedNoteCache {
             return events.first(where: { $0.id == eventId })
         }
         inflight[eventId] = task
+        #if DEBUG
+        // Correlation: this fan-out has a 6s/10s timeout that matches the
+        // reported freeze duration. It's async so it shouldn't block main —
+        // if a MAIN STALL lines up with this log, a hidden sync hop is implicated.
+        let t0 = CACurrentMediaTime()
+        mediaPerfLog.log("quotedNote.fetch start id=\(String(eventId.prefix(12)), privacy: .public) attempt=\(attempt, privacy: .public)")
+        #endif
         let result = await task.value
+        #if DEBUG
+        mediaPerfLog.log("quotedNote.fetch done \(Int((CACurrentMediaTime() - t0) * 1000), privacy: .public)ms hit=\(result != nil, privacy: .public) id=\(String(eventId.prefix(12)), privacy: .public)")
+        #endif
         inflight[eventId] = nil
         if let result {
             cache[eventId] = result
