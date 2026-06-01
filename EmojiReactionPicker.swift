@@ -12,6 +12,10 @@ struct EmojiReactionPicker: View {
     @State private var emojiRepo = EmojiRepository.shared
     @ObservedObject private var emojiCache = EmojiImageCache.shared
 
+    /// Picker keys (unicode chars or `:shortcode:`) the user has already reacted
+    /// with on this post. These cells are highlighted; tapping one signals the
+    /// parent to remove that reaction rather than add a duplicate.
+    var reactedKeys: Set<String> = []
     let onSelect: (PickedEmoji) -> Void
     let onPlus: () -> Void
 
@@ -19,8 +23,17 @@ struct EmojiReactionPicker: View {
     private let columns: Int = 6
     private let maxVisible: Int = 18  // 3 rows × 6 columns
 
+    /// Quick reactions, plus any of the user's existing reactions that aren't
+    /// already shown — so a reaction can always be found and removed even if it
+    /// has dropped out of the top-N quick list.
+    private var displayEntries: [String] {
+        var entries = Array(emojiRepo.sortedQuickReactions.prefix(maxVisible))
+        for key in reactedKeys where !entries.contains(key) { entries.append(key) }
+        return entries
+    }
+
     var body: some View {
-        let entries = Array(emojiRepo.sortedQuickReactions.prefix(maxVisible))
+        let entries = displayEntries
         let grid = Array(repeating: GridItem(.fixed(cellSize), spacing: 8), count: columns)
         VStack(alignment: .leading, spacing: 0) {
             LazyVGrid(columns: grid, spacing: 8) {
@@ -72,6 +85,16 @@ struct EmojiReactionPicker: View {
                 }
             }
             .frame(width: cellSize, height: cellSize)
+            .background(
+                // Highlight reactions the user has already placed — tapping one
+                // removes it.
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.accentColor.opacity(reactedKeys.contains(key) ? 0.18 : 0))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(Color.accentColor.opacity(reactedKeys.contains(key) ? 0.5 : 0), lineWidth: 1)
+                    )
+            )
         }
         .buttonStyle(.plain)
         .contextMenu {
