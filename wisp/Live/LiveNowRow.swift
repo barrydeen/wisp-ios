@@ -1,5 +1,24 @@
 import SwiftUI
 
+/// Wraps `LiveNowRow` so the home feed's `LazyVStack` body never reads
+/// `LiveStreamRepository.streams` directly. Discovery rewrites `streams` on
+/// every live chat message; keeping that read inside this subview scopes the
+/// `@Observable` invalidation here instead of re-evaluating the whole feed
+/// body (and its `ForEach` of `PostCardView`s) on every chat event.
+struct FeedLiveNowSection: View {
+    let profiles: [String: ProfileData]
+    let onSelect: (LiveStream) -> Void
+    @State private var repo = LiveStreamRepository.shared
+
+    var body: some View {
+        let liveStreams = repo.liveNowSorted
+        if !liveStreams.isEmpty {
+            LiveNowRow(streams: liveStreams, profiles: profiles, onSelect: onSelect)
+            Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
+        }
+    }
+}
+
 /// Horizontal pill row shown at the top of the home feed listing live NIP-53 streams
 /// the user follows. Sorted by chatter count descending.
 struct LiveNowRow: View {

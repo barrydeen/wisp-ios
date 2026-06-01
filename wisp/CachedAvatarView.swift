@@ -88,21 +88,38 @@ struct CachedAvatarView: View {
             return
         }
 
-        // Animated avatar path: try the multi-frame decoder first when the URL
-        // looks animated and the user hasn't disabled it. Falls through to the
-        // static UIImage path on single-frame payloads or when the toggle is off.
-        if settings.animateAvatars,
-           AnimatedImageHint.isLikelyAnimated(url: url, mime: nil),
-           let payload = AnimatedImageDecoder.decode(data: data),
-           payload.frames.count > 1 {
-            animatedPayload = payload
-            return
-        }
+        // Decode off the main thread — `UIImage(data:)` and the multi-frame
+        // animated decoder are real CPU work that previously ran on MainActor
+        // during scroll. The cheap `isLikelyAnimated` string check and the
+        // setting are read on main; only the decode hops off.
+        let tryAnimated = settings.animateAvatars
+            && AnimatedImageHint.isLikelyAnimated(url: url, mime: nil)
+        let decoded: DecodedAvatar = await Task.detached(priority: .utility) {
+            if tryAnimated,
+               let payload = AnimatedImageDecoder.decode(data: data),
+               payload.frames.count > 1 {
+                return .animated(payload)
+            }
+            if let img = UIImage(data: data) {
+                return .still(img)
+            }
+            return .failed
+        }.value
 
-        guard let img = UIImage(data: data) else {
-            loadFailed = true
-            return
+        if Task.isCancelled { return }
+        switch decoded {
+        case .animated(let payload): animatedPayload = payload
+        case .still(let img): uiImage = img
+        case .failed: loadFailed = true
         }
-        uiImage = img
+    }
+
+    /// Result of an off-main avatar decode. `@unchecked Sendable` to cross the
+    /// `Task.detached` boundary — mirrors `AnimatedImagePayload`; the payloads
+    /// are immutable once decoded.
+    private enum DecodedAvatar: @unchecked Sendable {
+        case animated(AnimatedImagePayload)
+        case still(UIImage)
+        case failed
     }
 }

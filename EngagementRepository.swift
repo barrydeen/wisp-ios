@@ -369,14 +369,14 @@ final class EngagementRepository {
         while liveSubs.count >= maxConcurrentSubs {
             let oldest = liveSubs.removeFirst()
             oldest.cancel()
-            Signposts.feed.emitEvent("engagement.req.capped")
+            Signposts.feed.emitEvent("engagement.req.capped", "active: \(self.liveSubs.count)/\(self.maxConcurrentSubs)")
         }
 
         let subId = "feed-engagement-\(UUID().uuidString.prefix(6))"
         let filter = NostrFilter(kinds: [1, 6, 7, 9735], eTags: eventIds, limit: 500)
         let sub = RelayPool.subscribe(relays: [relay], filter: filter, id: subId)
         liveSubs.append(sub)
-        Signposts.feed.emitEvent("engagement.req.opened")
+        Signposts.feed.emitEvent("engagement.req.opened", "active: \(self.liveSubs.count)/\(self.maxConcurrentSubs) ids: \(eventIds.count)")
 
         // NIP-18 quote reposts (kind-1 with only a `q` tag) are deliberately
         // *not* fetched here: doubling every feed/thread engagement REQ to
