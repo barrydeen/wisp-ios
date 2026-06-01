@@ -91,7 +91,6 @@ struct PostCardView: View {
     /// with `.presentationCompactAdaptation(.popover)` keeps the
     /// anchored-popup feel without animating the launching icon.
     @State private var showRepostMenu = false
-    @State private var showRemoveReactionMenu = false
     @State private var showOverflowMenu = false
     /// True when the user tapped Zap but no wallet is configured. Surfaces a
     /// confirmation prompt that can launch the Wallet tab to set one up.
@@ -200,15 +199,33 @@ struct PostCardView: View {
     /// only on this card's box, not on the entire EngagementRepository dict.
     private var repoBox: EngagementBox { engagementRepo.box(for: displayEventId) }
 
-    private var myReactor: Reactor? {
-        guard let me = myPubkey else { return nil }
-        // Read the shared repo first so optimistic reactions reflect immediately.
-        if let mine = repoBox.counts.reactors.first(where: { $0.pubkey == me }) {
-            return mine
+    /// All reactions the current user has placed on this post, repo first so
+    /// optimistic reactions reflect immediately, deduped by emoji.
+    private var myReactors: [Reactor] {
+        guard let me = myPubkey else { return [] }
+        var seen = Set<String>()
+        var result: [Reactor] = []
+        for r in repoBox.counts.reactors where r.pubkey == me {
+            if seen.insert(r.emoji).inserted { result.append(r) }
         }
-        return engagement?.reactors.first(where: { $0.pubkey == me })
+        for r in (engagement?.reactors ?? []) where r.pubkey == me {
+            if seen.insert(r.emoji).inserted { result.append(r) }
+        }
+        return result
     }
+    private var myReactor: Reactor? { myReactors.first }
     private var iReactedEmoji: String? { myReactor?.emoji }
+    /// Picker keys the user has already reacted with, normalized so legacy
+    /// NIP-25 "+"/"" reactions match the ❤️ picker cell.
+    private var myReactedKeys: Set<String> {
+        Set(myReactors.map { Self.normalizeReactionKey($0.emoji) })
+    }
+
+    /// Map legacy NIP-25 `+` / empty content to the ❤️ picker key; otherwise
+    /// pass the emoji / `:shortcode:` key through unchanged.
+    private static func normalizeReactionKey(_ raw: String) -> String {
+        (raw == "+" || raw.isEmpty) ? "\u{2764}\u{FE0F}" : raw
+    }
     private var iReposted: Bool {
         guard let me = myPubkey else { return false }
         if repoBox.counts.reposters.contains(me) { return true }
@@ -1203,7 +1220,6 @@ struct PostCardView: View {
         }
     }
 
-    private var myReactionEventId: String? { myReactor?.reactionEventId }
     private var myRepostEventId: String? {
         guard let me = myPubkey else { return nil }
         return repoBox.counts.reposterEventIds[me]
@@ -1212,30 +1228,27 @@ struct PostCardView: View {
     private var heartAction: some View {
         let displayed = displayReactedEmoji
         let custom = displayReactedCustomEmoji
-        let alreadyReacted = iReactedEmoji != nil
         return Button {
-            if alreadyReacted {
-                showRemoveReactionMenu = true
-            } else {
-                // Pick whichever side of the heart has more usable vertical
-                // space, then size the picker to fit that space so it scrolls
-                // internally instead of getting clipped by the popover. Reserve
-                // small margins for the status bar above and the home indicator
-                // / tab bar below. Frame is read live from the tracker so the
-                // anchor is correct for the heart's current scroll position.
-                let frame = heartFrameTracker.frame
-                let screenHeight = UIScreen.main.bounds.height
-                let topReserve: CGFloat = 60
-                let bottomReserve: CGFloat = 80
-                let popoverChrome: CGFloat = 32
-                let availableBelow = max(0, screenHeight - bottomReserve - frame.maxY - popoverChrome)
-                let availableAbove = max(0, frame.minY - topReserve - popoverChrome)
-                let preferBelow = availableBelow >= availableAbove
-                reactionArrowEdge = preferBelow ? .top : .bottom
-                let chosenSpace = preferBelow ? availableBelow : availableAbove
-                reactionPickerMaxHeight = min(192, max(80, chosenSpace))
-                showReactionPicker = true
-            }
+            // Always open the picker — existing reactions are highlighted in
+            // it and tapping one removes it. Pick whichever side of the heart
+            // has more usable vertical space, then size the picker to fit that
+            // space so it scrolls internally instead of getting clipped by the
+            // popover. Reserve small margins for the status bar above and the
+            // home indicator / tab bar below. Frame is read live from the
+            // tracker so the anchor is correct for the heart's current scroll
+            // position.
+            let frame = heartFrameTracker.frame
+            let screenHeight = UIScreen.main.bounds.height
+            let topReserve: CGFloat = 60
+            let bottomReserve: CGFloat = 80
+            let popoverChrome: CGFloat = 32
+            let availableBelow = max(0, screenHeight - bottomReserve - frame.maxY - popoverChrome)
+            let availableAbove = max(0, frame.minY - topReserve - popoverChrome)
+            let preferBelow = availableBelow >= availableAbove
+            reactionArrowEdge = preferBelow ? .top : .bottom
+            let chosenSpace = preferBelow ? availableBelow : availableAbove
+            reactionPickerMaxHeight = min(192, max(80, chosenSpace))
+            showReactionPicker = true
         } label: {
             if let emoji = displayed {
                 HStack(spacing: 4) {
@@ -1287,30 +1300,16 @@ struct PostCardView: View {
                     }
             }
         )
-        .popover(isPresented: $showRemoveReactionMenu) {
-            Button(role: .destructive) {
-                showRemoveReactionMenu = false
-                undoReaction()
-            } label: {
-                HStack {
-                    Spacer()
-                    Label("Remove Reaction", systemImage: "minus.circle")
-                    Spacer()
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(Color.red)
-            .frame(minWidth: 200)
-            .presentationCompactAdaptation(.popover)
-        }
         .popover(isPresented: $showReactionPicker, arrowEdge: reactionArrowEdge) {
             EmojiReactionPicker(
+                reactedKeys: myReactedKeys,
                 onSelect: { picked in
                     showReactionPicker = false
-                    sendReaction(picked)
+                    if myReactedKeys.contains(Self.normalizeReactionKey(picked.frequencyKey)) {
+                        removeReaction(key: picked.frequencyKey)
+                    } else {
+                        sendReaction(picked)
+                    }
                 },
                 onPlus: {
                     showReactionPicker = false
@@ -1407,11 +1406,14 @@ struct PostCardView: View {
         }
     }
 
-    private func undoReaction() {
-        guard let keypair = NostrKey.load(),
-              let me = myPubkey,
-              let reactor = myReactor,
-              let reactionEventId = myReactionEventId else { return }
+    /// Remove the user's reaction matching `key` (a picker key: a unicode char
+    /// or `:shortcode:`). Matches on the normalized key so a ❤️ tap also clears
+    /// a legacy NIP-25 `+` reaction.
+    private func removeReaction(key: String) {
+        guard let keypair = NostrKey.load(), let me = myPubkey else { return }
+        let nk = Self.normalizeReactionKey(key)
+        guard let reactor = myReactors.first(where: { Self.normalizeReactionKey($0.emoji) == nk }),
+              let reactionEventId = reactor.reactionEventId else { return }
         ReactionSender.shared.clearSent(pubkey: me, targetEventId: displayEventId, frequencyKey: reactor.emoji)
         EngagementRepository.shared.undoReaction(eventId: displayEventId, pubkey: me, emoji: reactor.emoji)
         Haptics.shared.blip()
