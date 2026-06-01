@@ -660,8 +660,15 @@ extension RelayPool {
     /// Returns the set of relay URLs that responded with OK.
     /// A hard timeout cancels the socket — `ws.receive()` can otherwise block past the deadline
     /// on relays that accept the connection but never send `OK` (some implementations drop OKs).
+    /// `onAccept` fires per accepting relay before the URL is returned through the group, so
+    /// `PostPublisher` can tick its `Broadcasting n/N` pill counter in real time.
     @discardableResult
-    static func publish(event: NostrEvent, to relays: [String], timeout: TimeInterval = 4) async -> [String] {
+    static func publish(
+        event: NostrEvent,
+        to relays: [String],
+        timeout: TimeInterval = 4,
+        onAccept: (@Sendable (String) -> Void)? = nil
+    ) async -> [String] {
         let urls = relays.compactMap(Self.wsURL)
         guard !urls.isEmpty else { return [] }
         let payload = "[\"EVENT\",\(event.toJSON())]"
@@ -695,7 +702,10 @@ extension RelayPool {
                                    let eventId = arr[1] as? String,
                                    eventId == event.id,
                                    let ok = arr[2] as? Bool {
-                                    if ok { return urlString }
+                                    if ok {
+                                        onAccept?(urlString)
+                                        return urlString
+                                    }
                                     let reason = (arr.count >= 4 ? (arr[3] as? String ?? "") : "").lowercased()
                                     if reason.hasPrefix("auth-required"), let challenge = lastChallenge {
                                         emitPendingAuth(url: urlString, challenge: challenge)
