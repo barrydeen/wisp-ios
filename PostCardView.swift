@@ -582,6 +582,19 @@ struct PostCardView: View {
         .modifier(TapToExpand(enabled: expandOnTap && !ancestorCompact, expanded: $expanded))
         .onAppear {
             let displayed = resolveRepost().event
+            #if DEBUG
+            // Stall-diagnostics breadcrumb: record which row is on screen so a
+            // MAIN STALL during this row's render names the offending note.
+            let imeta = displayed.tags.reduce(0) { $0 + ($1.first == "imeta" ? 1 : 0) }
+            let hasQuote = displayed.tags.contains { $0.first == "q" }
+                || displayed.content.contains("nostr:nevent")
+                || displayed.content.contains("nostr:note")
+            let snippet = displayed.content.prefix(48).replacingOccurrences(of: "\n", with: " ")
+            PerfTrace.enterRow(
+                note: String(displayed.id.prefix(12)),
+                media: "kind=\(displayed.kind) clen=\(displayed.content.count) imeta=\(imeta) quote=\(hasQuote) “\(snippet)”"
+            )
+            #endif
             if displayed.kind == Nip88.kindPoll || displayed.kind == Nip69.kindZapPoll {
                 // Deferred: markVisible can seed an @Observable tally box this
                 // card reads — avoid mutating observed state during the update.

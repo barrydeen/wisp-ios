@@ -154,6 +154,9 @@ struct RichInlineTextView: UIViewRepresentable {
             return
         }
 
+        #if DEBUG
+        PerfTrace.mark("richtext.buildAttributed")
+        #endif
         let attributed = buildAttributedString()
         uiView.attributedText = attributed
         uiView.invalidateIntrinsicContentSize()

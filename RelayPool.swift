@@ -1,4 +1,7 @@
 import Foundation
+#if DEBUG
+import os
+#endif
 
 /// A relay-side NIP-42 challenge that the user hasn't pre-approved. Surfaced via
 /// `RelayPool.pendingAuth` so the UI can prompt for approval. Once approved, the
@@ -658,6 +661,9 @@ actor RelayConnectionPool {
     /// rest.
     func register(subId: String, relays: [(url: URL, req: String)], sink: RelaySink) async {
         startReaperIfNeeded()
+        #if DEBUG
+        let connsBefore = conns.count
+        #endif
         var registered: [String] = []
         var seenInThisSub = Set<String>()
         for entry in relays {
@@ -670,6 +676,12 @@ actor RelayConnectionPool {
             registered.append(urlString)
         }
         subToRelays[subId] = registered
+        #if DEBUG
+        // Catch scroll-triggered connection storms: a burst of `q-…` (one-shot
+        // query / quoted-note / repost) registers each opening many NEW sockets
+        // is the fingerprint of the freeze.
+        relayPoolLog.log("register sub=\(subId, privacy: .public) requested=\(relays.count, privacy: .public) registered=\(registered.count, privacy: .public) newConns=\(self.conns.count - connsBefore, privacy: .public) liveConns=\(self.conns.count, privacy: .public)")
+        #endif
     }
 
     func deregister(subId: String) async {
