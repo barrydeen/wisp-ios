@@ -77,6 +77,10 @@
 		4CDA9000000000000A10000C /* AuthFlowComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA9000000000000B10000C /* AuthFlowComponents.swift */; };
 		4CDAD8F42FBE7EB30079A1BA /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = 4CDAD8F32FBE7EB30079A1BA /* GoogleSignIn */; };
 		4CDD000100000000000000B1 /* P256K in Frameworks */ = {isa = PBXBuildFile; productRef = 4CDD000000000000000000B1 /* P256K */; };
+		4CDDDD010000000000000001 /* DmMessageEntity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDDDD000000000000000001 /* DmMessageEntity.swift */; };
+		4CDDDD010000000000000002 /* DmStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDDDD000000000000000002 /* DmStore.swift */; };
+		4CDDDD010000000000000003 /* EncryptedMedia.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDDDD000000000000000003 /* EncryptedMedia.swift */; };
+		4CDDDD010000000000000004 /* DmReactionPublisher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDDDD000000000000000004 /* DmReactionPublisher.swift */; };
 		4CDFAB0000000000000DF101 /* Nip37.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDFAB0000000000000DF001 /* Nip37.swift */; };
 		4CDFAB0000000000000DF102 /* Nip09.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDFAB0000000000000DF002 /* Nip09.swift */; };
 		4CDFAB0000000000000DF103 /* DraftsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDFAB0000000000000DF003 /* DraftsViewModel.swift */; };
@@ -373,6 +377,10 @@
 		4CDA9000000000000B10000B /* AppleAuthView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleAuthView.swift; sourceTree = "<group>"; };
 		4CDA9000000000000B10000C /* AuthFlowComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthFlowComponents.swift; sourceTree = "<group>"; };
 		4CDA9000000000000B10000D /* wisp.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = wisp.entitlements; sourceTree = "<group>"; };
+		4CDDDD000000000000000001 /* DmMessageEntity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DmMessageEntity.swift; sourceTree = "<group>"; };
+		4CDDDD000000000000000002 /* DmStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DmStore.swift; sourceTree = "<group>"; };
+		4CDDDD000000000000000003 /* EncryptedMedia.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EncryptedMedia.swift; sourceTree = "<group>"; };
+		4CDDDD000000000000000004 /* DmReactionPublisher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DmReactionPublisher.swift; sourceTree = "<group>"; };
 		4CDFAB0000000000000DF001 /* Nip37.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Nip37.swift; sourceTree = "<group>"; };
 		4CDFAB0000000000000DF002 /* Nip09.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Nip09.swift; sourceTree = "<group>"; };
 		4CDFAB0000000000000DF003 /* DraftsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftsViewModel.swift; sourceTree = "<group>"; };
@@ -898,6 +906,10 @@
 				4CABCD000000000000F30003 /* PeerRelayResolver.swift */,
 				4CABCD000000000000F30004 /* PrivateReplyPublisher.swift */,
 				4CABCD000000000000F30005 /* PrivateReactionPublisher.swift */,
+				4CDDDD000000000000000001 /* DmMessageEntity.swift */,
+				4CDDDD000000000000000002 /* DmStore.swift */,
+				4CDDDD000000000000000003 /* EncryptedMedia.swift */,
+				4CDDDD000000000000000004 /* DmReactionPublisher.swift */,
 				4CABCD000000000000F30006 /* Dip03.swift */,
 				4CABCD000000000000050000 /* BackChevronButton.swift */,
 				4CABCD000000000000F2010 /* NewPostsPill.swift */,
@@ -1335,6 +1347,10 @@
 				4CABCD010000000000F30003 /* PeerRelayResolver.swift in Sources */,
 				4CABCD010000000000F30004 /* PrivateReplyPublisher.swift in Sources */,
 				4CABCD010000000000F30005 /* PrivateReactionPublisher.swift in Sources */,
+				4CDDDD010000000000000001 /* DmMessageEntity.swift in Sources */,
+				4CDDDD010000000000000002 /* DmStore.swift in Sources */,
+				4CDDDD010000000000000003 /* EncryptedMedia.swift in Sources */,
+				4CDDDD010000000000000004 /* DmReactionPublisher.swift in Sources */,
 				4CABCD010000000000F30006 /* Dip03.swift in Sources */,
 				4CABCD010000000000050000 /* BackChevronButton.swift in Sources */,
 				4CABCD010000000000F2010 /* NewPostsPill.swift in Sources */,

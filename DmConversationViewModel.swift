@@ -40,77 +40,153 @@ final class DmConversationViewModel {
         messages = repo.conversation(conversationKey)?.messages ?? []
     }
 
+    // MARK: - Sending
+
     func send() async {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !isSending else { return }
         isSending = true
         sendError = nil
         defer { isSending = false }
+        await performSend(content: text, rumorKind: Nip17.Kind.chatMessage, fileExtraTags: [], fileMetadata: nil)
+        if sendError == nil { draft = "" }
+    }
 
-        let priv = Hex.decode(keypair.privkey) ?? Data()
+    /// Encrypt `picked` with AES-256-GCM, upload the ciphertext to Blossom, and send a
+    /// NIP-17 kind-15 file message referencing it. Mirrors Android `sendFileMessage`.
+    func sendFile(_ picked: PickedMedia) async {
+        guard !isSending else { return }
+        isSending = true
+        sendError = nil
+        defer { isSending = false }
 
-        // Build extra rumor tags (group p-tags + reply e-tag) so all recipients decrypt the same rumor.
-        var extraTags: [[String]] = []
-        // Group: include p-tags for participants other than the primary recipient (which buildRumor adds).
-        // For 1:1 we send to participants[0] so no extras. For groups, include the rest.
-        if participants.count > 1 {
-            for p in participants.dropFirst() {
-                extraTags.append(["p", p])
+        // Resolve plaintext bytes (images carry their bytes inline; videos live on disk).
+        let plain: Data
+        if picked.isVideo {
+            guard let url = picked.sourceURL, let data = try? Data(contentsOf: url) else {
+                sendError = "Could not read video"
+                return
             }
+            plain = data
+        } else {
+            plain = picked.data
         }
-        if let reply = replyingTo {
-            extraTags.append(["e", reply.rumorId, "", "reply"])
+        guard !plain.isEmpty else { sendError = "Empty file"; return }
+
+        // Encrypt off the main actor (CPU-bound for large media).
+        let enc: EncryptedMedia.EncryptedFileResult
+        do {
+            enc = try await Task.detached(priority: .userInitiated) { try EncryptedMedia.encryptFile(plain) }.value
+        } catch {
+            sendError = "Encrypt failed"
+            return
         }
 
-        let rumorCreatedAt = Int(Date().timeIntervalSince1970)
+        // Upload the ciphertext as an opaque blob.
+        var servers = BlossomServerList.cached(for: keypair.pubkey)
+        if servers.isEmpty { servers = await BlossomServerList.refresh(for: keypair.pubkey) }
+        let uploadURL: String
+        do {
+            let result = try await BlossomClient.upload(
+                bytes: enc.encryptedBytes, mime: "application/octet-stream",
+                servers: servers, keypair: keypair
+            )
+            uploadURL = result.url
+        } catch {
+            sendError = "Upload failed"
+            return
+        }
+
+        let dim = (picked.dim.width > 0 && picked.dim.height > 0)
+            ? "\(Int(picked.dim.width))x\(Int(picked.dim.height))"
+            : nil
+        let fileTags = EncryptedMedia.buildKind15Tags(
+            mimeType: picked.mime, keyHex: enc.keyHex, nonceHex: enc.nonceHex,
+            encryptedHash: enc.encryptedSha256Hex, originalHash: enc.originalSha256Hex,
+            size: plain.count, dimensions: dim
+        )
+        let fileMeta = EncryptedFileMetadata(
+            fileUrl: uploadURL, mimeType: picked.mime, algorithm: EncryptedMedia.algorithm,
+            keyHex: enc.keyHex, nonceHex: enc.nonceHex,
+            encryptedHash: enc.encryptedSha256Hex, originalHash: enc.originalSha256Hex,
+            size: plain.count, dimensions: dim, blurhash: nil
+        )
+        await performSend(content: uploadURL, rumorKind: Nip17.Kind.fileMessage,
+                          fileExtraTags: fileTags, fileMetadata: fileMeta)
+    }
+
+    /// React to a DM message; fans the kind-7 (k=14) reaction out to all participants.
+    func react(to message: DmMessage, picked: PickedEmoji) async {
+        do {
+            try await DmReactionPublisher.react(
+                message: message, participants: participants,
+                conversationKey: conversationKey, keypair: keypair, picked: picked
+            )
+        } catch {
+            sendError = "Reaction failed"
+        }
+        refresh()
+    }
+
+    /// Shared NIP-17 fan-out: builds + gift-wraps the rumor to each participant (+ self),
+    /// publishes to each recipient's inbox, and optimistically appends the message locally.
+    /// `content` is the chat text or, for kind-15, the Blossom URL.
+    private func performSend(content: String, rumorKind: Int,
+                             fileExtraTags: [[String]], fileMetadata: EncryptedFileMetadata?) async {
         guard let primary = participants.first else {
             sendError = "No recipient"
             return
         }
+        let rumorCreatedAt = Int(Date().timeIntervalSince1970)
 
-        // Send a wrap to each participant + a self-copy.
+        // Build the rumor ONCE. Its tags must be byte-identical across every wrap (NIP-17),
+        // so all recipients AND our own self-copy compute the same rumor id and the same
+        // conversation key. The p-tags name the conversation participants (the actual
+        // recipients), NEVER ourselves — stamping `["p", self]` on the self-copy is what
+        // made replies show up as a self-conversation on other clients and hid them from
+        // the recipient's thread.
+        var tags: [[String]] = participants.map { ["p", $0] }
+        tags.append(contentsOf: fileExtraTags)
+        if let reply = replyingTo {
+            tags.append(["e", reply.rumorId, "", "reply"])
+        }
+        let rumor = Nip17.buildRumorRaw(
+            senderPubkey: keypair.pubkey,
+            kind: rumorKind,
+            tags: tags,
+            content: content,
+            createdAt: rumorCreatedAt
+        )
+
+        // Wrap the identical rumor once per participant + a self-copy. Only the OUTER
+        // gift-wrap envelope's recipient differs; each wrap is encrypted to that specific
+        // recipient (so group members can actually decrypt their own copy).
         var allTargets = participants
         allTargets.append(keypair.pubkey)
 
         var publishedRelays = Set<String>()
-        var firstWrapId: String?
-        var firstWrap: NostrEvent?
-
+        var selfWrap: NostrEvent?
         let powSnap = PowPreferences.snapshot()
 
         for recipient in allTargets {
             let isPrimary = recipient == primary
             let isSelf = recipient == keypair.pubkey
-            // For non-primary group recipients, swap the recipient p-tag to the primary's value
-            // so the rumor's id matches across participants. NIP-17 keeps the rumor identical;
-            // only the gift wrap envelope differs per recipient.
-            // Mine PoW only for the primary recipient — group fan-out copies are sent without PoW.
+            // Mine PoW only on the primary recipient's wrap; fan-out + self copies skip it.
             let powBits: Int? = (isPrimary && powSnap.dmEnabled) ? powSnap.dmDifficulty : nil
             let wrap: NostrEvent
             do {
-                let wrapRecipient = isPrimary || isSelf ? recipient : primary
-                let extras = rumorTagsForBroadcast(primary: primary, extraTags: extraTags)
-                let senderPub = keypair.pubkey
-                let senderPriv = priv
+                let kp = keypair
+                let r = rumor
                 if powBits != nil {
                     isMiningPow = true
                     miningAttempts = 0
                 }
-                // Route the seal's encrypt + sign through `Signer` so remote (NIP-46)
-                // accounts dispatch to their signer. The gift wrap's ephemeral key path
-                // and PoW mining still run inside the detached task to keep the main
-                // actor responsive; Swift hops to MainActor for the Signer calls and
-                // back automatically.
-                let kp = keypair
                 let result: Result<NostrEvent, Swift.Error> = await Task.detached(priority: .userInitiated) {
                     do {
-                        let event = try await Nip17.createGiftWrapWithSigner(
+                        let event = try await Nip17.wrapRumorWithSigner(
                             keypair: kp,
-                            recipientPubkey: wrapRecipient,
-                            message: text,
-                            rumorKind: Nip17.Kind.chatMessage,
-                            extraRumorTags: extras,
-                            rumorCreatedAt: rumorCreatedAt,
+                            recipientPubkey: recipient,
+                            rumor: r,
                             powTargetBits: powBits,
                             onPowProgress: { attempts in
                                 Task { @MainActor [weak self] in
@@ -131,60 +207,61 @@ final class DmConversationViewModel {
                     return
                 }
             }
-            if firstWrapId == nil {
-                firstWrapId = wrap.id
-                firstWrap = wrap
-            }
-            // Resolve recipient's inbox relays (kind 10050).
+            if isSelf { selfWrap = wrap }
+            // Resolve recipient's inbox relays (kind 10050). 8s timeout leaves room for the
+            // NIP-42 AUTH round-trip many DM relays require before they accept the EVENT.
             let targets = isSelf ? await resolveOwnRelays() : await resolveRelays(for: recipient)
-            let ok = await RelayPool.publish(event: wrap, to: targets)
+            let ok = await RelayPool.publish(event: wrap, to: targets, timeout: 8)
             publishedRelays.formUnion(ok)
         }
 
-        // Append optimistically to the local repo so the UI updates immediately.
-        if let wrap = firstWrap {
-            let rumor = Nip17.buildRumor(
-                senderPubkey: keypair.pubkey,
-                recipientPubkey: primary,
-                content: text,
-                kind: Nip17.Kind.chatMessage,
-                extraTags: rumorTagsForBroadcast(primary: primary, extraTags: extraTags),
-                createdAt: rumorCreatedAt
-            )
-            let msg = DmMessage(
-                id: "\(wrap.id):\(rumorCreatedAt)",
-                senderPubkey: keypair.pubkey,
-                content: text,
-                createdAt: rumorCreatedAt,
-                giftWrapId: wrap.id,
-                rumorId: rumor.id,
-                replyToId: replyingTo?.rumorId,
-                participants: participants,
-                relayUrls: publishedRelays
-            )
-            repo.addMessage(msg, conversationKey: conversationKey)
-            // Mark the self-copy gift wrap seen so the relay echo doesn't re-insert.
-            _ = repo.markGiftWrapSeen(wrap.id)
+        // If no relay accepted any wrap, the message went nowhere — surface it rather than
+        // optimistically showing a message that wasn't actually delivered.
+        guard !publishedRelays.isEmpty else {
+            sendError = "Couldn't reach any relay — message not sent"
+            return
         }
 
-        draft = ""
+        // Optimistic local insert, keyed on the SELF-copy wrap — that's the one that echoes
+        // back to us via our own kind-1059 subscription. Marking it seen lets the echo dedup
+        // cleanly instead of inserting a duplicate.
+        let identityWrapId = selfWrap?.id ?? rumor.id
+        let msg = DmMessage(
+            id: "\(identityWrapId):\(rumorCreatedAt)",
+            senderPubkey: keypair.pubkey,
+            content: content,
+            createdAt: rumorCreatedAt,
+            giftWrapId: identityWrapId,
+            rumorId: rumor.id,
+            replyToId: replyingTo?.rumorId,
+            participants: participants,
+            relayUrls: publishedRelays,
+            fileMetadata: fileMetadata
+        )
+        repo.addMessage(msg, conversationKey: conversationKey)
+        if let sw = selfWrap { _ = repo.markGiftWrapSeen(sw.id) }
+
         replyingTo = nil
         refresh()
-    }
-
-    /// Build the full rumor tag set: ["p", primary] is added by buildRumor; we add the remaining
-    /// p-tags + reply tags. We pass only the *extras*; buildRumor handles the primary p-tag itself.
-    private func rumorTagsForBroadcast(primary: String, extraTags: [[String]]) -> [[String]] {
-        extraTags
     }
 
     // MARK: - Relay resolution per recipient
 
     private func resolveOwnRelays() async -> [String] {
-        let own = await fetchDmRelays(for: keypair.pubkey)
+        // Publish the self-copy to the SAME relay set this account subscribes on for
+        // incoming DMs (MessagesViewModel.resolveDmSubscriptionRelays): kind-10050 DM
+        // relays unioned with general (NIP-65) relays, read from the loaded settings (no
+        // network round-trip). This guarantees our other devices — which listen on exactly
+        // these relays — receive what we send. Without this, a fresh kind-10050 query that
+        // times out (or an account with no kind-10050) dumped the self-copy onto public
+        // indexer relays the devices don't subscribe to, so sent messages never synced.
+        RelaySettingsRepository.shared.ensureLoaded(pubkey: keypair.pubkey)
+        let dm = RelaySettingsRepository.shared.dmRelays
+        let general = RelaySettingsRepository.shared.generalRelays.map { $0.url }
+        let own = Array(Set(dm + general))
         if !own.isEmpty { return own }
-        // Fallback: user's kind 10002 write relays via outbox cache, otherwise default broadcast.
-        return Self.indexerRelays
+        let reads = await RelayListRepository.shared.getReadRelays(keypair.pubkey)
+        return reads.isEmpty ? Self.indexerRelays : reads
     }
 
     private func resolveRelays(for pubkey: String) async -> [String] {
