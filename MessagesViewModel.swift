@@ -98,11 +98,7 @@ final class MessagesViewModel {
         // We do NOT mark the wrap seen here — that happens only after a successful decrypt
         // (`DmRepository.addMessage`), so a transient signer/decrypt failure is retried on
         // the next periodic REQ instead of being silently dropped for the session.
-        guard !repo.isGiftWrapSeen(event.id) else {
-            // Already processed: still merge relayUrl into the existing message if present.
-            mergeRelayUrl(giftWrapId: event.id, relayUrl: relayUrl)
-            return
-        }
+        guard !repo.isGiftWrapSeen(event.id) else { return }
 
         let rumor: Rumor
         do {
@@ -173,18 +169,6 @@ final class MessagesViewModel {
         await prefetchProfilesIfNeeded(participants: participants + [rumor.pubkey])
     }
 
-    private func mergeRelayUrl(giftWrapId: String, relayUrl: String) {
-        // Best-effort merge for already-seen messages. Cheap path; only need conversation lookup.
-        for (key, msgs) in repo.conversations {
-            if let i = msgs.firstIndex(where: { $0.giftWrapId == giftWrapId }) {
-                var msg = msgs[i]
-                msg.relayUrls.insert(relayUrl)
-                repo.addMessage(msg, conversationKey: key)
-                return
-            }
-        }
-    }
-
     func refreshSnapshot() {
         conversations = repo.conversationList()
         hasUnread = repo.hasUnread
@@ -192,23 +176,21 @@ final class MessagesViewModel {
 
     // MARK: - Relay resolution
 
-    /// Build the kind-1059 subscription target set: the user's kind-10050 DM inbox relays
-    /// UNIONED with their general (NIP-65) relays. Matches Android (`sendToAll` +
-    /// `sendToDmRelays`). Senders whose client doesn't know our kind-10050 list publish
-    /// gift wraps to our general relays, so subscribing only on the DM inbox would miss
-    /// whole conversations. Falls back to NIP-65 read relays if both lists are empty.
-    /// No hardcoded defaults — every URL here came from the user's own published lists.
+    /// Build the kind-1059 subscription target set: the user's kind-10050 DM inbox relays,
+    /// falling back to their NIP-65 read relays if no DM list is published. We do NOT union
+    /// in every general relay — that pins a `kind:1059` stream (no since/limit) open on every
+    /// relay, flooding the main actor with duplicate gift wraps and starving the shared
+    /// connection pool (one persistent socket per relay, capped). Cold-start completeness
+    /// comes from `DmStore` persistence now, not from a wider live fan-out.
     private func resolveDmSubscriptionRelays() async -> [String] {
         // Hydrate from disk (instant) for the case where MessagesViewModel.start runs before
         // RelaySettingsRepository.bootstrap completes its async merge.
         RelaySettingsRepository.shared.ensureLoaded(pubkey: keypair.pubkey)
 
         let dm = RelaySettingsRepository.shared.dmRelays
-        let general = RelaySettingsRepository.shared.generalRelays.map { $0.url }
-        var source = dm + general
-        if source.isEmpty {
-            source = await RelayListRepository.shared.getReadRelays(keypair.pubkey)
-        }
+        let source = dm.isEmpty
+            ? await RelayListRepository.shared.getReadRelays(keypair.pubkey)
+            : dm
 
         var seen = Set<String>()
         var canonical: [String] = []
