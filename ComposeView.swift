@@ -861,7 +861,8 @@ struct ComposeView: View {
     // MARK: - Actions row (under text editor)
 
     private var actionsRow: some View {
-        HStack(spacing: 22) {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 22) {
             if !viewModel.galleryMode, !viewModel.pollEnabled {
                 Button {
                     presentPhotoPicker(max: 4)
@@ -965,11 +966,10 @@ struct ComposeView: View {
                     .foregroundStyle(viewModel.scheduleEnabled ? Color.wispPrimary : .secondary)
             }
             .disabled(viewModel.isPrivate)
-
-            Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 4)
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 4)
     }
 
     // MARK: - Bottom publish bar
