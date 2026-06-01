@@ -1043,8 +1043,15 @@ struct ComposeView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .onChange(of: viewModel.publishedEventId) { _, newId in
-            guard newId != nil else { return }
-            SuccessToast.shared.show(publishToastMessage)
+            guard let newId else { return }
+            // Normal posts hand off to `PostPublisher` which drives a bottom
+            // pill ("Mining…" → "Broadcasting n/N" → "Posted to N relays").
+            // The pill is the single source of confirmation — suppress the
+            // top toast in that case. DMs and scheduled posts still finish
+            // in-sheet and surface through the toast as before.
+            if newId != "handed-off" {
+                SuccessToast.shared.show(publishToastMessage)
+            }
             dismiss()
         }
     }
