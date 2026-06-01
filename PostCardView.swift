@@ -1474,8 +1474,10 @@ struct PostCardView: View {
     }
 
     private func copyNoteId(_ target: NostrEvent) {
-        guard let bytes = Hex.decode(target.id),
-              let bech = Nip19.noteEncode(eventId: Array(bytes)) else { return }
+        let relays = Array(NoteSourceTracker.shared.relays(for: target.id).prefix(2))
+        guard let idBytes = Hex.decode(target.id) else { return }
+        let authorBytes = Hex.decode(target.pubkey).map { Array($0) }
+        guard let bech = Nip19.neventEncode(eventId32: Array(idBytes), relays: relays, author32: authorBytes) else { return }
         UIPasteboard.general.string = bech
         QuickFollowToast.shared.show("Copied")
     }
