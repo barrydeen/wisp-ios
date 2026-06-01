@@ -86,6 +86,29 @@ actor EventStore {
         }
     }
 
+    /// Feed events strictly older than `before` (`createdAt`), newest-first.
+    /// Mirrors `seedCache` but with a `createdAt < before` cursor so the feed
+    /// can page scroll-back history in from disk. The caller filters by follows
+    /// / renderability in Swift (same as the seed path's consumer).
+    func loadOlder(before: Int, limit: Int = 400, excludingEventIds: Set<String> = []) -> [NostrEvent] {
+        guard let box = ensureBox() else { return [] }
+        do {
+            let query = try box.query {
+                (EventEntity.kind == 1 || EventEntity.kind == 6 || EventEntity.kind == 20
+                    || EventEntity.kind == Nip88.kindPoll || EventEntity.kind == Nip69.kindZapPoll)
+                    && EventEntity.createdAt < before
+            }
+            .ordered(by: EventEntity.createdAt, flags: .descending)
+            .build()
+            let entities = try query.find(offset: 0, limit: limit)
+            let events = entities.compactMap { $0.toNostrEvent() }
+            if excludingEventIds.isEmpty { return events }
+            return events.filter { !excludingEventIds.contains($0.id) }
+        } catch {
+            return []
+        }
+    }
+
     /// Newest stored feed event timestamp. When `excludingPubkey` is set, the
     /// query skips that author so freshly-published own posts (e.g. a brand-new
     /// user's intro note) don't bias the `since` filter to "now - 5min" and

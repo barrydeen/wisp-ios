@@ -566,7 +566,9 @@ struct PostCardView: View {
         .onAppear {
             let displayed = resolveRepost().event
             if displayed.kind == Nip88.kindPoll || displayed.kind == Nip69.kindZapPoll {
-                PollTallyRepository.shared.markVisible(pollEvent: displayed)
+                // Deferred: markVisible can seed an @Observable tally box this
+                // card reads — avoid mutating observed state during the update.
+                Task { @MainActor in PollTallyRepository.shared.markVisible(pollEvent: displayed) }
             }
         }
         // Tag-only NIP-18 repost: `content` is empty so the inline JSON path
@@ -687,7 +689,10 @@ struct PostCardView: View {
         .onChange(of: zapStore.errors[displayEventId]) { _, message in
             guard let message else { return }
             actionAlert = ActionAlert(title: "Zap Failed", message: message)
-            zapStore.clearError(eventId: displayEventId)
+            // Deferred: clearError mutates the same @Observable store this
+            // onChange observes — mutating it inline publishes during the update.
+            let id = displayEventId
+            Task { @MainActor in zapStore.clearError(eventId: id) }
         }
     }
 
@@ -802,7 +807,14 @@ struct PostCardView: View {
         .padding(.top, 8)
         .padding(.horizontal, 16)
         .onAppear {
-            engagementRepo.seedReposter(eventId: displayEventId, reposterPubkey: wrapperPubkey)
+            // Defer one runloop tick: `seedReposter` mutates an @Observable
+            // EngagementBox this card observes, so running it synchronously here
+            // mutates observed state *during* the view-update commit — SwiftUI's
+            // "Publishing changes from within view updates" warning, which forces
+            // an extra render pass for every repost card as it scrolls into view.
+            let id = displayEventId
+            let pk = wrapperPubkey
+            Task { @MainActor in engagementRepo.seedReposter(eventId: id, reposterPubkey: pk) }
         }
     }
 
@@ -2242,14 +2254,30 @@ private struct ChipFlowLayout: Layout {
     }
 }
 
+// Module-level, lazily-created once. `DateFormatter()` construction is
+// expensive and these were being rebuilt on every call — i.e. per row, per
+// body evaluation, during scroll. Reused here; both functions are MainActor-
+// isolated (default isolation) so no cross-thread access to the formatters.
+private let postCardMonthDayFormatter: DateFormatter = {
+    let f = DateFormatter()
+    f.dateFormat = "MMM d"
+    return f
+}()
+private let postCardAbsoluteDateFormatter: DateFormatter = {
+    let f = DateFormatter()
+    f.dateFormat = "MMM d, yyyy"
+    return f
+}()
+private let postCardAbsoluteTimeFormatter: DateFormatter = {
+    let f = DateFormatter()
+    f.timeStyle = .short
+    return f
+}()
+
 /// Twitter-style "Mar 5, 2026 · 8:52 PM" — used by ThreadView's focal post.
 func absoluteTimestamp(_ timestamp: Int) -> String {
     let date = Date(timeIntervalSince1970: Double(timestamp))
-    let dateFmt = DateFormatter()
-    dateFmt.dateFormat = "MMM d, yyyy"
-    let timeFmt = DateFormatter()
-    timeFmt.timeStyle = .short
-    return "\(dateFmt.string(from: date)) · \(timeFmt.string(from: date))"
+    return "\(postCardAbsoluteDateFormatter.string(from: date)) · \(postCardAbsoluteTimeFormatter.string(from: date))"
 }
 
 func relativeTime(from timestamp: Int) -> String {
@@ -2259,9 +2287,30 @@ func relativeTime(from timestamp: Int) -> String {
     if seconds < 86400 { return "\(seconds / 3600)h" }
     if seconds < 604_800 { return "\(seconds / 86400)d" }
     if seconds >= 31_536_000 { return "\(Int((Double(seconds) / 31_536_000).rounded()))y" }
-    let formatter = DateFormatter()
-    formatter.dateFormat = "MMM d"
-    return formatter.string(from: Date(timeIntervalSince1970: Double(timestamp)))
+    return postCardMonthDayFormatter.string(from: Date(timeIntervalSince1970: Double(timestamp)))
 }
 
 
+
+extension PostCardView: Equatable {
+    /// Lets `.equatable()` skip re-rendering a feed row whose meaningful inputs
+    /// are unchanged. The `LazyVStack` re-invokes the `ForEach` row builder on
+    /// every scroll tick and hands each card freshly-created closures; without
+    /// this gate SwiftUI re-runs every visible row's (2000+ line) body
+    /// repeatedly during scroll. Closures and the `profiles` dictionary are
+    /// intentionally excluded — closures aren't comparable and behave
+    /// identically per row, and per-event engagement still flows through the
+    /// `@Observable EngagementBox`, which invalidates regardless of this `==`.
+    /// (Inline mention names may resolve a beat later; fine for the scroll win.)
+    static func == (lhs: PostCardView, rhs: PostCardView) -> Bool {
+        lhs.event.id == rhs.event.id
+            && lhs.profile == rhs.profile
+            && lhs.engagement == rhs.engagement
+            && lhs.expandOnTap == rhs.expandOnTap
+            && lhs.ancestorCompact == rhs.ancestorCompact
+            && lhs.useAbsoluteTimestamp == rhs.useAbsoluteTimestamp
+            && lhs.forcedReplyCount == rhs.forcedReplyCount
+            && lhs.showReplyContext == rhs.showReplyContext
+            && lhs.isPrivate == rhs.isPrivate
+    }
+}

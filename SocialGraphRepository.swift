@@ -27,8 +27,9 @@ actor SocialGraphRepository {
         static let topFirstDegreeForViz      = 15
         static let topSecondDegreeForViz     = 64
         static let topRankedListSize         = 30
-        // Extended Feed
-        static let extendedFeedRelayCap      = 60
+        // Extended Feed — persistent pooled connections (see RelayConnectionPool);
+        // sized to leave headroom under the global connection cap.
+        static let extendedFeedRelayCap      = 40
     }
 
     /// Indexer relays used as fallback when the score board hasn't been built yet.

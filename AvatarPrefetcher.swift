@@ -82,7 +82,9 @@ actor AvatarPrefetcher {
         }
         if ImageCache.shared.has(urlString) { return }
         do {
-            let (data, response) = try await URLSession.shared.data(from: url)
+            // Dedicated background pool (see `HttpClientFactory.prefetchClient`)
+            // so prefetch can't starve foreground image loads on URLSession.shared.
+            let (data, response) = try await HttpClientFactory.prefetchClient.data(from: url)
             if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
                 await markFailed(urlString)
                 return

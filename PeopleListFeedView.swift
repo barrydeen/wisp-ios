@@ -107,6 +107,9 @@ struct PeopleListFeedView: View {
                                 viewModel.loadMore()
                             }
                         }
+                        .onDisappear {
+                            engagementRepo.markInvisible(event: event)
+                        }
                         Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
                     }
                 }
