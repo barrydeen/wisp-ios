@@ -7,11 +7,19 @@ import Foundation
 
 // MARK: - Entity metadata
 
-extension EventEntity: ObjectBox.Entity {}
-extension GroupMessageEntity: ObjectBox.Entity {}
-extension GroupMetaEntity: ObjectBox.Entity {}
+// PROJECT NOTE: each `extension` and binding below is prefixed with
+// `nonisolated` so it doesn't inherit `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`.
+// Persistence is not UI work and the generated `static var` property
+// descriptors are referenced from inside `actor EventStore` / `actor GroupStore`.
+// On regeneration, re-apply this prefix to every extension and binding class.
 
-extension EventEntity: ObjectBox.__EntityRelatable {
+
+nonisolated extension EventEntity: ObjectBox.Entity {}
+nonisolated extension GroupMessageEntity: ObjectBox.Entity {}
+nonisolated extension GroupMetaEntity: ObjectBox.Entity {}
+nonisolated extension DmMessageEntity: ObjectBox.Entity {}
+
+nonisolated extension EventEntity: ObjectBox.__EntityRelatable {
     internal typealias EntityType = EventEntity
 
     internal var _id: EntityId<EventEntity> {
@@ -19,7 +27,7 @@ extension EventEntity: ObjectBox.__EntityRelatable {
     }
 }
 
-extension EventEntity: ObjectBox.EntityInspectable {
+nonisolated extension EventEntity: ObjectBox.EntityInspectable {
     internal typealias EntityBindingType = EventEntityBinding
 
     /// Generated metadata used by ObjectBox to persist the entity.
@@ -43,7 +51,7 @@ extension EventEntity: ObjectBox.EntityInspectable {
     }
 }
 
-extension EventEntity {
+nonisolated extension EventEntity {
     /// Generated entity property information.
     ///
     /// You may want to use this in queries to specify fetch conditions, for example:
@@ -104,7 +112,7 @@ extension EventEntity {
     }
 }
 
-extension ObjectBox.Property where E == EventEntity {
+nonisolated extension ObjectBox.Property where E == EventEntity {
     /// Generated entity property information.
     ///
     /// You may want to use this in queries to specify fetch conditions, for example:
@@ -181,7 +189,7 @@ extension ObjectBox.Property where E == EventEntity {
 
 
 /// Generated service type to handle persisting and reading entity data. Exposed through `EventEntity.EntityBindingType`.
-internal final class EventEntityBinding: ObjectBox.EntityBinding, Sendable {
+nonisolated internal final class EventEntityBinding: ObjectBox.EntityBinding, Sendable {
     internal typealias EntityType = EventEntity
     internal typealias IdType = Id
 
@@ -235,7 +243,7 @@ internal final class EventEntityBinding: ObjectBox.EntityBinding, Sendable {
 
 
 
-extension GroupMessageEntity: ObjectBox.__EntityRelatable {
+nonisolated extension GroupMessageEntity: ObjectBox.__EntityRelatable {
     internal typealias EntityType = GroupMessageEntity
 
     internal var _id: EntityId<GroupMessageEntity> {
@@ -243,7 +251,7 @@ extension GroupMessageEntity: ObjectBox.__EntityRelatable {
     }
 }
 
-extension GroupMessageEntity: ObjectBox.EntityInspectable {
+nonisolated extension GroupMessageEntity: ObjectBox.EntityInspectable {
     internal typealias EntityBindingType = GroupMessageEntityBinding
 
     /// Generated metadata used by ObjectBox to persist the entity.
@@ -265,7 +273,7 @@ extension GroupMessageEntity: ObjectBox.EntityInspectable {
     }
 }
 
-extension GroupMessageEntity {
+nonisolated extension GroupMessageEntity {
     /// Generated entity property information.
     ///
     /// You may want to use this in queries to specify fetch conditions, for example:
@@ -314,7 +322,7 @@ extension GroupMessageEntity {
     }
 }
 
-extension ObjectBox.Property where E == GroupMessageEntity {
+nonisolated extension ObjectBox.Property where E == GroupMessageEntity {
     /// Generated entity property information.
     ///
     /// You may want to use this in queries to specify fetch conditions, for example:
@@ -375,7 +383,7 @@ extension ObjectBox.Property where E == GroupMessageEntity {
 
 
 /// Generated service type to handle persisting and reading entity data. Exposed through `GroupMessageEntity.EntityBindingType`.
-internal final class GroupMessageEntityBinding: ObjectBox.EntityBinding, Sendable {
+nonisolated internal final class GroupMessageEntityBinding: ObjectBox.EntityBinding, Sendable {
     internal typealias EntityType = GroupMessageEntity
     internal typealias IdType = Id
 
@@ -425,7 +433,7 @@ internal final class GroupMessageEntityBinding: ObjectBox.EntityBinding, Sendabl
 
 
 
-extension GroupMetaEntity: ObjectBox.__EntityRelatable {
+nonisolated extension GroupMetaEntity: ObjectBox.__EntityRelatable {
     internal typealias EntityType = GroupMetaEntity
 
     internal var _id: EntityId<GroupMetaEntity> {
@@ -433,7 +441,7 @@ extension GroupMetaEntity: ObjectBox.__EntityRelatable {
     }
 }
 
-extension GroupMetaEntity: ObjectBox.EntityInspectable {
+nonisolated extension GroupMetaEntity: ObjectBox.EntityInspectable {
     internal typealias EntityBindingType = GroupMetaEntityBinding
 
     /// Generated metadata used by ObjectBox to persist the entity.
@@ -463,7 +471,7 @@ extension GroupMetaEntity: ObjectBox.EntityInspectable {
     }
 }
 
-extension GroupMetaEntity {
+nonisolated extension GroupMetaEntity {
     /// Generated entity property information.
     ///
     /// You may want to use this in queries to specify fetch conditions, for example:
@@ -560,7 +568,7 @@ extension GroupMetaEntity {
     }
 }
 
-extension ObjectBox.Property where E == GroupMetaEntity {
+nonisolated extension ObjectBox.Property where E == GroupMetaEntity {
     /// Generated entity property information.
     ///
     /// You may want to use this in queries to specify fetch conditions, for example:
@@ -685,7 +693,7 @@ extension ObjectBox.Property where E == GroupMetaEntity {
 
 
 /// Generated service type to handle persisting and reading entity data. Exposed through `GroupMetaEntity.EntityBindingType`.
-internal final class GroupMetaEntityBinding: ObjectBox.EntityBinding, Sendable {
+nonisolated internal final class GroupMetaEntityBinding: ObjectBox.EntityBinding, Sendable {
     internal typealias EntityType = GroupMetaEntity
     internal typealias IdType = Id
 
@@ -754,6 +762,117 @@ internal final class GroupMetaEntityBinding: ObjectBox.EntityBinding, Sendable {
 }
 
 
+nonisolated extension DmMessageEntity: ObjectBox.__EntityRelatable {
+    internal typealias EntityType = DmMessageEntity
+
+    internal var _id: EntityId<DmMessageEntity> {
+        return EntityId<DmMessageEntity>(self.id.value)
+    }
+}
+
+nonisolated extension DmMessageEntity: ObjectBox.EntityInspectable {
+    internal typealias EntityBindingType = DmMessageEntityBinding
+
+    /// Generated metadata used by ObjectBox to persist the entity.
+    internal static let entityInfo = ObjectBox.EntityInfo(name: "DmMessageEntity", id: 4)
+
+    internal static let entityBinding = EntityBindingType()
+
+    fileprivate static func buildEntity(modelBuilder: ObjectBox.ModelBuilder) throws {
+        let entityBuilder = try modelBuilder.entityBuilder(for: DmMessageEntity.self, id: 4, uid: 5566778899001122334)
+        try entityBuilder.addProperty(name: "id", type: PropertyType.long, flags: [.id], id: 1, uid: 1311111111111111111)
+        try entityBuilder.addProperty(name: "ownerPlusGiftWrap", type: PropertyType.string, flags: [.unique, .indexHash, .indexed], id: 2, uid: 2322222222222222222, indexId: 9, indexUid: 7777888899990000111)
+        try entityBuilder.addProperty(name: "ownerPubkey", type: PropertyType.string, flags: [.indexHash, .indexed], id: 3, uid: 3333333333333333333, indexId: 10, indexUid: 8888999900001111222)
+        try entityBuilder.addProperty(name: "conversationKey", type: PropertyType.string, id: 4, uid: 4344444444444444444)
+        try entityBuilder.addProperty(name: "createdAt", type: PropertyType.long, id: 5, uid: 5355555555555555555)
+        try entityBuilder.addProperty(name: "payloadJson", type: PropertyType.string, id: 6, uid: 6366666666666666666)
+
+        try entityBuilder.lastProperty(id: 6, uid: 6366666666666666666)
+    }
+}
+
+nonisolated extension DmMessageEntity {
+    /// Generated entity property information.
+    internal static var id: Property<DmMessageEntity, Id, Id> { return Property<DmMessageEntity, Id, Id>(propertyId: 1, isPrimaryKey: true) }
+    /// Generated entity property information.
+    internal static var ownerPlusGiftWrap: Property<DmMessageEntity, String, Void> { return Property<DmMessageEntity, String, Void>(propertyId: 2, isPrimaryKey: false) }
+    /// Generated entity property information.
+    internal static var ownerPubkey: Property<DmMessageEntity, String, Void> { return Property<DmMessageEntity, String, Void>(propertyId: 3, isPrimaryKey: false) }
+    /// Generated entity property information.
+    internal static var conversationKey: Property<DmMessageEntity, String, Void> { return Property<DmMessageEntity, String, Void>(propertyId: 4, isPrimaryKey: false) }
+    /// Generated entity property information.
+    internal static var createdAt: Property<DmMessageEntity, Int, Void> { return Property<DmMessageEntity, Int, Void>(propertyId: 5, isPrimaryKey: false) }
+    /// Generated entity property information.
+    internal static var payloadJson: Property<DmMessageEntity, String, Void> { return Property<DmMessageEntity, String, Void>(propertyId: 6, isPrimaryKey: false) }
+
+    fileprivate func __setId(identifier: ObjectBox.Id) {
+        self.id = Id(identifier)
+    }
+}
+
+nonisolated extension ObjectBox.Property where E == DmMessageEntity {
+    internal static var id: Property<DmMessageEntity, Id, Id> { return Property<DmMessageEntity, Id, Id>(propertyId: 1, isPrimaryKey: true) }
+
+    internal static var ownerPlusGiftWrap: Property<DmMessageEntity, String, Void> { return Property<DmMessageEntity, String, Void>(propertyId: 2, isPrimaryKey: false) }
+
+    internal static var ownerPubkey: Property<DmMessageEntity, String, Void> { return Property<DmMessageEntity, String, Void>(propertyId: 3, isPrimaryKey: false) }
+
+    internal static var conversationKey: Property<DmMessageEntity, String, Void> { return Property<DmMessageEntity, String, Void>(propertyId: 4, isPrimaryKey: false) }
+
+    internal static var createdAt: Property<DmMessageEntity, Int, Void> { return Property<DmMessageEntity, Int, Void>(propertyId: 5, isPrimaryKey: false) }
+
+    internal static var payloadJson: Property<DmMessageEntity, String, Void> { return Property<DmMessageEntity, String, Void>(propertyId: 6, isPrimaryKey: false) }
+
+}
+
+
+/// Generated service type to handle persisting and reading entity data. Exposed through `DmMessageEntity.EntityBindingType`.
+nonisolated internal final class DmMessageEntityBinding: ObjectBox.EntityBinding, Sendable {
+    internal typealias EntityType = DmMessageEntity
+    internal typealias IdType = Id
+
+    internal required init() {}
+
+    internal func generatorBindingVersion() -> Int { 1 }
+
+    internal func setEntityIdUnlessStruct(of entity: EntityType, to entityId: ObjectBox.Id) {
+        entity.__setId(identifier: entityId)
+    }
+
+    internal func entityId(of entity: EntityType) -> ObjectBox.Id {
+        return entity.id.value
+    }
+
+    internal func collect(fromEntity entity: EntityType, id: ObjectBox.Id,
+                                  propertyCollector: ObjectBox.FlatBufferBuilder, store: ObjectBox.Store) throws {
+        let propertyOffset_ownerPlusGiftWrap = propertyCollector.prepare(string: entity.ownerPlusGiftWrap)
+        let propertyOffset_ownerPubkey = propertyCollector.prepare(string: entity.ownerPubkey)
+        let propertyOffset_conversationKey = propertyCollector.prepare(string: entity.conversationKey)
+        let propertyOffset_payloadJson = propertyCollector.prepare(string: entity.payloadJson)
+
+        propertyCollector.collect(id, at: 2 + 2 * 1)
+        propertyCollector.collect(entity.createdAt, at: 2 + 2 * 5)
+        propertyCollector.collect(dataOffset: propertyOffset_ownerPlusGiftWrap, at: 2 + 2 * 2)
+        propertyCollector.collect(dataOffset: propertyOffset_ownerPubkey, at: 2 + 2 * 3)
+        propertyCollector.collect(dataOffset: propertyOffset_conversationKey, at: 2 + 2 * 4)
+        propertyCollector.collect(dataOffset: propertyOffset_payloadJson, at: 2 + 2 * 6)
+    }
+
+    internal func createEntity(entityReader: ObjectBox.FlatBufferReader, store: ObjectBox.Store) -> EntityType {
+        let entity = DmMessageEntity()
+
+        entity.id = entityReader.read(at: 2 + 2 * 1)
+        entity.ownerPlusGiftWrap = entityReader.read(at: 2 + 2 * 2)
+        entity.ownerPubkey = entityReader.read(at: 2 + 2 * 3)
+        entity.conversationKey = entityReader.read(at: 2 + 2 * 4)
+        entity.createdAt = entityReader.read(at: 2 + 2 * 5)
+        entity.payloadJson = entityReader.read(at: 2 + 2 * 6)
+
+        return entity
+    }
+}
+
+
 /// Helper function that allows calling Enum(rawValue: value) with a nil value, which will return nil.
 fileprivate func optConstruct<T: RawRepresentable>(_ type: T.Type, rawValue: T.RawValue?) -> T? {
     guard let rawValue = rawValue else { return nil }
@@ -762,17 +881,18 @@ fileprivate func optConstruct<T: RawRepresentable>(_ type: T.Type, rawValue: T.R
 
 // MARK: - Store setup
 
-fileprivate func cModel() throws -> OpaquePointer {
+nonisolated fileprivate func cModel() throws -> OpaquePointer {
     let modelBuilder = try ObjectBox.ModelBuilder()
     try EventEntity.buildEntity(modelBuilder: modelBuilder)
     try GroupMessageEntity.buildEntity(modelBuilder: modelBuilder)
     try GroupMetaEntity.buildEntity(modelBuilder: modelBuilder)
-    modelBuilder.lastEntity(id: 3, uid: 4122230795942758656)
-    modelBuilder.lastIndex(id: 8, uid: 1534493641155105792)
+    try DmMessageEntity.buildEntity(modelBuilder: modelBuilder)
+    modelBuilder.lastEntity(id: 4, uid: 5566778899001122334)
+    modelBuilder.lastIndex(id: 10, uid: 8888999900001111222)
     return modelBuilder.finish()
 }
 
-extension ObjectBox.Store {
+nonisolated extension ObjectBox.Store {
     /// A store with a fully configured model. Created by the code generator with your model's metadata in place.
     ///
     /// # In-memory database
