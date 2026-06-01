@@ -94,7 +94,9 @@ struct AnimatedImageView<Placeholder: View, Failure: View>: View {
             defer { Signposts.media.endInterval("fetchAnimated", signpostState) }
             do {
                 let (data, _) = try await URLSession.shared.data(from: url)
-                return AnimatedImageDecoder.decode(data: data)
+                // Cap inline animated media so a huge source can't peg the render
+                // server scaling full-res frames. 1024 matches the video poster cap.
+                return AnimatedImageDecoder.decode(data: data, maxPixelSize: 1024)
             } catch {
                 return nil
             }
@@ -117,10 +119,27 @@ struct AnimatedImagePayload: @unchecked Sendable {
 }
 
 enum AnimatedImageDecoder {
+    /// Frame-count ceiling. A pathological clip (hundreds/thousands of frames)
+    /// would otherwise build a giant in-memory payload that the render server
+    /// has to cycle. We sample evenly to this many frames and keep the real
+    /// total duration, so playback speed is unchanged — just coarser.
+    private static let maxFrames = 120
+
     /// Decodes every frame from `data`, summing the per-frame delays for the
     /// total animation duration. Returns nil if the bytes don't decode to an
     /// image. For single-frame inputs, returns one frame with duration 0.
-    static func decode(data: Data) -> AnimatedImagePayload? {
+    ///
+    /// `maxPixelSize` downsamples each frame to that longest-edge cap. Pass it
+    /// for avatars / inline media so a huge source can't blow up per-frame cost.
+    ///
+    /// Frames are ALWAYS fully decoded here (off the main thread). Plain
+    /// `CGImageSourceCreateImageAtIndex` returns a *lazily* decoded image whose
+    /// decompression is deferred to draw time — which runs on the MAIN thread as
+    /// `UIImageView` animates. A massive animated avatar (large dimensions ×
+    /// many frames, shown on every one of an author's feed rows) then pegged the
+    /// main thread for seconds. `kCGImageSourceShouldCacheImmediately` forces the
+    /// decode here instead.
+    static func decode(data: Data, maxPixelSize: CGFloat? = nil) -> AnimatedImagePayload? {
         let signpostId = Signposts.media.makeSignpostID()
         let signpostState = Signposts.media.beginInterval("decodeAnimated", id: signpostId)
         defer { Signposts.media.endInterval("decodeAnimated", signpostState) }
@@ -130,15 +149,30 @@ enum AnimatedImageDecoder {
         let count = CGImageSourceGetCount(src)
         guard count > 0 else { return nil }
 
+        var opts: [CFString: Any] = [kCGImageSourceShouldCacheImmediately: true]
+        let useThumbnail = maxPixelSize != nil
+        if let maxPixelSize {
+            opts[kCGImageSourceCreateThumbnailFromImageAlways] = true
+            opts[kCGImageSourceCreateThumbnailWithTransform] = true
+            opts[kCGImageSourceThumbnailMaxPixelSize] = maxPixelSize
+        }
+        let cfOpts = opts as CFDictionary
+
+        // Sample every `step`-th frame when the source exceeds `maxFrames`.
+        let step = count > maxFrames ? Int((Double(count) / Double(maxFrames)).rounded(.up)) : 1
+
         var frames: [UIImage] = []
-        frames.reserveCapacity(count)
+        frames.reserveCapacity(min(count, maxFrames))
         var total: TimeInterval = 0
         for i in 0..<count {
-            guard let cg = CGImageSourceCreateImageAtIndex(src, i, nil) else { continue }
-            frames.append(UIImage(cgImage: cg))
-            if count > 1 {
-                total += frameDelay(at: i, source: src)
-            }
+            // Read every frame's delay so the summed duration stays accurate even
+            // when frames are sampled.
+            if count > 1 { total += frameDelay(at: i, source: src) }
+            guard i % step == 0 else { continue }
+            let cg = useThumbnail
+                ? CGImageSourceCreateThumbnailAtIndex(src, i, cfOpts)
+                : CGImageSourceCreateImageAtIndex(src, i, cfOpts)
+            if let cg { frames.append(UIImage(cgImage: cg)) }
         }
         guard let first = frames.first else { return nil }
         let aspect: CGFloat = first.size.height > 0 ? first.size.width / first.size.height : 1
