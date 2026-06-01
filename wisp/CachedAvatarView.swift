@@ -94,9 +94,15 @@ struct CachedAvatarView: View {
         // setting are read on main; only the decode hops off.
         let tryAnimated = settings.animateAvatars
             && AnimatedImageHint.isLikelyAnimated(url: url, mime: nil)
+        // Downsample animated frames to the avatar's pixel size. A circular 40pt
+        // avatar only needs ~120px frames; without this cap, a massive animated
+        // pfp (large dimensions × many frames, rendered on every one of an
+        // author's feed rows) made UIImageView scale full-res frames on the main
+        // thread and froze the app. `* 3` covers @3x displays.
+        let framePixelCap = max(size * 3, 96)
         let decoded: DecodedAvatar = await Task.detached(priority: .utility) {
             if tryAnimated,
-               let payload = AnimatedImageDecoder.decode(data: data),
+               let payload = AnimatedImageDecoder.decode(data: data, maxPixelSize: framePixelCap),
                payload.frames.count > 1 {
                 return .animated(payload)
             }
