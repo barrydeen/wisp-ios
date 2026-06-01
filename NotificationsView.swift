@@ -165,7 +165,7 @@ private struct DailySummaryBar: View {
             stat(filter: .reactions, label: "\(s.reactionCount)") {
                 Image(systemName: "heart").font(.system(size: 14))
             }
-            stat(filter: .zaps, label: s.zapSats > 0 ? "\(NotificationStyle.formatSats(s.zapSats))" : "0") {
+            stat(filter: .zaps, label: "\(s.zapCount)") {
                 BoltIcon(tint: tint(for: .zaps))
                     .frame(width: 12, height: 14)
             }

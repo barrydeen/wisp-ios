@@ -441,8 +441,7 @@ final class NotificationRepository {
 
     private func computeSummary24h() -> NotificationSummary {
         var s = NotificationSummary()
-        let cutoff = Int(Date().timeIntervalSince1970) - 86400
-        for item in flatItems where item.timestamp >= cutoff {
+        for item in flatItems {
             switch item.kind {
             case .reply:    s.replyCount += 1
             case .reaction: s.reactionCount += 1
