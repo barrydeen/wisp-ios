@@ -34,6 +34,11 @@ struct FlatNotificationItem: Identifiable, Hashable {
     var dmConversationKey: String? = nil
     var dmUnread: Int = 0
     var relayHints: [String] = []
+    /// For `.reply` rows: whether `referencedEventId` (the immediate parent the
+    /// actor replied to) is one of my own notes. Drives the caption — "replying
+    /// to your note" vs "replying in your thread" when the parent is someone
+    /// else's reply nested under my note. Defaults `true` (direct-reply wording).
+    var replyTargetIsMine: Bool = true
     /// Option ids chosen by a kind-1018 poll voter (for `.pollVote` items).
     var voteOptionIds: [String] = []
     /// Index of the option zapped on a kind-6969 zap poll (annotates `.zap` items

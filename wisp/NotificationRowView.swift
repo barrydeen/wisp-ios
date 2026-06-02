@@ -167,7 +167,7 @@ struct NotificationRowView: View {
     private var replyExpansion: some View {
         if !item.referencedEventId.isEmpty {
             VStack(alignment: .leading, spacing: 6) {
-                Text("replying to your note")
+                Text(item.replyTargetIsMine ? "replying to your note" : "replying in your thread")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                 QuotedNoteView(
