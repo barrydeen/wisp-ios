@@ -176,16 +176,47 @@ final class NwcWallet: Wallet {
     func payInvoice(_ bolt11: String) async -> Result<String, WalletError> {
         // Payments can take minutes — disable the timeout. A timeout here does NOT mean
         // the payment failed; the wallet may still complete it.
-        await send(.payInvoice(bolt11: bolt11), timeout: 0) { response in
+        let result: Result<String, WalletError> = await send(.payInvoice(bolt11: bolt11), timeout: 0) { response in
             guard case .payInvoice(let preimage, _) = response else {
                 throw WalletError.decodeFailed("expected pay_invoice response")
             }
             return preimage
         }
+        if case .failure(let err) = result, let friendly = Self.friendlyPayError(err) {
+            return .failure(.other(friendly))
+        }
+        return result
     }
 
-    func makeInvoice(amountMsats: Int64, description: String) async -> Result<String, WalletError> {
-        await send(.makeInvoice(amountMsats: amountMsats, description: description)) { response in
+    /// Translates NIP-47 RPC errors into user-readable strings, parallel to
+    /// `SparkWallet.friendlyPayError`. Returns nil for errors that should
+    /// surface with their existing description.
+    private static func friendlyPayError(_ err: WalletError) -> String? {
+        switch err {
+        case .insufficientBalance:
+            return "Insufficient balance to pay this invoice."
+        case .rpcError(let code, let message):
+            let lower = (code + " " + message).lowercased()
+            if lower.contains("already paid") || lower.contains("already_paid") || lower.contains("alreadyexists") {
+                return "This invoice has already been paid."
+            }
+            if code == "INSUFFICIENT_BALANCE" || lower.contains("insufficient") {
+                return "Insufficient balance to pay this invoice."
+            }
+            if lower.contains("expired") {
+                return "This invoice has expired."
+            }
+            if lower.contains("route") && lower.contains("not found") {
+                return "Could not find a payment route. Try again in a moment."
+            }
+            return nil
+        default:
+            return nil
+        }
+    }
+
+    func makeInvoice(amountMsats: Int64, description: String, expirySecs: Int64) async -> Result<String, WalletError> {
+        await send(.makeInvoice(amountMsats: amountMsats, description: description, expirySecs: expirySecs)) { response in
             guard case .makeInvoice(let invoice, _) = response else {
                 throw WalletError.decodeFailed("expected make_invoice response")
             }

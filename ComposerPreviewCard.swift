@@ -42,7 +42,8 @@ struct ComposerPreviewCard: View {
                 // must size against the card's available width instead of
                 // the feed's edge-bleed math — without this, a 2+ image
                 // post paints past the card's right edge.
-                nested: true
+                nested: true,
+                isPreview: true
             )
         }
         .padding(12)

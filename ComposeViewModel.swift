@@ -115,7 +115,7 @@ final class ComposeViewModel {
 
     // MARK: - Init
 
-    init(keypair: Keypair, mode: ComposeMode = .new) {
+    init(keypair: Keypair, mode: ComposeMode = .new, initialText: String = "") {
         self.keypair = keypair
         self.signingKeypair = keypair
         self.mode = mode
@@ -133,6 +133,7 @@ final class ComposeViewModel {
         // spliced at publish time, and reply context still lives in tags — only
         // the editor body is restored.
         loadLocalAutosave()
+        if !initialText.isEmpty { content = initialText }
     }
 
     // MARK: - Local autosave (instant restore on reopen)

@@ -47,6 +47,10 @@ struct RichContentView: View {
     /// rather than the full screen. Used by `MediaGridView` to opt out of
     /// its feed-only edge-bleed layout.
     var nested: Bool = false
+    /// When true, interactive actions inside rich content are suppressed.
+    /// Used by the composer preview so e.g. a lightning invoice card's Pay
+    /// button is disabled — the note hasn't been posted yet.
+    var isPreview: Bool = false
     /// When true, each inline-text run publishes its rendered height up the
     /// `RichTextContentHeightKey` preference so the host card can base its
     /// "Show more" decision on text length alone. Off by default so nested
@@ -349,7 +353,7 @@ struct RichContentView: View {
         case .nostrAddressable(let dTag, _, let author, let kind):
             addressablePlaceholder(dTag: dTag, author: author, kind: kind)
         case .lightningInvoice(let invoice, let amount, let summary):
-            LightningInvoiceView(invoice: invoice, amountSats: amount, summary: summary)
+            LightningInvoiceView(invoice: invoice, amountSats: amount, summary: summary, isPreview: isPreview)
         default:
             EmptyView()
         }

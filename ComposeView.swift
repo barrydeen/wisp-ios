@@ -47,6 +47,11 @@ struct ComposeView: View {
         _viewModel = State(initialValue: ComposeViewModel(keypair: keypair, mode: .new))
     }
 
+    init(keypair: Keypair, initialText: String) {
+        self.initialDraft = nil
+        _viewModel = State(initialValue: ComposeViewModel(keypair: keypair, initialText: initialText))
+    }
+
     var body: some View {
         NavigationStack {
             ZStack {
