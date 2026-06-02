@@ -276,16 +276,20 @@ final class NotificationRepository {
 
     private func classifyKind1(_ event: NostrEvent) -> FlatNotificationItem? {
         // Reply: any "e" tag pointing at one of my notes wins.
-        if let replyTarget = event.tags.first(where: { $0.first == "e" && $0.count >= 2 && selfEventIds.contains($0[1]) }) {
-            let refId = replyTarget[1]
-            let hint = replyTarget.count >= 3 ? [replyTarget[2]] : []
+        if let selfETag = event.tags.first(where: { $0.first == "e" && $0.count >= 2 && selfEventIds.contains($0[1]) }) {
+            // Show what the actor actually replied to — the immediate parent — which for a
+            // reply-to-a-reply is someone else's note nested under mine, not my root post.
+            let parentId = Nip10.replyTarget(of: event) ?? selfETag[1]
+            let parentTag = event.tags.first { $0.first == "e" && $0.count >= 2 && $0[1] == parentId }
+            let hint = (parentTag?.count ?? 0) >= 3 ? [parentTag![2]] : []
             return FlatNotificationItem(
                 id: event.id,
                 kind: .reply,
                 actorPubkey: event.pubkey,
-                referencedEventId: refId,
+                referencedEventId: parentId,
                 timestamp: event.createdAt,
-                relayHints: hint
+                relayHints: hint,
+                replyTargetIsMine: selfEventIds.contains(parentId)
             )
         }
         // Quote: "q" tag pointing at one of my notes (NIP-18-style quote).
