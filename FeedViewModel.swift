@@ -1006,13 +1006,15 @@ final class FeedViewModel {
 
     /// Number of (score-sorted) relays the live follows feed connects to. With
     /// `RelayConnectionPool` these are now *persistent, reused* sockets (one per
-    /// relay, shared with engagement/profile/DM subs), so this is sized to leave
-    /// headroom under the pool's global cap for those other subsystems rather
-    /// than matching the old per-REQ ephemeral peak. The top-40 by score carry
-    /// the overwhelming majority of follows' events; the long tail added few
-    /// unique notes at a large connection cost. (Android's persistent floor is
-    /// 30.)
-    private static let maxPoolRelays = 40
+    /// relay, shared with engagement/profile/DM subs). The original scroll jank
+    /// was caused by per-REQ ephemeral socket *churn*, not by the steady-state
+    /// count — so a wider persistent set is cheap, while the long tail of relays
+    /// it covers does carry real notes (capping at 40 dropped them and users
+    /// missed posts). Restored to the pre-`b7ddc4a` value of 72; the global cap
+    /// in `RelayConnectionPool` is raised in tandem to leave headroom for
+    /// engagement/profile/DM/notification subs. (Android's persistent floor is
+    /// 30, but its effective scroll reach is ~70-80 via its ephemeral pool.)
+    private static let maxPoolRelays = 72
     /// Mirrors Android `OutboxRouter.MAX_AUTHORS_PER_FILTER` — relays reject REQs with too-large filters.
     private static let maxAuthorsPerFilter = 200
 
