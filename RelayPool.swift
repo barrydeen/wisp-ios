@@ -637,11 +637,16 @@ actor RelayConnectionPool {
     /// Hard ceiling on simultaneous relay connections. The user's follows graph
     /// can route to hundreds of distinct relays; without a cap, scroll-time
     /// outbox routing opens a connection to every one. Idle connections are
-    /// evicted LRU to stay under this. 64 comfortably holds the feed's relay set
-    /// plus engagement/profile/DM/notification subs (which mostly multiplex over
-    /// the same relays) while staying orders of magnitude below the per-process
-    /// network-flow limit the old per-call socket model blew past.
-    private let maxConnections = 64
+    /// evicted LRU to stay under this. 96 holds the feed's relay set
+    /// (`FeedViewModel.maxPoolRelays` = 72 + a couple indexer fallbacks) plus
+    /// headroom for DM inbox / notification / transient profile-thread-quote
+    /// scoped subs (most of which multiplex over the feed's relays anyway). This
+    /// must stay comfortably above `maxPoolRelays` — otherwise the feed alone
+    /// exceeds the cap and evicts its own relays as other subs register. Still
+    /// orders of magnitude below the per-process network-flow limit the old
+    /// per-call socket model blew past; the jank came from ephemeral churn, not
+    /// the steady-state count.
+    private let maxConnections = 96
     /// Close connections that have had no subscribers for this long.
     private let idleTTL: TimeInterval = 45
 

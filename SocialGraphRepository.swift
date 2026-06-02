@@ -28,8 +28,11 @@ actor SocialGraphRepository {
         static let topSecondDegreeForViz     = 64
         static let topRankedListSize         = 30
         // Extended Feed — persistent pooled connections (see RelayConnectionPool);
-        // sized to leave headroom under the global connection cap.
-        static let extendedFeedRelayCap      = 40
+        // sized to leave headroom under the global connection cap. Restored to the
+        // pre-`b7ddc4a` reach: the persistent pool makes a wider steady-state set
+        // cheap (the old per-REQ churn, not the count, caused the jank), so the
+        // long tail of relays that carry real notes is worth covering.
+        static let extendedFeedRelayCap      = 60
     }
 
     /// Indexer relays used as fallback when the score board hasn't been built yet.
