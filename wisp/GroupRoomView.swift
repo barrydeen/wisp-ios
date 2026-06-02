@@ -173,6 +173,13 @@ private struct GroupMessageBubble: View {
                 }
 
                 bubbleBody
+                    // Force the text to take all the vertical space it needs and
+                    // wrap, instead of SwiftUI intermittently laying it out as a
+                    // single tail-truncated ("…") line next to the row's Spacer.
+                    // The maxWidth:.infinity on the row gives it width; this gives
+                    // it height. Both are needed — width alone fixed most but not
+                    // all messages.
+                    .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                     .background(isMine ? Color.wispPrimary : Color.wispSurfaceVariant,
@@ -193,6 +200,10 @@ private struct GroupMessageBubble: View {
             if !isMine { Spacer(minLength: 40) }
         }
         .padding(.horizontal, 12)
+        // Give the row a definite full width so the bubble's text view receives
+        // a finite width proposal and wraps instead of clipping to one line —
+        // mirrors DmMessageBubbleView. Without this, long group messages truncate.
+        .frame(maxWidth: .infinity, alignment: isMine ? .trailing : .leading)
         .task(id: message.senderPubkey) {
             profile = ProfileRepository.shared.get(message.senderPubkey)
         }

@@ -10,6 +10,13 @@ final class NotificationsViewModel {
     var enabledTypes: Set<NotificationFilter> = Set(NotificationFilter.allCases)
     var isLoading: Bool = false
 
+    /// Id of the single currently-expanded notification row, or `nil` when none
+    /// is open. Lifted out of `NotificationRowView`'s local state so the list
+    /// behaves like an accordion — opening one row closes any other. Tracked
+    /// (not `@ObservationIgnored`) so every row re-evaluates its `expanded`
+    /// state when this changes.
+    var expandedItemId: String? = nil
+
     /// Hidden authors whose NSpam-classified notifications should not appear.
     /// Tracked (not `@ObservationIgnored`) so `filteredItems` re-evaluates when
     /// `maybeScoreReplyForSpam` or `unhideSpamAuthor` mutates this set.
