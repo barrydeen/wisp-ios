@@ -328,8 +328,9 @@ final class SparkWallet: Wallet {
             let response = try await sdk.lnurlPay(request: LnurlPayRequest(prepareResponse: prepare))
             return .success(response.payment.id)
         } catch {
-            emit("Payment failed: \(error.localizedDescription)")
-            return .failure(.other(error.localizedDescription))
+            let friendly = Self.friendlyPayError(error)
+            emit("Payment failed: \(friendly)")
+            return .failure(.other(friendly))
         }
     }
 
@@ -356,9 +357,32 @@ final class SparkWallet: Wallet {
             )
             return .success(response.payment.id)
         } catch {
-            emit("Payment failed: \(error.localizedDescription)")
-            return .failure(.other(error.localizedDescription))
+            let friendly = Self.friendlyPayError(error)
+            emit("Payment failed: \(friendly)")
+            return .failure(.other(friendly))
         }
+    }
+
+    /// Translates raw Spark SDK errors into user-readable strings. The SDK
+    /// surfaces full gRPC envelopes including internal field names and byte
+    /// arrays — exposing those in the Send sheet is hostile. Falls back to
+    /// `localizedDescription` for unknown errors.
+    private static func friendlyPayError(_ error: Error) -> String {
+        let raw = error.localizedDescription
+        let lower = raw.lowercased()
+        if lower.contains("alreadyexists") || lower.contains("preimage request already exists") {
+            return "This invoice has already been paid."
+        }
+        if lower.contains("insufficient") {
+            return "Insufficient balance to pay this invoice."
+        }
+        if lower.contains("expired") {
+            return "This invoice has expired."
+        }
+        if lower.contains("route") && lower.contains("not found") {
+            return "Could not find a payment route. Try again in a moment."
+        }
+        return raw
     }
 
     func makeInvoice(amountMsats: Int64, description: String, expirySecs: Int64) async -> Result<String, WalletError> {
