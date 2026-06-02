@@ -145,6 +145,8 @@ struct NotificationRowView: View {
                 referencedNoteExpansion
             case .zap:
                 zapExpansion
+            case .follower:
+                EmptyView()
             }
         }
         .padding(.top, 10)
@@ -385,7 +387,7 @@ struct NotificationRowView: View {
             raw = repo.event(forId: item.actorEventId ?? item.id)?.content
         case .pollVote, .pollEnded:
             raw = repo.event(forId: item.referencedEventId)?.content
-        case .dm, .reaction, .repost, .zap:
+        case .dm, .reaction, .repost, .zap, .follower:
             return nil
         }
         return raw.map {

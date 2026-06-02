@@ -208,6 +208,7 @@ final class ProfileViewModel {
         }
         followingPubkeys = pubkeys
         followingCount = pubkeys.count
+        followsYou = pubkeys.contains(activeUserPubkey)
     }
 
     private func loadTargetWriteRelays() async {

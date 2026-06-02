@@ -178,6 +178,9 @@ private struct DailySummaryBar: View {
             stat(filter: .dms, label: "\(s.dmCount)") {
                 Image(systemName: "envelope").font(.system(size: 14))
             }
+            stat(filter: .followers, label: "\(s.followerCount)") {
+                Image(systemName: "person.badge.plus").font(.system(size: 14))
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
@@ -304,6 +307,8 @@ private struct FilterRow: View {
             Image(systemName: "chart.bar").foregroundStyle(tint)
         case .dms:
             Image(systemName: "envelope").foregroundStyle(tint)
+        case .followers:
+            Image(systemName: "person.badge.plus").foregroundStyle(tint)
         }
     }
 

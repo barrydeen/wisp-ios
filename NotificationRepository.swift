@@ -31,6 +31,11 @@ final class NotificationRepository {
     /// quote/repost/reaction reference-event ownership checks. NotificationsViewModel
     /// keeps this fresh.
     var selfEventIds: Set<String> = []
+    /// Pubkeys of every account whose kind-3 has been seen containing the active
+    /// user's pubkey. Persisted so returning sessions don't re-notify for existing
+    /// followers. Exposed so ProfileViewModel can seed `followsYou` without a
+    /// separate relay query.
+    private(set) var knownFollowers: Set<String> = []
 
     private var seenEventIds: Set<String> = []
     private var seenOrder: [String] = []
@@ -112,6 +117,8 @@ final class NotificationRepository {
             // the first network call returns.
             let cached = UserDefaults.standard.stringArray(forKey: "notif_self_eventids_\(activePubkey)") ?? []
             selfEventIds = Set(cached)
+            let cachedFollowers = UserDefaults.standard.stringArray(forKey: "notif_known_followers_\(activePubkey)") ?? []
+            knownFollowers = Set(cachedFollowers)
         }
     }
 
@@ -135,6 +142,7 @@ final class NotificationRepository {
         var item: FlatNotificationItem?
         switch event.kind {
         case 1:    item = classifyKind1(event)
+        case 3:    item = classifyFollow(event)
         case 6:    item = classifyRepost(event)
         case 7:    item = classifyReaction(event)
         case 9735: item = classifyZap(event, isFromDmRelay: isFromDmRelay)
@@ -195,7 +203,7 @@ final class NotificationRepository {
         case .zap:
             if soundsOn { NotificationSounds.shared.play(.zap) }
             Haptics.shared.zapBuzz()
-        case .pollVote, .pollEnded, .dm:
+        case .pollVote, .pollEnded, .dm, .follower:
             break
         }
     }
@@ -410,6 +418,27 @@ final class NotificationRepository {
         )
     }
 
+    private func classifyFollow(_ event: NostrEvent) -> FlatNotificationItem? {
+        // The event must p-tag us and must not be our own contact list.
+        guard event.pubkey != activePubkey else { return nil }
+        guard event.tags.contains(where: { $0.first == "p" && $0.count >= 2 && $0[1] == activePubkey }) else { return nil }
+        let isNew = knownFollowers.insert(event.pubkey).inserted
+        if isNew { persistKnownFollowers() }
+        guard isNew else { return nil }
+        // Suppress notifications for backfill events that arrived before this app
+        // session started — soundEligibleAfter is set to launch time and bumped on
+        // each foreground transition, so historical relayed kind-3s are silently
+        // added to knownFollowers without generating a notification row.
+        guard event.createdAt >= soundEligibleAfter else { return nil }
+        return FlatNotificationItem(
+            id: event.id,
+            kind: .follower,
+            actorPubkey: event.pubkey,
+            referencedEventId: "",
+            timestamp: event.createdAt
+        )
+    }
+
     private func classifyPollVote(_ event: NostrEvent) -> FlatNotificationItem? {
         guard let pollId = Nip88.getPollEventId(event), selfEventIds.contains(pollId) else { return nil }
         let optionIds = Nip88.getResponseOptionIds(event)
@@ -454,11 +483,12 @@ final class NotificationRepository {
             case .zap:
                 s.zapCount += 1
                 s.zapSats += item.zapSats
-            case .mention:  s.mentionCount += 1
-            case .quote:    s.quoteCount += 1
-            case .dm:       s.dmCount += 1
+            case .mention:   s.mentionCount += 1
+            case .quote:     s.quoteCount += 1
+            case .dm:        s.dmCount += 1
             case .pollVote:  s.pollVoteCount += 1
             case .pollEnded: s.pollEndedCount += 1
+            case .follower:  s.followerCount += 1
             }
         }
         return s
@@ -496,6 +526,10 @@ final class NotificationRepository {
 
     func persistSelfEventIds() {
         UserDefaults.standard.set(Array(selfEventIds), forKey: selfIdsKey)
+    }
+
+    private func persistKnownFollowers() {
+        UserDefaults.standard.set(Array(knownFollowers), forKey: "notif_known_followers_\(activePubkey)")
     }
 
     private func bumpLatestTimestamp(_ ts: Int) {

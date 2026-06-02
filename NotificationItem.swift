@@ -10,6 +10,7 @@ enum NotificationKind: String, Hashable {
     case dm
     case pollVote
     case pollEnded
+    case follower
 }
 
 struct FlatNotificationItem: Identifiable, Hashable {
@@ -69,6 +70,7 @@ struct NotificationSummary: Hashable {
     var dmCount: Int = 0
     var pollVoteCount: Int = 0
     var pollEndedCount: Int = 0
+    var followerCount: Int = 0
 }
 
 /// Set-based filter: each type independently toggleable. Mirrors Android.
@@ -80,18 +82,20 @@ enum NotificationFilter: String, CaseIterable, Hashable {
     case mentions
     case votes
     case dms
+    case followers
 
     /// Map a `NotificationKind` to its filter bucket.
     /// Quote+mention collapse to .mentions; pollVote and pollEnded → .votes.
     static func bucket(for kind: NotificationKind) -> NotificationFilter {
         switch kind {
-        case .reply:               .replies
-        case .reaction:            .reactions
-        case .zap:                 .zaps
-        case .repost:              .reposts
-        case .quote, .mention:     .mentions
+        case .reply:                .replies
+        case .reaction:             .reactions
+        case .zap:                  .zaps
+        case .repost:               .reposts
+        case .quote, .mention:      .mentions
         case .pollVote, .pollEnded: .votes
-        case .dm:                  .dms
+        case .dm:                   .dms
+        case .follower:             .followers
         }
     }
 
@@ -104,6 +108,7 @@ enum NotificationFilter: String, CaseIterable, Hashable {
         case .mentions:  "Mentions"
         case .votes:     "Votes"
         case .dms:       "DMs"
+        case .followers: "New followers"
         }
     }
 }

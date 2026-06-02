@@ -12,6 +12,7 @@ enum NotificationStyle {
         case .dm:        "messaged you"
         case .pollVote:  "voted on your poll"
         case .pollEnded: "poll ended"
+        case .follower:  "started following you"
         }
     }
 
@@ -103,6 +104,10 @@ struct NotificationTypeIcon: View {
                     .foregroundStyle(Color.wispPrimary)
             case .pollEnded:
                 Image(systemName: "flag.checkered")
+                    .font(.system(size: 18))
+                    .foregroundStyle(Color.wispPrimary)
+            case .follower:
+                Image(systemName: "person.badge.plus")
                     .font(.system(size: 18))
                     .foregroundStyle(Color.wispPrimary)
             }

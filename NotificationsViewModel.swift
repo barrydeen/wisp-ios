@@ -35,6 +35,7 @@ final class NotificationsViewModel {
     @ObservationIgnored private var subQuotesQtag: RelaySubscription?
     @ObservationIgnored private var subDmZaps: RelaySubscription?
     @ObservationIgnored private var subPollVotes: RelaySubscription?
+    @ObservationIgnored private var subFollowers: RelaySubscription?
     @ObservationIgnored private var listenerTasks: [Task<Void, Never>] = []
     @ObservationIgnored private var rearmTask: Task<Void, Never>?
     @ObservationIgnored private var refreshSelfIdsTask: Task<Void, Never>?
@@ -211,6 +212,7 @@ final class NotificationsViewModel {
         subQuotesQtag?.cancel(); subQuotesQtag = nil
         subDmZaps?.cancel(); subDmZaps = nil
         subPollVotes?.cancel(); subPollVotes = nil
+        subFollowers?.cancel(); subFollowers = nil
     }
 
     func refresh() async {
@@ -587,6 +589,17 @@ final class NotificationsViewModel {
             })
         }
 
+        let fFollowers = NostrFilter(kinds: [3], pTags: [pubkey], limit: 500)
+        subFollowers = RelayPool.subscribe(relays: notifRelays, filter: fFollowers, id: "notif-followers")
+        listenerTasks.append(Task { [weak self] in
+            guard let sub = self?.subFollowers else { return }
+            for await (event, relayUrl) in sub.events {
+                guard let self else { break }
+                _ = self.repo.ingest(event, relayUrl: relayUrl)
+                self.maybePrefetchProfile(for: event.pubkey)
+            }
+        })
+
         if !dmRelays.isEmpty {
             let f4 = NostrFilter(kinds: [9735], pTags: [pubkey], limit: 100)
             subDmZaps = RelayPool.subscribe(relays: dmRelays, filter: f4, id: "notif-zaps-dm")
@@ -647,6 +660,7 @@ final class NotificationsViewModel {
         subQuotesQtag?.cancel(); subQuotesQtag = nil
         subDmZaps?.cancel(); subDmZaps = nil
         subPollVotes?.cancel(); subPollVotes = nil
+        subFollowers?.cancel(); subFollowers = nil
         openSubscriptions()
     }
 
