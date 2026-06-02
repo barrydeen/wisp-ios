@@ -473,6 +473,10 @@ struct NotificationRowView: View {
             onDmTap(key)
             return
         }
+        if item.kind == .follower {
+            onPeerTap(item.actorPubkey)
+            return
+        }
         withAnimation(.easeInOut(duration: 0.18)) {
             viewModel.expandedItemId = (viewModel.expandedItemId == item.id) ? nil : item.id
         }

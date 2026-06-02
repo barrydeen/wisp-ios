@@ -36,6 +36,7 @@ final class NotificationsViewModel {
     @ObservationIgnored private var subDmZaps: RelaySubscription?
     @ObservationIgnored private var subPollVotes: RelaySubscription?
     @ObservationIgnored private var subFollowers: RelaySubscription?
+    @ObservationIgnored private var subFollowerUpdates: RelaySubscription?
     @ObservationIgnored private var listenerTasks: [Task<Void, Never>] = []
     @ObservationIgnored private var rearmTask: Task<Void, Never>?
     @ObservationIgnored private var refreshSelfIdsTask: Task<Void, Never>?
@@ -213,6 +214,7 @@ final class NotificationsViewModel {
         subDmZaps?.cancel(); subDmZaps = nil
         subPollVotes?.cancel(); subPollVotes = nil
         subFollowers?.cancel(); subFollowers = nil
+        subFollowerUpdates?.cancel(); subFollowerUpdates = nil
     }
 
     func refresh() async {
@@ -279,8 +281,14 @@ final class NotificationsViewModel {
             UserDefaults.standard.removeObject(forKey: oldKey)
         }
         if let raws = UserDefaults.standard.stringArray(forKey: enabledTypesKey) {
-            let decoded = raws.compactMap(NotificationFilter.init(rawValue:))
-            enabledTypes = Set(decoded)
+            var decoded = Set(raws.compactMap(NotificationFilter.init(rawValue:)))
+            // Enable any filter type whose rawValue is absent from the stored array.
+            // Absent rawValues represent types added after the array was last written
+            // and should default to enabled rather than being silently excluded.
+            for filter in NotificationFilter.allCases where !raws.contains(filter.rawValue) {
+                decoded.insert(filter)
+            }
+            enabledTypes = decoded
         } else {
             enabledTypes = Set(NotificationFilter.allCases)
         }
@@ -593,12 +601,27 @@ final class NotificationsViewModel {
         subFollowers = RelayPool.subscribe(relays: notifRelays, filter: fFollowers, id: "notif-followers")
         listenerTasks.append(Task { [weak self] in
             guard let sub = self?.subFollowers else { return }
-            for await (event, relayUrl) in sub.events {
+            for await (event, _) in sub.events {
                 guard let self else { break }
-                _ = self.repo.ingest(event, relayUrl: relayUrl)
+                self.repo.ingestFollowEvent(event)
                 self.maybePrefetchProfile(for: event.pubkey)
             }
         })
+
+        // Watch known followers' contact lists for unfollows so re-follows
+        // generate a fresh notification instead of being silently deduped.
+        let currentFollowers = Array(repo.knownFollowers)
+        if !currentFollowers.isEmpty {
+            let fFollowerUpdates = NostrFilter(kinds: [3], authors: currentFollowers, limit: 500)
+            subFollowerUpdates = RelayPool.subscribe(relays: notifRelays, filter: fFollowerUpdates, id: "notif-follower-updates")
+            listenerTasks.append(Task { [weak self] in
+                guard let sub = self?.subFollowerUpdates else { return }
+                for await (event, _) in sub.events {
+                    guard let self else { break }
+                    self.repo.processContactListUpdate(event)
+                }
+            })
+        }
 
         if !dmRelays.isEmpty {
             let f4 = NostrFilter(kinds: [9735], pTags: [pubkey], limit: 100)
@@ -661,6 +684,7 @@ final class NotificationsViewModel {
         subDmZaps?.cancel(); subDmZaps = nil
         subPollVotes?.cancel(); subPollVotes = nil
         subFollowers?.cancel(); subFollowers = nil
+        subFollowerUpdates?.cancel(); subFollowerUpdates = nil
         openSubscriptions()
     }
 

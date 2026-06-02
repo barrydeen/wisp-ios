@@ -119,6 +119,7 @@ final class NotificationRepository {
             selfEventIds = Set(cached)
             let cachedFollowers = UserDefaults.standard.stringArray(forKey: "notif_known_followers_\(activePubkey)") ?? []
             knownFollowers = Set(cachedFollowers)
+            loadPersistedFollowerNotifs()
         }
     }
 
@@ -142,7 +143,6 @@ final class NotificationRepository {
         var item: FlatNotificationItem?
         switch event.kind {
         case 1:    item = classifyKind1(event)
-        case 3:    item = classifyFollow(event)
         case 6:    item = classifyRepost(event)
         case 7:    item = classifyReaction(event)
         case 9735: item = classifyZap(event, isFromDmRelay: isFromDmRelay)
@@ -418,25 +418,50 @@ final class NotificationRepository {
         )
     }
 
-    private func classifyFollow(_ event: NostrEvent) -> FlatNotificationItem? {
-        // The event must p-tag us and must not be our own contact list.
-        guard event.pubkey != activePubkey else { return nil }
-        guard event.tags.contains(where: { $0.first == "p" && $0.count >= 2 && $0[1] == activePubkey }) else { return nil }
+    /// Process a kind-3 event from the followers subscription. Updates
+    /// `knownFollowers` for all events (including backfill) but only inserts a
+    /// notification row — and consumes a `seenEventIds` slot — for live events
+    /// (createdAt >= soundEligibleAfter) that are genuinely new follows. This
+    /// keeps `seenEventIds` unpolluted by the hundreds of backfill kind-3s the
+    /// relay delivers on subscription open, which was causing legitimate
+    /// notification IDs to be evicted from the LRU and re-ingested as phantom
+    /// duplicate rows on every pull-to-refresh.
+    func ingestFollowEvent(_ event: NostrEvent) {
+        guard !activePubkey.isEmpty else { return }
+        guard event.pubkey != activePubkey else { return }
+        guard event.tags.contains(where: { $0.first == "p" && $0.count >= 2 && $0[1] == activePubkey }) else { return }
         let isNew = knownFollowers.insert(event.pubkey).inserted
         if isNew { persistKnownFollowers() }
-        guard isNew else { return nil }
-        // Suppress notifications for backfill events that arrived before this app
-        // session started — soundEligibleAfter is set to launch time and bumped on
-        // each foreground transition, so historical relayed kind-3s are silently
-        // added to knownFollowers without generating a notification row.
-        guard event.createdAt >= soundEligibleAfter else { return nil }
-        return FlatNotificationItem(
+        guard isNew else { return }
+        guard event.createdAt >= soundEligibleAfter else { return }
+        guard insertSeen(event.id) else { return }
+        let item = FlatNotificationItem(
             id: event.id,
             kind: .follower,
             actorPubkey: event.pubkey,
             referencedEventId: "",
             timestamp: event.createdAt
         )
+        let insertIdx = flatItems.firstIndex(where: { $0.timestamp < item.timestamp }) ?? flatItems.count
+        withTransaction(Transaction(animation: nil)) {
+            flatItems.insert(item, at: insertIdx)
+            if flatItems.count > Self.flatCap { flatItems.removeLast(flatItems.count - Self.flatCap) }
+        }
+        summary = computeSummary24h()
+        bumpLatestTimestamp(item.timestamp)
+        appendFollowerNotifRecord(eventId: event.id, pubkey: event.pubkey, timestamp: event.createdAt)
+        fireEffects(for: item, persist: true)
+    }
+
+    /// Called for kind-3 events from known followers (subscription by author list).
+    /// If their updated contact list no longer contains us, remove them from
+    /// knownFollowers so a future re-follow generates a new notification.
+    func processContactListUpdate(_ event: NostrEvent) {
+        guard !activePubkey.isEmpty, event.pubkey != activePubkey else { return }
+        let stillFollowsUs = event.tags.contains(where: { $0.first == "p" && $0.count >= 2 && $0[1] == activePubkey })
+        if !stillFollowsUs && knownFollowers.remove(event.pubkey) != nil {
+            persistKnownFollowers()
+        }
     }
 
     private func classifyPollVote(_ event: NostrEvent) -> FlatNotificationItem? {
@@ -530,6 +555,55 @@ final class NotificationRepository {
 
     private func persistKnownFollowers() {
         UserDefaults.standard.set(Array(knownFollowers), forKey: "notif_known_followers_\(activePubkey)")
+    }
+
+    // MARK: - Follower notification persistence
+
+    private struct FollowerNotifRecord: Codable {
+        let eventId: String
+        let pubkey: String
+        let timestamp: Int
+    }
+
+    private var followerNotifsKey: String { "notif_follower_items_\(activePubkey)" }
+
+    /// Reload persisted follower notification rows into `flatItems` on bind.
+    /// Must be called after `knownFollowers` is seeded so `ingestFollowEvent`
+    /// backfill dedup works correctly via the `knownFollowers.insert().inserted`
+    /// early-exit rather than consuming `seenEventIds` slots.
+    private func loadPersistedFollowerNotifs() {
+        guard !activePubkey.isEmpty else { return }
+        guard let data = UserDefaults.standard.data(forKey: followerNotifsKey),
+              let records = try? JSONDecoder().decode([FollowerNotifRecord].self, from: data),
+              !records.isEmpty else { return }
+        let items = records
+            .map { FlatNotificationItem(id: $0.eventId, kind: .follower, actorPubkey: $0.pubkey, referencedEventId: "", timestamp: $0.timestamp) }
+            .sorted { $0.timestamp > $1.timestamp }
+        withTransaction(Transaction(animation: nil)) {
+            for item in items {
+                let idx = flatItems.firstIndex(where: { $0.timestamp < item.timestamp }) ?? flatItems.count
+                flatItems.insert(item, at: idx)
+            }
+            if flatItems.count > Self.flatCap { flatItems.removeLast(flatItems.count - Self.flatCap) }
+        }
+        summary = computeSummary24h()
+    }
+
+    private func appendFollowerNotifRecord(eventId: String, pubkey: String, timestamp: Int) {
+        var existing: [FollowerNotifRecord] = []
+        if let data = UserDefaults.standard.data(forKey: followerNotifsKey),
+           let decoded = try? JSONDecoder().decode([FollowerNotifRecord].self, from: data) {
+            existing = decoded
+        }
+        existing.removeAll { $0.eventId == eventId }
+        existing.append(FollowerNotifRecord(eventId: eventId, pubkey: pubkey, timestamp: timestamp))
+        if existing.count > 200 {
+            existing.sort { $0.timestamp > $1.timestamp }
+            existing = Array(existing.prefix(200))
+        }
+        if let data = try? JSONEncoder().encode(existing) {
+            UserDefaults.standard.set(data, forKey: followerNotifsKey)
+        }
     }
 
     private func bumpLatestTimestamp(_ ts: Int) {
