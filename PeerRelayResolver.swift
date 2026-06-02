@@ -1,5 +1,21 @@
 import Foundation
 
+/// Which of a peer's published relay lists a gift-wrap delivery set was drawn
+/// from. Surfaced in the conversation relay panel so the user can see *why* we
+/// route to a given relay. Only the recipient's *inbox* lists are valid DM
+/// delivery targets — see `resolveWithSource`.
+enum DeliveryRelaySource {
+    case dmRelays    // kind-10050 NIP-17 DM relays
+    case readRelays  // kind-10002 NIP-65 read/inbox relays
+}
+
+/// A resolved delivery target set plus its provenance. Mirrors Android
+/// `PeerDeliveryRelays`.
+struct PeerDeliveryRelays: Equatable {
+    let urls: [String]
+    let source: DeliveryRelaySource
+}
+
 /// Resolve a peer's gift-wrap delivery targets. Applies the NIP-17 routing
 /// hierarchy used by Android: kind-10050 DM relays first, kind-10002 read
 /// (inbox) relays second, empty third. Never falls back to write relays —
@@ -16,6 +32,22 @@ enum PeerRelayResolver {
         }
         let inbox = await RelayListRepository.shared.getReadRelays(pubkey)
         return canonicalize(inbox)
+    }
+
+    /// Resolve a peer's gift-wrap delivery targets AND record which list they came from,
+    /// for the conversation relay panel. ALWAYS the recipient's own *inbox*: their kind-10050
+    /// DM relays, else their kind-10002 read (inbox) relays. Never the sender's relays and
+    /// never the recipient's write/outbox — a wrap published there would never reach them
+    /// (they don't read our relays, and NIP-17 delivers to the inbox, not the outbox).
+    /// Returns empty urls when the peer has published no inbox; the caller picks the
+    /// last-ditch fallback (a public best-effort, never our own relays).
+    static func resolveWithSource(pubkey: String) async -> PeerDeliveryRelays {
+        if let dm = await RelayListRepository.shared.getDmRelays(pubkey), !dm.isEmpty {
+            return PeerDeliveryRelays(urls: canonicalize(dm), source: .dmRelays)
+        }
+        // Strict read/inbox split (unmarked relays count as read) — no write fallback.
+        let read = await RelayListRepository.shared.readWriteSplit(pubkey).read
+        return PeerDeliveryRelays(urls: canonicalize(read), source: .readRelays)
     }
 
     private static func canonicalize(_ urls: [String]) -> [String] {

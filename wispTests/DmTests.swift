@@ -123,4 +123,93 @@ struct DmTests {
         #expect(back?.msg.rumorId == "r")
         #expect(back?.msg.reactions.first?.emoji == "👍")
     }
+
+    // MARK: - SendState (optimistic send) Codable migration
+
+    /// Backward-compat guard: a payload written before `sendState` existed must decode as
+    /// `.sent`, so every persisted row + received message renders delivered, never stuck
+    /// "sending". Other defaulted fields (relayUrls/reactions) must also fill in.
+    @Test func dmMessageDecodesMissingSendStateAsSent() throws {
+        let json = """
+        {"id":"gw:1","senderPubkey":"a","content":"hi","createdAt":1,"giftWrapId":"gw","rumorId":"r","participants":["p"]}
+        """
+        let decoded = try JSONDecoder().decode(DmMessage.self, from: Data(json.utf8))
+        #expect(decoded.sendState == .sent)
+        #expect(decoded.relayUrls.isEmpty)
+        #expect(decoded.reactions.isEmpty)
+        #expect(decoded.fileMetadata == nil)
+    }
+
+    /// `.sending` / `.failed` / `.sent` survive a Codable round-trip.
+    @Test func dmMessageSendStateRoundTrips() throws {
+        for state in [DmMessage.SendState.sending, .failed, .sent] {
+            var msg = DmMessage(id: "x", senderPubkey: "a", content: "c", createdAt: 1,
+                                giftWrapId: "", rumorId: "r", replyToId: nil, participants: ["p"])
+            msg.sendState = state
+            let data = try JSONEncoder().encode(msg)
+            let decoded = try JSONDecoder().decode(DmMessage.self, from: data)
+            #expect(decoded.sendState == state)
+        }
+    }
+
+    // MARK: - Optimistic send: reconcile + echo dedup
+
+    /// Reconciling an optimistic `.sending` row rewrites its temporary id to the real
+    /// composite id, attaches relay URLs + `.sent`, and — crucially — the self-copy echo
+    /// that later arrives over the subscription dedups by composite id instead of inserting
+    /// a duplicate. Uses an UNBOUND repository (empty owner ⇒ `persist()` no-ops, no disk).
+    @MainActor
+    @Test func optimisticReconcileRewritesIdAndDedupsEcho() {
+        let repo = DmRepository()
+        let convKey = "me,peer"
+        let tempId = "pending:abc"
+
+        var optimistic = DmMessage(id: tempId, senderPubkey: "me", content: "hi", createdAt: 100,
+                                   giftWrapId: "", rumorId: "rum1", replyToId: nil, participants: ["peer"])
+        optimistic.sendState = .sending
+        repo.insertOptimistic(optimistic, conversationKey: convKey)
+        #expect(repo.conversation(convKey)?.messages.count == 1)
+        #expect(repo.conversation(convKey)?.messages.first?.sendState == .sending)
+
+        // Pre-seed dedup the way `deliver` does before publishing the self-copy.
+        _ = repo.markGiftWrapSeen("selfwrap1")
+
+        let final = DmMessage(id: "selfwrap1:100", senderPubkey: "me", content: "hi", createdAt: 100,
+                              giftWrapId: "selfwrap1", rumorId: "rum1", replyToId: nil,
+                              participants: ["peer"], relayUrls: ["wss://r"], sendState: .sent)
+        #expect(repo.reconcileOptimistic(tempId: tempId, conversationKey: convKey, final: final))
+
+        let afterReconcile = repo.conversation(convKey)?.messages ?? []
+        #expect(afterReconcile.count == 1)
+        #expect(afterReconcile.first?.id == "selfwrap1:100")
+        #expect(afterReconcile.first?.sendState == .sent)
+        #expect(afterReconcile.first?.relayUrls == ["wss://r"])
+
+        // The self-copy echo (same composite id, different relay) must merge, not duplicate.
+        let echo = DmMessage(id: "selfwrap1:100", senderPubkey: "me", content: "hi", createdAt: 100,
+                             giftWrapId: "selfwrap1", rumorId: "rum1", replyToId: nil,
+                             participants: ["peer"], relayUrls: ["wss://r2"])
+        #expect(repo.addMessage(echo, conversationKey: convKey) == false)
+        #expect(repo.conversation(convKey)?.messages.count == 1)
+        #expect(repo.conversation(convKey)?.messages.first?.relayUrls.contains("wss://r2") == true)
+    }
+
+    /// A failed send can be flipped back to `.sending` for retry (in-memory state only).
+    @MainActor
+    @Test func optimisticFailedThenRetryFlipsState() {
+        let repo = DmRepository()
+        let convKey = "me,peer"
+        let tempId = "pending:xyz"
+        var msg = DmMessage(id: tempId, senderPubkey: "me", content: "hi", createdAt: 5,
+                            giftWrapId: "", rumorId: "r", replyToId: nil, participants: ["peer"])
+        msg.sendState = .sending
+        repo.insertOptimistic(msg, conversationKey: convKey)
+
+        repo.setOptimisticSendState(.failed, tempId: tempId, conversationKey: convKey)
+        #expect(repo.conversation(convKey)?.messages.first?.sendState == .failed)
+
+        repo.setOptimisticSendState(.sending, tempId: tempId, conversationKey: convKey)
+        #expect(repo.conversation(convKey)?.messages.first?.sendState == .sending)
+        #expect(repo.conversation(convKey)?.messages.count == 1)
+    }
 }

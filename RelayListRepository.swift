@@ -48,6 +48,15 @@ final class RelayListRepository {
         return entry?.read ?? []
     }
 
+    /// Raw NIP-65 read/write split with NO cross-fallback between the two axes —
+    /// for callers (the DM relay panel / delivery-source resolver) that must
+    /// distinguish whether a relay came from a `read` or `write` marker. Fetches
+    /// from indexers on cache miss, exactly like `getReadRelays`.
+    func readWriteSplit(_ pubkey: String) async -> (read: [String], write: [String]) {
+        let entry = await loadEntry(pubkey)
+        return (entry?.read ?? [], entry?.write ?? [])
+    }
+
     /// Peer's kind-10050 DM inbox relays. Returns `nil` only when the lookup
     /// failed (no indexer response, network error). Returns `[]` when the
     /// fetch definitively confirmed the peer has no kind-10050 — callers
@@ -79,6 +88,20 @@ final class RelayListRepository {
             cache[pubkey] = entry
             if !entry.read.isEmpty { return entry.read }
             return entry.write.isEmpty ? nil : entry.write
+        }
+        return nil
+    }
+
+    /// Synchronous kind-10050 lookup against the in-memory + UserDefaults cache
+    /// only (no network). Returns `nil` on a cold miss (never queried), or the
+    /// cached list — which may be `[]` if a negative result was previously cached.
+    /// Used to paint the conversation relay panel instantly before the async
+    /// refresh lands. Mirrors Android `getCachedDmRelays`.
+    func cachedDmRelays(_ pubkey: String) -> [String]? {
+        if let entry = dmCache[pubkey] { return entry.relays }
+        if let entry = loadDmFromDefaults(pubkey) {
+            dmCache[pubkey] = entry
+            return entry.relays
         }
         return nil
     }
