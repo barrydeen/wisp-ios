@@ -4,13 +4,16 @@ import UIKit
 
 @Observable
 @MainActor
-final class DmConversationViewModel {
+final class DmConversationViewModel: EmojiComposing {
     let keypair: Keypair
     /// Conversation participants excluding the local user, sorted (matches DmRepository.conversationKey ordering).
     let participants: [String]
 
     var messages: [DmMessage] = []
     var draft: String = ""
+    /// Custom-emoji `:shortcode` autocomplete state (EmojiComposing).
+    var emojiCandidates: [CustomEmoji] = []
+    var emojiStartUtf16: Int?
     var sendError: String?
     var replyingTo: DmMessage?
     var isMiningPow: Bool = false
@@ -296,6 +299,7 @@ final class DmConversationViewModel {
         // our own self-copy — computes the same rumor id and conversation key (NIP-17).
         var tags: [[String]] = participants.map { ["p", $0] }
         tags.append(contentsOf: fileExtraTags)
+        tags.append(contentsOf: EmojiShortcode.emojiTags(in: content))
         if let replyRumorId { tags.append(["e", replyRumorId, "", "reply"]) }
         return Nip17.buildRumorRaw(senderPubkey: keypair.pubkey, kind: kind,
                                    tags: tags, content: content, createdAt: createdAt)
@@ -304,10 +308,14 @@ final class DmConversationViewModel {
     private func insertOptimistic(tempId: String, content: String, createdAt: Int,
                                   rumorId: String, replyToId: String?,
                                   fileMetadata: EncryptedFileMetadata?) {
+        let emojiMap = Dictionary(
+            EmojiShortcode.emojiTags(in: content).compactMap { $0.count >= 3 ? ($0[1], $0[2]) : nil },
+            uniquingKeysWith: { first, _ in first }
+        )
         let msg = DmMessage(
             id: tempId, senderPubkey: keypair.pubkey, content: content, createdAt: createdAt,
             giftWrapId: "", rumorId: rumorId, replyToId: replyToId, participants: participants,
-            relayUrls: [], fileMetadata: fileMetadata, sendState: .sending
+            relayUrls: [], emojiMap: emojiMap, fileMetadata: fileMetadata, sendState: .sending
         )
         repo.insertOptimistic(msg, conversationKey: conversationKey)
     }

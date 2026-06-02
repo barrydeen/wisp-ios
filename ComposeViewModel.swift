@@ -519,14 +519,7 @@ final class ComposeViewModel {
 
     func selectEmoji(_ emoji: CustomEmoji) {
         guard let startOffset = emojiStartUtf16 else { return }
-        let s = content
-        guard let stringStart = s.utf16.index(s.utf16.startIndex, offsetBy: startOffset, limitedBy: s.utf16.endIndex),
-              let stringStartIdx = String.Index(stringStart, within: s) else { return }
-        var end = stringStartIdx
-        while end < s.endIndex, !s[end].isMentionTokenBreak { end = s.index(after: end) }
-        var newContent = s
-        newContent.replaceSubrange(stringStartIdx..<end, with: ":\(emoji.shortcode): ")
-        content = newContent
+        content = EmojiShortcode.insert(emoji.shortcode, into: content, atUtf16: startOffset)
         emojiQuery = nil
         emojiCandidates = []
         emojiStartUtf16 = nil
@@ -1200,6 +1193,7 @@ final class ComposeViewModel {
             existingP.insert(pk)
         }
         for tag in hashtags { extras.append(["t", tag]) }
+        extras.append(contentsOf: EmojiShortcode.emojiTags(in: body))
         if let clientTag = NostrEvent.clientTagIfEnabled() { extras.append(clientTag) }
 
         do {
@@ -1528,6 +1522,7 @@ final class ComposeViewModel {
                 ))
             }
             if explicit { tags.append(["content-warning", ""]) }
+            tags.append(contentsOf: EmojiShortcode.emojiTags(in: materializedContent))
             if let clientTag = NostrEvent.clientTagIfEnabled() { tags.append(clientTag) }
             return tags
         }
@@ -1567,6 +1562,8 @@ final class ComposeViewModel {
         } else if explicit {
             tags.append(["content-warning", ""])
         }
+
+        tags.append(contentsOf: EmojiShortcode.emojiTags(in: materializedContent))
 
         if let clientTag = NostrEvent.clientTagIfEnabled() { tags.append(clientTag) }
 

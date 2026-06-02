@@ -115,21 +115,27 @@ struct GroupRoomView: View {
     }
 
     private var composer: some View {
-        HStack(spacing: 8) {
-            TextField("Message", text: $viewModel.messageText, axis: .vertical)
-                .textFieldStyle(.plain)
-                .padding(10)
-                .background(Color.wispSurfaceVariant, in: RoundedRectangle(cornerRadius: 18))
-                .lineLimit(1...5)
-            Button {
-                Task { await viewModel.sendMessage() }
-            } label: {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.system(size: 30))
-                    .foregroundStyle(viewModel.messageText.trimmingCharacters(in: .whitespaces).isEmpty
-                                     ? Color.gray : Color.wispPrimary)
+        VStack(spacing: 6) {
+            if !viewModel.emojiCandidates.isEmpty {
+                EmojiSuggestionBar(candidates: viewModel.emojiCandidates) { emoji in
+                    viewModel.selectEmoji(emoji)
+                }
             }
-            .disabled(viewModel.messageText.trimmingCharacters(in: .whitespaces).isEmpty || viewModel.isSending)
+            HStack(spacing: 8) {
+                EmojiComposerTextView(viewModel: viewModel, placeholder: "Message")
+                    .padding(.horizontal, 8)
+                    .frame(maxWidth: .infinity)
+                    .background(Color.wispSurfaceVariant, in: RoundedRectangle(cornerRadius: 18))
+                Button {
+                    Task { await viewModel.sendMessage() }
+                } label: {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.system(size: 30))
+                        .foregroundStyle(viewModel.messageText.trimmingCharacters(in: .whitespaces).isEmpty
+                                         ? Color.gray : Color.wispPrimary)
+                }
+                .disabled(viewModel.messageText.trimmingCharacters(in: .whitespaces).isEmpty || viewModel.isSending)
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)

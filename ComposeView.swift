@@ -834,32 +834,8 @@ struct ComposeView: View {
     }
 
     private var emojiPopup: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                ForEach(viewModel.emojiCandidates) { emoji in
-                    Button {
-                        viewModel.selectEmoji(emoji)
-                    } label: {
-                        HStack(spacing: 4) {
-                            AsyncImage(url: URL(string: emoji.url)) { phase in
-                                switch phase {
-                                case .success(let img): img.resizable()
-                                default: Color.clear
-                                }
-                            }
-                            .frame(width: 18, height: 18)
-                            Text(":\(emoji.shortcode):")
-                                .font(.caption2.weight(.medium))
-                        }
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 5)
-                        .background(Color.wispSurfaceVariant.opacity(0.6),
-                                    in: RoundedRectangle(cornerRadius: 8))
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(.horizontal, 12)
+        EmojiSuggestionBar(candidates: viewModel.emojiCandidates) { emoji in
+            viewModel.selectEmoji(emoji)
         }
     }
 

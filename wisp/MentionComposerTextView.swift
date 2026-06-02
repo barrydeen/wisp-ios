@@ -466,8 +466,10 @@ struct MentionComposerTextView: UIViewRepresentable {
                 viewModel.updateMentionTrigger(query: nil, atOffsetUtf16: nil, endUtf16: nil)
             }
 
-            if token.hasPrefix(":"), token.count >= 2, !token.dropFirst().contains(":") {
-                viewModel.updateEmojiTrigger(query: String(token.dropFirst()), atOffsetUtf16: utf16Offset)
+            // Emoji `:shortcode` uses the shared detector (independent of the
+            // mention token walk above) so it fires mid-text after a space too.
+            if let (emojiQuery, emojiOffset) = EmojiShortcode.detectTrigger(in: ns as String, caretUtf16: caret) {
+                viewModel.updateEmojiTrigger(query: emojiQuery, atOffsetUtf16: emojiOffset)
             } else {
                 viewModel.updateEmojiTrigger(query: nil, atOffsetUtf16: nil)
             }
