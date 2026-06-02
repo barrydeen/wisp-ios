@@ -31,6 +31,9 @@ final class EmojiImageCache: ObservableObject {
 
         // disk hit
         let diskFile = diskDir.appendingPathComponent(diskKey(url))
+        #if DEBUG
+        PerfTrace.mark("emoji.diskRead", url: url)
+        #endif
         if let data = try? Data(contentsOf: diskFile), let img = UIImage(data: data) {
             memory[url] = img
             version &+= 1

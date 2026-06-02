@@ -1,6 +1,13 @@
 import SwiftUI
+import os
 
 struct CachedAvatarView: View {
+    /// Animated pfps whose raw bytes exceed this render STATIC (first frame),
+    /// even with "animate avatars" on. A few users ship enormous multi-MB
+    /// animated avatars whose per-frame render on every feed row pegs the main
+    /// thread; a hard byte ceiling is the reliable backstop on top of the
+    /// per-frame downsampling + frame cap in the decoder.
+    private static let maxAnimatedAvatarBytes = 2 * 1024 * 1024
     let url: String?
     let size: CGFloat
     /// When true, this avatar always loads regardless of the global auto-download
@@ -92,11 +99,23 @@ struct CachedAvatarView: View {
         // animated decoder are real CPU work that previously ran on MainActor
         // during scroll. The cheap `isLikelyAnimated` string check and the
         // setting are read on main; only the decode hops off.
-        let tryAnimated = settings.animateAvatars
-            && AnimatedImageHint.isLikelyAnimated(url: url, mime: nil)
+        let likelyAnimated = AnimatedImageHint.isLikelyAnimated(url: url, mime: nil)
+        let animatedTooLarge = data.count > Self.maxAnimatedAvatarBytes
+        let tryAnimated = settings.animateAvatars && likelyAnimated && !animatedTooLarge
+        #if DEBUG
+        if settings.animateAvatars, likelyAnimated, animatedTooLarge {
+            mediaPerfLog.log("avatar: animated pfp \(data.count, privacy: .public) bytes > cap — rendering static url=\(url, privacy: .public)")
+        }
+        #endif
+        // Downsample animated frames to the avatar's pixel size. A circular 40pt
+        // avatar only needs ~120px frames; without this cap, a massive animated
+        // pfp (large dimensions × many frames, rendered on every one of an
+        // author's feed rows) made UIImageView scale full-res frames on the main
+        // thread and froze the app. `* 3` covers @3x displays.
+        let framePixelCap = max(size * 3, 96)
         let decoded: DecodedAvatar = await Task.detached(priority: .utility) {
             if tryAnimated,
-               let payload = AnimatedImageDecoder.decode(data: data),
+               let payload = AnimatedImageDecoder.decode(data: data, maxPixelSize: framePixelCap),
                payload.frames.count > 1 {
                 return .animated(payload)
             }
