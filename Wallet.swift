@@ -28,7 +28,11 @@ protocol Wallet: AnyObject {
 }
 
 struct WalletTransaction: Identifiable, Codable {
-    var id: String { paymentHash }
+    /// Composite of paymentHash + direction. A self-payment produces an
+    /// (incoming, outgoing) pair that share a paymentHash; SwiftUI's
+    /// `ForEach` collapses duplicate ids, so without the type suffix both
+    /// rows render as whichever direction `ForEach` picked.
+    var id: String { "\(paymentHash)|\(type.rawValue)" }
     let type: TransactionType
     let description: String?
     let paymentHash: String
