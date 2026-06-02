@@ -876,7 +876,7 @@ struct PostCardView: View {
                 let replyCount = max(forcedReplyCount ?? 0, networkCount)
                 actionItem(
                     icon: "bubble.right",
-                    count: replyCount > 0 ? replyCount : nil
+                    count: replyCount
                 )
             }
             .buttonStyle(.plain)
@@ -939,21 +939,20 @@ struct PostCardView: View {
                     .frame(height: 28)
             } else {
                 let zapSats = repoBox.counts.zapSats > 0 ? repoBox.counts.zapSats : (engagement?.zapSats ?? 0)
-                let iconTint: Color = zapSats > 0
-                    ? (isOwnPost ? Color.wispZapColor.opacity(0.4) : Color.wispZapColor)
-                    : .secondary
-                let labelTint: Color = zapSats > 0 ? Color.wispZapColor : .secondary
+                // Orange only when *we* zapped (mirrors iReposted / iReactedEmoji);
+                // otherwise grey, even when others have zapped the note.
+                let iconTint: Color = iZapped ? Color.wispZapColor : .secondary
+                let labelTint: Color = iZapped ? Color.wispZapColor : .secondary
                 HStack(spacing: 4) {
                     settings.zapImage
                         .resizable()
                         .scaledToFit()
                         .frame(width: 18, height: 18)
                         .foregroundStyle(iconTint)
-                    if let label = zapLabel(zapSats), !label.isEmpty {
-                        Text(label)
-                            .font(.caption)
-                            .foregroundStyle(labelTint)
-                    }
+                    // Always show a number; plain "0" (not a fiat "$0.00") when unzapped.
+                    Text(zapSats > 0 ? (zapLabel(zapSats) ?? "0") : "0")
+                        .font(.caption)
+                        .foregroundStyle(labelTint)
                 }
                 .frame(height: 28)
             }
@@ -1030,7 +1029,7 @@ struct PostCardView: View {
         return Button {
             showRepostMenu = true
         } label: {
-            actionItem(icon: "arrow.2.squarepath", count: count > 0 ? count : nil, tint: tint)
+            actionItem(icon: "arrow.2.squarepath", count: count, tint: tint)
         }
         .buttonStyle(.plain)
         .popover(isPresented: $showRepostMenu) {
@@ -1293,7 +1292,7 @@ struct PostCardView: View {
             } else {
                 actionItem(
                     icon: iReactedEmoji != nil ? "heart.fill" : "heart",
-                    count: resolvedReactionCount > 0 ? resolvedReactionCount : nil,
+                    count: resolvedReactionCount,
                     tint: iReactedEmoji != nil ? .pink : nil
                 )
             }
@@ -1583,7 +1582,7 @@ struct PostCardView: View {
                 .frame(width: 22, height: 17, alignment: .center)
             if let label, !label.isEmpty {
                 Text(label).font(.caption)
-            } else if let count, count > 0 {
+            } else if let count {
                 Text(formatCount(count)).font(.caption)
             }
         }
@@ -1602,7 +1601,7 @@ struct PostCardView: View {
                 .frame(width: 18, height: 18)
             if let label, !label.isEmpty {
                 Text(label).font(.caption)
-            } else if let count, count > 0 {
+            } else if let count {
                 Text(formatCount(count)).font(.caption)
             }
         }

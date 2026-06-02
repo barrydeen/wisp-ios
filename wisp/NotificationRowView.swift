@@ -10,12 +10,15 @@ struct NotificationRowView: View {
     let onDmTap: (String) -> Void
     var onNoteTap: ((String, String?) -> Void)? = nil
 
-    @State private var expanded = false
     @State private var profiles: [String: ProfileData] = [:]
     @State private var sendingReply = false
 
     private let repo = NotificationRepository.shared
     private let profileRepo = ProfileRepository.shared
+
+    /// Single source of truth lives on the view model so only one row is open
+    /// at a time (accordion). See `NotificationsViewModel.expandedItemId`.
+    private var expanded: Bool { viewModel.expandedItemId == item.id }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -468,7 +471,9 @@ struct NotificationRowView: View {
             onDmTap(key)
             return
         }
-        withAnimation(.easeInOut(duration: 0.18)) { expanded.toggle() }
+        withAnimation(.easeInOut(duration: 0.18)) {
+            viewModel.expandedItemId = (viewModel.expandedItemId == item.id) ? nil : item.id
+        }
     }
 
     private func displayName(_ pubkey: String) -> String {

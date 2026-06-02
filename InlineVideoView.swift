@@ -224,6 +224,11 @@ struct InlineVideoView: View {
                     if settings.autoLoadMedia && settings.videoAutoplay {
                         initPlayer()
                         loaded = true
+                    } else if detectedAspect == nil, staticAspect == nil {
+                        // Autoplay off + no imeta `dim`: probe the true aspect so
+                        // the poster renders in the right-shaped box instead of
+                        // the 4:5 fallback. Metadata-only, dim-less videos only.
+                        Task { await detectAspectWithoutPlaying() }
                     }
                 }
             }
@@ -255,14 +260,24 @@ struct InlineVideoView: View {
         let p = AVPlayer(url: url)
         p.isMuted = isMuted
         player = p
-        Task { await detectAspect(for: p.currentItem) }
+        Task { await detectAspect(of: p.currentItem?.asset) }
+    }
+
+    /// Probe the real aspect ratio *without* starting playback. Used by the
+    /// poster branch when autoplay is off — otherwise `detectedAspect` stays
+    /// nil (it's only set via `initPlayer`) and a dim-less video falls back to
+    /// the squarish 4:5 default, squishing/cropping the poster. Builds a
+    /// metadata-only `AVURLAsset` (no `AVPlayer`, no playback).
+    private func detectAspectWithoutPlaying() async {
+        guard let url = URL(string: meta.url) else { return }
+        await detectAspect(of: AVURLAsset(url: url))
     }
 
     /// Reads the asset's natural video size via the modern `load(.tracks)`
     /// API and updates `detectedAspect` so the layout snaps to the real
     /// aspect even when no imeta `dim` tag was supplied.
-    private func detectAspect(for item: AVPlayerItem?) async {
-        guard let asset = item?.asset else { return }
+    private func detectAspect(of asset: AVAsset?) async {
+        guard let asset else { return }
         do {
             let tracks = try await asset.loadTracks(withMediaType: .video)
             guard let track = tracks.first else { return }
