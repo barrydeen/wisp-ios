@@ -23,7 +23,7 @@ protocol Wallet: AnyObject {
     func disconnect()
     func fetchBalance() async -> Result<Int64, WalletError>
     func payInvoice(_ bolt11: String) async -> Result<String, WalletError>
-    func makeInvoice(amountMsats: Int64, description: String) async -> Result<String, WalletError>
+    func makeInvoice(amountMsats: Int64, description: String, expirySecs: Int64) async -> Result<String, WalletError>
     func listTransactions(limit: Int, offset: Int) async -> Result<[WalletTransaction], WalletError>
 }
 

@@ -458,9 +458,9 @@ final class WalletStore {
         }
     }
 
-    func makeInvoice(amountSats: Int64, description: String) async -> Result<String, WalletError> {
+    func makeInvoice(amountSats: Int64, description: String, expirySecs: Int64 = 3600) async -> Result<String, WalletError> {
         guard let wallet else { return .failure(.notConnected) }
-        return await wallet.makeInvoice(amountMsats: amountSats * 1000, description: description)
+        return await wallet.makeInvoice(amountMsats: amountSats * 1000, description: description, expirySecs: expirySecs)
     }
 
     private(set) var hasMoreTransactions: Bool = false

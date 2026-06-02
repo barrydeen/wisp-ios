@@ -184,8 +184,8 @@ final class NwcWallet: Wallet {
         }
     }
 
-    func makeInvoice(amountMsats: Int64, description: String) async -> Result<String, WalletError> {
-        await send(.makeInvoice(amountMsats: amountMsats, description: description)) { response in
+    func makeInvoice(amountMsats: Int64, description: String, expirySecs: Int64) async -> Result<String, WalletError> {
+        await send(.makeInvoice(amountMsats: amountMsats, description: description, expirySecs: expirySecs)) { response in
             guard case .makeInvoice(let invoice, _) = response else {
                 throw WalletError.decodeFailed("expected make_invoice response")
             }

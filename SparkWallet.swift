@@ -361,7 +361,7 @@ final class SparkWallet: Wallet {
         }
     }
 
-    func makeInvoice(amountMsats: Int64, description: String) async -> Result<String, WalletError> {
+    func makeInvoice(amountMsats: Int64, description: String, expirySecs: Int64) async -> Result<String, WalletError> {
         guard let sdk else { return .failure(.notConnected) }
         do {
             let amountSats = UInt64(max(amountMsats / 1000, 1))
@@ -370,7 +370,7 @@ final class SparkWallet: Wallet {
                     paymentMethod: ReceivePaymentMethod.bolt11Invoice(
                         description: description.isEmpty ? "Wisp wallet" : description,
                         amountSats: amountSats,
-                        expirySecs: 3600,
+                        expirySecs: UInt32(min(expirySecs, Int64(UInt32.max))),
                         paymentHash: nil
                     )
                 )
