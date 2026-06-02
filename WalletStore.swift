@@ -476,10 +476,16 @@ final class WalletStore {
         let pageSize = 50
         switch await wallet.listTransactions(limit: pageSize, offset: 0) {
         case .success(let txs):
-            transactions = txs
+            // Deduplicate by (paymentHash, type) — some backends return a
+            // self-payment twice with identical type and hash. A genuine
+            // outgoing+incoming pair shares a hash but differs in type, so
+            // both rows are preserved.
+            var seen = Set<String>()
+            let deduped = txs.filter { seen.insert("\($0.paymentHash)|\($0.type.rawValue)").inserted }
+            transactions = deduped
             hasMoreTransactions = txs.count == pageSize
             lastTransactionError = nil
-            WalletCache.saveTransactions(txs, for: keypair.pubkey)
+            WalletCache.saveTransactions(deduped, for: keypair.pubkey)
         case .failure(let err):
             lastTransactionError = err.errorDescription ?? "Failed to fetch transactions"
         }

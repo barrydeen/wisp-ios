@@ -6,6 +6,7 @@ struct LightningInvoiceView: View {
     let invoice: String
     let amountSats: Int64?
     let summary: String?
+    var isPreview: Bool = false
 
     @Environment(WalletStore.self) private var walletStore: WalletStore?
     @State private var showSendSheet = false
@@ -16,10 +17,11 @@ struct LightningInvoiceView: View {
     private let timer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
     private let decoded: Bolt11.DecodedInvoice?
 
-    init(invoice: String, amountSats: Int64?, summary: String?) {
+    init(invoice: String, amountSats: Int64?, summary: String?, isPreview: Bool = false) {
         self.invoice = invoice
         self.amountSats = amountSats
         self.summary = summary
+        self.isPreview = isPreview
         self.decoded = Bolt11.decode(invoice)
     }
 
@@ -99,13 +101,13 @@ struct LightningInvoiceView: View {
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 10)
                         .background(
-                            isExpired ? Color.wispZapColor.opacity(0.3) : Color.wispZapColor,
+                            (isExpired || isPreview) ? Color.wispZapColor.opacity(0.3) : Color.wispZapColor,
                             in: Capsule()
                         )
-                        .foregroundStyle(isExpired ? Color.white.opacity(0.5) : .white)
+                        .foregroundStyle((isExpired || isPreview) ? Color.white.opacity(0.5) : .white)
                 }
                 .buttonStyle(.plain)
-                .disabled(isExpired)
+                .disabled(isExpired || isPreview)
 
                 Button {
                     showQR = true
