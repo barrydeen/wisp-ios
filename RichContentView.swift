@@ -103,7 +103,11 @@ struct RichContentView: View {
 
     private func memoizedParse() -> [ContentSegment] {
         let generation = emojiRepo.generation
-        let key = "\(generation)|\(content)" as NSString
+        // `linksAreInline` is part of the key because the same content
+        // produces different segments when the host folds `.link` into inline
+        // — without it, a feed-card render would poison the cache entry
+        // consumed by a bio (or vice versa).
+        let key = "\(generation)|\(showLinkPreviews ? 1 : 0)|\(content)" as NSString
         if let box = Self.parseCache.object(forKey: key) { return box.segments }
         let signpostState = Signposts.render.beginInterval("parseCacheMiss")
         defer { Signposts.render.endInterval("parseCacheMiss", signpostState) }
@@ -120,7 +124,12 @@ struct RichContentView: View {
         let segments = ContentParser.parse(
             content: content,
             tags: tags,
-            emojiMap: merged
+            emojiMap: merged,
+            // When the host hides link preview cards, `.link` segments get
+            // folded back into inline text below — tell the parser so its
+            // pass-4 blank-line trim treats them as inline neighbors and
+            // doesn't eat the separator newlines between adjacent URLs.
+            linksAreInline: !showLinkPreviews
         )
         Self.parseCache.setObject(SegmentBox(segments), forKey: key)
         return segments
