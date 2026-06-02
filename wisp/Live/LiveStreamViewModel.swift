@@ -6,7 +6,7 @@ import Observation
 /// nevent hints → activity hints → host inbox → host outbox → top scoreboard → fallback.
 @Observable
 @MainActor
-final class LiveStreamViewModel {
+final class LiveStreamViewModel: EmojiComposing {
     let aTagValue: String
     let hostPubkey: String
     let dTag: String
@@ -15,6 +15,14 @@ final class LiveStreamViewModel {
 
     var chatRelays: [String] = []
     var messageText: String = ""
+    /// Custom-emoji `:shortcode` autocomplete state (EmojiComposing); `draft`
+    /// bridges to `messageText`.
+    var draft: String {
+        get { messageText }
+        set { messageText = newValue }
+    }
+    var emojiCandidates: [CustomEmoji] = []
+    var emojiStartUtf16: Int?
     var replyTarget: LiveChatMessage?
     var lastError: String?
 
@@ -131,6 +139,7 @@ final class LiveStreamViewModel {
             tags.append(["e", reply.id, "", "reply"])
         }
         appendMentionPTags(content: text, into: &tags)
+        tags.append(contentsOf: EmojiShortcode.emojiTags(in: text))
         if let client = NostrEvent.clientTagIfEnabled() {
             tags.append(client)
         }

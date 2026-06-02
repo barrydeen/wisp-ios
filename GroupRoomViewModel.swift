@@ -6,7 +6,7 @@ import Observation
 /// `GroupRepository`; this VM is just the UI binding for one `(relayUrl, groupId)`.
 @Observable
 @MainActor
-final class GroupRoomViewModel {
+final class GroupRoomViewModel: EmojiComposing {
 
     let keypair: Keypair
     let relayUrl: String
@@ -16,6 +16,14 @@ final class GroupRoomViewModel {
     @ObservationIgnored private let pool = GroupRelayPool.shared
 
     var messageText: String = ""
+    /// Custom-emoji `:shortcode` autocomplete state (EmojiComposing); `draft`
+    /// bridges to the existing `messageText`.
+    var draft: String {
+        get { messageText }
+        set { messageText = newValue }
+    }
+    var emojiCandidates: [CustomEmoji] = []
+    var emojiStartUtf16: Int?
     var isSending: Bool = false
     var sendError: String?
     var replyTarget: GroupMessage?
@@ -70,13 +78,15 @@ final class GroupRoomViewModel {
             }
         }
 
-        // NIP-30 emoji tags for any `:shortcode:` whose URL we already know
-        // from earlier messages or reactions in this room.
-        let resolvedEmojis = collectEmojiUrls(in: text)
+        // NIP-30 emoji tags for any `:shortcode:` — prefer a URL already seen in
+        // this room (collectEmojiUrls), then fall back to the user's own custom
+        // emoji so a freshly-picked emoji never seen here is still tagged.
+        let roomUrls = collectEmojiUrls(in: text)
+        let ownMap = EmojiRepository.shared.resolvedCustomMap
         var emojiMap: [String: String] = [:]
-        for (shortcode, url) in resolvedEmojis {
-            extraTags.append(["emoji", shortcode, url])
-            emojiMap[shortcode] = url
+        for tag in EmojiShortcode.emojiTags(in: text, resolve: { roomUrls[$0] ?? ownMap[$0] }) where tag.count >= 3 {
+            extraTags.append(tag)
+            emojiMap[tag[1]] = tag[2]
         }
 
         // Build tags inline + route signing through `Signer` so remote

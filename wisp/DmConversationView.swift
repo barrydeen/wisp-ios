@@ -9,7 +9,6 @@ struct DmConversationView: View {
     @State private var profiles: [String: ProfileData] = [:]
     @State private var photoItem: PhotosPickerItem?
     @State private var showRelayInfo = false
-    @FocusState private var composerFocused: Bool
     @Environment(\.dismiss) private var dismiss
 
     init(keypair: Keypair, participants: [String]) {
@@ -208,6 +207,11 @@ struct DmConversationView: View {
                 .padding(.horizontal, 12)
                 .padding(.top, 6)
             }
+            if !viewModel.emojiCandidates.isEmpty {
+                EmojiSuggestionBar(candidates: viewModel.emojiCandidates) { emoji in
+                    viewModel.selectEmoji(emoji)
+                }
+            }
             HStack(alignment: .bottom, spacing: 8) {
                 PhotosPicker(selection: $photoItem, matching: .any(of: [.images, .videos])) {
                     Image(systemName: "photo.on.rectangle")
@@ -216,12 +220,10 @@ struct DmConversationView: View {
                         .padding(.bottom, 8)
                 }
 
-                TextField("Message", text: $viewModel.draft, axis: .vertical)
-                    .lineLimit(1...5)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
+                EmojiComposerTextView(viewModel: viewModel, placeholder: "Message")
+                    .padding(.horizontal, 10)
+                    .frame(maxWidth: .infinity)
                     .background(Color.wispSurfaceVariant, in: RoundedRectangle(cornerRadius: 18))
-                    .focused($composerFocused)
 
                 Button {
                     viewModel.send()
@@ -333,9 +335,15 @@ struct DmMessageBubbleView: View {
             } else if let preview = localPreview {
                 localMediaView(preview)
             } else {
-                Text(message.content)
-                    .font(.subheadline)
-                    .foregroundStyle(isMine ? Color.white : Color.wispOnSurface)
+                EmojiText(
+                    message.content,
+                    emojiMap: message.emojiMap.merging(EmojiRepository.shared.resolvedCustomMap) { own, _ in own },
+                    textStyle: .subheadline,
+                    color: isMine ? .white : UIColor(Color.wispOnSurface),
+                    lineLimit: nil
+                )
+                .font(.subheadline)
+                .foregroundStyle(isMine ? Color.white : Color.wispOnSurface)
             }
         }
         .padding(.horizontal, isBubbleMedia ? 6 : 12)
