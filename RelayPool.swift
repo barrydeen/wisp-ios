@@ -80,8 +80,22 @@ enum RelayPool {
         timeout: TimeInterval = 8,
         waitForAllRelays: Bool = false
     ) async -> [NostrEvent] {
+        await queryDetailed(relays: relays, filter: filter, timeout: timeout, waitForAllRelays: waitForAllRelays).events
+    }
+
+    /// Like `query`, but also reports how many distinct relays sent EOSE — i.e. actually
+    /// answered the REQ. Lets a caller distinguish "queried successfully, no such event"
+    /// (`relaysResponded > 0`) from "couldn't reach anyone" (`== 0`), which matters before
+    /// taking a destructive action on an apparent absence — e.g. auto-creating a replaceable
+    /// list (kind 10050), where a fresh `createdAt` would clobber a list we merely failed to fetch.
+    static func queryDetailed(
+        relays: [String],
+        filter: NostrFilter,
+        timeout: TimeInterval = 8,
+        waitForAllRelays: Bool = false
+    ) async -> (events: [NostrEvent], relaysResponded: Int) {
         let urls = relays.compactMap(Self.wsURL)
-        guard !urls.isEmpty else { return [] }
+        guard !urls.isEmpty else { return ([], 0) }
 
         let subId = "q-" + String(UUID().uuidString.prefix(8)).lowercased()
         let reqFrame = "[\"REQ\",\"\(subId)\",\(filter.toJSON())]"
@@ -112,7 +126,7 @@ enum RelayPool {
         }
 
         await RelayConnectionPool.shared.deregister(subId: subId)
-        return collector.events
+        return (collector.events, collector.eoseCount)
     }
 
     // MARK: - Streaming query (one-shot, per-relay filters)
@@ -638,6 +652,10 @@ actor RelayConnectionPool {
     private var relayTouched: [String: Date] = [:]
     /// subId -> the relay urlStrings it was registered on (for deregister).
     private var subToRelays: [String: [String]] = [:]
+    /// subIds whose `deregister` raced ahead of their `register` (the two are spawned as
+    /// separate unstructured Tasks with no ordering guarantee). `register` consults and
+    /// clears this at the end so a cancel-before-register can't leak a pinned subscription.
+    private var cancelledSubs: Set<String> = []
     private var reaper: Task<Void, Never>?
 
     private init() {
@@ -682,10 +700,22 @@ actor RelayConnectionPool {
         // is the fingerprint of the freeze.
         relayPoolLog.log("register sub=\(subId, privacy: .public) requested=\(relays.count, privacy: .public) registered=\(registered.count, privacy: .public) newConns=\(self.conns.count - connsBefore, privacy: .public) liveConns=\(self.conns.count, privacy: .public)")
         #endif
+        // A `cancel()` may have raced ahead of this register (its deregister ran while we
+        // were awaiting `addSub`, or before this Task was even scheduled). If so, tear down
+        // now — otherwise the subscription stays pinned forever (refcount never hits 0),
+        // which is exactly the kind of leaked no-`since` stream that caused regression #266.
+        if cancelledSubs.remove(subId) != nil {
+            await deregister(subId: subId)
+        }
     }
 
     func deregister(subId: String) async {
-        guard let relays = subToRelays.removeValue(forKey: subId) else { return }
+        guard let relays = subToRelays.removeValue(forKey: subId) else {
+            // `register` hasn't populated `subToRelays` yet (no ordering between the two
+            // Tasks). Record the cancellation so `register` tears itself down on completion.
+            cancelledSubs.insert(subId)
+            return
+        }
         for urlString in relays {
             if let conn = conns[urlString] { await conn.removeSub(id: subId) }
             let n = (relayRefCount[urlString] ?? 1) - 1

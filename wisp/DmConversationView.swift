@@ -8,6 +8,7 @@ struct DmConversationView: View {
     @State private var viewModel: DmConversationViewModel
     @State private var profiles: [String: ProfileData] = [:]
     @State private var photoItem: PhotosPickerItem?
+    @State private var showRelayInfo = false
     @FocusState private var composerFocused: Bool
     @Environment(\.dismiss) private var dismiss
 
@@ -21,6 +22,10 @@ struct DmConversationView: View {
         VStack(spacing: 0) {
             header
             Divider().overlay(Color.wispSurfaceVariant.opacity(0.5))
+            if showRelayInfo {
+                relayPanel
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
             messageList
             Divider().overlay(Color.wispSurfaceVariant.opacity(0.5))
             composer
@@ -30,9 +35,18 @@ struct DmConversationView: View {
         .onAppear {
             viewModel.refresh()
             loadProfiles()
+            Task { await viewModel.start() }
         }
+        .onDisappear { viewModel.stop() }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
             viewModel.refresh()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: DmRepository.conversationDidUpdate)) { note in
+            // Live-update when a wrap/reaction for THIS conversation is ingested by the global
+            // subscription (or the scoped one), not just on foreground / local send.
+            if note.userInfo?["conversationKey"] as? String == viewModel.conversationKey {
+                viewModel.refresh()
+            }
         }
     }
 
@@ -52,10 +66,91 @@ struct DmConversationView: View {
             HStack {
                 BackChevronButton { dismiss() }
                 Spacer()
+                if viewModel.relayCount > 0 { relayButton }
             }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+    }
+
+    /// Cloud icon + count badge that toggles the relay-config panel. Mirrors Android.
+    private var relayButton: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.2)) { showRelayInfo.toggle() }
+        } label: {
+            Image(systemName: "cloud")
+                .font(.system(size: 18))
+                .foregroundStyle(showRelayInfo ? Color.wispPrimary : Color.wispOnSurfaceVariant)
+                .overlay(alignment: .topTrailing) {
+                    Text("\(viewModel.relayCount)")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 3)
+                        .frame(minWidth: 15, minHeight: 15)
+                        .background(Color.wispPrimary, in: Circle())
+                        .offset(x: 7, y: -7)
+                }
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Expandable panel listing each participant's DM delivery relays (with the source
+    /// they were resolved from) plus our own DM relays. Mirrors Android's relay panel.
+    private var relayPanel: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(participants, id: \.self) { pk in
+                if let delivery = viewModel.allParticipantRelays[pk] {
+                    relayGroup(
+                        pubkey: pk,
+                        name: profiles[pk]?.displayString ?? shortPubkey(pk),
+                        sourceLabel: sourceLabel(delivery.source),
+                        urls: delivery.urls
+                    )
+                }
+            }
+            if !viewModel.userDmRelays.isEmpty {
+                relayGroup(
+                    pubkey: keypair.pubkey,
+                    name: "You",
+                    sourceLabel: nil,
+                    urls: viewModel.userDmRelays
+                )
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(Color.wispSurfaceVariant.opacity(0.4))
+    }
+
+    private func relayGroup(pubkey: String, name: String, sourceLabel: String?, urls: [String]) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 8) {
+                CachedAvatarView(url: profiles[pubkey]?.picture, size: 20)
+                Text(name)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(Color.wispOnSurface)
+                    .lineLimit(1)
+                if let sourceLabel {
+                    Text("(\(sourceLabel))")
+                        .font(.caption2)
+                        .foregroundStyle(Color.wispOnSurfaceVariant)
+                }
+            }
+            ForEach(urls, id: \.self) { url in
+                Text(url.hasPrefix("wss://") ? String(url.dropFirst(6)) : url)
+                    .font(.caption2)
+                    .foregroundStyle(Color.wispOnSurfaceVariant)
+                    .padding(.leading, 28)
+            }
+        }
+    }
+
+    private func sourceLabel(_ source: DeliveryRelaySource) -> String? {
+        switch source {
+        case .dmRelays: return nil
+        case .readRelays: return "inbox"
+        }
     }
 
     private var messageList: some View {
@@ -73,8 +168,10 @@ struct DmConversationView: View {
                             senderProfile: profiles[msg.senderPubkey],
                             parent: parent,
                             parentName: parent.map { displayName(for: $0.senderPubkey) },
-                            onReply: { viewModel.replyingTo = msg },
-                            onReact: { picked in Task { await viewModel.react(to: msg, picked: picked) } }
+                            localPreview: viewModel.localPreview(for: msg),
+                            onReply: { viewModel.beginReply(to: msg) },
+                            onReact: { picked in Task { await viewModel.react(to: msg, picked: picked) } },
+                            onRetry: { viewModel.retry(msg) }
                         )
                         .id(msg.id)
                     }
@@ -82,7 +179,7 @@ struct DmConversationView: View {
                 .padding(.vertical, 12)
                 .padding(.horizontal, 12)
             }
-            .onChange(of: viewModel.messages.count) { _, _ in
+            .onChange(of: viewModel.messages.last?.id) { _, _ in
                 if let last = viewModel.messages.last {
                     withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
                 }
@@ -118,7 +215,6 @@ struct DmConversationView: View {
                         .foregroundStyle(Color.wispPrimary)
                         .padding(.bottom, 8)
                 }
-                .disabled(viewModel.isSending)
 
                 TextField("Message", text: $viewModel.draft, axis: .vertical)
                     .lineLimit(1...5)
@@ -128,19 +224,12 @@ struct DmConversationView: View {
                     .focused($composerFocused)
 
                 Button {
-                    Task {
-                        await viewModel.send()
-                        viewModel.refresh()
-                    }
+                    viewModel.send()
                 } label: {
-                    if viewModel.isSending {
-                        ProgressView().tint(.white).padding(10)
-                    } else {
-                        Image(systemName: "arrow.up")
-                            .font(.system(size: 16, weight: .bold))
-                            .foregroundStyle(.white)
-                            .padding(10)
-                    }
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(.white)
+                        .padding(10)
                 }
                 .background(canSend ? Color.wispPrimary : Color.wispSurfaceVariant, in: Circle())
                 .disabled(!canSend)
@@ -155,8 +244,7 @@ struct DmConversationView: View {
             guard let newItem else { return }
             Task {
                 if let media = try? await MediaPicker.load(newItem) {
-                    await viewModel.sendFile(media)
-                    viewModel.refresh()
+                    viewModel.sendFile(media)
                 }
                 photoItem = nil
             }
@@ -164,7 +252,7 @@ struct DmConversationView: View {
     }
 
     private var canSend: Bool {
-        !viewModel.isSending && !viewModel.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !viewModel.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func loadProfiles() {
@@ -198,8 +286,12 @@ struct DmMessageBubbleView: View {
     let senderProfile: ProfileData?
     let parent: DmMessage?
     let parentName: String?
+    /// Local media preview for an in-flight (`.sending`/`.failed`) file message,
+    /// shown until the Blossom upload finishes and `fileMetadata` is reconciled in.
+    let localPreview: DmConversationViewModel.LocalOutgoingMedia?
     let onReply: () -> Void
     let onReact: (PickedEmoji) -> Void
+    let onRetry: () -> Void
 
     @State private var showActions = false
     @State private var showEmojiLibrary = false
@@ -214,6 +306,7 @@ struct DmMessageBubbleView: View {
             VStack(alignment: isMine ? .trailing : .leading, spacing: 2) {
                 bubble
                 reactionChips
+                statusFooter
             }
             .onLongPressGesture { showActions = true }
             .popover(isPresented: $showActions) { actionsPopover }
@@ -237,18 +330,71 @@ struct DmMessageBubbleView: View {
             }
             if let meta = message.fileMetadata {
                 EncryptedMediaView(metadata: meta, cacheKey: message.rumorId)
+            } else if let preview = localPreview {
+                localMediaView(preview)
             } else {
                 Text(message.content)
                     .font(.subheadline)
                     .foregroundStyle(isMine ? Color.white : Color.wispOnSurface)
             }
         }
-        .padding(.horizontal, message.fileMetadata == nil ? 12 : 6)
-        .padding(.vertical, message.fileMetadata == nil ? 8 : 6)
+        .padding(.horizontal, isBubbleMedia ? 6 : 12)
+        .padding(.vertical, isBubbleMedia ? 6 : 8)
         .background(
             isMine ? Color.wispPrimary : Color.wispSurfaceVariant,
             in: RoundedRectangle(cornerRadius: 18)
         )
+    }
+
+    /// True when this bubble renders media (delivered or an in-flight local preview) —
+    /// drives the tighter media padding.
+    private var isBubbleMedia: Bool { message.fileMetadata != nil || localPreview != nil }
+
+    private func localMediaView(_ preview: DmConversationViewModel.LocalOutgoingMedia) -> some View {
+        ZStack {
+            if let img = preview.image {
+                Image(uiImage: img)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Color.wispSurfaceVariant
+            }
+            if preview.isVideo {
+                Image(systemName: "play.circle.fill")
+                    .font(.system(size: 28))
+                    .foregroundStyle(.white.opacity(0.9))
+            }
+        }
+        .frame(maxWidth: 220, maxHeight: 260)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .opacity(message.sendState == .sending ? 0.6 : 1)
+    }
+
+    /// Outgoing delivery status under our own bubbles: a clock while sending, a
+    /// tappable retry affordance on failure. Received messages render nothing.
+    @ViewBuilder
+    private var statusFooter: some View {
+        if isMine {
+            switch message.sendState {
+            case .sending:
+                Image(systemName: "clock")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .padding(.trailing, 2)
+            case .failed:
+                Button(action: onRetry) {
+                    HStack(spacing: 3) {
+                        Image(systemName: "exclamationmark.circle.fill")
+                        Text("Not delivered — tap to retry")
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+                }
+                .buttonStyle(.plain)
+            case .sent:
+                EmptyView()
+            }
+        }
     }
 
     private func quotedParent(_ parent: DmMessage) -> some View {

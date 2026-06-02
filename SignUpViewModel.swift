@@ -138,7 +138,9 @@ final class SignUpViewModel {
     /// Always-on relay published into every new user's kind-10002 (read+write)
     /// and kind-10050 list, regardless of RelayProber outcome.
     private static let wispOutboxRelay = "wss://relay.wisp.talk"
-    private static let wispDmRelay = "wss://auth.nostr1.com"
+    /// Shared with the login-time auto-seed in `RelaySettingsRepository` so new accounts and
+    /// existing accounts that lack a kind-10050 converge on the same DM inbox relay.
+    private static let wispDmRelay = RelaySettingsRepository.defaultDmRelay
 
     static let popularHashtags = [
         "nostr", "bitcoin", "lightning", "art", "photography",

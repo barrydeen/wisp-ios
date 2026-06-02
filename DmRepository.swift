@@ -12,6 +12,12 @@ import UIKit
 final class DmRepository {
     static let shared = DmRepository()
 
+    /// Posted (userInfo["conversationKey"]) whenever a conversation's messages/reactions
+    /// change, so an OPEN `DmConversationView` live-updates regardless of which subscription
+    /// (global or per-conversation) delivered the wrap. Mirrors the kind-1 `.nostrEventPublished`
+    /// bridge used by threads.
+    static let conversationDidUpdate = Notification.Name("DmConversationDidUpdate")
+
     /// conversationKey → ordered messages (ascending by createdAt)
     private(set) var conversations: [String: [DmMessage]] = [:]
     /// Track gift wrap ids we've already processed (across multiple relays). Hydrated
@@ -50,6 +56,10 @@ final class DmRepository {
         #endif
     }
 
+    /// The pubkey this repository's in-memory state currently belongs to. Used by senders to
+    /// confirm the active account hasn't changed out from under an in-flight optimistic send.
+    var activeAccount: String { activePubkey }
+
     /// Comma-joined sorted participant pubkeys; stable across sender/receiver.
     nonisolated static func conversationKey(participants: [String]) -> String {
         Set(participants).sorted().joined(separator: ",")
@@ -81,20 +91,11 @@ final class DmRepository {
 
     @discardableResult
     func addMessage(_ msg: DmMessage, conversationKey: String) -> Bool {
-        var existing = conversations[conversationKey] ?? []
         // Dedupe by composite id (giftWrapId:rumorCreatedAt) while merging relayUrls.
-        if let i = existing.firstIndex(where: { $0.id == msg.id }) {
-            var merged = existing[i]
-            merged.relayUrls.formUnion(msg.relayUrls)
-            existing[i] = merged
-            conversations[conversationKey] = existing
+        guard upsertInMemory(msg, conversationKey: conversationKey) else {
             seenGiftWraps.insert(msg.giftWrapId)
             return false
         }
-        existing.append(msg)
-        existing.sort { $0.createdAt < $1.createdAt }
-        conversations[conversationKey] = existing
-        rumorIndex[msg.rumorId] = (conversationKey, msg.id)
         // Mark seen only after a successful insert — a transient decrypt failure
         // upstream leaves the wrap unseen so the periodic REQ retries it.
         seenGiftWraps.insert(msg.giftWrapId)
@@ -108,7 +109,68 @@ final class DmRepository {
                 _ = addReaction(conversationKey: conversationKey, targetRumorId: msg.rumorId, reaction: r)
             }
         }
+        notifyConversationUpdated(conversationKey)
         return true
+    }
+
+    /// Insert (or merge-by-composite-id) a message into the in-memory conversation,
+    /// keeping it sorted and the rumor index current. Pure in-memory bookkeeping —
+    /// does NOT persist, mark wraps seen, fire haptics, or apply buffered reactions;
+    /// callers layer those on. Returns false when it merged into an existing row
+    /// (duplicate id), unioning relay URLs.
+    @discardableResult
+    private func upsertInMemory(_ msg: DmMessage, conversationKey: String) -> Bool {
+        var existing = conversations[conversationKey] ?? []
+        if let i = existing.firstIndex(where: { $0.id == msg.id }) {
+            var merged = existing[i]
+            merged.relayUrls.formUnion(msg.relayUrls)
+            existing[i] = merged
+            conversations[conversationKey] = existing
+            return false
+        }
+        existing.append(msg)
+        existing.sort { $0.createdAt < $1.createdAt }
+        conversations[conversationKey] = existing
+        rumorIndex[msg.rumorId] = (conversationKey, msg.id)
+        return true
+    }
+
+    // MARK: - Optimistic outgoing messages
+
+    /// Insert an in-flight optimistic outgoing message (`.sending`). In-memory ONLY:
+    /// not persisted (its `giftWrapId` is empty until published) and not added to
+    /// `seenGiftWraps`. Promoted to a real, persisted row by `reconcileOptimistic`
+    /// once at least one relay accepts the wrap.
+    func insertOptimistic(_ msg: DmMessage, conversationKey: String) {
+        upsertInMemory(msg, conversationKey: conversationKey)
+    }
+
+    /// Promote the optimistic row identified by `tempId` to its delivered form:
+    /// swap in `final` (which carries the real composite id, giftWrapId, relayUrls,
+    /// content/file metadata and `.sent` state), refresh the rumor index, mark the
+    /// self-wrap seen so the relay echo dedups, and persist. Returns false if the
+    /// optimistic row is gone (e.g. the account switched and cleared state).
+    @discardableResult
+    func reconcileOptimistic(tempId: String, conversationKey: String, final: DmMessage) -> Bool {
+        guard var arr = conversations[conversationKey],
+              let i = arr.firstIndex(where: { $0.id == tempId }) else { return false }
+        rumorIndex.removeValue(forKey: arr[i].rumorId)
+        arr[i] = final
+        arr.sort { $0.createdAt < $1.createdAt }
+        conversations[conversationKey] = arr
+        rumorIndex[final.rumorId] = (conversationKey, final.id)
+        seenGiftWraps.insert(final.giftWrapId)
+        persist(final, conversationKey: conversationKey)
+        return true
+    }
+
+    /// Flip the optimistic row identified by `tempId` to a new send state (in-memory
+    /// only). Used to mark a send `.failed` (tap-to-retry) and back to `.sending` on retry.
+    func setOptimisticSendState(_ state: DmMessage.SendState, tempId: String, conversationKey: String) {
+        guard var arr = conversations[conversationKey],
+              let i = arr.firstIndex(where: { $0.id == tempId }) else { return }
+        arr[i].sendState = state
+        conversations[conversationKey] = arr
     }
 
     /// Attach a reaction (kind-7 `k=14`) to a message by its rumor id. Deduped by
@@ -142,7 +204,15 @@ final class DmRepository {
         arr[i] = msg
         conversations[convKey] = arr
         persist(msg, conversationKey: convKey)
+        notifyConversationUpdated(convKey)
         return true
+    }
+
+    private func notifyConversationUpdated(_ conversationKey: String) {
+        NotificationCenter.default.post(
+            name: Self.conversationDidUpdate, object: nil,
+            userInfo: ["conversationKey": conversationKey]
+        )
     }
 
     private func fireIncomingHaptic(for msg: DmMessage) {

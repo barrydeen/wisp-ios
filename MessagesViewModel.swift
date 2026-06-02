@@ -53,12 +53,11 @@ final class MessagesViewModel {
         let filter = NostrFilter(kinds: [Nip17.Kind.giftWrap], pTags: [keypair.pubkey])
         let sub = RelayPool.subscribe(relays: relays, filter: filter, id: "dms")
         subscription = sub
-        let priv = privkeyData()
 
         listenerTask = Task { [weak self] in
             for await (event, relayUrl) in sub.events {
                 guard let self else { break }
-                await self.handleGiftWrap(event: event, relayUrl: relayUrl, privkey: priv)
+                await self.handleGiftWrap(event: event, relayUrl: relayUrl)
             }
         }
 
@@ -92,81 +91,14 @@ final class MessagesViewModel {
         hasUnread = false
     }
 
-    private func handleGiftWrap(event: NostrEvent, relayUrl: String, privkey: Data) async {
-        guard event.kind == Nip17.Kind.giftWrap else { return }
-        // Read-only dedup across relays (cheap) before attempting decryption (expensive).
-        // We do NOT mark the wrap seen here — that happens only after a successful decrypt
-        // (`DmRepository.addMessage`), so a transient signer/decrypt failure is retried on
-        // the next periodic REQ instead of being silently dropped for the session.
-        guard !repo.isGiftWrapSeen(event.id) else { return }
-
-        let rumor: Rumor
-        do {
-            rumor = try await Nip17.unwrapGiftWrapWithSigner(keypair: keypair, giftWrap: event)
-        } catch {
-            // Bounded retry: keep the wrap unseen so the next REQ re-delivers it, but give
-            // up after a few attempts (and mark it seen) so a permanently-bad wrap doesn't
-            // busy-loop. Not persisted — a fresh launch retries.
-            let gaveUp = repo.recordDecryptFailure(event.id)
-            Self.log.error("DM gift-wrap decrypt failed (gaveUp=\(gaveUp, privacy: .public)) id=\(event.id, privacy: .public) relay=\(relayUrl, privacy: .public) error=\(String(describing: error), privacy: .public)")
-            return
-        }
-
-        // Chat (kind-14) and file (kind-15) messages are materialized inline since they
-        // mutate the per-conversation snapshot. Other rumor kinds — private replies
-        // (kind-1) and private reactions (kind-7, incl. DM reactions with k=14) — route
-        // through the shared router.
-        guard rumor.kind == Nip17.Kind.chatMessage || rumor.kind == Nip17.Kind.fileMessage else {
-            await PrivateInteractionRouter.handleRumor(
-                rumor: rumor,
-                giftWrap: event,
-                relayUrl: relayUrl,
-                keypair: keypair
-            )
-            return
-        }
-
-        // Safety check on the inner rumor — kind:1059 wrappers are pure transport so we filter
-        // on what's actually inside.
-        let safetyEvent = NostrEvent(
-            id: rumor.id, pubkey: rumor.pubkey, kind: rumor.kind, createdAt: rumor.createdAt,
-            tags: rumor.tags, content: rumor.content, sig: ""
-        )
-        if SafetyFilter.shared.shouldDrop(event: safetyEvent, context: .messages) {
-            // Treat as handled so we don't re-decrypt a muted/blocked sender's wrap every REQ.
-            _ = repo.markGiftWrapSeen(event.id)
-            return
-        }
-
-        let participants = Nip17.getConversationParticipants(rumor: rumor, myPubkey: keypair.pubkey)
-        let convKey = DmRepository.conversationKey(participants: participants + [keypair.pubkey])
-        // Prefer the NIP-10 "reply"-marked e-tag, falling back to the first e-tag.
-        let replyTo = rumor.tags.first { $0.count >= 4 && $0[0] == "e" && $0[3] == "reply" }?[1]
-            ?? rumor.tags.first { $0.count >= 2 && $0[0] == "e" }?[1]
-        // NIP-30 custom-emoji shortcode → URL map carried on the rumor.
-        var emojiMap: [String: String] = [:]
-        for t in rumor.tags where t.count >= 3 && t[0] == "emoji" { emojiMap[t[1]] = t[2] }
-        // Kind-15: parse the encrypted-file metadata; content holds the Blossom URL.
-        let fileMeta = rumor.kind == Nip17.Kind.fileMessage
-            ? EncryptedMedia.parseKind15Tags(rumor.tags, fileUrl: rumor.content)
-            : nil
-
-        let msg = DmMessage(
-            id: "\(event.id):\(rumor.createdAt)",
-            senderPubkey: rumor.pubkey,
-            content: rumor.content,
-            createdAt: rumor.createdAt,
-            giftWrapId: event.id,
-            rumorId: rumor.id,
-            replyToId: replyTo,
-            participants: participants,
-            relayUrls: relayUrl.isEmpty ? [] : [relayUrl],
-            emojiMap: emojiMap,
-            fileMetadata: fileMeta
-        )
-        repo.addMessage(msg, conversationKey: convKey)
+    /// Thin wrapper over the shared `DmGiftWrapIngestor` (which also feeds the
+    /// per-conversation scoped subscription). Decrypt/dedup/safety/routing live in
+    /// the ingestor; the view model only owns the snapshot refresh + profile prefetch.
+    private func handleGiftWrap(event: NostrEvent, relayUrl: String) async {
+        guard let result = await DmGiftWrapIngestor.ingest(event: event, relayUrl: relayUrl, keypair: keypair)
+        else { return }
         refreshSnapshot()
-        await prefetchProfilesIfNeeded(participants: participants + [rumor.pubkey])
+        await prefetchProfilesIfNeeded(participants: result.participants + [result.senderPubkey])
     }
 
     func refreshSnapshot() {
@@ -176,33 +108,30 @@ final class MessagesViewModel {
 
     // MARK: - Relay resolution
 
-    /// Build the kind-1059 subscription target set: the user's kind-10050 DM inbox relays,
-    /// falling back to their NIP-65 read relays if no DM list is published. We do NOT union
-    /// in every general relay — that pins a `kind:1059` stream (no since/limit) open on every
-    /// relay, flooding the main actor with duplicate gift wraps and starving the shared
-    /// connection pool (one persistent socket per relay, capped). Cold-start completeness
-    /// comes from `DmStore` persistence now, not from a wider live fan-out.
+    /// Build the kind-1059 subscription target set: the UNION of the user's own
+    /// kind-10050 DM inbox relays AND their NIP-65 read relays. Both are the user's
+    /// OWN published lists (bounded, small) — unioning them means we catch copies a
+    /// sender deposited in our NIP-65 inbox (because they couldn't find our kind-10050)
+    /// even when we DO publish a kind-10050. We still do NOT union in every general
+    /// relay — that pins a `kind:1059` stream (no since/limit) open on every relay,
+    /// flooding the main actor with duplicate gift wraps and starving the shared
+    /// connection pool (one persistent socket per relay, capped). Broader per-conversation
+    /// coverage comes from the temporary scoped subscription in `DmConversationViewModel`.
     private func resolveDmSubscriptionRelays() async -> [String] {
         // Hydrate from disk (instant) for the case where MessagesViewModel.start runs before
         // RelaySettingsRepository.bootstrap completes its async merge.
         RelaySettingsRepository.shared.ensureLoaded(pubkey: keypair.pubkey)
 
         let dm = RelaySettingsRepository.shared.dmRelays
-        let source = dm.isEmpty
-            ? await RelayListRepository.shared.getReadRelays(keypair.pubkey)
-            : dm
+        let read = await RelayListRepository.shared.getReadRelays(keypair.pubkey)
 
         var seen = Set<String>()
         var canonical: [String] = []
-        for url in source {
+        for url in dm + read {
             guard let n = RelayUrlValidator.canonicalize(url) else { continue }
             if seen.insert(n).inserted { canonical.append(n) }
         }
         return canonical
-    }
-
-    func privkeyData() -> Data {
-        Hex.decode(keypair.privkey) ?? Data()
     }
 
     private func prefetchProfilesIfNeeded(participants: [String]) async {
