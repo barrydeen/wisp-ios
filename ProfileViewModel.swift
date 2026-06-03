@@ -45,6 +45,8 @@ final class ProfileViewModel {
 
     var followerProfiles: [ProfileData] = []
     var isLoadingFollowers: Bool = false
+    var isLoadingMoreFollowers: Bool = false
+    var followersHasMore: Bool = false
     var followersLoaded: Bool = false
 
     var groups: [SimpleGroup] = []
@@ -85,7 +87,7 @@ final class ProfileViewModel {
     @ObservationIgnored private var galleryFlushScheduled = false
     @ObservationIgnored private var galleryStreamTask: Task<Void, Never>?
 
-    @ObservationIgnored private var followersStreamTask: Task<Void, Never>?
+    @ObservationIgnored private var followersOffset = 0
     @ObservationIgnored private var sortedNotesStreamTask: Task<Void, Never>?
     @ObservationIgnored private var sortedRepliesStreamTask: Task<Void, Never>?
 
@@ -95,8 +97,6 @@ final class ProfileViewModel {
     @ObservationIgnored private let eventStore = EventStore.shared
 
     private static let indexerRelays = RelayDefaults.indexers
-
-    private static let followersRelay = "wss://feeds.nostrarchives.com/profiles/followers"
 
     init(pubkey: String, activeUserPubkey: String) {
         self.pubkey = pubkey
@@ -127,6 +127,7 @@ final class ProfileViewModel {
             group.addTask { [weak self] in await self?.loadProfileHeader() }
             group.addTask { [weak self] in await self?.loadContacts() }
             group.addTask { [weak self] in await self?.loadTargetWriteRelays() }
+            group.addTask { [weak self] in await self?.loadFollowerCount() }
         }
 
         // Now that we know the target's write relays, load notes/replies in parallel
@@ -208,6 +209,8 @@ final class ProfileViewModel {
         }
         followingPubkeys = pubkeys
         followingCount = pubkeys.count
+        // Their contact list p-tags the active user → they follow us.
+        followsYou = pubkeys.contains(activeUserPubkey)
     }
 
     private func loadTargetWriteRelays() async {
@@ -538,34 +541,78 @@ final class ProfileViewModel {
 
     // MARK: - Followers
 
+    /// Cheap count-only fetch run from `start()` so the header shows the real
+    /// follower total the moment the profile opens — without it the bio sat at
+    /// the `∞` placeholder until the Followers tab was opened.
+    private func loadFollowerCount() async {
+        guard let social = try? await NostrArchivesClient.social(
+            pubkey: pubkey, followersLimit: 1
+        ) else { return }
+        followersCount = social.followers.count
+        followersCountIsApprox = false
+    }
+
     private func loadFollowers() async {
-        followersStreamTask?.cancel()
         isLoadingFollowers = true
         followerProfiles = []
+        followersOffset = 0
 
-        let queries = [RelayQuery(
-            relayUrl: Self.followersRelay,
-            filter: NostrFilter(kinds: [0], pTags: [pubkey], limit: 500)
-        )]
-
-        // Curated archive relay: append per-event so rows fill progressively
-        // rather than landing all at once after the 15s blocking wait.
-        followersStreamTask = Task { [weak self] in
-            guard let self else { return }
-            var seenPubkeys = Set<String>()
-            for await (event, _) in RelayPool.stream(queries: queries, timeout: 15) {
-                guard event.kind == 0,
-                      seenPubkeys.insert(event.pubkey).inserted,
-                      let updated = self.profileRepo.updateFromEvent(event) else { continue }
-                self.profiles[event.pubkey] = updated
-                self.followerProfiles.append(updated)
-                if self.isLoadingFollowers { self.isLoadingFollowers = false }
-            }
-            self.followersCount = self.followerProfiles.count
-            self.followersCountIsApprox = false
-            self.followersLoaded = true
-            self.isLoadingFollowers = false
+        guard let social = try? await NostrArchivesClient.social(
+            pubkey: pubkey, followersLimit: 100, followersOffset: 0
+        ) else {
+            isLoadingFollowers = false
+            followersLoaded = true
+            return
         }
+
+        followersCount = social.followers.count
+        followersCountIsApprox = false
+
+        let pubkeys = social.followers.pubkeys
+        followerProfiles = await resolveFollowerProfiles(pubkeys)
+        followersOffset = pubkeys.count
+        followersHasMore = followerProfiles.count < followersCount
+        followersLoaded = true
+        isLoadingFollowers = false
+    }
+
+    func loadMoreFollowers() async {
+        guard followersHasMore, !isLoadingMoreFollowers else { return }
+        isLoadingMoreFollowers = true
+        defer { isLoadingMoreFollowers = false }
+
+        guard let social = try? await NostrArchivesClient.social(
+            pubkey: pubkey, followersLimit: 100, followersOffset: followersOffset
+        ) else {
+            followersHasMore = false
+            return
+        }
+
+        let page = social.followers.pubkeys
+        followersOffset += page.count
+
+        let known = Set(followerProfiles.map(\.pubkey))
+        let fresh = page.filter { !known.contains($0) }
+        followerProfiles.append(contentsOf: await resolveFollowerProfiles(fresh))
+        // Stop when the API stops handing back new rows, even if the reported
+        // total hasn't been reached (deleted/duplicate pubkeys can leave a gap).
+        followersHasMore = !page.isEmpty && followerProfiles.count < social.followers.count
+    }
+
+    /// Resolve follower hex pubkeys into profile rows, preserving the API's
+    /// (relevance) order. Mirrors `loadFollowingProfiles`: local cache first,
+    /// then a batched indexer fetch for the rest, with a bare-pubkey fallback
+    /// row for anyone still unresolved. Also warms `self.profiles` for avatars.
+    private func resolveFollowerProfiles(_ pubkeys: [String]) async -> [ProfileData] {
+        guard !pubkeys.isEmpty else { return [] }
+        var local = profileRepo.getAll(pubkeys)
+        let missing = pubkeys.filter { local[$0] == nil }
+        if !missing.isEmpty {
+            let fetched = await fetchProfilesFromIndexers(missing)
+            for (k, v) in fetched { local[k] = v }
+        }
+        for (k, v) in local { profiles[k] = v }
+        return pubkeys.compactMap { local[$0] ?? ProfileData(pubkey: $0) }
     }
 
     // MARK: - Groups
