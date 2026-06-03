@@ -1212,22 +1212,17 @@ struct PostCardView: View {
                     Divider()
                 }
 
-                // ShareLink kept as-is — it opens the system share sheet
-                // and there's no `Menu`-style bouncy parent here, just a
-                // popover row that dismisses naturally when the sheet
-                // takes over.
-                ShareLink(item: shareItem) {
-                    HStack(spacing: 12) {
-                        Text("Share")
-                        Spacer(minLength: 0)
-                        Image(systemName: "square.and.arrow.up")
+                // A bare `ShareLink` here never presented: the row's tap both
+                // dismissed this popover and tried to present the share sheet,
+                // and the dismissal tore down the presenter first. Dismiss the
+                // popover, then present a `UIActivityViewController` on the VC
+                // beneath it (next runloop tick so the dismissal has settled).
+                popoverMenuItem(title: "Share", systemImage: "square.and.arrow.up") {
+                    showOverflowMenu = false
+                    DispatchQueue.main.async {
+                        ShareSheetPresenter.present(url: shareItem)
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
-                    .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
-                .simultaneousGesture(TapGesture().onEnded { showOverflowMenu = false })
                 Divider()
 
                 popoverMenuItem(
