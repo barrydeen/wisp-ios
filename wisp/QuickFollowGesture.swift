@@ -23,6 +23,10 @@ private struct QuickFollowLongPressModifier: ViewModifier {
     /// scalar so the ring scale, stroke opacity, and outer shadow can all
     /// interpolate against it from one animation.
     @State private var glow: CGFloat = 0
+    /// Whether the active user currently follows `pubkey`. Drives the corner
+    /// checkmark badge. Seeded in `onAppear`, kept live via `.followsDidChange`,
+    /// and flipped optimistically inside `toggle()` for instant feedback.
+    @State private var isFollowing = false
 
     func body(content: Content) -> some View {
         content
@@ -50,10 +54,51 @@ private struct QuickFollowLongPressModifier: ViewModifier {
                 }
                 .allowsHitTesting(false)
             )
+            // Follow-status badge: a primary-tinted checkmark riding the
+            // avatar's lower-right rim when the active user follows `pubkey`.
+            // Scaled to the rendered avatar (24pt feed → 84pt profile header)
+            // with a legibility floor so it stays readable on the small
+            // reposter-stack avatars, and ringed in the background color for
+            // contrast over any picture. Non-interactive so the underlying
+            // tap / long-press targets are untouched.
+            .overlay(
+                GeometryReader { geo in
+                    if isFollowing {
+                        let d = min(geo.size.width, geo.size.height)
+                        let ring = max(5.5, d * 0.21)
+                        // Place the badge center on the circle's lower-right
+                        // edge (45° from vertical): R·cos45 ≈ 0.3536·d.
+                        let off = d * 0.3536
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: ring * 0.78, weight: .bold))
+                            .foregroundStyle(Color.wispPrimary)
+                            .frame(width: ring, height: ring)
+                            .background(Circle().fill(Color.wispBackground))
+                            .position(x: geo.size.width / 2 + off, y: geo.size.height / 2 + off)
+                            .transition(.scale.combined(with: .opacity))
+                    }
+                }
+                .allowsHitTesting(false)
+            )
             .highPriorityGesture(
                 LongPressGesture(minimumDuration: 0.5)
                     .onEnded { _ in toggle() }
             )
+            .onAppear { isFollowing = computeIsFollowing() }
+            .onReceive(NotificationCenter.default.publisher(for: .followsDidChange)) { _ in
+                // `FollowsCache.update` posts this on the main actor, so this
+                // fires on main and can mutate state directly.
+                isFollowing = computeIsFollowing()
+            }
+    }
+
+    /// Cheap follow-status check for `pubkey`. `NostrKey.load()` is memoized,
+    /// and `FollowsCache.followsSet` is an in-memory `Set` after first load, so
+    /// this is fine to call per-avatar on appear / per follow change. Returns
+    /// false for self and the missing-key case so the badge never shows there.
+    private func computeIsFollowing() -> Bool {
+        guard !pubkey.isEmpty, let me = NostrKey.load()?.pubkey, me != pubkey else { return false }
+        return FollowsCache.shared.followsSet(for: me).contains(pubkey)
     }
 
     private func toggle() {
@@ -63,12 +108,16 @@ private struct QuickFollowLongPressModifier: ViewModifier {
         busy = true
         let wasFollowing = FollowsCache.shared.followsSet(for: kp.pubkey).contains(pubkey)
         // Immediate feedback that the long-press registered: tactile pulse,
-        // glow ring, and an optimistic toast. `FollowSender` already commits
-        // the new follow set to the local cache before it tries to publish,
-        // so showing the toast here matches the actual state of the app —
-        // the relay round-trip is just confirmation. A publish failure
-        // overrides the toast with the specific reason below.
+        // glow ring, an optimistic toast, and an optimistic badge flip.
+        // `FollowSender` already commits the new follow set to the local cache
+        // before it tries to publish, so showing the toast here matches the
+        // actual state of the app — the relay round-trip is just confirmation.
+        // A publish failure overrides the toast with the specific reason below
+        // and reverts the badge. The optimistic flip is load-bearing: a no-op
+        // toggle (already in the desired state) never republishes, so
+        // `.followsDidChange` doesn't fire and this is the only update.
         Haptics.shared.pulse()
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { isFollowing = !wasFollowing }
         withAnimation(.easeInOut(duration: 0.18)) { glow = 1 }
         QuickFollowToast.shared.show(wasFollowing ? "Unfollowed" : "Followed")
         // Match the toast's lifetime exactly — same 0.18s ease-in, 1.6s
@@ -91,6 +140,13 @@ private struct QuickFollowLongPressModifier: ViewModifier {
                 NSLog("[QuickFollow] toggle failed: %@", String(describing: error))
                 QuickFollowToast.shared.show(QuickFollowLongPressModifier.message(for: error))
                 Haptics.shared.fail()
+                // Reconcile the badge to the real local state. `noRelays` /
+                // `missingKey` throw before the cache write (→ reverts to the
+                // old value), while `publishFailed` throws *after* it (the
+                // local follow succeeded, only the relay broadcast failed →
+                // stays on the new value). Reading the cache covers both with
+                // no flicker.
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { isFollowing = computeIsFollowing() }
             }
         }
     }

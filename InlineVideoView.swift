@@ -29,6 +29,11 @@ struct InlineVideoView: View {
     @State private var player: AVPlayer?
     @State private var showFullScreen = false
     @State private var muteState = GlobalVideoMute.shared
+    /// True when the user deliberately paused inline playback by tapping the
+    /// video. Drives the centered play affordance. Distinct from lifecycle
+    /// pauses (scroll-off) — those don't set it, and `onAppear` clears it on
+    /// the re-appearing autoplay.
+    @State private var isPaused = false
     /// Aspect ratio (W / H) detected from `AVPlayerItem.presentationSize` after
     /// the asset's tracks load. `nil` until known — many notes ship with no
     /// imeta `dim` tag, so we can't trust the static fallback.
@@ -93,19 +98,23 @@ struct InlineVideoView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .contentShape(Rectangle())
                     .onTapGesture {
-                        // Tapping anywhere on the playing video expands to
-                        // fullscreen — the corner expand button stays as a
-                        // discoverable affordance, but having to find a
-                        // 28pt target on the move is awkward. The inner
-                        // mute / expand buttons (rendered after this in
-                        // the ZStack) take SwiftUI hit-test priority over
-                        // an `onTapGesture`, so their actions still fire.
+                        // Tapping anywhere on the playing video toggles
+                        // play/pause — fullscreen lives on the dedicated
+                        // corner expand button instead. The inner mute /
+                        // expand buttons (rendered after this in the ZStack)
+                        // take SwiftUI hit-test priority over an
+                        // `onTapGesture`, so their actions still fire.
                         // Skipped in passthrough mode — the parent pager is
                         // already a fullscreen presentation and we want the
                         // tap surface available for its own gestures.
                         guard !passthroughHitTests else { return }
-                        player.pause()
-                        showFullScreen = true
+                        if isPaused {
+                            player.play()
+                            withAnimation(.easeInOut(duration: 0.15)) { isPaused = false }
+                        } else {
+                            player.pause()
+                            withAnimation(.easeInOut(duration: 0.15)) { isPaused = true }
+                        }
                     }
                     .allowsHitTesting(!passthroughHitTests)
                     .onAppear {
@@ -121,6 +130,10 @@ struct InlineVideoView: View {
                         MediaAudioSession.activateMixed()
                         player.isMuted = isMuted
                         player.play()
+                        // A re-appearing row autoplays, so clear any prior
+                        // user-pause. (onDisappear's pause is a lifecycle
+                        // pause and intentionally leaves `isPaused` alone.)
+                        isPaused = false
                     }
                     .onDisappear {
                         player.pause()
@@ -141,6 +154,20 @@ struct InlineVideoView: View {
                         }
                         player.isMuted = nowMuted
                     }
+
+                // Centered play glyph shown only while the user has tapped to
+                // pause, so the paused state is discoverable and re-tappable.
+                // Non-interactive: taps fall through to the play/pause
+                // `onTapGesture` on the video layer, and the bottom-trailing
+                // mute / expand buttons keep their hit-test priority.
+                if isPaused {
+                    Image(systemName: "play.circle.fill")
+                        .font(.system(size: 56))
+                        .foregroundStyle(.white)
+                        .shadow(radius: 4)
+                        .allowsHitTesting(false)
+                        .transition(.opacity)
+                }
 
                 VStack {
                     Spacer()
@@ -246,9 +273,15 @@ struct InlineVideoView: View {
         .fullScreenCover(isPresented: $showFullScreen, onDismiss: {
             // Resume the inline player on dismiss only when autoplay is on,
             // so users who disabled autoplay aren't surprised by audio
-            // restarting in the feed.
+            // restarting in the feed. Keep `isPaused` in sync with whether
+            // the inline player is actually playing so the centered play
+            // glyph reflects reality (otherwise an autoplay-off video would
+            // sit paused with no affordance).
             if settings.autoLoadMedia && settings.videoAutoplay {
                 player?.play()
+                isPaused = false
+            } else {
+                isPaused = true
             }
         }) {
             FullScreenVideoView(url: meta.url)
