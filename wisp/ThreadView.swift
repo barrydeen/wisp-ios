@@ -4,31 +4,15 @@ struct ThreadView: View {
     @State private var viewModel: ThreadViewModel
     @State private var showError: Bool = false
     @State private var showHiddenSpam: Bool = false
+    /// Focal reply bar at the bottom of the thread. This composer is presented
+    /// from ThreadView's own root (a sibling of the `LazyVStack`, not a row
+    /// inside it), so it's already stable. Per-card reply / quote / emoji-react
+    /// instead route through the app-level `ComposePresenter` in the
+    /// environment (injected at `MainView`'s root).
     @State private var showReplyCompose: Bool = false
     @State private var didScrollToFocal: Bool = false
     @State private var suppressNextDisappearChainRemoval: Bool = false
-    /// Hosts keyboard-using sheets (emoji library, reply / quote composer)
-    /// at the ThreadView level — outside the `LazyVStack` — so their
-    /// presentation isn't recycled when the keyboard shrinks the visible
-    /// area and a focal / ancestor / reply row gets re-windowed by the
-    /// lazy stack. Tap-time state captures the target event so any row's
-    /// action bar can route through a single shared sheet anchor.
-    @State private var showEmojiLibrary: Bool = false
-    @State private var emojiPickCallback: ((PickedEmoji) -> Void)?
-    @State private var pendingReplyTarget: PendingReplyTarget?
-    @State private var pendingQuoteTarget: PendingQuoteTarget?
     @Environment(\.dismiss) private var dismiss
-
-    private struct PendingReplyTarget: Identifiable {
-        let parent: NostrEvent
-        let root: NostrEvent?
-        var id: String { parent.id }
-    }
-
-    private struct PendingQuoteTarget: Identifiable {
-        let event: NostrEvent
-        var id: String { event.id }
-    }
 
     /// The active tab's NavigationStack path. Mutated directly by smart-pop so a
     /// tap on an ancestor that's already in the back stack pops to it instead of
@@ -169,35 +153,6 @@ struct ThreadView: View {
                 )
             }
         }
-        .sheet(isPresented: $showEmojiLibrary) {
-            EmojiLibrarySheet(mode: .pickForReaction { picked in
-                emojiPickCallback?(picked)
-                emojiPickCallback = nil
-                showEmojiLibrary = false
-            })
-        }
-        .sheet(item: $pendingReplyTarget) { target in
-            ComposeView(
-                keypair: viewModel.keypair,
-                mode: .reply(parent: target.parent, root: target.root)
-            )
-        }
-        .sheet(item: $pendingQuoteTarget) { target in
-            ComposeView(keypair: viewModel.keypair, mode: .quote(target.event))
-        }
-    }
-
-    private func openEmojiLibrary(callback: @escaping (PickedEmoji) -> Void) {
-        emojiPickCallback = callback
-        showEmojiLibrary = true
-    }
-
-    private func openReplyCompose(parent: NostrEvent, root: NostrEvent?) {
-        pendingReplyTarget = PendingReplyTarget(parent: parent, root: root)
-    }
-
-    private func openQuoteCompose(event: NostrEvent) {
-        pendingQuoteTarget = PendingQuoteTarget(event: event)
     }
 
     // MARK: - Subviews
@@ -301,10 +256,7 @@ struct ThreadView: View {
                 onNoteTap: { quotedId in
                     navigateToThread(eventId: quotedId, authorPubkey: row.event.pubkey)
                 },
-                onHashtagTap: { _ in },
-                onOpenEmojiLibrary: openEmojiLibrary,
-                onOpenReplyCompose: openReplyCompose,
-                onOpenQuoteCompose: openQuoteCompose
+                onHashtagTap: { _ in }
             )
             .contentShape(Rectangle())
             .onTapGesture {
@@ -333,10 +285,7 @@ struct ThreadView: View {
                     onNoteTap: { quotedId in
                         navigateToThread(eventId: quotedId, authorPubkey: row.event.pubkey)
                     },
-                    onHashtagTap: { tag in push(HashtagFeedRoute(tag: tag)) },
-                    onOpenEmojiLibrary: openEmojiLibrary,
-                    onOpenReplyCompose: openReplyCompose,
-                    onOpenQuoteCompose: openQuoteCompose
+                    onHashtagTap: { tag in push(HashtagFeedRoute(tag: tag)) }
                 )
             }
             Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
@@ -402,10 +351,7 @@ struct ThreadView: View {
                 onNoteTap: { quotedId in
                     navigateToThread(eventId: quotedId, authorPubkey: row.event.pubkey)
                 },
-                onHashtagTap: { tag in push(HashtagFeedRoute(tag: tag)) },
-                onOpenEmojiLibrary: openEmojiLibrary,
-                onOpenReplyCompose: openReplyCompose,
-                onOpenQuoteCompose: openQuoteCompose
+                onHashtagTap: { tag in push(HashtagFeedRoute(tag: tag)) }
             )
             .contentShape(Rectangle())
             .onTapGesture {

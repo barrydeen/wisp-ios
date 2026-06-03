@@ -35,6 +35,12 @@ struct MainView: View {
     @State private var showLists = false
     @State private var showPolls = false
     @State private var showCompose = false
+    /// App-level router for reply / quote / emoji-reaction composers triggered
+    /// from any feed card. Hosted from this view's stable root (see body) so the
+    /// composer sheet is never anchored to a recyclable `LazyVStack` row, which
+    /// is what caused the rare open/close loop. Injected into the environment so
+    /// every card in every tab routes through it.
+    @State private var composePresenter = ComposePresenter()
     @State private var showDraftsScheduled = false
     @State private var showRelayPicker = false
     @State private var showOnlineSheet = false
@@ -84,7 +90,8 @@ struct MainView: View {
     }
 
     var body: some View {
-        ZStack(alignment: .leading) {
+        @Bindable var presenter = composePresenter
+        return ZStack(alignment: .leading) {
             mainShell
 
             if drawerOpen {
@@ -199,6 +206,7 @@ struct MainView: View {
         .overlay(SuccessToastOverlay())
         .overlay(PostStatusPillOverlay())
         .environment(walletStore)
+        .environment(composePresenter)
         .onReceive(NotificationCenter.default.publisher(for: .openWalletTab)) { _ in
             // PostCardView posts this when the user tries to zap without
             // a configured wallet and chooses "Set Up Wallet" on the
@@ -400,6 +408,22 @@ struct MainView: View {
         }
         .sheet(isPresented: $showCompose) {
             ComposeView(keypair: keypair, mode: .new)
+        }
+        // Reply / quote / emoji-reaction composers from any feed card present
+        // here, from the stable root — never from the recyclable card row. See
+        // `ComposePresenter`.
+        .sheet(item: $presenter.request) { req in
+            switch req {
+            case .reply(let parent, let root):
+                ComposeView(keypair: keypair, mode: .reply(parent: parent, root: root))
+            case .quote(let event):
+                ComposeView(keypair: keypair, mode: .quote(event))
+            case .emoji(_, let onPick):
+                EmojiLibrarySheet(mode: .pickForReaction { picked in
+                    onPick(picked)
+                    composePresenter.request = nil
+                })
+            }
         }
         .sheet(item: $reopenDraft) { draft in
             ComposeView(keypair: keypair, draft: draft)
@@ -1107,6 +1131,11 @@ struct MainView: View {
                         .transaction { $0.animation = nil }
                     }
                 }
+                // Keep the feed's layout stable when a composer raises the
+                // keyboard — without this the safe-area shrink reflows the
+                // LazyVStack and recycles rows. Parity with every other feed
+                // (Search, Hashtag, Trending, NoteList, PeopleList, Thread).
+                .ignoresSafeArea(.keyboard, edges: .bottom)
                 .refreshable { await viewModel.refresh() }
                 .onScrollPhaseChange { _, newPhase in
                     switch newPhase {
