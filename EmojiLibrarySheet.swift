@@ -24,6 +24,27 @@ struct EmojiLibrarySheet: View {
     @ObservedObject private var emojiCache = EmojiImageCache.shared
     @State private var selectedTab: String = ""
     @State private var searchQuery: String = ""
+    /// Debounced search input. `searchQuery` updates on every keystroke;
+    /// `debouncedQuery` lags behind by ~150ms so we only rebuild the filter
+    /// grids once typing settles. Without this, every character triggered
+    /// a full `EmojiData.searchEmojis` + `filteredCustom` pass on the main
+    /// thread and the sheet stuttered noticeably for users typing quickly.
+    @State private var debouncedQuery: String = ""
+    @State private var debounceTask: Task<Void, Never>? = nil
+    /// Memoized search results keyed by `debouncedQuery`. Recomputed only
+    /// when the debounced query changes — previously every body re-eval
+    /// (any scroll offset change, any pack image load that flipped
+    /// `emojiCache.version`) re-ran the filter passes over the full
+    /// catalog + custom pack list.
+    @State private var unicodeMatches: [String] = []
+    @State private var customMatches: [(shortcode: String, url: String)] = []
+    /// When true, ignore scroll-driven tab updates briefly so a tab tap's
+    /// `scrollTo` animation doesn't ping-pong with the position observer
+    /// (the scroll lands on the target → observer sees it → tries to
+    /// re-set the same tab → no-op, but the suppression is what prevents
+    /// any intermediate-section transient from flickering the tab).
+    @State private var suppressScrollSync = false
+    @State private var suppressResetTask: Task<Void, Never>? = nil
 
     private var hasCustom: Bool { !emojiRepo.resolvedCustomMap.isEmpty }
 
@@ -60,6 +81,83 @@ struct EmojiLibrarySheet: View {
                     emojiCache.ensureLoaded(url)
                 }
             }
+            .onChange(of: searchQuery) { _, newValue in
+                scheduleSearchUpdate(newValue)
+            }
+            .onDisappear {
+                debounceTask?.cancel()
+                suppressResetTask?.cancel()
+            }
+        }
+    }
+
+    /// Each section reports its top edge's y position (in the scroll's
+    /// named coordinate space) so `onPreferenceChange` can pick the
+    /// category that the user has just scrolled into view as the new
+    /// `selectedTab`. The reporter is rendered as a 0-size background so
+    /// it never contributes layout space — it only carries the geometry.
+    @ViewBuilder
+    private func sectionPositionReporter(id: String) -> some View {
+        GeometryReader { proxy in
+            Color.clear
+                .preference(
+                    key: SectionTopOffsetKey.self,
+                    value: [id: proxy.frame(in: .named("emojiScroll")).minY]
+                )
+        }
+    }
+
+    /// Pick the section whose top edge is closest to (and not past) the
+    /// scroll view's leading edge — i.e. the one currently sitting at the
+    /// top of the visible window. We allow a small positive padding (16pt
+    /// matches the outer VStack padding) so a section just barely below
+    /// the leading edge still counts as "the current one" rather than
+    /// staying on the previous category until the title scrolls all the
+    /// way under the tab strip.
+    private func nearestSectionToTop(in offsets: [String: CGFloat]) -> String? {
+        guard !offsets.isEmpty else { return nil }
+        let threshold: CGFloat = 16
+        // Sections whose top is at or above the threshold; pick the one
+        // with the *largest* (least negative) offset — that's the topmost
+        // visible section.
+        let aboveOrAt = offsets.filter { $0.value <= threshold }
+        if let top = aboveOrAt.max(by: { $0.value < $1.value }) {
+            return top.key
+        }
+        // All sections are below the threshold (e.g. on first appear);
+        // pick the one closest to it from below.
+        return offsets.min(by: { abs($0.value - threshold) < abs($1.value - threshold) })?.key
+    }
+
+    /// Temporarily silence scroll-driven tab updates when the user has
+    /// just tapped a tab — the resulting programmatic `scrollTo` would
+    /// otherwise emit a stream of intermediate-section offsets that flick
+    /// the tab through every category between source and destination
+    /// before settling.
+    private func suppressScrollSyncBriefly() {
+        suppressScrollSync = true
+        suppressResetTask?.cancel()
+        suppressResetTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(450))
+            guard !Task.isCancelled else { return }
+            suppressScrollSync = false
+        }
+    }
+
+    /// Debounce the search update so a rapid burst of keystrokes only
+    /// produces one filter pass (the last one). 150ms keeps the response
+    /// feel snappy while collapsing the typical 5–6 character query into
+    /// a single rebuild.
+    private func scheduleSearchUpdate(_ query: String) {
+        debounceTask?.cancel()
+        debounceTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(150))
+            guard !Task.isCancelled else { return }
+            let trimmed = query.trimmingCharacters(in: .whitespaces).lowercased()
+            guard trimmed != debouncedQuery else { return }
+            debouncedQuery = trimmed
+            unicodeMatches = trimmed.isEmpty ? [] : EmojiData.searchEmojis(trimmed)
+            customMatches = trimmed.isEmpty ? [] : filteredCustom(trimmed)
         }
     }
 
@@ -99,28 +197,39 @@ struct EmojiLibrarySheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
                     if hasCustom {
-                        customSection.id("custom")
+                        customSection
+                            .id("custom")
+                            .background(sectionPositionReporter(id: "custom"))
                     }
                     ForEach(EmojiData.categories, id: \.name) { cat in
-                        categorySection(cat).id(cat.name)
+                        categorySection(cat)
+                            .id(cat.name)
+                            .background(sectionPositionReporter(id: cat.name))
                     }
                 }
                 .padding(16)
             }
+            .coordinateSpace(name: "emojiScroll")
+            .onPreferenceChange(SectionTopOffsetKey.self) { offsets in
+                guard !suppressScrollSync else { return }
+                guard let topmost = nearestSectionToTop(in: offsets) else { return }
+                if topmost != selectedTab { selectedTab = topmost }
+            }
             .onChange(of: selectedTab) { _, new in
                 guard !new.isEmpty else { return }
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    proxy.scrollTo(new, anchor: .top)
-                }
+                // Plain `scrollTo` — the previous `withAnimation` wrapper
+                // forced a layout interpolation pass between the source
+                // and destination anchors, which on long category lists
+                // visibly stuttered on the first tap. Snap-jumps are
+                // imperceptibly faster and match the system emoji
+                // picker's behavior.
+                proxy.scrollTo(new, anchor: .top)
             }
         }
     }
 
     private var filteredView: some View {
-        let q = searchQuery.trimmingCharacters(in: .whitespaces).lowercased()
-        let unicodeMatches = EmojiData.searchEmojis(q)
-        let customMatches = filteredCustom(q)
-        return ScrollView {
+        ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 if !customMatches.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
@@ -200,28 +309,45 @@ struct EmojiLibrarySheet: View {
     // MARK: - Tab strip
 
     private var tabStrip: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                ForEach(tabs, id: \.id) { tab in
-                    Button {
-                        selectedTab = tab.id
-                    } label: {
-                        Text(tab.label)
-                            .font(.system(size: 22))
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(
-                                Capsule()
-                                    .fill(selectedTab == tab.id
-                                          ? Color.primary.opacity(0.10)
-                                          : Color.clear)
-                            )
+        ScrollViewReader { stripProxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(tabs, id: \.id) { tab in
+                        Button {
+                            // Suppress the scroll-position observer briefly so
+                            // the programmatic `scrollTo` triggered by setting
+                            // `selectedTab` doesn't flick the highlight through
+                            // every intermediate category before landing.
+                            suppressScrollSyncBriefly()
+                            selectedTab = tab.id
+                        } label: {
+                            Text(tab.label)
+                                .font(.system(size: 22))
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(
+                                    Capsule()
+                                        .fill(selectedTab == tab.id
+                                              ? Color.primary.opacity(0.10)
+                                              : Color.clear)
+                                )
+                        }
+                        .buttonStyle(.plain)
+                        .id("tab-\(tab.id)")
                     }
-                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+            }
+            // Keep the active tab visible as the user scrolls the grid —
+            // without this, the highlighted tab slides off-screen once
+            // the user reaches categories past the strip's overflow.
+            .onChange(of: selectedTab) { _, new in
+                guard !new.isEmpty else { return }
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    stripProxy.scrollTo("tab-\(new)", anchor: .center)
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
         }
     }
 
@@ -292,6 +418,10 @@ struct EmojiLibrarySheet: View {
                     .aspectRatio(contentMode: .fit)
                     .padding(2)
             } else {
+                // No per-cell `.onAppear { ensureLoaded }` here — the sheet's
+                // top-level `.onAppear` already kicks off loads for every URL
+                // in `resolvedCustomMap`, so repeating the call per cell only
+                // added redundant scheduler hops on first paint.
                 Color.clear
                     .overlay(
                         Text(":\(shortcode):")
@@ -301,7 +431,6 @@ struct EmojiLibrarySheet: View {
                             .truncationMode(.middle)
                             .padding(.horizontal, 2)
                     )
-                    .onAppear { emojiCache.ensureLoaded(url) }
             }
         }
         .frame(height: 50)
@@ -361,5 +490,16 @@ struct EmojiLibrarySheet: View {
             cb(shortcode, url)
             dismiss()
         }
+    }
+}
+
+/// Per-section top-edge offsets in the scroll's named coordinate space.
+/// Sections write their own entry via `.background(GeometryReader …)`; the
+/// scroll view reads the merged dictionary and picks the one currently at
+/// the top of the visible window to drive the tab strip highlight.
+private struct SectionTopOffsetKey: PreferenceKey {
+    static var defaultValue: [String: CGFloat] = [:]
+    static func reduce(value: inout [String: CGFloat], nextValue: () -> [String: CGFloat]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
     }
 }
