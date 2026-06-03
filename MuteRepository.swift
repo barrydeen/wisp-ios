@@ -58,6 +58,16 @@ final class MuteRepository {
             qualifiedNetwork: [],
             userPubkey: pk
         ))
+
+        // One-time sweep: purge on-disk content for every author already on the
+        // block list. `persist` blocks only *new* events and `removeByAuthor`
+        // only *newly*-blocked authors — neither covers content stored before an
+        // author was blocked (or before this source-level filter shipped).
+        // Idempotent; a no-op when nothing matches.
+        let blockedSnapshot = blockedPubkeys
+        if !blockedSnapshot.isEmpty {
+            Task.detached { await EventStore.shared.removeBlockedAuthors(blockedSnapshot) }
+        }
     }
 
     func unbind() {

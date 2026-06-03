@@ -138,6 +138,7 @@ struct QuotedNoteView: View {
 
     @State private var event: NostrEvent?
     @State private var loaded = false
+    @State private var blocked = false
     @State private var profile: ProfileData?
     @State private var contentExpanded = false
     @State private var attempt: Int = 0
@@ -156,7 +157,9 @@ struct QuotedNoteView: View {
 
     var body: some View {
         Group {
-            if let event {
+            if blocked {
+                blockedCard
+            } else if let event {
                 noteCard(event)
             } else if loaded {
                 missingCard
@@ -190,6 +193,28 @@ struct QuotedNoteView: View {
             RoundedRectangle(cornerRadius: 12)
                 .stroke(Color.wispSurfaceVariant, lineWidth: 1)
         )
+    }
+
+    /// Shown when the quoted note's author is blocked. Their content is never
+    /// rendered; a neutral stub keeps the surrounding card from looking broken
+    /// (or showing a misleading "Quoted note not found").
+    private var blockedCard: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "nosign")
+                .foregroundStyle(.secondary)
+            Text("Note from a blocked user")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.wispSurfaceVariant.opacity(0.3))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.wispSurfaceVariant, lineWidth: 1)
+        )
+        .accessibilityLabel("Note from a blocked user")
     }
 
     private var missingCard: some View {
@@ -346,6 +371,11 @@ struct QuotedNoteView: View {
 
     private func load() async {
         if let cached = QuotedNoteCache.shared.cached(eventId: eventId) {
+            if SafetyFilter.shared.snapshot.blockedPubkeys.contains(cached.pubkey) {
+                self.blocked = true
+                loaded = true
+                return
+            }
             self.event = cached
             self.profile = profiles[cached.pubkey] ?? ProfileRepository.shared.get(cached.pubkey)
             loaded = true
@@ -375,6 +405,11 @@ struct QuotedNoteView: View {
         if Task.isCancelled { return }
 
         if let result {
+            if SafetyFilter.shared.snapshot.blockedPubkeys.contains(result.pubkey) {
+                self.blocked = true
+                loaded = true
+                return
+            }
             self.event = result
             self.profile = profiles[result.pubkey] ?? ProfileRepository.shared.get(result.pubkey)
             loaded = true

@@ -486,6 +486,16 @@ final class EngagementRepository {
     private func ingest(_ event: NostrEvent, relayUrl: String) {
         guard seenEngagementIds.insert(event.id).inserted else { return }
 
+        // Block at source: a blocked author's reply / quote / repost / reaction
+        // must not bump engagement counts or appear in the reactor / quoter /
+        // reposter drawers. Zaps (9735) are checked separately in the kind
+        // switch below against the *resolved* sender, since `event.pubkey` on a
+        // zap receipt is the LNURL server, not the zapper.
+        if event.kind == 1 || event.kind == 6 || event.kind == 7,
+           SafetyFilter.shared.snapshot.blockedPubkeys.contains(event.pubkey) {
+            return
+        }
+
         // Quote reposts (NIP-18) come in on the parallel `#q` subscription and
         // by convention SHOULD NOT carry an `e` tag for the quoted id — so the
         // generic e-tag path below would skip them. Handle them up front: any
@@ -576,8 +586,6 @@ final class EngagementRepository {
             if let hash = paymentHash, !seenZapPaymentHashes.insert(hash).inserted {
                 return
             }
-            current.zapSats += sats
-            current.zapCount += 1
 
             // Resolve the real zapper via `Nip57.resolveZapSender`, which handles
             // both public zaps (description.pubkey path) and DIP-03 private zaps
@@ -585,11 +593,18 @@ final class EngagementRepository {
             // to ephemeral pubkey when decryption fails). For DIP-03 receipts
             // arriving for a note that isn't ours (we're a third-party observer)
             // we can't decrypt — those still surface with the ephemeral pubkey,
-            // which is the correct privacy-preserving behavior.
+            // which is the correct privacy-preserving behavior. Resolved up front
+            // so a blocked sender can be dropped *before* it bumps the count.
             let privkey32 = NostrKey.load().flatMap { Hex.decode($0.privkey) }
             let resolved = Nip57.resolveZapSender(receipt: event, recipientPrivkey32: privkey32)
             let zapperPubkey = resolved?.pubkey ?? event.pubkey
+            // Block at source: a blocked zapper must not bump the count or show
+            // in the zappers drawer. `event.pubkey` is the LNURL server, so the
+            // check runs against the resolved sender.
+            if SafetyFilter.shared.snapshot.blockedPubkeys.contains(zapperPubkey) { return }
             let message = resolved?.message ?? ""
+            current.zapSats += sats
+            current.zapCount += 1
             current.zappers.append(Zapper(pubkey: zapperPubkey, sats: sats, message: message))
             // Zapper pubkey is sourced from the description tag (the actual
             // sender), not event.pubkey (the LNURL server). Always observe it

@@ -533,9 +533,11 @@ final class ThreadViewModel {
         let blockedPubkeys = SafetyFilter.shared.snapshot.blockedPubkeys
         for event in cached where event.kind == 1 {
             if event.id != rootId {
-                // Blocked-author events are kept as placeholders so the thread
-                // depth and the user's own replies to them remain coherent.
-                // Other safety drops (WoT, word filter) fully exclude the event.
+                // Blocked authors' replies are no longer persisted (see
+                // `ingestReply`), so this branch normally only matches legacy
+                // rows written before the source-level block filter shipped.
+                // Kept as a defensive placeholder so depth stays coherent for
+                // those; other safety drops (WoT, word filter) fully exclude.
                 if blockedPubkeys.contains(event.pubkey) {
                     events[event.id] = event
                     blockedEventIds.insert(event.id)
@@ -760,7 +762,12 @@ final class ThreadViewModel {
         guard events[event.id] == nil else { return }
         events[event.id] = event
         if blocked { blockedEventIds.insert(event.id) }
-        Task { await eventStore.persist([event]) }
+        // Blocked authors' replies are kept only as an in-session placeholder
+        // (the in-memory `events` map above) — never persisted. `EventStore.persist`
+        // would drop them anyway, and writing them would contradict "blocked
+        // content must never exist on disk." On a cold reopen the placeholder is
+        // simply absent; child replies still resolve via their `e` tags.
+        if !blocked { Task { await eventStore.persist([event]) } }
 
         // Hydrate every referenced author (note author + repost inner + npub mentions) from
         // cache; the watcher takes care of fetching anything we haven't seen.

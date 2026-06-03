@@ -170,6 +170,126 @@ struct SafetyTests {
         #expect(!SafetyFilter.shared.shouldDrop(event: repost, context: .feed))
     }
 
+    // MARK: - isHardBlocked (persistence-time block gate)
+
+    @Test func isHardBlockedMatchesDirectAuthor() {
+        let snap = SafetyFilterSnapshot(
+            mutedWords: [], blockedPubkeys: ["alice"], mutedThreads: [],
+            wotEnabled: false, qualifiedNetwork: [], userPubkey: "me"
+        )
+        SafetyFilter.shared.install(snap)
+        defer { SafetyFilter.shared.install(.empty) }
+
+        #expect(SafetyFilter.shared.isHardBlocked(event: makeEvent(kind: 1, pubkey: "alice", content: "hi")))
+        #expect(!SafetyFilter.shared.isHardBlocked(event: makeEvent(kind: 1, pubkey: "bob", content: "hi")))
+    }
+
+    @Test func isHardBlockedMatchesRepostInnerAuthor() {
+        let snap = SafetyFilterSnapshot(
+            mutedWords: [], blockedPubkeys: ["alice"], mutedThreads: [],
+            wotEnabled: false, qualifiedNetwork: [], userPubkey: "me"
+        )
+        SafetyFilter.shared.install(snap)
+        defer { SafetyFilter.shared.install(.empty) }
+
+        let embedded = #"{"pubkey":"alice","id":"abc","kind":1,"content":"hi"}"#
+        let jsonRepost = makeEvent(kind: 6, pubkey: "bob", content: embedded, tags: [["e", "abc"], ["p", "alice"]])
+        #expect(SafetyFilter.shared.isHardBlocked(event: jsonRepost))
+
+        let tagRepost = makeEvent(kind: 6, pubkey: "bob", content: "", tags: [["e", "abc"], ["p", "alice"]])
+        #expect(SafetyFilter.shared.isHardBlocked(event: tagRepost))
+
+        let cleanRepost = makeEvent(kind: 6, pubkey: "bob", content: "", tags: [["e", "abc"], ["p", "carol"]])
+        #expect(!SafetyFilter.shared.isHardBlocked(event: cleanRepost))
+    }
+
+    @Test func isHardBlockedIgnoresWordThreadAndWot() {
+        // A block gate is block-list-only: word / thread / WoT are reversible
+        // preferences and must never evict an event from disk permanently.
+        let snap = SafetyFilterSnapshot(
+            mutedWords: ["spam"], blockedPubkeys: [], mutedThreads: ["root123"],
+            wotEnabled: true, qualifiedNetwork: ["bob"], userPubkey: "me"
+        )
+        SafetyFilter.shared.install(snap)
+        defer { SafetyFilter.shared.install(.empty) }
+
+        let evt = makeEvent(kind: 1, pubkey: "stranger", content: "spam", tags: [["e", "root123", "", "reply"]])
+        #expect(!SafetyFilter.shared.isHardBlocked(event: evt))
+        // shouldDrop would still drop it (word + WoT + thread) — proves the
+        // semantic difference between the two gates.
+        #expect(SafetyFilter.shared.shouldDrop(event: evt, context: .feed))
+    }
+
+    @Test func survivesBlockRetainsExemptKindsButDropsContent() {
+        let snap = SafetyFilterSnapshot(
+            mutedWords: [], blockedPubkeys: ["alice"], mutedThreads: [],
+            wotEnabled: false, qualifiedNetwork: [], userPubkey: "me"
+        )
+        SafetyFilter.shared.install(snap)
+        defer { SafetyFilter.shared.install(.empty) }
+
+        // Content / engagement kinds from a blocked author never persist.
+        for kind in [1, 7, 9735, 20, 1068] {
+            #expect(!EventStore.survivesBlock(makeEvent(kind: kind, pubkey: "alice", content: "x")))
+        }
+        // Identity / config kinds are retained even for a blocked author.
+        for kind in [0, 10002, 10030, 30030, 30000] {
+            #expect(EventStore.survivesBlock(makeEvent(kind: kind, pubkey: "alice", content: "x")))
+        }
+        // A repost of a blocked author is dropped; non-blocked content survives.
+        let repost = makeEvent(kind: 6, pubkey: "bob", content: "", tags: [["e", "abc"], ["p", "alice"]])
+        #expect(!EventStore.survivesBlock(repost))
+        #expect(EventStore.survivesBlock(makeEvent(kind: 1, pubkey: "carol", content: "hi")))
+    }
+
+    // MARK: - Notification sub-thread suppression
+
+    @MainActor
+    @Test func notificationDropsReplyInBlockedSubThread() {
+        // Bind to a unique pubkey so the shared singleton's seen-id LRU and
+        // self-event set start clean (bind only resets when the active pubkey
+        // changes); event ids are unique for the same reason.
+        let me = "me_" + UUID().uuidString
+        let myNote = "mynote_" + UUID().uuidString
+
+        let snap = SafetyFilterSnapshot(
+            mutedWords: [], blockedPubkeys: ["bob"], mutedThreads: [],
+            wotEnabled: false, qualifiedNetwork: [], userPubkey: me
+        )
+        SafetyFilter.shared.install(snap)
+        defer { SafetyFilter.shared.install(.empty) }
+
+        let repo = NotificationRepository.shared
+        repo.bind(activePubkey: me)
+        repo.selfEventIds = [myNote]
+
+        // Non-blocked alice replies inside blocked bob's sub-thread: her reply
+        // p-tags bob (the NIP-10 ancestor author). Dropped.
+        let blockedSubThread = makeEvent(
+            kind: 1, pubkey: "alice", content: "+1",
+            tags: [["e", myNote, "", "reply"], ["p", me], ["p", "bob"]],
+            id: "reply_blocked_" + UUID().uuidString
+        )
+        #expect(repo.ingest(blockedSubThread, relayUrl: "", persist: false) == false)
+
+        // Same reply with no blocked ancestor still notifies.
+        let cleanReply = makeEvent(
+            kind: 1, pubkey: "alice", content: "+1",
+            tags: [["e", myNote, "", "reply"], ["p", me]],
+            id: "reply_clean_" + UUID().uuidString
+        )
+        #expect(repo.ingest(cleanReply, relayUrl: "", persist: false) == true)
+
+        // A direct mention that incidentally p-tags a blocked user is NOT a
+        // sub-thread — scope is `.reply` only, so it still notifies.
+        let mention = makeEvent(
+            kind: 1, pubkey: "alice", content: "hey",
+            tags: [["p", me], ["p", "bob"]],
+            id: "mention_" + UUID().uuidString
+        )
+        #expect(repo.ingest(mention, relayUrl: "", persist: false) == true)
+    }
+
     // MARK: - Nip51Mute
 
     @Test func privateBodyRoundtrip() {
@@ -232,9 +352,10 @@ struct SafetyTests {
 
     // MARK: - Helpers
 
-    private func makeEvent(kind: Int, pubkey: String, content: String, tags: [[String]] = []) -> NostrEvent {
+    private func makeEvent(kind: Int, pubkey: String, content: String, tags: [[String]] = [],
+                           id: String = String(repeating: "0", count: 64)) -> NostrEvent {
         NostrEvent(
-            id: String(repeating: "0", count: 64),
+            id: id,
             pubkey: pubkey, kind: kind,
             createdAt: 0,
             tags: tags, content: content, sig: ""
