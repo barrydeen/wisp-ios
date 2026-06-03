@@ -209,6 +209,8 @@ final class ProfileViewModel {
         }
         followingPubkeys = pubkeys
         followingCount = pubkeys.count
+        // Their contact list p-tags the active user → they follow us.
+        followsYou = pubkeys.contains(activeUserPubkey)
     }
 
     private func loadTargetWriteRelays() async {

@@ -386,29 +386,28 @@ private struct ProfileHeaderView: View {
                     .buttonStyle(.plain)
                     .offset(y: -28)
                 } else if !isMe && !isWatchOnly {
-                    VStack(alignment: .trailing, spacing: 4) {
-                        actionButtons
-                        if viewModel.followsYou {
-                            Text("Follows you")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .offset(y: -28)
+                    actionButtons
+                        .offset(y: -28)
                 }
             }
             .padding(.horizontal, 16)
             .padding(.bottom, -16)
 
             VStack(alignment: .leading, spacing: 6) {
-                EmojiText(
-                    viewModel.profile?.displayString ?? shortKey(viewModel.pubkey),
-                    emojiMap: viewModel.profile?.emojiMap ?? [:],
-                    textStyle: .title3,
-                    weight: .bold,
-                    color: .label,
-                    lineLimit: 1
-                )
+                HStack(spacing: 8) {
+                    EmojiText(
+                        viewModel.profile?.displayString ?? shortKey(viewModel.pubkey),
+                        emojiMap: viewModel.profile?.emojiMap ?? [:],
+                        textStyle: .title3,
+                        weight: .bold,
+                        color: .label,
+                        lineLimit: 1
+                    )
+                    if viewModel.followsYou {
+                        followsYouBadge
+                    }
+                    Spacer(minLength: 0)
+                }
 
                 if let nip = viewModel.profile?.nip05, !nip.isEmpty {
                     HStack(spacing: 4) {
@@ -467,6 +466,23 @@ private struct ProfileHeaderView: View {
                 )
             }
         }
+    }
+
+    /// Small pill shown beside the display name when this profile's contact
+    /// list p-tags the active user — i.e. they follow you. `fixedSize` keeps it
+    /// intact so a long name truncates around it rather than squeezing it out.
+    private var followsYouBadge: some View {
+        HStack(spacing: 3) {
+            Image(systemName: "person.fill.checkmark")
+                .font(.system(size: 9, weight: .semibold))
+            Text("Follows you")
+                .font(.caption2.weight(.medium))
+        }
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(Color.wispSurfaceVariant, in: Capsule())
+        .fixedSize()
     }
 
     @ViewBuilder
