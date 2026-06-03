@@ -398,15 +398,48 @@ struct PostCardView: View {
                 // shrink, which left InlineImageView's clipShape rounding the
                 // empty parent frame instead of the image edges. Render at
                 // natural size so corner rounding actually shows.
-                RichContentView(
-                    content: displayEvent.content,
-                    tags: displayEvent.tags,
-                    profiles: profiles,
-                    authorPubkey: displayEvent.pubkey,
-                    onProfileTap: nil,
-                    onNoteTap: onNoteTap,
-                    onHashtagTap: nil
-                )
+                //
+                // Action bar is included here so the user can react, reply,
+                // repost, zap, bookmark, or expand details on an ancestor
+                // (parent / grand-parent) note directly from the thread view
+                // without having to navigate into the ancestor's own thread.
+                // Polls and the top-zapper pill stay out of compact mode
+                // intentionally — those would crowd the slim ancestor row.
+                VStack(alignment: .leading, spacing: 8) {
+                    RichContentView(
+                        content: displayEvent.content,
+                        tags: displayEvent.tags,
+                        profiles: profiles,
+                        authorPubkey: displayEvent.pubkey,
+                        onProfileTap: nil,
+                        onNoteTap: onNoteTap,
+                        onHashtagTap: nil
+                    )
+
+                    if !activeUserIsWatchOnly { actionBar }
+
+                    if expanded {
+                        NoteDetailsPanel(
+                            zappers: repoBox.counts.zappers.isEmpty ? (engagement?.zappers ?? []) : repoBox.counts.zappers,
+                            reactors: repoBox.counts.reactors.isEmpty ? (engagement?.reactors ?? []) : repoBox.counts.reactors,
+                            reposters: repoBox.counts.reposters.isEmpty ? (engagement?.reposters ?? []) : repoBox.counts.reposters,
+                            quoters: repoBox.counts.quoters.isEmpty ? (engagement?.quoters ?? []) : repoBox.counts.quoters,
+                            relays: combinedRelays(for: displayEvent.id),
+                            tags: displayEvent.tags,
+                            createdAt: displayEvent.createdAt,
+                            profiles: profiles,
+                            onProfileTap: onProfileTap,
+                            onNoteTap: onNoteTap
+                        )
+                        .task(id: displayEvent.id) {
+                            engagementRepo.fetchQuoters(
+                                eventId: displayEvent.id,
+                                authorPubkey: displayEvent.pubkey
+                            )
+                        }
+                        .transition(.opacity)
+                    }
+                }
                 .padding(.horizontal, 16)
                 .padding(.top, 14)
                 .padding(.bottom, 12)
