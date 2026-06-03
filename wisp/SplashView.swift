@@ -84,7 +84,7 @@ struct SplashView: View {
 
                     Spacer().frame(height: 32)
 
-                    VStack(spacing: 8) {
+                    VStack(spacing: 16) {
                         // Apple HIG: when other third-party sign-in
                         // options are present, the Sign in with Apple
                         // button must be at least as prominent. Top of
@@ -97,14 +97,21 @@ struct SplashView: View {
                         // isn't signed in or the container isn't
                         // provisioned, AppleAuthView surfaces a friendly
                         // error after tap.
-                        if AppleAuthConfig.isConfigured {
-                            ContinueWithAppleButton(action: onContinueWithApple)
+                        VStack(spacing: 8) {
+                            if AppleAuthConfig.isConfigured {
+                                ContinueWithAppleButton(action: onContinueWithApple)
+                            }
+
+                            if GoogleAuthConfig.isConfigured {
+                                ContinueWithGoogleButton(action: onContinueWithGoogle)
+                            }
                         }
 
-                        if GoogleAuthConfig.isConfigured {
-                            ContinueWithGoogleButton(action: onContinueWithGoogle)
-                        }
-
+                        // Slightly larger gap before the Nostr button so
+                        // the federated identity options (Apple, Google)
+                        // read as one group and the protocol-native option
+                        // reads as its own choice rather than a third
+                        // entry in the same list.
                         ContinueWithNostrButton(action: onContinueWithNostr)
                     }
                 }
@@ -452,10 +459,11 @@ struct NostrLoginSheet: View {
                 .foregroundStyle(Color.wispOnSurface)
                 .padding(.top, 12)
 
-            Text("Enter your existing key, or create a new account. Your key never leaves the device.")
+            Text("Your key never leaves the device.")
                 .font(.subheadline)
                 .foregroundStyle(Color.wispOnSurfaceVariant)
                 .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 6)
                 .padding(.horizontal, 4)
 
@@ -489,6 +497,9 @@ struct NostrLoginSheet: View {
                 .buttonStyle(.plain)
             }
             .padding(.top, 20)
+
+            NsecIdentityPreview(nsecInput: nsecInput)
+                .padding(.top, 12)
 
             if let error {
                 Text(error)
@@ -535,7 +546,13 @@ struct NostrLoginSheet: View {
         .padding(.bottom, 32)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Color.wispBackground)
-        .presentationDetents([.medium, .large])
+        // Just a touch taller than `.medium`: the previous default left
+        // the ostrich crowded against the top edge, and the identity
+        // preview's 64pt reserved slot pushed the bottom controls under
+        // the safe-area inset. This bump fits both without covering the
+        // discovery grid above. `.large` is offered as a secondary
+        // detent for users who want more room.
+        .presentationDetents([.height(500), .large])
         .presentationBackground(Color.wispBackground)
         .presentationDragIndicator(.visible)
         .fullScreenCover(isPresented: $showQRScanner) {
@@ -565,7 +582,7 @@ struct NostrLoginSheet: View {
             onLogin(Keypair(privkey: "", pubkey: pubkeyHex))
             return
         }
-        error = "Invalid key. Enter an nsec, npub, nprofile, or hex private key."
+        error = "Couldn't read that key. Paste an nsec (\"nsec1…\"), an npub / nprofile to browse watch-only, or a 64-character hex private key."
     }
 
     private func handleScanned(_ value: String) {

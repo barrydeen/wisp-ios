@@ -39,7 +39,17 @@ enum NostrKey {
             return Keypair(privkey: Hex.encode(data), pubkey: Hex.encode(pub))
         }
 
-        if trimmed.count == 64, let data = Hex.decode(trimmed), data.count == 32 {
+        // Hex private key. Strip an optional `0x` prefix and any internal
+        // whitespace so a key copied from a wallet or terminal (where the
+        // value is sometimes shown with a `0x` prefix or with spaces around
+        // it) still parses. The Bech32 path above already handles the
+        // `nsec1` case so there's no risk of misinterpreting it here.
+        var hex = trimmed
+        if hex.hasPrefix("0x") || hex.hasPrefix("0X") {
+            hex = String(hex.dropFirst(2))
+        }
+        hex.removeAll(where: { $0.isWhitespace })
+        if hex.count == 64, let data = Hex.decode(hex), data.count == 32 {
             guard let pub = Secp256k1.publicKey(from: data) else { return nil }
             return Keypair(privkey: Hex.encode(data), pubkey: Hex.encode(pub))
         }
