@@ -381,68 +381,35 @@ enum EmojiData {
         return map
     }()
 
-    /// Supplemental keyword aliases for emoji whose Unicode name doesn't
-    /// match common search terms. The Unicode name path catches the formal
-    /// description (😂 → "face with tears of joy"), but users type colloquial
-    /// terms like "lol", "cry", "fire". Each alias becomes a hit for the
-    /// emoji it maps to in `searchEmojis(_:)`.
+    /// Supplemental keyword aliases for terms the Unicode CLDR keyword
+    /// data (loaded by `CldrEmojiKeywords`) genuinely doesn't ship.
+    /// CLDR already covers the standard descriptions (love, fire, laugh,
+    /// thumbs, etc.) AND most slang (lol, lmao, lit, ily, etc.), so this
+    /// table is intentionally small — only the nostr-culture, internet
+    /// shorthand, and explicit-override entries that aren't in CLDR's
+    /// English annotations.
+    ///
+    /// When extending: check `CldrEmojiKeywords.keywordsByEmoji[e]` first
+    /// to avoid duplicating coverage.
     static let keywordAliases: [String: [String]] = [
-        "😂": ["lol", "lmao", "laugh", "laughing", "joy", "crying"],
-        "🤣": ["rofl", "lmao", "laugh", "laughing"],
-        "😭": ["cry", "crying", "sad", "sob", "tears"],
-        "😢": ["cry", "crying", "sad", "tear"],
-        "😍": ["love", "heart", "eyes"],
-        "🥰": ["love", "loved", "hearts", "affection"],
-        "❤️": ["love", "heart", "red"],
-        "🧡": ["love", "heart", "orange"],
-        "💛": ["love", "heart", "yellow"],
-        "💚": ["love", "heart", "green"],
-        "💙": ["love", "heart", "blue"],
-        "💜": ["love", "heart", "purple"],
-        "🖤": ["love", "heart", "black"],
-        "🤍": ["love", "heart", "white"],
-        "🤎": ["love", "heart", "brown"],
-        "💔": ["heart", "break", "broken", "sad"],
-        "💕": ["love", "heart", "hearts"],
-        "💖": ["love", "heart", "sparkle"],
-        "🔥": ["fire", "lit", "hot", "flame"],
-        "👌": ["ok", "okay", "perfect", "alright"],
-        "✅": ["ok", "okay", "check", "yes", "done"],
-        "❌": ["x", "no", "wrong", "cancel"],
-        "👍": ["thumbs", "up", "like", "yes", "approve"],
-        "👎": ["thumbs", "down", "dislike", "no"],
-        "🙏": ["pray", "thanks", "please", "praying"],
-        "💪": ["strong", "muscle", "flex"],
-        "👏": ["clap", "applause", "bravo"],
-        "🎉": ["party", "celebrate", "congrats", "tada"],
-        "🎊": ["party", "celebrate", "confetti"],
-        "😎": ["cool", "sunglasses", "shades"],
-        "🤔": ["think", "thinking", "hmm"],
-        "😴": ["sleep", "sleeping", "tired", "zzz"],
-        "🥱": ["yawn", "tired", "bored"],
-        "🙄": ["eyeroll", "annoyed", "whatever"],
-        "😤": ["mad", "angry", "frustrated", "huff"],
-        "😡": ["mad", "angry", "rage", "furious"],
-        "🤬": ["mad", "angry", "swear", "curse"],
-        "🥺": ["please", "pleading", "puppy", "beg"],
-        "🤯": ["mind", "blown", "shocked", "wow"],
-        "💀": ["dead", "skull", "rip", "ded"],
-        "☠️": ["dead", "skull", "danger", "poison"],
-        "🤡": ["clown", "joke", "fool"],
-        "👻": ["ghost", "boo", "spooky"],
-        "🎃": ["halloween", "pumpkin", "spooky"],
-        "💩": ["poop", "shit", "crap"],
-        "🚀": ["rocket", "launch", "moon"],
-        "⚡": ["lightning", "zap", "bolt", "fast"],
-        "💯": ["100", "hundred", "perfect", "score"],
-        "✨": ["sparkle", "sparkles", "shine", "magic"],
-        "🌟": ["star", "shine", "glow"],
-        "👀": ["eyes", "look", "watching", "shifty"],
-        "💸": ["money", "cash", "fly"],
-        "💰": ["money", "bag", "cash"],
-        "🍑": ["peach", "butt", "ass"],
-        "🍆": ["eggplant", "aubergine"],
-        "🥹": ["happy", "tear", "emotional", "moved"]
+        // Internet slang / shorthand not in CLDR
+        "💀": ["ded"],
+        "😏": ["sus", "suspicious"],
+        "🤨": ["sus", "suspicious"],
+        "🥹": ["pleading"],
+        // Nostr-culture
+        "🐸": ["pepe"],
+        // Useful overrides where the CLDR keyword set is sparse or where
+        // we want the alias to rank ahead of unrelated Unicode-name hits
+        "✅": ["ok", "yes"],
+        "❌": ["x", "no"],
+        "🚀": ["moon", "fly"],
+        "🔥": ["af"],
+        "👀": ["shifty", "watching"],
+        // Common short forms
+        "💯": ["100", "hundred"],
+        "🆗": ["ok"],
+        "🆕": ["new"]
     ]
 
     /// Reverse index used by `searchEmojis`. Built once on first access so
@@ -457,19 +424,37 @@ enum EmojiData {
         return map
     }()
 
-    /// Returns every emoji whose Unicode name OR alias matches `query`
-    /// (case-insensitive substring match). Empty query returns an empty
-    /// list — callers should short-circuit and show the categorized view
-    /// instead. Alias matches are returned first so a search for "lol"
-    /// surfaces 😂 / 🤣 ahead of every "face" emoji whose Unicode name
-    /// happens to contain those three letters.
+    /// Returns every emoji whose CLDR keyword, hand-curated alias, or
+    /// Unicode name matches `query` (case-insensitive substring match).
+    /// Empty query returns an empty list — callers should short-circuit
+    /// and show the categorized view instead.
+    ///
+    /// Match order is deliberate:
+    /// 1. Hand-curated `keywordAliases` — covers nostr-culture and slang
+    ///    that CLDR doesn't ship ("pepe", "lol", "ded", etc.).
+    /// 2. CLDR keywords — the comprehensive 1500-entry index from
+    ///    Unicode's official annotations data.
+    /// 3. Unicode name substring — last-resort catch-all.
+    ///
+    /// Filtering to entries that appear in the rendered `allEmojis` set
+    /// keeps the catalog as the source of truth — CLDR has many emoji
+    /// our categories don't include (e.g. skin-tone modifiers as
+    /// standalone entries) which we don't want surfaced as standalone
+    /// results.
     static func searchEmojis(_ query: String) -> [String] {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
         guard !q.isEmpty else { return [] }
+        let renderable = Set(allEmojis)
         var seen = Set<String>()
         var ordered: [String] = []
+
         for (alias, emojis) in emojisByAlias where alias.contains(q) {
-            for emoji in emojis where seen.insert(emoji).inserted {
+            for emoji in emojis where renderable.contains(emoji) && seen.insert(emoji).inserted {
+                ordered.append(emoji)
+            }
+        }
+        for (keyword, emojis) in CldrEmojiKeywords.emojisByKeyword where keyword.contains(q) {
+            for emoji in emojis where renderable.contains(emoji) && seen.insert(emoji).inserted {
                 ordered.append(emoji)
             }
         }

@@ -29,6 +29,8 @@
 		4CABCD010000000000F30002 /* PrivateInteractionRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30002 /* PrivateInteractionRouter.swift */; };
 		4CABCD010000000000F30003 /* PeerRelayResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30003 /* PeerRelayResolver.swift */; };
 		4CABCD030000000000F30010 /* DmGiftWrapIngestor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD020000000000F30010 /* DmGiftWrapIngestor.swift */; };
+		4CABCD030000000000F30040 /* CldrEmojiKeywords.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD020000000000F30040 /* CldrEmojiKeywords.swift */; };
+		4CABCD040000000000F30041 /* cldr-emoji-keywords-en.json in Resources */ = {isa = PBXBuildFile; fileRef = 4CABCD020000000000F30041 /* cldr-emoji-keywords-en.json */; };
 		4CABCD010000000000F30004 /* PrivateReplyPublisher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30004 /* PrivateReplyPublisher.swift */; };
 		4CABCD010000000000F30005 /* PrivateReactionPublisher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30005 /* PrivateReactionPublisher.swift */; };
 		4CABCD010000000000F30006 /* Dip03.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30006 /* Dip03.swift */; };
@@ -329,6 +331,8 @@
 		4CABCD000000000000F30002 /* PrivateInteractionRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateInteractionRouter.swift; sourceTree = "<group>"; };
 		4CABCD000000000000F30003 /* PeerRelayResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeerRelayResolver.swift; sourceTree = "<group>"; };
 		4CABCD020000000000F30010 /* DmGiftWrapIngestor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DmGiftWrapIngestor.swift; sourceTree = "<group>"; };
+		4CABCD020000000000F30040 /* CldrEmojiKeywords.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CldrEmojiKeywords.swift; sourceTree = "<group>"; };
+		4CABCD020000000000F30041 /* cldr-emoji-keywords-en.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "cldr-emoji-keywords-en.json"; sourceTree = "<group>"; };
 		4CABCD000000000000F30004 /* PrivateReplyPublisher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateReplyPublisher.swift; sourceTree = "<group>"; };
 		4CABCD000000000000F30005 /* PrivateReactionPublisher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateReactionPublisher.swift; sourceTree = "<group>"; };
 		4CABCD000000000000F30006 /* Dip03.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Dip03.swift; sourceTree = "<group>"; };
@@ -907,6 +911,8 @@
 				4CABCD000000000000F30002 /* PrivateInteractionRouter.swift */,
 				4CABCD000000000000F30003 /* PeerRelayResolver.swift */,
 				4CABCD020000000000F30010 /* DmGiftWrapIngestor.swift */,
+				4CABCD020000000000F30040 /* CldrEmojiKeywords.swift */,
+				4CABCD020000000000F30041 /* cldr-emoji-keywords-en.json */,
 				4CABCD000000000000F30004 /* PrivateReplyPublisher.swift */,
 				4CABCD000000000000F30005 /* PrivateReactionPublisher.swift */,
 				4CDDDD000000000000000001 /* DmMessageEntity.swift */,
@@ -1062,6 +1068,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				4CABCD040000000000F30041 /* cldr-emoji-keywords-en.json in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1349,6 +1356,7 @@
 				4CABCD010000000000F30002 /* PrivateInteractionRouter.swift in Sources */,
 				4CABCD010000000000F30003 /* PeerRelayResolver.swift in Sources */,
 				4CABCD030000000000F30010 /* DmGiftWrapIngestor.swift in Sources */,
+				4CABCD030000000000F30040 /* CldrEmojiKeywords.swift in Sources */,
 				4CABCD010000000000F30004 /* PrivateReplyPublisher.swift in Sources */,
 				4CABCD010000000000F30005 /* PrivateReactionPublisher.swift in Sources */,
 				4CDDDD010000000000000001 /* DmMessageEntity.swift in Sources */,
