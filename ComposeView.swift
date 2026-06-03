@@ -880,11 +880,10 @@ struct ComposeView: View {
                 } label: {
                     Image(systemName: "doc.on.clipboard")
                         .font(.system(size: 22))
-                        .foregroundStyle(UIPasteboard.general.hasImages ? Color.wispPrimary : .secondary)
+                        .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Paste image from clipboard")
-                .disabled(!UIPasteboard.general.hasImages)
             }
 
             if !viewModel.pollEnabled {
@@ -1127,10 +1126,33 @@ struct ComposeView: View {
     /// which uploads each one to Blossom and appends as an attachment.
     /// `.onPasteCommand` is unavailable on iOS, so this routes through a
     /// visible button that reads `UIPasteboard.general` on tap.
+    ///
+    /// Detection has to handle a few quirks:
+    /// - `canLoadObject(ofClass: UIImage.self)` misses Photos.app's custom UTI
+    ///   pasteboard items. `hasItemConformingToTypeIdentifier("public.image")`
+    ///   is the authoritative check — it includes every UTI that conforms to
+    ///   `public.image` (PNG, JPEG, GIF, HEIC, WebP, TIFF, RAW, …).
+    /// - When the clipboard has zero matching providers but `UIPasteboard`'s
+    ///   high-level `image` accessor returns something (some sources only
+    ///   write through the legacy API), fall back to that and re-wrap it as
+    ///   a provider so the existing upload pipeline runs unchanged.
+    /// - On nothing-to-paste, surface a toast so the user knows the tap
+    ///   registered. Otherwise a silent button feels broken.
     private func pasteImageFromClipboard() {
-        let providers = UIPasteboard.general.itemProviders.filter { $0.canLoadObject(ofClass: UIImage.self) }
-        guard !providers.isEmpty else { return }
-        Task { await viewModel.addPastedImages(providers) }
+        let pasteboard = UIPasteboard.general
+        let providers = pasteboard.itemProviders.filter {
+            $0.hasItemConformingToTypeIdentifier(UTType.image.identifier)
+        }
+        if !providers.isEmpty {
+            Task { await viewModel.addPastedImages(providers) }
+            return
+        }
+        if let image = pasteboard.image, let png = image.pngData() {
+            let provider = NSItemProvider(item: png as NSData, typeIdentifier: UTType.png.identifier)
+            Task { await viewModel.addPastedImages([provider]) }
+            return
+        }
+        QuickFollowToast.shared.show("No image on clipboard")
     }
 
     private var previewTags: [[String]] {

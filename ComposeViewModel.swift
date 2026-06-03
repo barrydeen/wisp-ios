@@ -658,25 +658,118 @@ final class ComposeViewModel {
         uploadProgress = nil
     }
 
+    /// Preference order matters: Safari's "Copy Image" on an animated GIF
+    /// publishes BOTH `com.compuserve.gif` and `public.png` representations,
+    /// and we have to read the GIF first or the PNG (frame zero) wins and
+    /// the animation is gone before bytes ever reach the compressor.
+    /// Animated formats first, then static.
     private static let pasteImageTypes: [(typeId: String, mime: String)] = [
+        ("com.compuserve.gif", "image/gif"),
+        ("org.webmproject.webp", "image/webp"),
         ("public.png", "image/png"),
         ("public.jpeg", "image/jpeg"),
-        ("public.heic", "image/heic"),
-        ("com.compuserve.gif", "image/gif"),
-        ("org.webmproject.webp", "image/webp")
+        ("public.heic", "image/heic")
     ]
 
     private func loadPastedImageData(from provider: NSItemProvider) async -> (data: Data, mime: String)? {
+        // Source URL preserves animation when the inline bytes do not.
+        // Most browsers rasterize images on "Copy Image" — Chromium for
+        // example only writes `public.png` (frame zero of the source GIF)
+        // even when the source was animated. Fetching the original URL
+        // sidesteps that and gets the bytes the server actually serves.
+        let sourceUrl = await pasteboardSourceImageUrl(from: provider)
+        var inline: (data: Data, mime: String)?
         for entry in Self.pasteImageTypes where provider.hasItemConformingToTypeIdentifier(entry.typeId) {
             if let data = await loadDataRepresentation(from: provider, typeIdentifier: entry.typeId) {
-                return (data, entry.mime)
+                inline = (data, entry.mime)
+                break
             }
         }
+        // Inline bytes already animated → no need to hit the network.
+        if let inline, MediaCompressor.isAnimated(inline.data) {
+            return inline
+        }
+        // Try the source URL when the inline bytes are static (or absent)
+        // and the URL looks like it might be image-flavoured. We trust the
+        // fetched bytes when they're animated; otherwise stick with whatever
+        // the clipboard provided so we don't pay a network round-trip for a
+        // worse result.
+        if let sourceUrl, let fetched = await fetchUrlImageBytes(sourceUrl) {
+            if MediaCompressor.isAnimated(fetched.data) {
+                return fetched
+            }
+            if inline == nil {
+                return fetched
+            }
+        }
+        if let inline { return inline }
         // Fallback for type-id-less providers (rare): re-encode anything decodable as JPEG.
         if let data = await loadDataRepresentation(from: provider, typeIdentifier: "public.image"),
            let img = UIImage(data: data),
            let jpeg = img.jpegData(compressionQuality: 0.92) {
             return (jpeg, "image/jpeg")
+        }
+        return nil
+    }
+
+    /// UTIs that browsers / share extensions use to carry the source URL of
+    /// a copied image. Checked in order; first hit wins.
+    private static let pasteSourceUrlTypeIds: [String] = [
+        "org.chromium.source-url",
+        "public.url",
+        "public.utf8-plain-text"
+    ]
+
+    private func pasteboardSourceImageUrl(from provider: NSItemProvider) async -> URL? {
+        for typeId in Self.pasteSourceUrlTypeIds where provider.hasItemConformingToTypeIdentifier(typeId) {
+            guard let data = await loadDataRepresentation(from: provider, typeIdentifier: typeId) else { continue }
+            guard let string = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+                  !string.isEmpty else { continue }
+            guard let url = URL(string: string), let scheme = url.scheme?.lowercased(),
+                  scheme == "https" || scheme == "http" else { continue }
+            return url
+        }
+        return nil
+    }
+
+    private func fetchUrlImageBytes(_ url: URL) async -> (data: Data, mime: String)? {
+        var req = URLRequest(url: url)
+        req.setValue("image/*", forHTTPHeaderField: "Accept")
+        req.timeoutInterval = 10
+        do {
+            let (data, response) = try await URLSession.shared.data(for: req)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return nil }
+            // Trust the server's Content-Type only when it's an image MIME;
+            // otherwise sniff the bytes so a `text/html` redirect page doesn't
+            // get uploaded as an image.
+            let serverMime = (http.value(forHTTPHeaderField: "Content-Type") ?? "")
+                .split(separator: ";").first.map { String($0).trimmingCharacters(in: .whitespaces) } ?? ""
+            let mime: String
+            if serverMime.hasPrefix("image/") {
+                mime = serverMime
+            } else if let sniffed = sniffImageMime(data) {
+                mime = sniffed
+            } else {
+                return nil
+            }
+            return (data, mime)
+        } catch {
+            return nil
+        }
+    }
+
+    /// Magic-byte sniff for the formats our compressor handles. Used when the
+    /// server doesn't send a useful `Content-Type` header (e.g. CDNs that
+    /// return `application/octet-stream`).
+    private func sniffImageMime(_ data: Data) -> String? {
+        guard data.count >= 12 else { return nil }
+        let p = data.prefix(12)
+        if p.starts(with: [0x47, 0x49, 0x46]) { return "image/gif" }
+        if p.starts(with: [0x89, 0x50, 0x4E, 0x47]) { return "image/png" }
+        if p.starts(with: [0xFF, 0xD8, 0xFF]) { return "image/jpeg" }
+        if p.starts(with: [0x52, 0x49, 0x46, 0x46]) && p.dropFirst(8).starts(with: [0x57, 0x45, 0x42, 0x50]) {
+            return "image/webp"
         }
         return nil
     }
