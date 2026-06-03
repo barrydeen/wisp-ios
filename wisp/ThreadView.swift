@@ -79,6 +79,19 @@ struct ThreadView: View {
                                 .id(item.row.id)
                         }
 
+                        // Optimistic pending reply — shown at the bottom of
+                        // the replies list (where the new reply will land
+                        // once relays accept it) so the user gets immediate
+                        // visual confirmation. Gated to the kind-1 reply case
+                        // referencing this thread's focal so we don't surface
+                        // a pending reply that belongs to a different thread.
+                        if let pending = PendingPostStore.shared.pending,
+                           pending.event.kind == 1,
+                           PendingPostStore.shared.pendingIsReply,
+                           pendingTargetsCurrentThread(pending: pending) {
+                            PendingPostRow(pending: pending)
+                        }
+
                         if !viewModel.hiddenSpamReplies.isEmpty {
                             hiddenSpamSection
                         }
@@ -493,6 +506,22 @@ struct ThreadView: View {
 
     /// Scroll the focal post to the top once both it and its ancestors have resolved.
     /// Fires once per ThreadView lifetime so the user can scroll up freely afterward.
+    /// True when the pending event's `e` tags reference the focal post or
+    /// one of its ancestors — i.e. it really is a reply to *this* thread.
+    /// Without this gate, opening any thread while a pending reply exists
+    /// (e.g. one composed from a different thread) would render the row in
+    /// the wrong context.
+    private func pendingTargetsCurrentThread(pending: PendingPostStore.PendingPost) -> Bool {
+        var thisThreadIds: Set<String> = []
+        if let focalId = viewModel.focal?.id { thisThreadIds.insert(focalId) }
+        thisThreadIds.insert(viewModel.rootId)
+        for ancestor in viewModel.ancestors { thisThreadIds.insert(ancestor.id) }
+        for tag in pending.event.tags where tag.first == "e" && tag.count >= 2 {
+            if thisThreadIds.contains(tag[1]) { return true }
+        }
+        return false
+    }
+
     private func scrollToFocalIfNeeded(proxy: ScrollViewProxy) {
         guard !didScrollToFocal else { return }
         guard let focalId = viewModel.focal?.id else { return }
