@@ -710,10 +710,28 @@ struct ComposeView: View {
     private func attachmentThumb(_ attachment: ComposeAttachment, size: CGFloat) -> some View {
         ZStack(alignment: .topTrailing) {
             ZStack {
-                if let bytes = attachment.localBytes, let img = UIImage(data: bytes) {
+                if let bytes = attachment.localBytes,
+                   AnimatedImageHint.isLikelyAnimated(url: "", mime: attachment.mime),
+                   let payload = AnimatedImageDecoder.decode(data: bytes, maxPixelSize: size * UIScreen.main.scale) {
+                    // Animated GIF / animated WebP / APNG — render with the
+                    // per-frame decoder so the thumbnail plays before publish.
+                    // The simple `UIImage(data:)` path freezes on frame 0.
+                    AnimatedImageRenderer(payload: payload, contentMode: .scaleAspectFill)
+                } else if let bytes = attachment.localBytes, let img = UIImage(data: bytes) {
                     Image(uiImage: img)
                         .resizable()
                         .scaledToFill()
+                } else if let url = attachment.url,
+                          AnimatedImageHint.isLikelyAnimated(url: url, mime: attachment.mime) {
+                    // Post-upload: bytes have been cleared but the attachment
+                    // is animated. Fetch + animate from the Blossom URL.
+                    AnimatedImageView(
+                        url: URL(string: url),
+                        aspect: nil,
+                        contentMode: .fill,
+                        placeholder: { Color.wispSurfaceVariant },
+                        failure: { Color.wispSurfaceVariant }
+                    )
                 } else if let url = attachment.url {
                     AsyncImage(url: URL(string: url)) { phase in
                         switch phase {
