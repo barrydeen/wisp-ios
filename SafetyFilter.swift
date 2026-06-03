@@ -114,6 +114,24 @@ final class SafetyFilter: @unchecked Sendable {
         return false
     }
 
+    /// Block-list-only gate used by the persistence chokepoint (`EventStore.persist`)
+    /// to drop blocked authors' content *before it ever reaches disk*. Unlike
+    /// `shouldDrop`, it deliberately ignores word / thread / WoT filters — those are
+    /// reversible, context-dependent preferences and must never permanently evict an
+    /// event from on-disk storage. Matches the direct author OR the inner author of a
+    /// kind-6 repost. Lockless `_current` read; safe to call from any actor.
+    func isHardBlocked(event: NostrEvent) -> Bool {
+        let s = _current
+        guard !s.blockedPubkeys.isEmpty else { return false }
+        if s.blockedPubkeys.contains(event.pubkey) { return true }
+        if event.kind == 6,
+           let innerPubkey = Self.repostInnerPubkey(event),
+           s.blockedPubkeys.contains(innerPubkey) {
+            return true
+        }
+        return false
+    }
+
     /// Install a freshly-built snapshot. Lockfree readers pick up the new pointer on their
     /// next read; old snapshots remain valid for any in-flight read.
     func install(_ snap: SafetyFilterSnapshot) {
@@ -157,8 +175,10 @@ final class SafetyFilter: @unchecked Sendable {
     /// Pull the original author's pubkey out of a kind-6 repost. Prefers the
     /// embedded event JSON in `content`; falls back to the `p` tag when the
     /// reposter omits the embedded event (common with non-damus clients).
-    /// Static so the lockfree hot path can call it without an actor hop.
-    private static func repostInnerPubkey(_ event: NostrEvent) -> String? {
+    /// Static so the lockfree hot path can call it without an actor hop. Internal
+    /// (not private) so `EventStore.removeByAuthor` can reuse it to purge reposts
+    /// of a blocked author from disk.
+    static func repostInnerPubkey(_ event: NostrEvent) -> String? {
         if !event.content.isEmpty,
            let data = event.content.data(using: .utf8),
            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],

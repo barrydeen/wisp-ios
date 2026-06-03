@@ -148,6 +148,21 @@ final class NotificationRepository {
         // Self-zap (zapping your own note from your own wallet) — drop after
         // classification, since `actorPubkey` is the resolved zap-request signer.
         if item.kind == .zap && item.actorPubkey == activePubkey { return false }
+        // Sub-thread suppression: don't notify about a reply whose NIP-10 chain
+        // includes a blocked author. When non-blocked A replies to blocked B's
+        // reply to your note, A's event p-tags B (the ancestor author) — and
+        // B's own reply is never persisted, so that p-tag is the only surviving
+        // signal. Scope is `.reply` only: a `.mention`/`.quote` targets your
+        // content directly and merely incidentally p-tags a blocked user, so
+        // dropping those would hide legitimate notifications. This is the single
+        // ingest chokepoint, so it also covers the disk-seed hydration path.
+        if item.kind == .reply {
+            let blocked = SafetyFilter.shared.snapshot.blockedPubkeys
+            if !blocked.isEmpty,
+               event.tags.contains(where: { $0.count >= 2 && $0[0] == "p" && blocked.contains($0[1]) }) {
+                return false
+            }
+        }
         eventCache[event.id] = event
         // Insert in timestamp-desc sorted position so the FIFO eviction at the
         // tail actually drops the oldest item. A backfill burst delivers items
@@ -428,8 +443,18 @@ final class NotificationRepository {
     /// Called when the user blocks someone — without this, notifications they
     /// triggered linger in `flatItems` and `eventCache` until cold-launch.
     func purgeAuthor(_ pubkey: String) {
-        eventCache = eventCache.filter { $0.value.pubkey != pubkey }
-        flatItems.removeAll { $0.actorPubkey == pubkey }
+        // Identify sub-thread rows BEFORE pruning eventCache: a reply by a
+        // non-blocked actor that p-tags the now-blocked `pubkey` is part of a
+        // sub-thread we no longer want (mirrors the ingest-time `.reply` drop).
+        // Its source event is the only place that link survives, so resolve it
+        // from the cache while it's still present.
+        let subThreadIds = Set(flatItems.compactMap { item -> String? in
+            guard item.kind == .reply, let ev = eventCache[item.id] else { return nil }
+            let involvesBlocked = ev.tags.contains { $0.count >= 2 && $0[0] == "p" && $0[1] == pubkey }
+            return involvesBlocked ? item.id : nil
+        })
+        eventCache = eventCache.filter { $0.value.pubkey != pubkey && !subThreadIds.contains($0.key) }
+        flatItems.removeAll { $0.actorPubkey == pubkey || subThreadIds.contains($0.id) }
         for (key, replies) in inlineReplies {
             let filtered = replies.filter { $0.pubkey != pubkey }
             if filtered.isEmpty {
