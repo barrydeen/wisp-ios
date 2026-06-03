@@ -93,7 +93,10 @@ struct AnimatedImageView<Placeholder: View, Failure: View>: View {
             let signpostState = Signposts.media.beginInterval("fetchAnimated", id: signpostId)
             defer { Signposts.media.endInterval("fetchAnimated", signpostState) }
             do {
-                let (data, _) = try await URLSession.shared.data(from: url)
+                // Dedicated foreground image session (own connection pool +
+                // transit cache) so this doesn't contend on URLSession.shared's
+                // 6-per-host budget with NIP-05 / LNURL / relay-info JSON.
+                let (data, _) = try await HttpClientFactory.imageClient.data(from: url)
                 // Cap inline animated media so a huge source can't peg the render
                 // server scaling full-res frames. 1024 matches the video poster cap.
                 return AnimatedImageDecoder.decode(data: data, maxPixelSize: 1024)
@@ -118,7 +121,12 @@ struct AnimatedImagePayload: @unchecked Sendable {
     let aspect: CGFloat
 }
 
-enum AnimatedImageDecoder {
+/// `nonisolated` so its pure-compute decode runs genuinely off the main actor
+/// when called from `Task.detached` — under the project's MainActor-default
+/// isolation it would otherwise be MainActor-isolated (see the
+/// `project_mainactor_default_isolation` regression: crypto/decode silently
+/// pinned to main froze the feed).
+nonisolated enum AnimatedImageDecoder {
     /// Frame-count ceiling. A pathological clip (hundreds/thousands of frames)
     /// would otherwise build a giant in-memory payload that the render server
     /// has to cycle. We sample evenly to this many frames and keep the real
@@ -177,6 +185,33 @@ enum AnimatedImageDecoder {
         guard let first = frames.first else { return nil }
         let aspect: CGFloat = first.size.height > 0 ? first.size.width / first.size.height : 1
         return AnimatedImagePayload(frames: frames, totalDuration: total, aspect: aspect)
+    }
+
+    /// Decode a single still image, optionally downsampled to `maxPixelSize`
+    /// (longest edge). Used by the avatar + inline-image paths so a multi-
+    /// thousand-pixel source isn't decompressed at full resolution on the main
+    /// thread at draw time (and then GPU-downscaled into a 40 pt circle / 320 pt
+    /// row every frame) — and so the cached bitmap's resident footprint is
+    /// bounded. The thumbnail path applies EXIF orientation
+    /// (`…WithTransform`) and forces the decode here (`…ShouldCacheImmediately`)
+    /// off the caller's `Task.detached`. Pass `nil` to keep full source
+    /// resolution (full-screen zoom). Falls back to `UIImage(data:)` (which
+    /// preserves orientation) if ImageIO can't build a thumbnail.
+    static func decodeStatic(data: Data, maxPixelSize: CGFloat? = nil) -> UIImage? {
+        guard let maxPixelSize else { return UIImage(data: data) }
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil) else {
+            return UIImage(data: data)
+        }
+        let opts: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
+        ]
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else {
+            return UIImage(data: data)
+        }
+        return UIImage(cgImage: cg)
     }
 
     /// Per-frame delay from GIF / APNG / animated-WebP metadata. Browsers

@@ -53,11 +53,11 @@ enum HttpClientFactory {
 
     /// Best-effort background prefetch (e.g. avatars pulled ahead of the
     /// viewport by `AvatarPrefetcher`). A SEPARATE connection pool from the
-    /// foreground image loaders on `URLSession.shared`, so a burst of
-    /// prefetches can't exhaust the 6-per-host budget and starve the images
-    /// the user is actually looking at — the documented regression that made
-    /// scroll feel "much slower". No `URLCache`: the prefetcher stores decoded
-    /// results in `ImageCache.shared`, which `CachedAvatarView` reads first.
+    /// foreground image loaders (`imageClient`), so a burst of prefetches can't
+    /// exhaust the 6-per-host budget and starve the images the user is actually
+    /// looking at — the documented regression that made scroll feel "much
+    /// slower". No `URLCache`: the prefetcher stores decoded results in
+    /// `ImageCache.shared`, which `CachedAvatarView` reads first.
     static let prefetchClient: URLSession = {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 10

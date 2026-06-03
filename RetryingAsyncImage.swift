@@ -15,6 +15,12 @@ import os.signpost
 struct RetryingAsyncImage<Content: View, Loading: View, Failure: View>: View {
     let url: URL?
     let maxAttempts: Int
+    /// Longest-edge pixel cap for the decode. Defaults to 1024 (matches the
+    /// inline animated / video-poster cap) so feed / grid / gallery images are
+    /// downsampled to a bounded size instead of decompressing the full source
+    /// on the main thread at draw time. Full-screen zoom passes `nil` to keep
+    /// native resolution.
+    let maxPixelSize: CGFloat?
     @ViewBuilder let content: (Image) -> Content
     @ViewBuilder let loading: () -> Loading
     @ViewBuilder let failure: () -> Failure
@@ -32,12 +38,14 @@ struct RetryingAsyncImage<Content: View, Loading: View, Failure: View>: View {
     init(
         url: URL?,
         maxAttempts: Int = 3,
+        maxPixelSize: CGFloat? = 1024,
         @ViewBuilder content: @escaping (Image) -> Content,
         @ViewBuilder loading: @escaping () -> Loading,
         @ViewBuilder failure: @escaping () -> Failure
     ) {
         self.url = url
         self.maxAttempts = maxAttempts
+        self.maxPixelSize = maxPixelSize
         self.content = content
         self.loading = loading
         self.failure = failure
@@ -77,7 +85,9 @@ struct RetryingAsyncImage<Content: View, Loading: View, Failure: View>: View {
             phase = .failure
             return
         }
-        let key = url.absoluteString
+        // Key the decoded cache by url + pixel cap so the inline-capped (1024)
+        // and full-screen-uncapped variants of the same URL don't collide.
+        let key = maxPixelSize.map { "\(url.absoluteString)#px\(Int($0))" } ?? url.absoluteString
 
         // Cache hit — render immediately with no loading state.
         if let cached = DecodedImageCache.staticImage(for: key) {
@@ -93,16 +103,22 @@ struct RetryingAsyncImage<Content: View, Loading: View, Failure: View>: View {
         }
 
         phase = .loading
+        let cap = maxPixelSize
         let image: UIImage? = await Task.detached(priority: .utility) {
             let signpostId = Signposts.media.makeSignpostID()
             let signpostState = Signposts.media.beginInterval("fetchStaticImage", id: signpostId)
             defer { Signposts.media.endInterval("fetchStaticImage", signpostState) }
             do {
-                let (data, response) = try await URLSession.shared.data(from: url)
+                // Dedicated foreground image session (own pool + 64/256 MB
+                // transit cache) instead of URLSession.shared, so image loads
+                // don't share the 6-per-host budget with JSON/LNURL/relay-info.
+                let (data, response) = try await HttpClientFactory.imageClient.data(from: url)
                 if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
                     return nil
                 }
-                return UIImage(data: data)
+                // Downsample to `cap` (off-main) so the main thread never
+                // decompresses an oversized source at draw time.
+                return AnimatedImageDecoder.decodeStatic(data: data, maxPixelSize: cap)
             } catch {
                 return nil
             }

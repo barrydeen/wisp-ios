@@ -89,6 +89,25 @@ final class ThreadViewModel {
     @ObservationIgnored private var hiddenSpamPubkeys: Set<String> = []
     @ObservationIgnored private var blockedEventIds: Set<String> = []
     @ObservationIgnored private var spamScoringInflight: Set<String> = []
+    /// Memoized `Nip10.replyTarget` per event id. Events are immutable value
+    /// types keyed by id, so the reply target never changes — caching it turns
+    /// the grouping passes in `rebuildSlices` from per-event tag re-parses
+    /// (each allocating a filtered `[[String]]`) into dict lookups. Lazily
+    /// filled on miss via `parent(of:)` — one chokepoint instead of patching
+    /// every `events[id] = …` insert site.
+    @ObservationIgnored private var parentIdCache: [String: String?] = [:]
+    /// Coalesces thread rebuilds during a reply-stream burst. `rebuildSlices`
+    /// is O(N) over the whole `events` map; the live reply subscription can
+    /// deliver hundreds of events in a burst, and rebuilding per event was
+    /// O(N²) on the MainActor right when the user waits for the thread to
+    /// paint. Leading-edge debounce: the first event in a quiet window rebuilds
+    /// immediately (fast first paint); further events within the ~60 ms window
+    /// coalesce into one trailing rebuild. Mirrors `FeedViewModel`'s debounced
+    /// live-event flush.
+    @ObservationIgnored private var rebuildTask: Task<Void, Never>?
+    @ObservationIgnored private var rebuildWindowOpen = false
+    @ObservationIgnored private var rebuildCoalesced = false
+    private static let rebuildDebounceMs: UInt64 = 60
 
     @ObservationIgnored private let eventStore = EventStore.shared
     @ObservationIgnored private let profileRepo = ProfileRepository.shared
@@ -292,6 +311,10 @@ final class ThreadViewModel {
         streamTasks.removeAll()
         engagementBatcher?.cancel()
         engagementBatcher = nil
+        rebuildTask?.cancel()
+        rebuildTask = nil
+        rebuildWindowOpen = false
+        rebuildCoalesced = false
     }
 
     // MARK: - Reply
@@ -736,11 +759,11 @@ final class ThreadViewModel {
                 let snap = SafetyFilter.shared.snapshot
                 if snap.blockedPubkeys.contains(event.pubkey) {
                     // Keep as a placeholder; do not score for spam.
-                    self.ingestReply(event, blocked: true)
+                    self.ingestReply(event, blocked: true, coalesceRebuild: true)
                     continue
                 }
                 if SafetyFilter.shared.shouldDrop(event: event, context: .thread(rootId: rootId)) { continue }
-                self.ingestReply(event)
+                self.ingestReply(event, coalesceRebuild: true)
                 self.maybeScoreReplyForSpam(event)
             }
         }
@@ -756,7 +779,7 @@ final class ThreadViewModel {
         streamTasks.append(watchdog)
     }
 
-    private func ingestReply(_ event: NostrEvent, blocked: Bool = false) {
+    private func ingestReply(_ event: NostrEvent, blocked: Bool = false, coalesceRebuild: Bool = false) {
         guard events[event.id] == nil else { return }
         events[event.id] = event
         if blocked { blockedEventIds.insert(event.id) }
@@ -772,8 +795,40 @@ final class ThreadViewModel {
         MissingProfileWatcher.shared.observe(event)
 
         queueEngagement(ids: [event.id])
-        rebuildSlices()
+        if coalesceRebuild { scheduleRebuild() } else { rebuildSlices() }
         if isLoading { isLoading = false }
+    }
+
+    /// Leading-edge debounced rebuild — see `rebuildTask`. The first call in a
+    /// quiet window rebuilds synchronously so the first streamed reply paints
+    /// immediately; subsequent calls within the window collapse into a single
+    /// trailing rebuild, turning an O(N²) per-event burst into ~one rebuild per
+    /// `rebuildDebounceMs`.
+    private func scheduleRebuild() {
+        if rebuildWindowOpen {
+            rebuildCoalesced = true
+            return
+        }
+        rebuildWindowOpen = true
+        rebuildSlices()
+        rebuildTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(Self.rebuildDebounceMs))
+            guard let self, !Task.isCancelled else { return }
+            self.rebuildWindowOpen = false
+            if self.rebuildCoalesced {
+                self.rebuildCoalesced = false
+                self.rebuildSlices()
+            }
+        }
+    }
+
+    /// Memoized reply-target lookup (see `parentIdCache`). A cached `nil` (event
+    /// has no reply target) is preserved distinctly from "not yet computed".
+    private func parent(of event: NostrEvent) -> String? {
+        if let cached = parentIdCache[event.id] { return cached }
+        let target = Nip10.replyTarget(of: event)
+        parentIdCache[event.id] = target
+        return target
     }
 
     private func markStreamingDone() {
@@ -954,25 +1009,29 @@ final class ThreadViewModel {
             missingAncestorId = newMissingId
         }
 
-        // Tally direct children per parent so reply rows can show a
-        // "View N replies" hint as soon as any descendants are loaded.
-        var counts: [String: Int] = [:]
-        for event in events.values {
-            guard let parentId = Nip10.replyTarget(of: event) else { continue }
-            counts[parentId, default: 0] += 1
+        // Build the parent→children adjacency map ONCE (sorted oldest-first per
+        // parent) and derive childCounts, the direct-reply list, and the nested
+        // tree from it — instead of three independent O(N) scans over
+        // `events.values`, each re-parsing reply targets. `parent(of:)` memoizes
+        // the per-event tag walk. Only kind-1 replies are mapped: a kind-6
+        // repost `e`-tags this note too but isn't a reply (without the guard it'd
+        // surface as a duplicate card). This narrows `childCounts` to genuine
+        // replies (it previously counted kind-6 reposts); childCounts feeds
+        // `effectiveReplyCount` as `max(local, remote)` in ThreadView, so the
+        // narrowing is benign and arguably more consistent with the relay count.
+        var childrenByParent: [String: [NostrEvent]] = [:]
+        for event in events.values where event.kind == 1 && event.id != focalEventId {
+            guard let parentId = parent(of: event) else { continue }
+            childrenByParent[parentId, default: []].append(event)
         }
-        childCounts = counts
+        for key in childrenByParent.keys {
+            childrenByParent[key]?.sort { $0.createdAt < $1.createdAt }
+        }
 
-        let directReplies = events.values
-            .filter { event in
-                guard event.id != focalEventId else { return false }
-                // Replies are kind-1 only. A kind-6 repost references this note
-                // via its `e` tag too, but it isn't a reply — without this
-                // guard it'd surface as a duplicate card under the focal.
-                guard event.kind == 1 else { return false }
-                return Nip10.replyTarget(of: event) == focalEventId
-            }
-            .sorted { $0.createdAt < $1.createdAt }
+        childCounts = childrenByParent.mapValues(\.count)
+
+        // Direct replies are the focal's bucket — already sorted oldest-first.
+        let directReplies = childrenByParent[focalEventId] ?? []
 
         if hiddenSpamPubkeys.isEmpty {
             replies = directReplies.map { makeRow($0) }
@@ -990,7 +1049,7 @@ final class ThreadViewModel {
             hiddenSpamReplies = hidden
         }
 
-        nestedReplies = buildNestedReplies()
+        nestedReplies = buildNestedReplies(childrenByParent: childrenByParent)
 
         // Promote the pending scroll target the first time it appears in the
         // rendered list, so ThreadView scrolls after data is visible rather
@@ -1002,21 +1061,13 @@ final class ThreadViewModel {
         }
     }
 
-    /// DFS preorder walk from the focal through every known descendant.
-    /// Children of a parent are sorted oldest-first to match the direct-
-    /// reply ordering. Blocked rows and hidden-spam authors drop with their
-    /// entire subtree — same rule we apply to the direct list — so a muted
-    /// branch doesn't leave orphaned grandchildren stranded at depth 0.
-    private func buildNestedReplies() -> [NestedReplyRow] {
-        var childrenByParent: [String: [NostrEvent]] = [:]
-        for event in events.values where event.kind == 1 && event.id != focalEventId {
-            guard let parentId = Nip10.replyTarget(of: event) else { continue }
-            childrenByParent[parentId, default: []].append(event)
-        }
-        for key in childrenByParent.keys {
-            childrenByParent[key]?.sort { $0.createdAt < $1.createdAt }
-        }
-
+    /// DFS preorder walk from the focal through every known descendant, over the
+    /// pre-built (oldest-first per parent) adjacency map from `rebuildSlices` so
+    /// the tree isn't regrouped a second time. Blocked rows and hidden-spam
+    /// authors drop with their entire subtree — same rule we apply to the direct
+    /// list — so a muted branch doesn't leave orphaned grandchildren stranded at
+    /// depth 0.
+    private func buildNestedReplies(childrenByParent: [String: [NostrEvent]]) -> [NestedReplyRow] {
         var result: [NestedReplyRow] = []
         var visited: Set<String> = [focalEventId]
 
@@ -1047,14 +1098,14 @@ final class ThreadViewModel {
         var current = focal
         var seen: Set<String> = [focal.id]
         for _ in 0..<30 {
-            guard let parentId = Nip10.replyTarget(of: current),
+            guard let parentId = parent(of: current),
                   seen.insert(parentId).inserted else { break }
-            guard let parent = events[parentId] else {
+            guard let parentEvent = events[parentId] else {
                 let rows = chain.reversed().map { makeRow($0) }
                 return (rows, parentId)
             }
-            chain.append(parent)
-            current = parent
+            chain.append(parentEvent)
+            current = parentEvent
         }
         return (chain.reversed().map { makeRow($0) }, nil)
     }
