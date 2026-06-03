@@ -24,6 +24,32 @@ struct CachedAvatarView: View {
         alwaysLoad || settings.autoLoadMedia || manualLoad
     }
 
+    /// Longest-edge pixel cap for the decoded avatar. A 40 pt circle only needs
+    /// ~120 px even at @3x; capping here means a multi-MB source isn't kept (or
+    /// decompressed on the main thread at draw time) at full resolution.
+    private var framePixelCap: CGFloat { max(size * 3, 96) }
+    /// Decoded-cache keys, size-bucketed so the same avatar rendered at
+    /// different `size`s doesn't collide, and distinct from the inline-media
+    /// keys used by RetryingAsyncImage / AnimatedImageView for the same URL.
+    private func staticCacheKey(_ u: String) -> String { "\(u)#avatar\(Int(framePixelCap))" }
+    private func animatedCacheKey(_ u: String) -> String { "\(u)#avatarA\(Int(framePixelCap))" }
+    private var wantsAnimated: Bool {
+        guard let url, !url.isEmpty else { return false }
+        return settings.animateAvatars && AnimatedImageHint.isLikelyAnimated(url: url, mime: nil)
+    }
+    /// Synchronous decoded-cache pre-reads (DecodedImageCache is @MainActor), so
+    /// a recycled row renders the previously-decoded result with no re-fetch,
+    /// no re-decode, and no placeholder flash — the win CachedAvatarView
+    /// previously left on the table by never consulting DecodedImageCache.
+    private var cachedAnimated: AnimatedImagePayload? {
+        guard shouldLoad, wantsAnimated, let url, !url.isEmpty else { return nil }
+        return DecodedImageCache.animatedPayload(for: animatedCacheKey(url))
+    }
+    private var cachedStatic: UIImage? {
+        guard shouldLoad, let url, !url.isEmpty else { return nil }
+        return DecodedImageCache.staticImage(for: staticCacheKey(url))
+    }
+
     var body: some View {
         Group {
             if let animatedPayload {
@@ -31,6 +57,15 @@ struct CachedAvatarView: View {
                     .allowsHitTesting(false)
             } else if let uiImage {
                 Image(uiImage: uiImage)
+                    .resizable()
+                    .scaledToFill()
+            } else if let cachedAnimated {
+                // Decoded-cache hit (synchronous): a recycled LazyVStack row
+                // paints instantly with no placeholder flash and no re-decode.
+                AnimatedImageRenderer(payload: cachedAnimated, contentMode: .scaleAspectFill)
+                    .allowsHitTesting(false)
+            } else if let cachedStatic {
+                Image(uiImage: cachedStatic)
                     .resizable()
                     .scaledToFill()
             } else if loadFailed || url == nil || url?.isEmpty == true {
@@ -83,7 +118,9 @@ struct CachedAvatarView: View {
             data = cached
         } else if let imageUrl = URL(string: url) {
             do {
-                let (fetched, _) = try await URLSession.shared.data(from: imageUrl)
+                // Dedicated foreground image session (own pool + transit cache)
+                // rather than URLSession.shared's JSON-contended 6-per-host pool.
+                let (fetched, _) = try await HttpClientFactory.imageClient.data(from: imageUrl)
                 ImageCache.shared.store(fetched, for: url)
                 data = fetched
             } catch {
@@ -107,29 +144,39 @@ struct CachedAvatarView: View {
             mediaPerfLog.log("avatar: animated pfp \(data.count, privacy: .public) bytes > cap — rendering static url=\(url, privacy: .public)")
         }
         #endif
-        // Downsample animated frames to the avatar's pixel size. A circular 40pt
-        // avatar only needs ~120px frames; without this cap, a massive animated
-        // pfp (large dimensions × many frames, rendered on every one of an
-        // author's feed rows) made UIImageView scale full-res frames on the main
-        // thread and froze the app. `* 3` covers @3x displays.
-        let framePixelCap = max(size * 3, 96)
+        // Downsample animated frames AND the static fallback to the avatar's
+        // pixel size. A circular 40pt avatar only needs ~120px; without this
+        // cap, a massive pfp (large dimensions × many frames, rendered on every
+        // one of an author's feed rows) made UIImageView scale full-res frames
+        // on the main thread and froze the app. The static branch previously
+        // skipped this entirely — bare `UIImage(data:)` deferred a full-res
+        // decompression to draw time on main, repeated on every cell recycle.
+        // `* 3` covers @3x displays.
+        let cap = framePixelCap
         let decoded: DecodedAvatar = await Task.detached(priority: .utility) {
             if tryAnimated,
-               let payload = AnimatedImageDecoder.decode(data: data, maxPixelSize: framePixelCap),
+               let payload = AnimatedImageDecoder.decode(data: data, maxPixelSize: cap),
                payload.frames.count > 1 {
                 return .animated(payload)
             }
-            if let img = UIImage(data: data) {
+            if let img = AnimatedImageDecoder.decodeStatic(data: data, maxPixelSize: cap) {
                 return .still(img)
             }
             return .failed
         }.value
 
         if Task.isCancelled { return }
+        // Store the decoded result so a recycle (or any reuse of this URL at
+        // this size) is a synchronous cache hit via `cachedStatic`/`cachedAnimated`.
         switch decoded {
-        case .animated(let payload): animatedPayload = payload
-        case .still(let img): uiImage = img
-        case .failed: loadFailed = true
+        case .animated(let payload):
+            DecodedImageCache.storeAnimated(payload, for: animatedCacheKey(url))
+            animatedPayload = payload
+        case .still(let img):
+            DecodedImageCache.storeStatic(img, for: staticCacheKey(url))
+            uiImage = img
+        case .failed:
+            loadFailed = true
         }
     }
 

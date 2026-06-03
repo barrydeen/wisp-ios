@@ -258,6 +258,12 @@ struct ThreadView: View {
                 },
                 onHashtagTap: { _ in }
             )
+            // Gate row re-renders: the thread's `engagement` dict mutates per
+            // inbound reaction/zap/reply, which re-evaluates ThreadView.body.
+            // Without `==`, every visible row re-ran its full body each tick.
+            // PostCardView's `==` re-renders only the row whose engagement /
+            // profile actually changed — same as the feed.
+            .equatable()
             .contentShape(Rectangle())
             .onTapGesture {
                 navigateToThread(eventId: row.event.id, authorPubkey: row.event.pubkey)
@@ -287,6 +293,7 @@ struct ThreadView: View {
                     },
                     onHashtagTap: { tag in push(HashtagFeedRoute(tag: tag)) }
                 )
+                .equatable()
             }
             Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
         }
@@ -353,6 +360,7 @@ struct ThreadView: View {
                 },
                 onHashtagTap: { tag in push(HashtagFeedRoute(tag: tag)) }
             )
+            .equatable()
             .contentShape(Rectangle())
             .onTapGesture {
                 navigateToThread(eventId: row.event.id, authorPubkey: row.event.pubkey)
