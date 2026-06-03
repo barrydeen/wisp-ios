@@ -497,6 +497,11 @@ struct FollowersTabView: View {
                         ProfileRow(profile: profile)
                         Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
                     }
+                    if viewModel.followersHasMore {
+                        loadMoreFooter {
+                            await viewModel.loadMoreFollowers()
+                        }
+                    }
                 }
             }
         }

@@ -59,13 +59,13 @@ struct ProfileView: View {
                     viewModel: viewModel,
                     isMe: isMe,
                     isWatchOnly: NostrKey.isWatchOnly(pubkey: activeUserPubkey),
-                    selectedTab: selectedTab,
                     onEditProfile: { showEditProfile = true },
                     onProfileTap: onProfileTap,
                     onNoteTap: onNoteTap,
                     onHashtagTap: onHashtagTap
                 )
                 Section {
+                    sortRow
                     tabBody
                 } header: {
                     ProfileTabBar(selected: $selectedTab, tabs: visibleTabs)
@@ -201,6 +201,39 @@ struct ProfileView: View {
         )
     }
 
+    /// Notes/Replies sort control, on its own row directly beneath the pinned
+    /// tab bar (scrolls up under it). Previously sat in the header's stat row,
+    /// where it squished the follow/follower counts; only the sortable tabs
+    /// surface it, every other tab collapses this to nothing.
+    @ViewBuilder
+    private var sortRow: some View {
+        switch selectedTab {
+        case .notes:
+            sortRowBar(selection: viewModel.notesSortMode) { mode in
+                Task { await viewModel.setNotesSortMode(mode) }
+            }
+        case .replies:
+            sortRowBar(selection: viewModel.repliesSortMode) { mode in
+                Task { await viewModel.setRepliesSortMode(mode) }
+            }
+        default:
+            EmptyView()
+        }
+    }
+
+    private func sortRowBar(
+        selection: ProfileSortMode,
+        onSelect: @escaping (ProfileSortMode) -> Void
+    ) -> some View {
+        HStack {
+            Spacer(minLength: 0)
+            ProfileSortPicker(selection: selection, onSelect: onSelect)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+    }
+
     @ViewBuilder
     private var tabBody: some View {
         if !isMe && muteRepo.isBlocked(pubkey) {
@@ -295,7 +328,6 @@ private struct ProfileHeaderView: View {
     @Bindable var viewModel: ProfileViewModel
     var isMe: Bool = false
     var isWatchOnly: Bool = false
-    var selectedTab: ProfileTab = .notes
     var onEditProfile: () -> Void = {}
     var onProfileTap: ((String) -> Void)? = nil
     var onNoteTap: ((String) -> Void)? = nil
@@ -545,34 +577,7 @@ private struct ProfileHeaderView: View {
                     ? "∞"
                     : formatCount(viewModel.followersCount)
             )
-            Spacer(minLength: 12)
-            sortPicker
-        }
-    }
-
-    /// The notes/replies sort control lives here, right-aligned next to the
-    /// follow counts, instead of in its own full-width row below the pinned
-    /// tab bar — collapsing two rows into one saves a band of vertical space.
-    /// Only the sortable tabs surface it; everything else leaves the slot empty.
-    @ViewBuilder
-    private var sortPicker: some View {
-        switch selectedTab {
-        case .notes:
-            ProfileSortPicker(
-                selection: viewModel.notesSortMode,
-                onSelect: { mode in
-                    Task { await viewModel.setNotesSortMode(mode) }
-                }
-            )
-        case .replies:
-            ProfileSortPicker(
-                selection: viewModel.repliesSortMode,
-                onSelect: { mode in
-                    Task { await viewModel.setRepliesSortMode(mode) }
-                }
-            )
-        default:
-            EmptyView()
+            Spacer(minLength: 0)
         }
     }
 
