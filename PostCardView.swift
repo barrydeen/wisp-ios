@@ -50,6 +50,13 @@ struct PostCardView: View {
     var onOpenQuoteCompose: ((NostrEvent) -> Void)? = nil
     @Environment(WalletStore.self) private var walletStore: WalletStore?
     @Environment(AppSettings.self) private var settings
+    /// App-level composer router (reply / quote / emoji reaction). Optional so
+    /// cards rendered outside the injected environment (previews, embeddings)
+    /// still compile and fall back to the in-card `.sheet(item:)`. When present,
+    /// it's preferred over the in-card sheet so the composer is hosted from the
+    /// stable app root rather than this recyclable `LazyVStack` row. See
+    /// `ComposePresenter`.
+    @Environment(ComposePresenter.self) private var composePresenter: ComposePresenter?
     @State private var expanded = false
     @State private var contentExpanded = false
     /// Largest rendered height we've observed for the body's *text* runs
@@ -859,9 +866,11 @@ struct PostCardView: View {
     private var actionBar: some View {
         HStack(spacing: 0) {
             Button {
+                let target = resolveRepost().event
                 if let route = onOpenReplyCompose {
-                    let target = resolveRepost().event
                     route(target, replyRootStub(for: target))
+                } else if let composePresenter {
+                    composePresenter.openReply(parent: target, root: replyRootStub(for: target))
                 } else {
                     activeSheet = .replyCompose
                 }
@@ -1060,6 +1069,8 @@ struct PostCardView: View {
                     showRepostMenu = false
                     if let route = onOpenQuoteCompose {
                         route(resolveRepost().event)
+                    } else if let composePresenter {
+                        composePresenter.openQuote(resolveRepost().event)
                     } else {
                         activeSheet = .quoteCompose
                     }
@@ -1327,6 +1338,8 @@ struct PostCardView: View {
                     showReactionPicker = false
                     if let route = onOpenEmojiLibrary {
                         route { picked in sendReaction(picked) }
+                    } else if let composePresenter {
+                        composePresenter.openEmojiReaction { picked in sendReaction(picked) }
                     } else {
                         activeSheet = .emojiLibrary
                     }
