@@ -82,10 +82,15 @@ final class ThreadViewModel {
     /// (replayed from cache or delivered live). Prevents double-counting
     /// when a relay re-sends a kind-6/7/9735 we've already ingested.
     @ObservationIgnored private var seenEngagementIds = Set<String>()
-    /// Latest createdAt across cache-replayed engagement events. Live
-    /// engagement queries scope `since:` to one second past this so the
-    /// relay subscription only delivers truly new events.
-    @ObservationIgnored private var engagementSinceFloor: Int = 0
+    /// Per-target high-water mark: newest cache-replayed engagement `createdAt`
+    /// for each tracked id. Live engagement queries scope `since:` to the batch
+    /// minimum floor (minus an overlap buffer) so the relay subscription only
+    /// delivers truly new events — but a target with NO cached engagement is
+    /// cold and forces a full (no-`since`) pull for its REQ. The prior single
+    /// global floor applied the newest-overall timestamp to every reply, which
+    /// silently skipped reactions on a reply whose own engagement predated the
+    /// global max (e.g. a reaction made on another device).
+    @ObservationIgnored private var perTargetFloor: [String: Int] = [:]
     @ObservationIgnored private var hiddenSpamPubkeys: Set<String> = []
     @ObservationIgnored private var blockedEventIds: Set<String> = []
     @ObservationIgnored private var spamScoringInflight: Set<String> = []
@@ -605,9 +610,19 @@ final class ThreadViewModel {
         let cachedEngagement = await eventStore.loadEngagement(forTargetIds: trackedIds)
         if !cachedEngagement.isEmpty {
             ingestEngagement(cachedEngagement)
-            // Track the latest createdAt so the live query can ask for events
-            // strictly newer than what we've already replayed.
-            engagementSinceFloor = cachedEngagement.map(\.createdAt).max() ?? engagementSinceFloor
+            // Build the per-target floor: attribute each cached engagement event
+            // to its last non-`mention` e-target (same rule as `ingestEngagement`)
+            // and keep the newest createdAt per target, so the live query asks
+            // each target only for events newer than what we've already replayed.
+            for event in cachedEngagement {
+                let targets = event.tags.compactMap { tag -> String? in
+                    guard tag.count >= 2, tag[0] == "e" else { return nil }
+                    if tag.count >= 4, tag[3] == "mention" { return nil }
+                    return tag[1]
+                }
+                guard let primary = targets.last else { continue }
+                perTargetFloor[primary] = Swift.max(perTargetFloor[primary] ?? 0, event.createdAt)
+            }
         }
     }
 
@@ -875,12 +890,13 @@ final class ThreadViewModel {
     private func openEngagementSub(ids: [String], relays: [String]) async {
         guard !ids.isEmpty, !relays.isEmpty else { return }
         let rootIdLocal = rootId
-        // Only fetch events strictly newer than what cache replay already
-        // covered. `engagementSinceFloor` is the latest `createdAt` we've
-        // ingested locally; +1 keeps the boundary exclusive.
-        let since: Int? = engagementSinceFloor > 0 ? engagementSinceFloor + 1 : nil
         for chunk in ids.chunked(into: 50) {
             let subId = "thread-engagement-\(UUID().uuidString.prefix(6))"
+            // Per-target floor: only fetch events newer than what cache replay
+            // covered, using the batch MINIMUM (minus overlap) so no target in
+            // the chunk under-fetches. A target with no cached engagement is
+            // cold → the helper returns nil → full pull for this REQ.
+            let since = EngagementRepository.sinceFloor(forTargets: chunk, cursor: perTargetFloor, forceFull: false)
             let filter = NostrFilter(kinds: [1, 6, 7, 9735], eTags: chunk, limit: 500, since: since)
             let sub = RelayPool.subscribe(relays: relays, filter: filter, id: subId)
             // NIP-18 quote reposts (kind-1 with only a `q` tag) are not
@@ -893,6 +909,10 @@ final class ThreadViewModel {
             // arrive on this stream and are routed into `quoters` below.
             let consumer = Task { [weak self] in
                 for await (event, _) in sub.events {
+                    // Persist so the disk cache (and the feed's cross-session
+                    // cursor / count replay) sees thread-discovered engagement.
+                    // EventStore applies block/dedup at the persist layer.
+                    Task { await EventPersistQueue.shared.enqueue(event) }
                     if SafetyFilter.shared.shouldDrop(event: event, context: .thread(rootId: rootIdLocal)) { continue }
                     self?.ingestEngagement([event])
                 }
@@ -986,6 +1006,13 @@ final class ThreadViewModel {
             default: break
             }
             engagement[primary] = current
+            // Forward to the shared feed box so the count the thread discovered
+            // survives navigation back to the feed (which reads
+            // `EngagementRepository.box(for:)`). Routes through the feed's own
+            // dedup set, so a later feed sub re-delivering the same event is
+            // skipped — raised once, never summed. Quotes `continue` above, so
+            // only genuine reactions/replies/reposts/zaps reach here.
+            EngagementRepository.shared.ingestForwarded(event)
         }
     }
 

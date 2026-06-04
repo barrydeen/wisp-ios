@@ -198,6 +198,46 @@ actor EventStore {
         return out
     }
 
+    /// Per-target reply counts from disk: how many cached kind:1 events reply to
+    /// each of `targetIds`. Count-only (no `NostrEvent` materialization) because
+    /// the feed card renders just a reply *number* — this lets the feed seed a
+    /// last-known reply count on a cold open without the cost of walking the
+    /// whole reply table into objects. Attribution mirrors the engagement-ingest
+    /// rule: a reply belongs to its last non-`mention` `e`-target. A NIP-18 quote
+    /// (`q`-tag pointing at a tracked note) is a quote, not a reply, so it's
+    /// excluded — same as `EngagementRepository.ingest`.
+    func loadReplyCounts(forTargetIds targetIds: Set<String>) -> [String: Int] {
+        guard let box = ensureBox(), !targetIds.isEmpty else { return [:] }
+        var counts: [String: Int] = [:]
+        var seenIds = Set<String>()
+        for target in targetIds {
+            do {
+                let query = try box.query {
+                    EventEntity.kind == 1 && EventEntity.tags.contains(target)
+                }.build()
+                let candidates = try query.find(offset: 0, limit: 5000)
+                for entity in candidates {
+                    guard let event = entity.toNostrEvent(), seenIds.insert(event.id).inserted else { continue }
+                    // A quote targeting a tracked note is not a reply.
+                    let isQuote = event.tags.contains { $0.count >= 2 && $0[0] == "q" && targetIds.contains($0[1]) }
+                    if isQuote { continue }
+                    let eTargets = event.tags.compactMap { tag -> String? in
+                        guard tag.count >= 2, tag[0] == "e" else { return nil }
+                        if tag.count >= 4, tag[3] == "mention" { return nil }
+                        return tag[1]
+                    }
+                    guard let primary = eTargets.last,
+                          primary != event.id,
+                          targetIds.contains(primary) else { continue }
+                    counts[primary, default: 0] += 1
+                }
+            } catch {
+                continue
+            }
+        }
+        return counts
+    }
+
     /// Returns cached kind:1 events that are part of the thread anchored at `rootId`:
     /// the root itself plus any event whose tags contain `["e", rootId, ...]`.
     /// Falls back to scanning all kind:1 events client-side because tags are stored as JSON.
