@@ -1,6 +1,5 @@
 import SwiftUI
 import UIKit
-import os.signpost
 
 /// Drop-in replacement for `AsyncImage` that:
 ///   - reads from `DecodedImageCache` first so a cell scrolled back into view
@@ -51,11 +50,25 @@ struct RetryingAsyncImage<Content: View, Loading: View, Failure: View>: View {
         self.failure = failure
     }
 
+    /// Synchronous decoded-cache pre-read (DecodedImageCache is @MainActor).
+    /// `.task` only fires AFTER the first body render, so without this a
+    /// recycled row flashes the loader for one frame even on a cache hit —
+    /// the same fix CachedAvatarView already applies.
+    private var cachedImage: UIImage? {
+        guard let url else { return nil }
+        let key = InlineMediaLoader.staticKey(url: url, maxPixelSize: maxPixelSize)
+        return DecodedImageCache.staticImage(for: key)
+    }
+
     var body: some View {
         Group {
             switch phase {
             case .empty, .loading:
-                loading()
+                if let cachedImage {
+                    content(Image(uiImage: cachedImage))
+                } else {
+                    loading()
+                }
             case .success(let image):
                 content(Image(uiImage: image))
             case .failure:
@@ -85,11 +98,10 @@ struct RetryingAsyncImage<Content: View, Loading: View, Failure: View>: View {
             phase = .failure
             return
         }
-        // Key the decoded cache by url + pixel cap so the inline-capped (1024)
-        // and full-screen-uncapped variants of the same URL don't collide.
-        let key = maxPixelSize.map { "\(url.absoluteString)#px\(Int($0))" } ?? url.absoluteString
-
-        // Cache hit — render immediately with no loading state.
+        // Cache hit — render immediately with no loading state. (Key is
+        // url + pixel cap so the inline-capped (1024) and full-screen-
+        // uncapped variants of the same URL don't collide.)
+        let key = InlineMediaLoader.staticKey(url: url, maxPixelSize: maxPixelSize)
         if let cached = DecodedImageCache.staticImage(for: key) {
             phase = .success(cached)
             return
@@ -103,30 +115,19 @@ struct RetryingAsyncImage<Content: View, Loading: View, Failure: View>: View {
         }
 
         phase = .loading
-        let cap = maxPixelSize
-        let image: UIImage? = await Task.detached(priority: .utility) {
-            let signpostId = Signposts.media.makeSignpostID()
-            let signpostState = Signposts.media.beginInterval("fetchStaticImage", id: signpostId)
-            defer { Signposts.media.endInterval("fetchStaticImage", signpostState) }
-            do {
-                // Dedicated foreground image session (own pool + 64/256 MB
-                // transit cache) instead of URLSession.shared, so image loads
-                // don't share the 6-per-host budget with JSON/LNURL/relay-info.
-                let (data, response) = try await HttpClientFactory.imageClient.data(from: url)
-                if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-                    return nil
-                }
-                // Downsample to `cap` (off-main) so the main thread never
-                // decompresses an oversized source at draw time.
-                return AnimatedImageDecoder.decodeStatic(data: data, maxPixelSize: cap)
-            } catch {
-                return nil
-            }
-        }.value
+        // Shared in-flight-deduped fetch+decode: if the lookahead prefetcher
+        // (or another mounted view) already started this URL, attach to that
+        // task instead of fetching again. This view's `.task` being cancelled
+        // on scroll-away does NOT cancel the shared load — the result still
+        // lands in DecodedImageCache for the next appearance.
+        let image = await InlineMediaLoader.staticImage(
+            url: url,
+            maxPixelSize: maxPixelSize,
+            source: .foreground
+        )
 
         if Task.isCancelled { return }
         if let image {
-            DecodedImageCache.storeStatic(image, for: key)
             phase = .success(image)
         } else if attempt < maxAttempts {
             attempt += 1  // Triggers another `task` cycle via TaskKey change.

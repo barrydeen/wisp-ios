@@ -34,40 +34,58 @@ struct AnimatedImageView<Placeholder: View, Failure: View>: View {
         case failure
     }
 
+    /// Synchronous decoded-cache pre-read. `.task` only fires AFTER the first
+    /// body render, so without this a recycled row flashes the placeholder
+    /// for one frame even when the payload is already decoded — the same fix
+    /// CachedAvatarView / RetryingAsyncImage apply.
+    private var cachedPayload: AnimatedImagePayload? {
+        guard let url else { return nil }
+        return DecodedImageCache.animatedPayload(for: url.absoluteString)
+    }
+
     var body: some View {
         Group {
             switch phase {
             case .loading:
-                placeholder()
+                if let cachedPayload {
+                    rendered(cachedPayload)
+                } else {
+                    placeholder()
+                }
             case .failure:
                 failure()
             case .success(let payload):
-                // No `.allowsHitTesting(false)` here: with it, the GIF's frame
-                // becomes non-hit-testable in SwiftUI and pinch / drag /
-                // double-tap gestures attached to the surrounding view never
-                // fire over animated content. UIImageView itself ships with
-                // `isUserInteractionEnabled = false` so it doesn't intercept
-                // touches at the UIKit layer either — gestures pass cleanly
-                // up to the SwiftUI parent.
-                switch contentMode {
-                case .fit:
-                    AnimatedImageRenderer(payload: payload)
-                        .aspectRatio(aspect ?? payload.aspect, contentMode: .fit)
-                        .frame(maxWidth: .infinity)
-                case .fill:
-                    // No SwiftUI aspectRatio wrapper — let UIImageView's
-                    // `.scaleAspectFill` crop into the parent's explicit
-                    // frame. `.clipped()` on the parent (gallery tile)
-                    // keeps the bleed inside the corner-radius rect.
-                    AnimatedImageRenderer(
-                        payload: payload,
-                        contentMode: .scaleAspectFill
-                    )
-                }
+                rendered(payload)
             }
         }
         .task(id: url) {
             await load()
+        }
+    }
+
+    /// No `.allowsHitTesting(false)` here: with it, the GIF's frame
+    /// becomes non-hit-testable in SwiftUI and pinch / drag /
+    /// double-tap gestures attached to the surrounding view never
+    /// fire over animated content. UIImageView itself ships with
+    /// `isUserInteractionEnabled = false` so it doesn't intercept
+    /// touches at the UIKit layer either — gestures pass cleanly
+    /// up to the SwiftUI parent.
+    @ViewBuilder
+    private func rendered(_ payload: AnimatedImagePayload) -> some View {
+        switch contentMode {
+        case .fit:
+            AnimatedImageRenderer(payload: payload)
+                .aspectRatio(aspect ?? payload.aspect, contentMode: .fit)
+                .frame(maxWidth: .infinity)
+        case .fill:
+            // No SwiftUI aspectRatio wrapper — let UIImageView's
+            // `.scaleAspectFill` crop into the parent's explicit
+            // frame. `.clipped()` on the parent (gallery tile)
+            // keeps the bleed inside the corner-radius rect.
+            AnimatedImageRenderer(
+                payload: payload,
+                contentMode: .scaleAspectFill
+            )
         }
     }
 
@@ -88,26 +106,15 @@ struct AnimatedImageView<Placeholder: View, Failure: View>: View {
 
         phase = .loading
 
-        let payload: AnimatedImagePayload? = await Task.detached(priority: .utility) {
-            let signpostId = Signposts.media.makeSignpostID()
-            let signpostState = Signposts.media.beginInterval("fetchAnimated", id: signpostId)
-            defer { Signposts.media.endInterval("fetchAnimated", signpostState) }
-            do {
-                // Dedicated foreground image session (own connection pool +
-                // transit cache) so this doesn't contend on URLSession.shared's
-                // 6-per-host budget with NIP-05 / LNURL / relay-info JSON.
-                let (data, _) = try await HttpClientFactory.imageClient.data(from: url)
-                // Cap inline animated media so a huge source can't peg the render
-                // server scaling full-res frames. 1024 matches the video poster cap.
-                return AnimatedImageDecoder.decode(data: data, maxPixelSize: 1024)
-            } catch {
-                return nil
-            }
-        }.value
+        // Shared in-flight-deduped fetch+decode: attaches to a load the
+        // prefetcher (or another mounted view) already started instead of
+        // re-fetching. This view's `.task` being cancelled on scroll-away
+        // does NOT cancel the shared load — the decoded payload still lands
+        // in DecodedImageCache for the next appearance.
+        let payload = await InlineMediaLoader.animatedPayload(url: url, source: .foreground)
 
         if Task.isCancelled { return }
         if let payload {
-            DecodedImageCache.storeAnimated(payload, for: key)
             phase = .success(payload)
         } else {
             phase = .failure
@@ -248,7 +255,11 @@ nonisolated enum AnimatedImageDecoder {
 /// and the alternative (rendering them through AsyncImage) freezes them on
 /// frame 0. The animated decoder handles single-frame WebPs correctly, so the
 /// only cost of a false positive is the CGImageSource round-trip.
-enum AnimatedImageHint {
+///
+/// `nonisolated`: pure string compute, called from MainActor views and from
+/// off-main prefetch paths (AvatarPrefetcher's actor) alike — same rationale
+/// as `AnimatedImageDecoder` under the project's MainActor-default isolation.
+nonisolated enum AnimatedImageHint {
     static func isLikelyAnimated(url: String, mime: String?) -> Bool {
         if let mime = mime?.lowercased(),
            mime.hasPrefix("image/gif") || mime.hasPrefix("image/webp") || mime.hasPrefix("image/apng") {

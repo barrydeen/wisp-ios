@@ -1106,6 +1106,15 @@ struct MainView: View {
                             }
                             .onAppear {
                                 engagementRepo.markVisible(event: event)
+                                // Warm media (images / GIF bytes / posters /
+                                // avatars) for the next ~10 rows so they're
+                                // decoded before they scroll in. O(1) per
+                                // appear (internally cached index map).
+                                MediaLookaheadPrefetcher.shared.noteAppeared(
+                                    eventId: event.id,
+                                    in: visible,
+                                    profiles: viewModel.profiles
+                                )
                                 if loadMoreTriggerIds.contains(event.id) {
                                     // Routes Follows → disk-replay scroll-back,
                                     // relay/extended → relay loadMore.
