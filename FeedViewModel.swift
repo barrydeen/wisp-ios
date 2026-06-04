@@ -214,12 +214,22 @@ final class FeedViewModel {
             forName: .nostrEventPublished, object: nil, queue: .main
         ) { [weak self] note in
             guard let event = note.userInfo?["event"] as? NostrEvent else { return }
-            Task { @MainActor [weak self] in
+            // Synchronous main-actor call instead of `Task { @MainActor in }`
+            // so this observer and `PendingPostStore`'s observer run in the
+            // same runloop tick — SwiftUI batches both writes (events insert
+            // + pending clear) into a single render pass. Without this, the
+            // dimmed pending row could sit visible under the real card for a
+            // beat before the deferred clear committed.
+            MainActor.assumeIsolated {
                 guard let self else { return }
                 guard event.pubkey == self.keypair.pubkey else { return }
                 guard self.currentKind == .follows else { return }
                 guard Self.isFeedRenderable(event) else { return }
                 guard self.seenIds.insert(event.id).inserted else { return }
+                // Clear the optimistic placeholder atomically with the real
+                // insert. PendingPostStore's own observer is also listening;
+                // this just guarantees the swap regardless of observer order.
+                PendingPostStore.shared.clearIfMatches(realEvent: event)
                 self.events = self.windowTrimmed(Self.consolidateReposts(
                     Self.mergeSortedDesc(self.events, [event])
                 ))

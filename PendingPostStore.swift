@@ -41,13 +41,21 @@ final class PendingPostStore {
     private(set) var pending: PendingPost?
 
     private init() {
+        // Observer runs synchronously on the main thread (queue: .main) and
+        // calls into the MainActor-isolated `clearIfMatches` via
+        // `MainActor.assumeIsolated`. The earlier `Task { @MainActor in ... }`
+        // hop yielded to the runloop between this observer and
+        // `FeedViewModel.observeOwnPublishes`, allowing SwiftUI to commit an
+        // intermediate frame where the real event was already in the feed
+        // but `pending` hadn't been cleared yet — the user saw the dimmed
+        // placeholder sitting under the real card for a beat.
         NotificationCenter.default.addObserver(
             forName: .nostrEventPublished,
             object: nil,
             queue: .main
         ) { [weak self] note in
             guard let event = note.userInfo?["event"] as? NostrEvent else { return }
-            Task { @MainActor [weak self] in
+            MainActor.assumeIsolated {
                 self?.clearIfMatches(realEvent: event)
             }
         }
@@ -106,7 +114,7 @@ final class PendingPostStore {
     /// real event. Reactions (kind 7) / DMs / private interactions go
     /// through different publishers but also fire `.nostrEventPublished`,
     /// so we still gate on kind to avoid clearing the slot prematurely.
-    private func clearIfMatches(realEvent: NostrEvent) {
+    func clearIfMatches(realEvent: NostrEvent) {
         guard let pending else { return }
         guard realEvent.pubkey == pending.event.pubkey else { return }
         guard realEvent.kind == pending.event.kind else { return }
