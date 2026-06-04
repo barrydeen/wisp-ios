@@ -10,6 +10,17 @@ import Foundation
 /// teardown cost, no synchronisation needed.
 enum HttpClientFactory {
 
+    /// Transit cache shared by `imageClient` and `mediaPrefetchClient`: the
+    /// SAME `URLCache` instance, so bytes warmed by the lookahead prefetcher
+    /// are cache hits for the foreground load that follows when the row
+    /// scrolls into view. (Separate URLCache instances here would silently
+    /// defeat the whole prefetch — the foreground session would re-download.)
+    static let sharedImageURLCache = URLCache(
+        memoryCapacity: 64 * 1024 * 1024,
+        diskCapacity: 256 * 1024 * 1024,
+        directory: nil
+    )
+
     /// Image and avatar loads. Generous resource timeout for slow CDNs but
     /// fail-fast on connection so a stalled host doesn't queue head-of-line.
     /// Has its own 64 MB / 256 MB URLCache so transit-layer hits don't share
@@ -20,11 +31,7 @@ enum HttpClientFactory {
         config.timeoutIntervalForResource = 30
         config.httpMaximumConnectionsPerHost = 6
         config.requestCachePolicy = .useProtocolCachePolicy
-        config.urlCache = URLCache(
-            memoryCapacity: 64 * 1024 * 1024,
-            diskCapacity: 256 * 1024 * 1024,
-            directory: nil
-        )
+        config.urlCache = sharedImageURLCache
         return URLSession(configuration: config)
     }()
 
@@ -58,13 +65,37 @@ enum HttpClientFactory {
     /// looking at — the documented regression that made scroll feel "much
     /// slower". No `URLCache`: the prefetcher stores decoded results in
     /// `ImageCache.shared`, which `CachedAvatarView` reads first.
+    ///
+    /// Deliberately NOT `networkServiceType = .background`: the OS throttles
+    /// background-class flows so hard that avatars routinely hadn't arrived by
+    /// the time their row scrolled in, defeating the prefetch entirely. Pool
+    /// separation (above) is the anti-starvation mechanism, not OS-level
+    /// deprioritization.
     static let prefetchClient: URLSession = {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 10
         config.timeoutIntervalForResource = 30
         config.httpMaximumConnectionsPerHost = 4
         config.urlCache = nil
-        config.networkServiceType = .background
+        return URLSession(configuration: config)
+    }()
+
+    /// Viewport-lookahead media prefetch (`MediaLookaheadPrefetcher`): inline
+    /// images, GIF byte-warming, video posters, upcoming-row avatars. Same
+    /// design constraints as `prefetchClient` — a SEPARATE connection pool so
+    /// lookahead bursts can't starve the foreground `imageClient` — but it
+    /// SHARES `imageClient`'s `URLCache` so warmed bytes are transit hits for
+    /// the foreground load that follows. `allowsConstrainedNetworkAccess =
+    /// false` means iOS Low Data Mode disables lookahead while on-demand
+    /// foreground loads keep working.
+    static let mediaPrefetchClient: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 10
+        config.timeoutIntervalForResource = 30
+        config.httpMaximumConnectionsPerHost = 4
+        config.requestCachePolicy = .useProtocolCachePolicy
+        config.urlCache = sharedImageURLCache
+        config.allowsConstrainedNetworkAccess = false
         return URLSession(configuration: config)
     }()
 

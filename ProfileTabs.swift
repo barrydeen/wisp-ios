@@ -57,7 +57,14 @@ struct NotesTabView: View {
                                 )
                             }
                             .buttonStyle(.plain)
-                            .onAppear { engagementRepo.markVisible(event: event) }
+                            .onAppear {
+                                engagementRepo.markVisible(event: event)
+                                MediaLookaheadPrefetcher.shared.noteAppeared(
+                                    eventId: event.id,
+                                    in: viewModel.rootNotes,
+                                    profiles: viewModel.profiles
+                                )
+                            }
                             .onDisappear { engagementRepo.markInvisible(event: event) }
                             Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
                         }
@@ -86,7 +93,14 @@ struct NotesTabView: View {
                                 )
                             }
                             .buttonStyle(.plain)
-                            .onAppear { engagementRepo.markVisible(event: event) }
+                            .onAppear {
+                                engagementRepo.markVisible(event: event)
+                                MediaLookaheadPrefetcher.shared.noteAppeared(
+                                    eventId: event.id,
+                                    in: viewModel.sortedNotes,
+                                    profiles: viewModel.profiles
+                                )
+                            }
                             .onDisappear { engagementRepo.markInvisible(event: event) }
                             Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
                         }
@@ -126,7 +140,14 @@ struct RepliesTabView: View {
                                 )
                             }
                             .buttonStyle(.plain)
-                            .onAppear { engagementRepo.markVisible(event: event) }
+                            .onAppear {
+                                engagementRepo.markVisible(event: event)
+                                MediaLookaheadPrefetcher.shared.noteAppeared(
+                                    eventId: event.id,
+                                    in: viewModel.replies,
+                                    profiles: viewModel.profiles
+                                )
+                            }
                             .onDisappear { engagementRepo.markInvisible(event: event) }
                             Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
                         }
@@ -155,7 +176,14 @@ struct RepliesTabView: View {
                                 )
                             }
                             .buttonStyle(.plain)
-                            .onAppear { engagementRepo.markVisible(event: event) }
+                            .onAppear {
+                                engagementRepo.markVisible(event: event)
+                                MediaLookaheadPrefetcher.shared.noteAppeared(
+                                    eventId: event.id,
+                                    in: viewModel.sortedReplies,
+                                    profiles: viewModel.profiles
+                                )
+                            }
                             .onDisappear { engagementRepo.markInvisible(event: event) }
                             Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
                         }
@@ -194,7 +222,14 @@ struct ConversationTabView: View {
                             )
                         }
                         .buttonStyle(.plain)
-                        .onAppear { engagementRepo.markVisible(event: event) }
+                        .onAppear {
+                            engagementRepo.markVisible(event: event)
+                            MediaLookaheadPrefetcher.shared.noteAppeared(
+                                eventId: event.id,
+                                in: viewModel.conversationNotes,
+                                profiles: viewModel.profiles
+                            )
+                        }
                         .onDisappear { engagementRepo.markInvisible(event: event) }
                         Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
                     }

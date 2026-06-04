@@ -271,15 +271,17 @@ private struct MediaTileImage: View {
         // Prefer the imeta-supplied poster URL — instant and free of any video
         // bandwidth. Fall back to a frame decoded from the video itself so
         // dim-less / poster-less posts still get something visible.
+        // RetryingAsyncImage (not bare AsyncImage) so the poster goes through
+        // DecodedImageCache + the shared in-flight dedup at the same #px1024
+        // key the lookahead prefetcher warms — a prefetched poster renders
+        // with no spinner, and a recycled tile doesn't re-fetch.
         if let posterUrl = item.posterUrl, let url = URL(string: posterUrl) {
-            AsyncImage(url: url) { phase in
-                switch phase {
-                case .success(let image):
-                    image.resizable().scaledToFill()
-                default:
-                    GeneratedVideoPoster(videoUrl: item.url) { placeholder }
-                }
-            }
+            RetryingAsyncImage(
+                url: url,
+                content: { image in image.resizable().scaledToFill() },
+                loading: { placeholder },
+                failure: { GeneratedVideoPoster(videoUrl: item.url) { placeholder } }
+            )
         } else {
             GeneratedVideoPoster(videoUrl: item.url) { placeholder }
         }
