@@ -115,9 +115,22 @@ final class SearchViewModel {
         // 500 ms timer, then ran a fresh `runSearch()` that cleared the
         // visible results and re-fetched them.
         guard text != query else { return }
+        // A pasted `nostr:` URI scheme is transport syntax, never search
+        // terms — strip it from the field itself (the binding's `get`
+        // re-reads `query`) when a NIP-19 entity follows. Plain text after
+        // `nostr:` is left alone so typing the literal word isn't mangled;
+        // `preprocessQuery` still drops the scheme for intent either way.
+        let text = strippedNostrScheme(from: text)
+        guard text != query else { return }
         query = text
         debounceTask?.cancel()
         let intent = preprocessQuery(text)
+        // An explicit NIP-19 entity implies its search mode — an event
+        // reference can only resolve as a note, a profile reference only
+        // as a person. Re-aim the mode chip so the result actually shows.
+        if let implied = impliedMode(for: text), mode != implied {
+            mode = implied
+        }
         guard isQueryActionable(intent) else {
             if case .text(let s) = intent, s.isEmpty {
                 notes = []
@@ -199,6 +212,11 @@ final class SearchViewModel {
         let intent = preprocessQuery(query)
         guard isQueryActionable(intent) else { return }
 
+        // A pasted event reference is only ever a direct note lookup —
+        // re-align the mode in case the user toggled People with the
+        // reference still in the field.
+        if case .eventRef = intent, mode != .notes { mode = .notes }
+
         searchCounter += 1
         let myCounter = searchCounter
         let mode = self.mode
@@ -236,6 +254,14 @@ final class SearchViewModel {
                 return
             }
 
+            // Direct id lookup for a pasted note1/nevent1 — queries the
+            // nevent's relay hints plus discovery relays, and verifies the
+            // result against the requested id (see runEventLookup).
+            if case .eventRef(let id, let hints) = intent {
+                await self.runEventLookup(id: id, relayHints: hints, counter: myCounter)
+                return
+            }
+
             let relays = self.relaysToQuery()
             guard !relays.isEmpty else {
                 await MainActor.run { self.isSearching = false }
@@ -255,13 +281,21 @@ final class SearchViewModel {
                 case .text(let trimmed):
                     filter = NostrFilter(kinds: [0], limit: 20, search: trimmed)
                     queryRelays = relays
-                case .nip05:
-                    // Handled above via the early-return path
+                case .nip05, .eventRef:
+                    // Handled above via the early-return paths
                     return
                 }
             case .notes:
                 let authorPubkey = self.authorFilter?.pubkey
-                guard case .text(let trimmed) = intent else { return }
+                guard case .text(let trimmed) = intent else {
+                    // Identity intents (pubkey / NIP-05) have no notes-mode
+                    // form — end the search instead of stranding the spinner.
+                    await MainActor.run {
+                        guard myCounter == self.searchCounter else { return }
+                        self.isSearching = false
+                    }
+                    return
+                }
                 filter = NostrFilter(
                     kinds: [1],
                     authors: authorPubkey.map { [$0] },
@@ -299,6 +333,41 @@ final class SearchViewModel {
                 self.isSearching = false
             }
         }
+    }
+
+    /// Direct event-id lookup for a pasted `note1` / `nevent1` reference.
+    /// Queries the nevent's relay hints plus the search + indexer relays,
+    /// and only accepts an event whose *recomputed* id matches the request:
+    /// a misbehaving relay can answer an `ids:` filter with a different
+    /// note (or forge the requested id onto different content), and
+    /// first-event-wins would render the wrong note.
+    private func runEventLookup(id: String, relayHints: [String], counter: Int) async {
+        var seen = Set<String>()
+        var relays: [String] = []
+        for raw in relayHints {
+            let url = normalizeRelayUrl(raw)
+            if !url.isEmpty, seen.insert(url).inserted { relays.append(url) }
+        }
+        for url in relaysToQuery() where seen.insert(url).inserted { relays.append(url) }
+        for url in RelayDefaults.indexers where seen.insert(url).inserted { relays.append(url) }
+
+        var filter = NostrFilter()
+        filter.ids = [id]
+        filter.limit = 1
+        let events = await RelayPool.query(relays: relays, filter: filter, timeout: searchTimeout)
+        guard !Task.isCancelled, counter == searchCounter else { return }
+
+        let match = events.first { event in
+            event.id == id && NostrEvent.computeId(
+                pubkey: event.pubkey,
+                createdAt: event.createdAt,
+                kind: event.kind,
+                tags: event.tags,
+                content: event.content
+            ) == id
+        }
+        handleNoteResults(match.map { [$0] } ?? [])
+        isSearching = false
     }
 
     private func handlePeopleResults(_ events: [NostrEvent]) {
@@ -450,6 +519,7 @@ final class SearchViewModel {
         case text(String)     // full-text search via NIP-50
         case pubkey(String)   // resolved hex pubkey → authors: filter
         case nip05(String)    // name@domain → async HTTP lookup → authors: filter
+        case eventRef(id: String, relays: [String])  // note1/nevent1 → ids: lookup
     }
 
     // MARK: - Helpers
@@ -510,6 +580,14 @@ final class SearchViewModel {
             }
         }
 
+        // note / nevent → decode to a direct event-id lookup
+        if lower.hasPrefix("note1") || lower.hasPrefix("nevent1") {
+            if let data = Nip19.decodeNostrUri(s),
+               case .noteRef(let eventId, let relays, _) = data, !eventId.isEmpty {
+                return .eventRef(id: eventId, relays: relays)
+            }
+        }
+
         // Bare 64-char hex pubkey
         if s.count == 64, s.allSatisfy({ $0.isHexDigit }) {
             return .pubkey(s.lowercased())
@@ -529,8 +607,32 @@ final class SearchViewModel {
     private func isQueryActionable(_ intent: SearchIntent) -> Bool {
         switch intent {
         case .text(let s): return s.count >= 2
-        case .pubkey, .nip05: return true
+        case .pubkey, .nip05, .eventRef: return true
         }
+    }
+
+    /// Visible-field form of the `nostr:` strip: drop the scheme only when a
+    /// NIP-19 entity actually follows, so a paste shows the bare entity but
+    /// someone typing the literal text "nostr:..." keeps their input.
+    private func strippedNostrScheme(from text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.lowercased().hasPrefix("nostr:") else { return text }
+        let rest = String(trimmed.dropFirst("nostr:".count))
+        let restLower = rest.lowercased()
+        let entityPrefixes = ["npub1", "nprofile1", "note1", "nevent1", "naddr1"]
+        guard entityPrefixes.contains(where: { restLower.hasPrefix($0) }) else { return text }
+        return rest
+    }
+
+    /// Mode implied by an explicit NIP-19 entity at the head of the query,
+    /// or nil when the text doesn't pin one down.
+    private func impliedMode(for text: String) -> Mode? {
+        var s = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if s.hasPrefix("@") { s = String(s.dropFirst()) }
+        if s.hasPrefix("nostr:") { s = String(s.dropFirst("nostr:".count)) }
+        if s.hasPrefix("note1") || s.hasPrefix("nevent1") { return .notes }
+        if s.hasPrefix("npub1") || s.hasPrefix("nprofile1") { return .people }
+        return nil
     }
 
     private func normalizeRelayUrl(_ url: String) -> String {
