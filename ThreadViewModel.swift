@@ -441,7 +441,7 @@ final class ThreadViewModel {
             return
         }
 
-        let createdAt = Int(Date().timeIntervalSince1970)
+        let createdAt = NostrClock.now()
         var tags = Nip10.buildReplyTags(replyTo: parent, relayHint: "")
         if let clientTag = NostrEvent.clientTagIfEnabled() { tags.append(clientTag) }
 

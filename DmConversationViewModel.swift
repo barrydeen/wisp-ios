@@ -193,7 +193,7 @@ final class DmConversationViewModel: EmojiComposing {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         sendError = nil
-        let createdAt = Int(Date().timeIntervalSince1970)
+        let createdAt = NostrClock.now()
         let reply = currentReplyRumorId()
         let rumor = buildRumor(content: text, kind: Nip17.Kind.chatMessage,
                                fileExtraTags: [], replyRumorId: reply, createdAt: createdAt)
@@ -213,7 +213,7 @@ final class DmConversationViewModel: EmojiComposing {
     /// immediately, then encrypts + uploads to Blossom + publishes in the background.
     func sendFile(_ picked: PickedMedia) {
         sendError = nil
-        let createdAt = Int(Date().timeIntervalSince1970)
+        let createdAt = NostrClock.now()
         let reply = currentReplyRumorId()
         let tempId = Self.makeTempId()
         localOutgoingMedia[tempId] = LocalOutgoingMedia(

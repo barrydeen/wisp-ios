@@ -84,7 +84,7 @@ final class ReactionSender {
         }
 
         let baseTags = Nip25.reactionTags(targetEvent: targetEvent, customEmoji: custom)
-        let baseCreatedAt = Int(Date().timeIntervalSince1970)
+        let baseCreatedAt = NostrClock.now()
         let powSnap = PowPreferences.snapshot()
 
         // Applied before PoW so the heart fills in on tap, not after the mine.

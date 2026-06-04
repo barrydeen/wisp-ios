@@ -69,7 +69,7 @@ final class MediaServersViewModel {
         }
         publishState = .publishing
         let tags = servers.map { ["server", $0] }
-        let createdAt = Int(Date().timeIntervalSince1970)
+        let createdAt = NostrClock.now()
         let pubkeyHex = keypair.pubkey
         let relays = topWriteRelays(pubkey: pubkeyHex)
 

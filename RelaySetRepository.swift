@@ -102,7 +102,7 @@ final class RelaySetRepository {
 
         let dTag = uniqueDTag(forName: trimmed)
         let normalized = relays.compactMap(Nip51Lists.normalize)
-        let now = Int(Date().timeIntervalSince1970)
+        let now = NostrClock.now()
 
         let set = RelaySet(
             pubkey: keypair.pubkey,
@@ -124,7 +124,7 @@ final class RelaySetRepository {
         guard !trimmed.isEmpty else { return }
         var set = relaySets[idx]
         set.name = trimmed
-        set.createdAt = Int(Date().timeIntervalSince1970)
+        set.createdAt = NostrClock.now()
         relaySets[idx] = set
         relaySetUpdatedAt[dTag] = set.createdAt
         saveRelaySets(pubkey: keypair.pubkey)
@@ -145,7 +145,7 @@ final class RelaySetRepository {
         var set = relaySets[idx]
         guard !set.relays.contains(n) else { return }
         set.relays.append(n)
-        set.createdAt = Int(Date().timeIntervalSince1970)
+        set.createdAt = NostrClock.now()
         relaySets[idx] = set
         relaySetUpdatedAt[dTag] = set.createdAt
         saveRelaySets(pubkey: keypair.pubkey)
@@ -158,7 +158,7 @@ final class RelaySetRepository {
         var set = relaySets[idx]
         guard let i = set.relays.firstIndex(of: n) else { return }
         set.relays.remove(at: i)
-        set.createdAt = Int(Date().timeIntervalSince1970)
+        set.createdAt = NostrClock.now()
         relaySets[idx] = set
         relaySetUpdatedAt[dTag] = set.createdAt
         saveRelaySets(pubkey: keypair.pubkey)
@@ -228,7 +228,7 @@ final class RelaySetRepository {
 
     private func publishFavorites(keypair: Keypair) {
         guard let privkey = Hex.decode(keypair.privkey) else { return }
-        let now = Int(Date().timeIntervalSince1970)
+        let now = NostrClock.now()
         favoritesUpdatedAt = max(favoritesUpdatedAt + 1, now)
         let tags = Nip51Lists.buildFavoriteRelayTags(favoriteRelays)
         let pubkey = keypair.pubkey
@@ -275,7 +275,7 @@ final class RelaySetRepository {
         guard let privkey = Hex.decode(keypair.privkey) else { return }
         let tags: [[String]] = [["d", dTag]]
         let pubkey = keypair.pubkey
-        let createdAt = Int(Date().timeIntervalSince1970)
+        let createdAt = NostrClock.now()
         let relays = topWriteRelays(pubkey: pubkey)
         Task.detached {
             guard let event = try? NostrEvent.sign(

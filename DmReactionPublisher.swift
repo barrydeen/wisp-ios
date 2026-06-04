@@ -29,7 +29,7 @@ enum DmReactionPublisher {
         let ownRelays = await resolveOwnDmRelays(keypair: keypair)
         guard !ownRelays.isEmpty else { throw SendError.noOwnRelays }
 
-        let rumorCreatedAt = Int(Date().timeIntervalSince1970)
+        let rumorCreatedAt = NostrClock.now()
         var tags: [[String]] = []
         tags.append(["e", message.rumorId])
         tags.append(["p", message.senderPubkey])

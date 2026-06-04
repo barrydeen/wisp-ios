@@ -9,7 +9,7 @@ nonisolated enum Nip42 {
     /// Build a signed kind-22242 AUTH event in response to a relay's
     /// `["AUTH", challenge]` frame.
     static func buildAuthEvent(challenge: String, relayUrl: String, keypair: Keypair,
-                               createdAt: Int = Int(Date().timeIntervalSince1970)) throws -> NostrEvent {
+                               createdAt: Int = NostrClock.now()) throws -> NostrEvent {
         let tags: [[String]] = [
             ["relay", relayUrl],
             ["challenge", challenge]

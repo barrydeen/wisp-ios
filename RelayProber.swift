@@ -147,7 +147,7 @@ enum RelayProber {
             return ProbeResult(url: urlString, passed: false, latencyMs: 0)
         }
 
-        let now = Int(Date().timeIntervalSince1970)
+        let now = NostrClock.now()
         guard let event = try? NostrEvent.sign(
             privkey32: privkey,
             pubkey: keypair.pubkey,

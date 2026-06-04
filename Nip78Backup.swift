@@ -125,7 +125,7 @@ nonisolated enum Nip78Backup {
             privkey32: privkey32,
             pubkey: pubkeyHex,
             kind: kind,
-            createdAt: Int(Date().timeIntervalSince1970),
+            createdAt: NostrClock.now(),
             tags: [["d", dTag], ["deleted", "true"]],
             content: ""
         )

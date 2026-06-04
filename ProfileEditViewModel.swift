@@ -186,7 +186,7 @@ final class ProfileEditViewModel {
                 kind: 0,
                 tags: tags,
                 content: content,
-                createdAt: Int(Date().timeIntervalSince1970)
+                createdAt: NostrClock.now()
             )
         } catch {
             lastError = "Signing failed: \(error.localizedDescription)"

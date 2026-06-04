@@ -172,7 +172,7 @@ final class MuteRepository {
         let words = mutedWords
         let pubkeys = blockedPubkeys
         let threads = mutedThreads
-        let createdAt = max(Int(Date().timeIntervalSince1970), lastUpdatedAt + 1)
+        let createdAt = max(NostrClock.now(), lastUpdatedAt + 1)
         do {
             let event = try await Nip51Mute.buildSignedMuteEvent(
                 keypair: signKeypair,
