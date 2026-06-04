@@ -46,7 +46,7 @@ nonisolated enum Nip51Mute {
         blockedPubkeys: Set<String>,
         mutedWords: Set<String>,
         mutedThreads: Set<String>,
-        createdAt: Int = Int(Date().timeIntervalSince1970)
+        createdAt: Int = NostrClock.now()
     ) async throws -> NostrEvent {
         let json = buildPrivateBodyJson(
             pubkeys: blockedPubkeys, words: mutedWords, threads: mutedThreads

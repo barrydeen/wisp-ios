@@ -129,7 +129,8 @@ final class DmRepository {
             return false
         }
         existing.append(msg)
-        existing.sort { $0.createdAt < $1.createdAt }
+        // Tie-break equal timestamps by id so clamped messages keep a stable order.
+        existing.sort { ($0.createdAt, $0.id) < ($1.createdAt, $1.id) }
         conversations[conversationKey] = existing
         rumorIndex[msg.rumorId] = (conversationKey, msg.id)
         return true

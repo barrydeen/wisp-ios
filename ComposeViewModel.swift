@@ -955,7 +955,7 @@ final class ComposeViewModel {
             innerTags.append(imeta)
         }
 
-        let now = Int(Date().timeIntervalSince1970)
+        let now = NostrClock.now()
         let innerJSON = Nip37.serializeInner(
             pubkeyHex: signingKeypair.pubkey, innerKind: innerKind,
             content: materialized, tags: innerTags, createdAt: now
@@ -1012,7 +1012,7 @@ final class ComposeViewModel {
     private func clearDraftOnPublish() async {
         guard let dTag = currentDraftId else { return }
         currentDraftId = nil
-        let now = Int(Date().timeIntervalSince1970)
+        let now = NostrClock.now()
         let innerJSON = Nip37.serializeInner(
             pubkeyHex: signingKeypair.pubkey, innerKind: 1, content: "", tags: [], createdAt: now
         )
@@ -1116,7 +1116,7 @@ final class ComposeViewModel {
 
         // Normal post: hand off to PostPublisher so the sheet can dismiss
         // immediately while mining + broadcasting run in the background.
-        let createdAt = Int(Date().timeIntervalSince1970)
+        let createdAt = NostrClock.now()
         let draft = PreparedDraft(
             kind: kind,
             tags: tags,

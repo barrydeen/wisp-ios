@@ -150,7 +150,7 @@ final class LiveStreamViewModel: EmojiComposing {
                 privkey32: privkey32,
                 pubkey: keypair.pubkey,
                 kind: Nip53.kindLiveChatMessage,
-                createdAt: Int(Date().timeIntervalSince1970),
+                createdAt: NostrClock.now(),
                 tags: tags,
                 content: text
             )
@@ -198,7 +198,7 @@ final class LiveStreamViewModel: EmojiComposing {
                 privkey32: privkey32,
                 pubkey: keypair.pubkey,
                 kind: 7,
-                createdAt: Int(Date().timeIntervalSince1970),
+                createdAt: NostrClock.now(),
                 tags: tags,
                 content: emoji
             )

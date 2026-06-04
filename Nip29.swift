@@ -149,7 +149,7 @@ nonisolated enum Nip29 {
     static func buildChatMessage(privkey32: Data, pubkey: String, groupId: String, relayUrl: String,
                                  content: String, replyTo: (id: String, author: String)? = nil,
                                  extraTags: [[String]] = [],
-                                 createdAt: Int = Int(Date().timeIntervalSince1970)) throws -> NostrEvent {
+                                 createdAt: Int = NostrClock.now()) throws -> NostrEvent {
         var tags: [[String]] = [["h", groupId, relayUrl]]
         if let replyTo {
             tags.append(["q", replyTo.id, relayUrl, replyTo.author])
@@ -162,7 +162,7 @@ nonisolated enum Nip29 {
 
     static func buildJoinRequest(privkey32: Data, pubkey: String, groupId: String,
                                  inviteCode: String? = nil, reason: String = "",
-                                 createdAt: Int = Int(Date().timeIntervalSince1970)) throws -> NostrEvent {
+                                 createdAt: Int = NostrClock.now()) throws -> NostrEvent {
         var tags: [[String]] = [["h", groupId]]
         if let code = inviteCode, !code.isEmpty { tags.append(["code", code]) }
         return try NostrEvent.sign(privkey32: privkey32, pubkey: pubkey, kind: kindJoinRequest,
@@ -171,28 +171,28 @@ nonisolated enum Nip29 {
 
     static func buildLeaveRequest(privkey32: Data, pubkey: String, groupId: String,
                                   reason: String = "",
-                                  createdAt: Int = Int(Date().timeIntervalSince1970)) throws -> NostrEvent {
+                                  createdAt: Int = NostrClock.now()) throws -> NostrEvent {
         let tags: [[String]] = [["h", groupId]]
         return try NostrEvent.sign(privkey32: privkey32, pubkey: pubkey, kind: kindLeaveRequest,
                                    createdAt: createdAt, tags: tags, content: reason)
     }
 
     static func buildCreateGroup(privkey32: Data, pubkey: String, groupId: String,
-                                 createdAt: Int = Int(Date().timeIntervalSince1970)) throws -> NostrEvent {
+                                 createdAt: Int = NostrClock.now()) throws -> NostrEvent {
         let tags: [[String]] = [["h", groupId]]
         return try NostrEvent.sign(privkey32: privkey32, pubkey: pubkey, kind: kindCreateGroup,
                                    createdAt: createdAt, tags: tags, content: "")
     }
 
     static func buildDeleteGroup(privkey32: Data, pubkey: String, groupId: String,
-                                 createdAt: Int = Int(Date().timeIntervalSince1970)) throws -> NostrEvent {
+                                 createdAt: Int = NostrClock.now()) throws -> NostrEvent {
         let tags: [[String]] = [["h", groupId]]
         return try NostrEvent.sign(privkey32: privkey32, pubkey: pubkey, kind: kindDeleteGroup,
                                    createdAt: createdAt, tags: tags, content: "")
     }
 
     static func buildCreateInvite(privkey32: Data, pubkey: String, groupId: String, code: String,
-                                  createdAt: Int = Int(Date().timeIntervalSince1970)) throws -> NostrEvent {
+                                  createdAt: Int = NostrClock.now()) throws -> NostrEvent {
         let tags: [[String]] = [["h", groupId], ["code", code]]
         return try NostrEvent.sign(privkey32: privkey32, pubkey: pubkey, kind: kindCreateInvite,
                                    createdAt: createdAt, tags: tags, content: "")
@@ -205,7 +205,7 @@ nonisolated enum Nip29 {
                                   name: String? = nil, about: String? = nil, picture: String? = nil,
                                   isPrivate: Bool? = nil, isClosed: Bool? = nil,
                                   isRestricted: Bool? = nil, isHidden: Bool? = nil,
-                                  createdAt: Int = Int(Date().timeIntervalSince1970)) throws -> NostrEvent {
+                                  createdAt: Int = NostrClock.now()) throws -> NostrEvent {
         var tags: [[String]] = [["h", groupId]]
         if let name = name?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
             tags.append(["name", name])
@@ -226,7 +226,7 @@ nonisolated enum Nip29 {
 
     static func buildPutUser(privkey32: Data, pubkey: String, groupId: String, targetPubkey: String,
                              roles: [String] = [],
-                             createdAt: Int = Int(Date().timeIntervalSince1970)) throws -> NostrEvent {
+                             createdAt: Int = NostrClock.now()) throws -> NostrEvent {
         let pTag = (["p", targetPubkey] + roles)
         let tags: [[String]] = [["h", groupId], pTag]
         return try NostrEvent.sign(privkey32: privkey32, pubkey: pubkey, kind: kindPutUser,
@@ -234,7 +234,7 @@ nonisolated enum Nip29 {
     }
 
     static func buildRemoveUser(privkey32: Data, pubkey: String, groupId: String, targetPubkey: String,
-                                createdAt: Int = Int(Date().timeIntervalSince1970)) throws -> NostrEvent {
+                                createdAt: Int = NostrClock.now()) throws -> NostrEvent {
         let tags: [[String]] = [["h", groupId], ["p", targetPubkey]]
         return try NostrEvent.sign(privkey32: privkey32, pubkey: pubkey, kind: kindRemoveUser,
                                    createdAt: createdAt, tags: tags, content: "")
@@ -243,7 +243,7 @@ nonisolated enum Nip29 {
     static func buildReaction(privkey32: Data, pubkey: String, groupId: String,
                               messageId: String, messageAuthorPubkey: String, emoji: String,
                               customEmoji: (shortcode: String, url: String)? = nil,
-                              createdAt: Int = Int(Date().timeIntervalSince1970)) throws -> NostrEvent {
+                              createdAt: Int = NostrClock.now()) throws -> NostrEvent {
         var tags: [[String]] = [
             ["e", messageId],
             ["p", messageAuthorPubkey],

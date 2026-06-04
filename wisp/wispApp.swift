@@ -18,6 +18,10 @@ struct wispApp: App {
         NsecPasteGuard.setUp()
         try? ObjectBoxSetup.setUp()
         GiphyConfig.bootstrap()
+        // Estimate device-clock skew so outgoing event `created_at` is correct even
+        // when the wall clock is off (relays reject future timestamps). Re-syncs on
+        // foreground entry, throttled inside NostrClock.
+        NostrClock.bootstrap()
         Task {
             await ExchangeRateService.shared.refresh()
             await ExchangeRateCache.shared.updateFromService()

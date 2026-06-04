@@ -32,7 +32,7 @@ enum BlossomClient {
         sha256Hex: String,
         expirationOffset: Int = 300
     ) async -> String? {
-        let now = Int(Date().timeIntervalSince1970)
+        let now = NostrClock.now()
         let tags: [[String]] = [
             ["t", "upload"],
             ["x", sha256Hex],

@@ -39,7 +39,9 @@ nonisolated class GroupMessageEntity {
     }
 
     func toMessage() -> GroupMessage {
+        // Clamp at hydration too: rows persisted before the clamp existed (or while
+        // the local clock itself was fast) re-materialize with sane ordering.
         GroupMessage(id: eventId, senderPubkey: senderPubkey, content: content,
-                     createdAt: createdAt, replyToId: replyToId)
+                     createdAt: NostrClock.clampIncoming(createdAt), replyToId: replyToId)
     }
 }
