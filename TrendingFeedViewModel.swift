@@ -73,6 +73,7 @@ final class TrendingFeedViewModel {
     }
 
     func refresh() async {
+        EngagementRepository.shared.requestFullResync()
         await load()
     }
 

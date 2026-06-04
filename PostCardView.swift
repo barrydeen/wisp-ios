@@ -914,7 +914,7 @@ struct PostCardView: View {
                 // event to stream in. `forcedReplyCount` (the in-thread
                 // visible count, blocked-author-aware) wins as more local
                 // replies arrive.
-                let networkCount = max(repoBox.counts.replies, engagement?.replies ?? 0)
+                let networkCount = max(repoBox.counts.replies, max(repoBox.diskReplyCount, engagement?.replies ?? 0))
                 let replyCount = max(forcedReplyCount ?? 0, networkCount)
                 actionItem(
                     icon: "bubble.right",

@@ -325,6 +325,10 @@ final class FeedViewModel {
 
     func refresh() async {
         reloadFollowsCache()
+        // Pull-to-refresh is the completeness safety valve: re-pull engagement
+        // without a `since` floor so a reaction that landed on a relay outside
+        // the warm cursor's window (e.g. one made on another device) is found.
+        EngagementRepository.shared.requestFullResync()
         // Newly-persisted older events (e.g. from the Extended Network
         // subscription, which shares EventStore) may now sit below the
         // viewport, so let disk-replay try again after a pull-to-refresh.
