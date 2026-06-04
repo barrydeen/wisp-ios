@@ -28,8 +28,6 @@ struct LiveStreamView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
-            Divider().overlay(Color.wispSurfaceVariant.opacity(0.5))
             VStack(spacing: 0) {
                 StreamPlayer(url: vm.activity?.streamingUrl)
                 StreamInfoBar(
@@ -59,6 +57,7 @@ struct LiveStreamView: View {
             }
             LiveChatInputBar(vm: vm)
         }
+        .wispTopHeader { header }
         .toolbar(.hidden, for: .navigationBar)
         .task { await vm.start() }
         .onDisappear {

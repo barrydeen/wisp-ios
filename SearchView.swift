@@ -10,9 +10,6 @@ struct SearchView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            topBar
-            Divider().overlay(Color.wispSurfaceVariant.opacity(0.5))
-
             if viewModel.showAdvanced {
                 advancedPanel
                 Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
@@ -21,6 +18,7 @@ struct SearchView: View {
             results
         }
         .background(Color.wispBackground)
+        .wispTopHeader { topBar }
         .onAppear { viewModel.start() }
         .sheet(isPresented: $showAddRelaySheet) {
             AddRelaySheet { url in

@@ -38,8 +38,6 @@ struct ThreadView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
-            Divider().overlay(Color.wispSurfaceVariant.opacity(0.5))
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 0) {
@@ -112,6 +110,7 @@ struct ThreadView: View {
             }
         }
         .background(Color.wispBackground)
+        .wispTopHeader { header }
         .toolbar(.hidden, for: .navigationBar)
         .swipeBackFromLeftEdge {
             popCurrentThread()

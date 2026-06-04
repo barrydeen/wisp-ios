@@ -7,8 +7,6 @@ struct GroupRoomView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
-            Divider().overlay(Color.wispSurfaceVariant.opacity(0.5))
             messageList
 
             if !viewModel.keypair.isWatchOnly {
@@ -27,6 +25,7 @@ struct GroupRoomView: View {
             }
         }
         .background(Color.wispBackground)
+        .wispTopHeader { header }
         .toolbar(.hidden, for: .navigationBar)
         .navigationDestination(isPresented: $showDetail) {
             GroupDetailView(viewModel: viewModel)
