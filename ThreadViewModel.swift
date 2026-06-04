@@ -60,9 +60,22 @@ final class ThreadViewModel {
     /// event actually appears in `nestedReplies`, so the scroll fires after data
     /// loads rather than immediately on navigation.
     var scrollTargetId: String?
+    /// Set briefly (~1.5s) to flash a background tint on the note the user came
+    /// from — the route/seed target, an in-place reply-row tap, or a freshly
+    /// published reply. Observable so ThreadView's `onChange` fires; deliberately
+    /// never read by PostCardView so its `==` re-render gate stays untouched.
+    var highlightId: String?
     /// Holds the scroll target from the route until `rebuildSlices` confirms the
     /// event is in the rendered list.
     @ObservationIgnored private var pendingScrollToId: String?
+    /// The note the user tapped to open this thread, AFTER repost-unwrap (the
+    /// inner kind-1, never the kind-6 wrapper). `focalEventId` is re-rooted to the
+    /// conversation root, so this is the only handle on "the note they came for":
+    /// the scroll/highlight target and the default reply parent.
+    @ObservationIgnored private var seedTargetId: String
+    /// Event backing the bottom "Reply…" composer's default parent — the tapped
+    /// note (`seedTargetId`), not the re-rooted focal/root.
+    var composerDefaultParent: NostrEvent? { events[seedTargetId] }
     /// Active undo countdown for an unsent reply, mirroring `ComposeViewModel`.
     var replyCountdown: Int?
     /// Buffered text + parent for a reply that's mid-countdown, so `publishNow` /
@@ -130,6 +143,7 @@ final class ThreadViewModel {
         self.authorHint = authorHint
         self.rootId = seedEventId
         self.focalEventId = seedEventId
+        self.seedTargetId = seedEventId
         self.pendingScrollToId = scrollToId
         // Catch the user's own freshly-published replies the moment ComposeViewModel
         // broadcasts them — the live relay subscription often doesn't reflect outbound
@@ -200,6 +214,7 @@ final class ThreadViewModel {
             if isPrivate { PrivateInteractionStore.shared.markPrivate(event.id) }
             ingestReply(event)
             scrollTargetId = event.id
+            highlightId = event.id
         }
     }
 
@@ -232,20 +247,13 @@ final class ThreadViewModel {
         seedIds.insert(rootId)
         queueEngagement(ids: seedIds)
 
-        // 4. Fetch root + ancestor chain in parallel against the initial set.
-        //    The ancestor walk depends on the seed but not on the root, so
-        //    they don't have to serialize. Both feed events into the same
-        //    `events` map; rebuildSlices fires per-ingest.
-        let needRoot = rootEvent == nil
-        let needAncestors = focalEventId != rootId
-        if needRoot && needAncestors {
-            async let rootFetch: Void = fetchRoot(from: initialRelays)
-            async let ancestorFetch: Void = fetchAncestorChain(from: initialRelays)
-            _ = await (rootFetch, ancestorFetch)
-        } else if needRoot {
+        // 4. Fetch the root event if it isn't cached. There are no ancestors to
+        //    walk — the focal is re-rooted to the conversation root, so the whole
+        //    tree streams via startReplyStream's eTags:[rootId]. `rootBefore`
+        //    lets step 5 detect if fetchRoot re-resolved to an even higher root.
+        let rootBefore = rootId
+        if rootEvent == nil {
             await fetchRoot(from: initialRelays)
-        } else if needAncestors {
-            await fetchAncestorChain(from: initialRelays)
         }
 
         // 5. Once the root is loaded, re-resolve relays (now using the real
@@ -254,7 +262,10 @@ final class ThreadViewModel {
         //    from pull-to-refresh on cold notification loads.
         if rootEvent != nil {
             let widerRelays = await resolveRelays()
-            if Set(widerRelays) != Set(initialRelays) {
+            // Restart when the relay set widened OR fetchRoot bumped us to a
+            // higher true root (the live consumer captured the old root id, so
+            // the higher subtree wouldn't otherwise subscribe).
+            if Set(widerRelays) != Set(initialRelays) || rootId != rootBefore {
                 cancelStreams()
                 startReplyStream(relays: widerRelays)
                 startEngagementBatcher(relays: widerRelays)
@@ -404,9 +415,9 @@ final class ThreadViewModel {
             errorMessage = "Thread root unavailable"
             return
         }
-        // Default reply parent is the screen's focal, not the root. Each pushed
-        // ThreadView replies to its own focal.
-        let defaultParent: NostrEvent = events[focalEventId] ?? root
+        // Default reply parent is the note the user opened the thread on
+        // (`seedTargetId`), not the re-rooted focal/root.
+        let defaultParent: NostrEvent = events[seedTargetId] ?? events[focalEventId] ?? root
         let parent: NostrEvent = pending.parentId.flatMap { events[$0] } ?? defaultParent
 
         isSending = true
@@ -537,19 +548,31 @@ final class ThreadViewModel {
             // inner id so reply filtering and ancestor lookups use the
             // id that real replies actually `e`-tag.
             let focalEvent = unwrapRepostForFocal(seedEvent)
-            focalEventId = focalEvent.id
             let resolvedRoot = Nip10.rootId(of: focalEvent) ?? focalEvent.id
+            // Re-root: the focal becomes the conversation root so the WHOLE reply
+            // tree renders inline (one canonical thread view). `seedTargetId`
+            // keeps the tapped note (post repost-unwrap) for the scroll/highlight
+            // target and the default reply parent. Store the inner event under
+            // its OWN id (it now differs from `focalEventId`).
+            seedTargetId = focalEvent.id
+            focalEventId = resolvedRoot
             rootId = resolvedRoot
-            events[focalEventId] = focalEvent
+            events[focalEvent.id] = focalEvent
             if focalEvent.id == resolvedRoot {
                 rootEvent = focalEvent
                 isLoading = false
+            }
+            // Scroll to the tapped note once it appears in the tree — unless it
+            // IS the root (nothing to scroll past) or an explicit route
+            // `scrollToId` was supplied (that wins).
+            if pendingScrollToId == nil && seedTargetId != resolvedRoot {
+                pendingScrollToId = seedTargetId
             }
         }
 
         // If the seed was a reply, pull its true root by id too so the header
         // renders without waiting on the network.
-        if rootEvent == nil, rootId != focalEventId,
+        if rootEvent == nil,
            let cachedRoot = await eventStore.eventsByIds([rootId]).first {
             events[cachedRoot.id] = cachedRoot
             rootEvent = cachedRoot
@@ -640,12 +663,13 @@ final class ThreadViewModel {
             }
         }
 
-        // Focal author inbox — replies to the focal are sent to its
-        // author's read relays (NIP-65 outbox model). When the focal
-        // isn't the root, the root author's inbox alone misses every
-        // reply that came in via the focal author's relay set, which
-        // is what made deep-thread navigation render "no replies".
-        let focalAuthor = events[focalEventId]?.pubkey ?? authorHint
+        // Tapped-note author inbox — replies to the note the user opened are
+        // sent to ITS author's read relays (NIP-65 outbox model). The focal is
+        // now re-rooted to the conversation root, so keying off the tapped note
+        // (`seedTargetId`) here preserves the coverage the old focal-author
+        // branch added: without it a deep deep-link misses every reply that
+        // came in via the tapped author's relay set ("no replies").
+        let focalAuthor = events[seedTargetId]?.pubkey ?? authorHint
         if let pk = focalAuthor, pk != rootAuthor {
             for url in await relayListRepo.getReadRelays(pk) where seen.insert(url).inserted {
                 ordered.append(url)
@@ -703,6 +727,14 @@ final class ThreadViewModel {
         // The root we just fetched may itself be a reply; re-resolve and re-fetch.
         if let trueRoot = Nip10.rootId(of: event), trueRoot != rootId {
             rootId = trueRoot
+            // Keep the focal pinned to the (now higher) conversation root. start()
+            // restarts the reply stream because rootId changed, so the higher
+            // subtree subscribes. Re-arm the scroll target in case it was
+            // suppressed while we briefly believed the tapped note was the root.
+            focalEventId = trueRoot
+            if pendingScrollToId == nil && scrollTargetId == nil && seedTargetId != trueRoot {
+                pendingScrollToId = seedTargetId
+            }
             rootEvent = events[trueRoot]
             if rootEvent == nil, let upstreamRoot = await fetchEvent(id: trueRoot, from: relays) {
                 events[upstreamRoot.id] = upstreamRoot
@@ -710,6 +742,9 @@ final class ThreadViewModel {
             }
         }
         await eventStore.persist([event])
+        // Repaint with the (possibly re-rooted) focal — the live stream may not
+        // have delivered anything yet on a cold load.
+        rebuildSlices()
     }
 
     /// Walk `Nip10.replyTarget` upward from the focal, fetching any missing intermediate
@@ -855,6 +890,10 @@ final class ThreadViewModel {
 
     private func markStreamingDone() {
         if isLoading { isLoading = false }
+        // The route/seed scroll target either landed (cleared on promotion) or
+        // its event never arrived — stop it re-contending with manual in-place
+        // taps on every subsequent rebuild.
+        pendingScrollToId = nil
     }
 
     /// Coalesce engagement subscriptions: as new event ids arrive, batch them every 400ms and open
@@ -1034,14 +1073,11 @@ final class ThreadViewModel {
     /// from the current `events` map. Called whenever events change.
     private func rebuildSlices() {
         focal = events[focalEventId].map { makeRow($0) }
-        let (chain, newMissingId) = computeAncestors()
-        ancestors = chain
-        // Only surface the missing-ancestor state after all fetch attempts have
-        // completed. While isSearchingAncestors is true a live-stream rebuild
-        // would otherwise flip the placeholder on before retries are exhausted.
-        if !isSearchingAncestors {
-            missingAncestorId = newMissingId
-        }
+        // The focal is always the conversation root now, so there is never an
+        // ancestor chain — skip the walk (and never surface the searching /
+        // missing-ancestor UI, which assumes a partial-tree focal).
+        ancestors = []
+        missingAncestorId = nil
 
         // Build the parent→children adjacency map ONCE (sorted oldest-first per
         // parent) and derive childCounts, the direct-reply list, and the nested
@@ -1091,6 +1127,7 @@ final class ThreadViewModel {
         if let pending = pendingScrollToId,
            nestedReplies.contains(where: { $0.id == pending }) {
             scrollTargetId = pending
+            highlightId = pending
             pendingScrollToId = nil
         }
     }
