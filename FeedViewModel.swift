@@ -245,6 +245,24 @@ final class FeedViewModel {
                 }
             }
         }
+
+        // Snapshot installs (WoT toggle / graph recompute) re-filter the
+        // in-memory window the same way — events ingested while WoT was off
+        // (or under a larger network) would otherwise stay rendered until a
+        // refresh. `isWotQualified` is a no-op-cheap true when WoT is off, so
+        // the mute-edit installs that also land here cost one early-exit scan.
+        NotificationCenter.default.addObserver(
+            forName: .safetyFilterChanged, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                guard SafetyFilter.shared.snapshot.wotEnabled else { return }
+                self.events.removeAll {
+                    !SafetyFilter.shared.isWotQualified($0.pubkey)
+                    || ($0.repostInnerPubkey.map { !SafetyFilter.shared.isWotQualified($0) } ?? false)
+                }
+            }
+        }
     }
 
     func start() async {
@@ -1088,6 +1106,12 @@ final class FeedViewModel {
             for await (event, _) in sub.events {
                 guard let self else { return }
                 if Task.isCancelled { return }
+                // Same gate as every other feed write path (startSubscription,
+                // seed, loadOlder, loadMore). A followed author is in the WoT
+                // network by definition, but their kind-6 can wrap a stranger's
+                // note — `shouldDrop` fail-closes on the inner author, and this
+                // was the one live path that skipped it.
+                if SafetyFilter.shared.shouldDrop(event: event, context: .feed) { continue }
                 self.markActivityIfFollowed(event)
                 guard Self.isFeedRenderable(event) else { continue }
                 guard self.seenIds.insert(event.id).inserted else { continue }

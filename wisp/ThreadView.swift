@@ -252,6 +252,8 @@ struct ThreadView: View {
     private func ancestorRow(_ row: ThreadRow) -> some View {
         if row.isBlocked {
             blockedPlaceholder
+        } else if row.isWotHidden {
+            wotHiddenPlaceholder
         } else {
             // See `replyRow` for the rationale on `.onTapGesture` vs a
             // wrapping `Button` — same nested-button hit-test issue on
@@ -294,6 +296,8 @@ struct ThreadView: View {
             Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
             if row.isBlocked {
                 blockedPlaceholder
+            } else if row.isWotHidden {
+                wotHiddenPlaceholder
             } else {
                 PostCardView(
                     event: row.event,
@@ -357,6 +361,11 @@ struct ThreadView: View {
     private func replyRow(_ row: ThreadRow) -> some View {
         if row.isBlocked {
             blockedPlaceholder
+        } else if row.isWotHidden {
+            // Replies normally drop outright before reaching a row; this only
+            // renders if a WoT-hidden id slips into a slice (belt-and-
+            // suspenders — never show the content either way).
+            wotHiddenPlaceholder
         } else {
             // The whole card is the tap target — tapping pushes a new
             // ThreadView with this reply as its focal. Use
@@ -469,6 +478,26 @@ struct ThreadView: View {
                 .font(.system(size: 13))
                 .foregroundStyle(.tertiary)
             Text("Post from blocked user")
+                .font(.subheadline)
+                .foregroundStyle(.tertiary)
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Structural stand-in for a root/focal/ancestor the Web-of-Trust filter
+    /// hides. Deliberately renders NOTHING from the event — no content, no
+    /// author, no media, and no reveal affordance — the filter gates
+    /// potentially graphic content, so the placeholder only preserves the
+    /// thread's shape.
+    private var wotHiddenPlaceholder: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "eye.slash")
+                .font(.system(size: 13))
+                .foregroundStyle(.tertiary)
+            Text("Hidden by Web of Trust filter")
                 .font(.subheadline)
                 .foregroundStyle(.tertiary)
             Spacer()

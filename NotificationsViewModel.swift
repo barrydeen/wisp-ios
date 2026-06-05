@@ -99,6 +99,14 @@ final class NotificationsViewModel {
         for item in repo.flatItems {
             if hidden.contains(item.actorPubkey) { continue }
             if blocked.contains(item.actorPubkey) { continue }
+            // WoT render gate: rows ingested before the filter was enabled (or
+            // before a recompute shrank the network) are purged asynchronously
+            // on `.safetyFilterChanged`; this synchronous check guarantees they
+            // can't paint even for the one frame before the purge lands.
+            // Private (gift-wrap) rows and private/anonymous zaps keep their
+            // WoT exemption — same carve-outs as the ingest gate.
+            if !item.isPrivate, !item.isPrivateZap,
+               !SafetyFilter.shared.isWotQualified(item.actorPubkey) { continue }
             if !allowed.contains(NotificationFilter.bucket(for: item.kind)) { continue }
             if item.kind == .zap && !item.referencedEventId.isEmpty {
                 let key = "\(item.actorPubkey)|\(item.referencedEventId)"
@@ -688,6 +696,22 @@ final class NotificationsViewModel {
             }
         }
         listenerTasks.append(task)
+
+        // Snapshot installs (WoT toggle, graph recompute, mute edits) must both
+        // re-evaluate `filteredItems` (generation bump) and physically scrub
+        // rows that were ingested under looser WoT rules — render-gating alone
+        // would leave them inflating the 24h summary counters. The purge
+        // early-outs when WoT is off, so the block-edit case (which fires both
+        // `.userBlocked` and this) doesn't double-scan.
+        let snapshotTask = Task { @MainActor [weak self] in
+            let events = NotificationCenter.default.notifications(named: .safetyFilterChanged)
+            for await _ in events {
+                guard let self else { break }
+                self.safetyGeneration &+= 1
+                self.repo.purgeNonWotQualified()
+            }
+        }
+        listenerTasks.append(snapshotTask)
     }
 
     private func startDmObservation() {

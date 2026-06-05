@@ -125,7 +125,25 @@ final class NotificationRepository {
     @discardableResult
     func ingest(_ event: NostrEvent, relayUrl: String, isFromDmRelay: Bool = false, isPrivate: Bool = false, persist: Bool = true) -> Bool {
         guard !activePubkey.isEmpty else { return false }
-        guard insertSeen(event.id) else { return false }
+        // Safety chokepoint. Every caller — live subs, 24h backfill, disk
+        // hydration, future paths — funnels through ingest, so the full
+        // SafetyFilter gate lives HERE rather than at each call site (the
+        // backfill path once forgot its pre-filter and leaked unfiltered
+        // events). Runs before `insertSeen` so a drop under today's rules
+        // doesn't permanently mark the id seen — if the user later relaxes
+        // the filter, a re-delivered event can still notify. Two carve-outs:
+        // gift-wrap rumors (`isPrivate`) are e2e-private and WoT/word-exempt
+        // by design, and kind-9735 receipts are signed by the LN service —
+        // their real sender is judged post-classification below.
+        if !isPrivate, event.kind != 9735,
+           SafetyFilter.shared.shouldDrop(event: event, context: .notifications) {
+            return false
+        }
+        // Zaps defer the seen-mark until their actor gate below passes — the
+        // gate needs `classifyZap`'s resolved sender first, and marking a
+        // dropped receipt seen here would permanently silence it even after
+        // the user relaxes the filter.
+        guard event.kind == 9735 || insertSeen(event.id) else { return false }
 
         // Drop the user's own actions for non-zap kinds — your own reply/quote/repost/
         // reaction shouldn't ping you. Zaps are evaluated by the resolved zap-request
@@ -148,6 +166,20 @@ final class NotificationRepository {
         // Self-zap (zapping your own note from your own wallet) — drop after
         // classification, since `actorPubkey` is the resolved zap-request signer.
         if item.kind == .zap && item.actorPubkey == activePubkey { return false }
+        // Zap safety gate — the receipt's `pubkey` is the LN service, so the
+        // generic chokepoint above deliberately skipped kind-9735. Judge the
+        // resolved zap-request signer instead: blocked senders always drop;
+        // non-WoT senders drop unless the zap is private/anonymous
+        // (`isPrivateZap`, set by `classifyZap` — NOT the gift-wrap `isPrivate`
+        // param, which is never true for zaps): an e2e-private zap reached the
+        // user through the same trusted channel as a DM, and an anonymous one
+        // has no judgeable sender. Only after the gate passes does the receipt
+        // take its seen slot (deferred from the top of ingest).
+        if item.kind == .zap {
+            if SafetyFilter.shared.snapshot.blockedPubkeys.contains(item.actorPubkey) { return false }
+            if !item.isPrivateZap, !SafetyFilter.shared.isWotQualified(item.actorPubkey) { return false }
+            guard insertSeen(event.id) else { return false }
+        }
         // Sub-thread suppression: don't notify about a reply whose NIP-10 chain
         // includes a blocked author. When non-blocked A replies to blocked B's
         // reply to your note, A's event p-tags B (the ancestor author) — and
@@ -463,6 +495,26 @@ final class NotificationRepository {
                 inlineReplies[key] = filtered
             }
         }
+        summary = computeSummary24h()
+    }
+
+    /// Drop every in-memory notification whose actor fails the current WoT
+    /// snapshot. Called on `.safetyFilterChanged` so enabling WoT (or a graph
+    /// recompute shrinking the qualified set) scrubs rows that were ingested
+    /// under looser rules — without this they'd render until cold relaunch and
+    /// keep inflating the 24h summary. Private (gift-wrap) items keep their
+    /// blanket WoT exemption; `inlineReplies` are the user's own optimistic
+    /// replies and need no pruning. O(flatItems ≤ cap), runs only on snapshot
+    /// installs.
+    func purgeNonWotQualified() {
+        guard SafetyFilter.shared.snapshot.wotEnabled else { return }
+        let dropIds = Set(flatItems.compactMap { item -> String? in
+            guard !item.isPrivate, !item.isPrivateZap else { return nil }
+            return SafetyFilter.shared.isWotQualified(item.actorPubkey) ? nil : item.id
+        })
+        guard !dropIds.isEmpty else { return }
+        eventCache = eventCache.filter { !dropIds.contains($0.key) }
+        flatItems.removeAll { dropIds.contains($0.id) }
         summary = computeSummary24h()
     }
 

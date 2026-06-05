@@ -14,6 +14,13 @@ struct SafetySettingsView: View {
     @State private var wotState: WotDiscoveryState = .idle
     @State private var wotSummary: (qualifiedCount: Int, computedAt: Int) = (0, 0)
     @State private var wotStateTask: Task<Void, Never>?
+    /// True while a graph compute that was force-started by flipping the WoT
+    /// toggle ON is in flight. Drives the revert-on-failure contract: only a
+    /// gate-compute failure flips the toggle back off — a failed *manual*
+    /// recompute (button) must not disable a filter that already has a
+    /// previously-computed network behind it.
+    @State private var pendingEnableCompute = false
+    @State private var wotGateError: String?
 
     enum Tab: String, CaseIterable, Identifiable {
         case filters = "Filters"
@@ -59,9 +66,27 @@ struct SafetySettingsView: View {
             wotStateTask = Task {
                 for await state in ExtendedNetworkRepository.shared.stateStream {
                     await MainActor.run { self.wotState = state }
-                    if case .complete = state {
+                    switch state {
+                    case .complete:
                         let s = await ExtendedNetworkRepository.shared.summary()
-                        await MainActor.run { self.wotSummary = s }
+                        await MainActor.run {
+                            self.wotSummary = s
+                            self.pendingEnableCompute = false
+                        }
+                    case .failed(let reason):
+                        // Error display only — the gate task in
+                        // `handleWotToggle` owns the actual toggle revert (it
+                        // survives view dismissal; this stream task does not).
+                        // The `pendingEnableCompute` guard keeps a failed
+                        // *manual* recompute from showing "couldn't enable"
+                        // copy for a filter that's already running on a
+                        // previously-computed network.
+                        await MainActor.run {
+                            guard self.pendingEnableCompute else { return }
+                            self.wotGateError = reason
+                        }
+                    case .idle, .fetchingFollowLists, .buildingGraph:
+                        break
                     }
                 }
             }
@@ -82,11 +107,25 @@ struct SafetySettingsView: View {
                     .foregroundStyle(theme.palette.onSurfaceVariant)
                     .padding(.bottom, 4)
 
-                Toggle("Web of Trust", isOn: $prefs.wotFilterEnabled)
-                    .toggleStyle(SwitchToggleStyle(tint: theme.primary))
-                Text("Drops events from authors outside your extended network (your follows + their follows, threshold 10). Profiles, follow lists, and DMs are exempt.")
+                // Intercepting binding rather than `$prefs.wotFilterEnabled`:
+                // enabling WoT must force a social-graph compute when none
+                // exists — the filter is fail-closed, so an enabled-but-empty
+                // network hides everything until the graph lands, and a failed
+                // compute has to revert the flip (see the stateStream observer).
+                Toggle("Web of Trust", isOn: Binding(
+                    get: { prefs.wotFilterEnabled },
+                    set: { handleWotToggle(on: $0) }
+                ))
+                .toggleStyle(SwitchToggleStyle(tint: theme.primary))
+                .disabled(wotIsRunning)
+                Text("Drops events from authors outside your extended network (your follows + their follows, threshold 10). Profiles, follow lists, and DMs are exempt. Enabling computes your network first; content stays hidden until it completes.")
                     .font(.system(size: 12))
                     .foregroundStyle(theme.palette.onSurfaceVariant)
+                if let wotGateError {
+                    Label("Couldn't enable Web of Trust: \(wotGateError)", systemImage: "exclamationmark.triangle.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.orange)
+                }
             }
 
             section(title: "Network") {
@@ -112,6 +151,44 @@ struct SafetySettingsView: View {
         switch wotState {
         case .fetchingFollowLists, .buildingGraph: return true
         case .idle, .complete, .failed: return false
+        }
+    }
+
+    /// Toggle state machine: OFF → (flip ON: filter live fail-closed + force a
+    /// graph compute when none exists) → COMPLETE stays ON | FAILED reverts to
+    /// OFF with the reason shown. Flipping OFF is unconditional.
+    private func handleWotToggle(on: Bool) {
+        wotGateError = nil
+        // Persist + snapshot rebuild fire via the property's didSet; with no
+        // computed network the very next snapshot drops all non-exempt events
+        // (fail-closed) — nothing graphic can slip through while the compute
+        // below runs.
+        prefs.wotFilterEnabled = on
+        guard on else { return }
+        Task {
+            let summary = await ExtendedNetworkRepository.shared.summary()
+            if summary.computedAt == 0 || summary.qualifiedCount == 0 {
+                // Never computed (or empty cache): this is the gate-compute —
+                // arm the revert contract before starting.
+                pendingEnableCompute = true
+                await ExtendedNetworkRepository.shared.recompute()
+                // The revert lives HERE, not in the stateStream observer: this
+                // unstructured Task survives the view, so navigating away
+                // mid-compute can't orphan the contract and leave the filter
+                // fail-closed (hiding everything) with no network behind it.
+                // `recompute()` returns only after finishing or failing; an
+                // empty set afterwards means the gate-compute failed.
+                let after = await ExtendedNetworkRepository.shared.summary()
+                if after.computedAt == 0 || after.qualifiedCount == 0 {
+                    SafetyPreferences.shared.wotFilterEnabled = false
+                }
+                pendingEnableCompute = false
+            } else if await ExtendedNetworkRepository.shared.isStale() {
+                // A usable network exists; refresh it in the background. No
+                // revert arm — a failed refresh keeps filtering on the cached
+                // set, same as the launch-time freshen in MainView.
+                await ExtendedNetworkRepository.shared.recompute()
+            }
         }
     }
 

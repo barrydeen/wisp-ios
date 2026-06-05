@@ -60,6 +60,11 @@ actor ExtendedNetworkRepository {
     func isStale() -> Bool {
         guard let pk = pubkey else { return true }
         if computedAt == 0 { return true }
+        // A computed-but-empty set can't be a real result (recompute always
+        // includes the non-empty first-degree follows) — it's a corrupt or
+        // partial cache, and with WoT fail-closed it would hide everything
+        // forever. Treat as stale so the launch path recomputes and self-heals.
+        if qualified.isEmpty { return true }
         let now = Int(Date().timeIntervalSince1970)
         if now - computedAt > Self.staleHours * 3600 { return true }
         let currentFollows = FollowsCache.shared.follows(for: pk)
@@ -161,18 +166,25 @@ actor ExtendedNetworkRepository {
     // MARK: - Persistence
 
     private func loadFromDefaults(_ pk: String) {
+        // All-or-nothing: a partial payload (e.g. `computedAt` present but
+        // `qualified` missing/empty) would otherwise read as "computed" with
+        // an empty set — which `isStale` would once have called fresh, locking
+        // the fail-closed filter into hiding everything permanently. Any
+        // malformed key resets to the never-computed state so the launch
+        // recompute self-heals.
         guard let data = UserDefaults.standard.data(forKey: Self.cacheKey(pk)),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let arr = json["qualified"] as? [String], !arr.isEmpty,
+              let first = json["firstDegreeCount"] as? Int,
+              let computed = json["computedAt"] as? Int, computed > 0 else {
             qualified = []
             firstDegreeCount = 0
             computedAt = 0
             return
         }
-        if let arr = json["qualified"] as? [String] {
-            qualified = Set(arr)
-        }
-        firstDegreeCount = (json["firstDegreeCount"] as? Int) ?? 0
-        computedAt = (json["computedAt"] as? Int) ?? 0
+        qualified = Set(arr)
+        firstDegreeCount = first
+        computedAt = computed
     }
 
     private func saveToDefaults(_ pk: String) {

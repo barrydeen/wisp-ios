@@ -281,9 +281,24 @@ struct MainView: View {
                 MuteRepository.shared.startSync(privkey32: priv)
             }
             Task.detached(priority: .utility) {
-                if await SafetyPreferences.shared.wotFilterEnabled,
-                   await ExtendedNetworkRepository.shared.isStale() {
+                guard await SafetyPreferences.shared.wotFilterEnabled,
+                      await ExtendedNetworkRepository.shared.isStale() else { return }
+                // With WoT enabled the filter is FAIL-CLOSED: an empty/corrupt
+                // cached network hides all non-exempt content until a recompute
+                // lands. Retry with backoff (launch offline, flaky relays)
+                // rather than staying dark until the next cold launch. A
+                // stale-but-populated network keeps filtering on the cached set
+                // after one freshen attempt — only the empty case retries.
+                // Deliberately NO auto-disable on failure: the user opted into
+                // a filter that gates graphic content; failing open without
+                // consent is worse than a temporarily empty feed.
+                for attempt in 0..<3 {
                     await ExtendedNetworkRepository.shared.recompute()
+                    let summary = await ExtendedNetworkRepository.shared.summary()
+                    if summary.qualifiedCount > 0 { return }
+                    if attempt < 2 {
+                        try? await Task.sleep(for: .seconds(20 * (attempt + 1)))
+                    }
                 }
             }
 
