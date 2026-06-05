@@ -103,7 +103,11 @@ struct SafetyTests {
         #expect(!SafetyFilter.shared.shouldDrop(event: myNote, context: .feed))
     }
 
-    @Test func wotInactiveWhenQualifiedSetEmpty() {
+    @Test func wotFailsClosedWhenQualifiedSetEmpty() {
+        // FAIL CLOSED: WoT on with an uncomputed/lost network must hide every
+        // non-exempt stranger event rather than silently no-op — the filter
+        // gates potentially graphic content while the graph compute runs.
+        // (This inverts the pre-fix fail-open behavior, which was the bug.)
         let snap = SafetyFilterSnapshot(
             mutedWords: [],
             blockedPubkeys: [],
@@ -116,7 +120,95 @@ struct SafetyTests {
         defer { SafetyFilter.shared.install(.empty) }
 
         let strangerNote = makeEvent(kind: 1, pubkey: "stranger", content: "hi")
-        #expect(!SafetyFilter.shared.shouldDrop(event: strangerNote, context: .feed))
+        #expect(SafetyFilter.shared.shouldDrop(event: strangerNote, context: .feed))
+
+        // Exempt kinds and the user's own events still pass.
+        let strangerProfile = makeEvent(kind: 0, pubkey: "stranger", content: "{}")
+        #expect(!SafetyFilter.shared.shouldDrop(event: strangerProfile, context: .feed))
+        let myNote = makeEvent(kind: 1, pubkey: "me", content: "hi")
+        #expect(!SafetyFilter.shared.shouldDrop(event: myNote, context: .feed))
+    }
+
+    @Test func wotKind6RequiresBothAuthorsQualified() {
+        let snap = SafetyFilterSnapshot(
+            mutedWords: [], blockedPubkeys: [], mutedThreads: [],
+            wotEnabled: true, qualifiedNetwork: ["bob"], userPubkey: "me"
+        )
+        SafetyFilter.shared.install(snap)
+        defer { SafetyFilter.shared.install(.empty) }
+
+        // Qualified bob reposting unqualified carol leaks her content — drop.
+        let embedded = #"{"pubkey":"carol","id":"abc","kind":1,"content":"hi"}"#
+        let jsonRepost = makeEvent(kind: 6, pubkey: "bob", content: embedded, tags: [["e", "abc"], ["p", "carol"]])
+        #expect(SafetyFilter.shared.shouldDrop(event: jsonRepost, context: .feed))
+
+        // Same via p-tag-only form (no embedded JSON).
+        let tagRepost = makeEvent(kind: 6, pubkey: "bob", content: "", tags: [["e", "abc"], ["p", "carol"]])
+        #expect(SafetyFilter.shared.shouldDrop(event: tagRepost, context: .feed))
+
+        // Unparseable inner author fails closed.
+        let blindRepost = makeEvent(kind: 6, pubkey: "bob", content: "", tags: [["e", "abc"]])
+        #expect(SafetyFilter.shared.shouldDrop(event: blindRepost, context: .feed))
+
+        // Unqualified reposter never passes, even wrapping qualified content.
+        let strangerRepost = makeEvent(
+            kind: 6, pubkey: "stranger",
+            content: #"{"pubkey":"bob","id":"abc","kind":1,"content":"hi"}"#,
+            tags: [["e", "abc"], ["p", "bob"]]
+        )
+        #expect(SafetyFilter.shared.shouldDrop(event: strangerRepost, context: .feed))
+
+        // Qualified reposting qualified (or the user) passes.
+        let bobRepost = makeEvent(
+            kind: 6, pubkey: "bob",
+            content: #"{"pubkey":"bob","id":"abc","kind":1,"content":"hi"}"#,
+            tags: [["e", "abc"], ["p", "bob"]]
+        )
+        #expect(!SafetyFilter.shared.shouldDrop(event: bobRepost, context: .feed))
+        let repostOfMe = makeEvent(kind: 6, pubkey: "bob", content: "", tags: [["e", "abc"], ["p", "me"]])
+        #expect(!SafetyFilter.shared.shouldDrop(event: repostOfMe, context: .feed))
+    }
+
+    @Test func wotZapReceiptNotJudgedByEventPubkey() {
+        // A kind-9735 receipt is signed by the LN service, not the zapper —
+        // the generic gate must NOT drop it for the service pubkey being
+        // outside the network (that wrongly killed every zap notification).
+        // The real sender is judged post-classification in
+        // NotificationRepository.ingest (covered below).
+        let snap = SafetyFilterSnapshot(
+            mutedWords: [], blockedPubkeys: [], mutedThreads: [],
+            wotEnabled: true, qualifiedNetwork: ["bob"], userPubkey: "me"
+        )
+        SafetyFilter.shared.install(snap)
+        defer { SafetyFilter.shared.install(.empty) }
+
+        let receipt = makeEvent(kind: 9735, pubkey: "lnservice", content: "", tags: [["p", "me"]])
+        #expect(!SafetyFilter.shared.shouldDrop(event: receipt, context: .notifications))
+    }
+
+    @Test func isWotQualifiedTruthTable() {
+        // Off → everyone qualifies (the helper is a no-op gate).
+        SafetyFilter.shared.install(.empty)
+        #expect(SafetyFilter.shared.isWotQualified("stranger"))
+
+        let snap = SafetyFilterSnapshot(
+            mutedWords: [], blockedPubkeys: [], mutedThreads: [],
+            wotEnabled: true, qualifiedNetwork: ["bob"], userPubkey: "me"
+        )
+        SafetyFilter.shared.install(snap)
+        defer { SafetyFilter.shared.install(.empty) }
+        #expect(SafetyFilter.shared.isWotQualified("me"))
+        #expect(SafetyFilter.shared.isWotQualified("bob"))
+        #expect(!SafetyFilter.shared.isWotQualified("stranger"))
+
+        // Empty network + enabled → only self qualifies (fail closed).
+        let emptyNet = SafetyFilterSnapshot(
+            mutedWords: [], blockedPubkeys: [], mutedThreads: [],
+            wotEnabled: true, qualifiedNetwork: [], userPubkey: "me"
+        )
+        SafetyFilter.shared.install(emptyNet)
+        #expect(SafetyFilter.shared.isWotQualified("me"))
+        #expect(!SafetyFilter.shared.isWotQualified("bob"))
     }
 
     @Test func mutedAuthorRepostDroppedWhenEmbeddedJsonPresent() {
@@ -288,6 +380,187 @@ struct SafetyTests {
             id: "mention_" + UUID().uuidString
         )
         #expect(repo.ingest(mention, relayUrl: "", persist: false) == true)
+    }
+
+    // MARK: - Notification ingest WoT chokepoint
+
+    @MainActor
+    @Test func notificationIngestDropsNonWotAuthors() {
+        let me = "me_" + UUID().uuidString
+        let myNote = "mynote_" + UUID().uuidString
+
+        let snap = SafetyFilterSnapshot(
+            mutedWords: [], blockedPubkeys: [], mutedThreads: [],
+            wotEnabled: true, qualifiedNetwork: ["friend"], userPubkey: me
+        )
+        SafetyFilter.shared.install(snap)
+        defer { SafetyFilter.shared.install(.empty) }
+
+        let repo = NotificationRepository.shared
+        repo.bind(activePubkey: me)
+        repo.selfEventIds = [myNote]
+
+        // The gate lives in ingest itself — no caller pre-filter — so even a
+        // path that forgets shouldDrop (the 24h-backfill bug) stays safe.
+        let strangerReply = makeEvent(
+            kind: 1, pubkey: "stranger", content: "graphic",
+            tags: [["e", myNote, "", "reply"], ["p", me]],
+            id: "wotreply_stranger_" + UUID().uuidString
+        )
+        #expect(repo.ingest(strangerReply, relayUrl: "", persist: false) == false)
+        #expect(!repo.flatItems.contains { $0.actorPubkey == "stranger" })
+
+        let friendReply = makeEvent(
+            kind: 1, pubkey: "friend", content: "hello",
+            tags: [["e", myNote, "", "reply"], ["p", me]],
+            id: "wotreply_friend_" + UUID().uuidString
+        )
+        #expect(repo.ingest(friendReply, relayUrl: "", persist: false) == true)
+    }
+
+    @MainActor
+    @Test func notificationIngestZapJudgedByResolvedActor() {
+        let me = "me_" + UUID().uuidString
+        let myNote = "mynote_" + UUID().uuidString
+
+        let snap = SafetyFilterSnapshot(
+            mutedWords: [], blockedPubkeys: [], mutedThreads: [],
+            wotEnabled: true, qualifiedNetwork: ["friend"], userPubkey: me
+        )
+        SafetyFilter.shared.install(snap)
+        defer { SafetyFilter.shared.install(.empty) }
+
+        let repo = NotificationRepository.shared
+        repo.bind(activePubkey: me)
+        repo.selfEventIds = [myNote]
+
+        // Both receipts are signed by the same out-of-network LN service —
+        // what must decide is the zap-request signer in `description`.
+        func receipt(sender: String) -> NostrEvent {
+            makeEvent(
+                kind: 9735, pubkey: "lnservice", content: "",
+                tags: [
+                    ["p", me],
+                    ["e", myNote],
+                    ["description", #"{"pubkey":"\#(sender)","content":"","tags":[]}"#]
+                ],
+                id: "zap_\(sender)_" + UUID().uuidString
+            )
+        }
+        let strangerReceipt = receipt(sender: "stranger")
+        #expect(repo.ingest(strangerReceipt, relayUrl: "", persist: false) == false)
+        #expect(repo.ingest(receipt(sender: "friend"), relayUrl: "", persist: false) == true)
+
+        // The dropped receipt must NOT have taken a seen slot — relaxing the
+        // filter and re-delivering the same event id notifies. (The seen-mark
+        // for zaps is deferred until the actor gate passes.)
+        let relaxed = SafetyFilterSnapshot(
+            mutedWords: [], blockedPubkeys: [], mutedThreads: [],
+            wotEnabled: true, qualifiedNetwork: ["friend", "stranger"], userPubkey: me
+        )
+        SafetyFilter.shared.install(relaxed)
+        #expect(repo.ingest(strangerReceipt, relayUrl: "", persist: false) == true)
+    }
+
+    @MainActor
+    @Test func notificationIngestPrivateZapExemptFromWot() {
+        let me = "me_" + UUID().uuidString
+        let myNote = "mynote_" + UUID().uuidString
+
+        let snap = SafetyFilterSnapshot(
+            mutedWords: [], blockedPubkeys: [], mutedThreads: [],
+            wotEnabled: true, qualifiedNetwork: [], userPubkey: me
+        )
+        SafetyFilter.shared.install(snap)
+        defer { SafetyFilter.shared.install(.empty) }
+
+        let repo = NotificationRepository.shared
+        repo.bind(activePubkey: me)
+        repo.selfEventIds = [myNote]
+
+        // An anonymous NIP-57 zap (empty `anon` tag in the embedded request)
+        // classifies as `isPrivateZap` — there is no judgeable sender, so the
+        // WoT gate must not eat it (`item.isPrivateZap`, not the gift-wrap
+        // `isPrivate` param, which is always false for zaps).
+        let anonReceipt = makeEvent(
+            kind: 9735, pubkey: "lnservice", content: "",
+            tags: [
+                ["p", me],
+                ["e", myNote],
+                ["description", #"{"pubkey":"ephemeral","content":"","tags":[["anon",""]]}"#]
+            ],
+            id: "zap_anon_" + UUID().uuidString
+        )
+        #expect(repo.ingest(anonReceipt, relayUrl: "", persist: false) == true)
+    }
+
+    @MainActor
+    @Test func notificationIngestPrivateRumorExemptFromWot() {
+        let me = "me_" + UUID().uuidString
+        let myNote = "mynote_" + UUID().uuidString
+
+        let snap = SafetyFilterSnapshot(
+            mutedWords: [], blockedPubkeys: [], mutedThreads: [],
+            wotEnabled: true, qualifiedNetwork: [], userPubkey: me
+        )
+        SafetyFilter.shared.install(snap)
+        defer { SafetyFilter.shared.install(.empty) }
+
+        let repo = NotificationRepository.shared
+        repo.bind(activePubkey: me)
+        repo.selfEventIds = [myNote]
+
+        // Gift-wrap rumors are e2e-private and WoT-exempt by design — the
+        // sender already reached the user through the DM channel.
+        let privateReply = makeEvent(
+            kind: 1, pubkey: "dmsender", content: "psst",
+            tags: [["e", myNote, "", "reply"], ["p", me]],
+            id: "private_" + UUID().uuidString
+        )
+        #expect(repo.ingest(privateReply, relayUrl: "", isPrivate: true, persist: false) == true)
+    }
+
+    @MainActor
+    @Test func purgeNonWotQualifiedScrubsInMemoryItems() {
+        let me = "me_" + UUID().uuidString
+        let myNote = "mynote_" + UUID().uuidString
+
+        // Ingest under a snapshot where alice qualifies…
+        let permissive = SafetyFilterSnapshot(
+            mutedWords: [], blockedPubkeys: [], mutedThreads: [],
+            wotEnabled: true, qualifiedNetwork: ["alice"], userPubkey: me
+        )
+        SafetyFilter.shared.install(permissive)
+        defer { SafetyFilter.shared.install(.empty) }
+
+        let repo = NotificationRepository.shared
+        repo.bind(activePubkey: me)
+        repo.selfEventIds = [myNote]
+
+        let aliceReply = makeEvent(
+            kind: 1, pubkey: "alice", content: "hi",
+            tags: [["e", myNote, "", "reply"], ["p", me]],
+            id: "purge_alice_" + UUID().uuidString
+        )
+        #expect(repo.ingest(aliceReply, relayUrl: "", persist: false) == true)
+        let privateReply = makeEvent(
+            kind: 1, pubkey: "dmsender", content: "psst",
+            tags: [["e", myNote, "", "reply"], ["p", me]],
+            id: "purge_private_" + UUID().uuidString
+        )
+        #expect(repo.ingest(privateReply, relayUrl: "", isPrivate: true, persist: false) == true)
+
+        // …then the network shrinks (recompute) and alice falls out.
+        let tightened = SafetyFilterSnapshot(
+            mutedWords: [], blockedPubkeys: [], mutedThreads: [],
+            wotEnabled: true, qualifiedNetwork: [], userPubkey: me
+        )
+        SafetyFilter.shared.install(tightened)
+        repo.purgeNonWotQualified()
+
+        #expect(!repo.flatItems.contains { $0.actorPubkey == "alice" })
+        // Private rows keep their gift-wrap exemption through the purge.
+        #expect(repo.flatItems.contains { $0.actorPubkey == "dmsender" })
     }
 
     // MARK: - Nip51Mute

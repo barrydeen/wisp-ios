@@ -373,7 +373,12 @@ final class SearchViewModel {
     private func handlePeopleResults(_ events: [NostrEvent]) {
         var seen = Set<String>()
         var results: [ProfileData] = []
+        let blocked = SafetyFilter.shared.snapshot.blockedPubkeys
         for event in events where event.kind == 0 {
+            // Blocked users never surface as people results. Kind-0 is
+            // WoT-exempt by design (profiles stay resolvable), so people
+            // search keeps working with the WoT filter on.
+            if blocked.contains(event.pubkey) { continue }
             guard seen.insert(canonicalPubkey(event.pubkey)).inserted else { continue }
             if let profile = profileRepo.updateFromEvent(event) {
                 results.append(profile)
@@ -395,6 +400,12 @@ final class SearchViewModel {
         var seen = Set<String>()
         var ordered: [NostrEvent] = []
         for event in events where event.kind == 1 {
+            // Search was the one surface with no safety gate at all — relay
+            // text search (and pasted note1/nevent1 lookups) returned
+            // arbitrary-author events straight into the result list. Same
+            // rule as the feed: blocked / muted-word / non-WoT content never
+            // renders, even when the user explicitly went looking.
+            if SafetyFilter.shared.shouldDrop(event: event, context: .feed) { continue }
             if seen.insert(event.id).inserted {
                 ordered.append(event)
             }
@@ -499,7 +510,11 @@ final class SearchViewModel {
                 guard myCounter == self.authorCounter else { return }
                 var seen = Set<String>()
                 var results: [ProfileData] = []
+                let blocked = SafetyFilter.shared.snapshot.blockedPubkeys
                 for event in events where event.kind == 0 {
+                    // Same rule as `handlePeopleResults`: blocked users never
+                    // surface, here in the author-filter autocomplete.
+                    if blocked.contains(event.pubkey) { continue }
                     guard seen.insert(self.canonicalPubkey(event.pubkey)).inserted else { continue }
                     if let profile = self.profileRepo.updateFromEvent(event) {
                         results.append(profile)

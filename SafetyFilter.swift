@@ -17,7 +17,8 @@ final class SafetyFilterSnapshot: @unchecked Sendable {
     let blockedPubkeys: Set<String>
     let mutedThreads: Set<String>
     let wotEnabled: Bool
-    let qualifiedNetwork: Set<String>     // empty when WoT off or never computed
+    let qualifiedNetwork: Set<String>     // empty when WoT off or never computed — with
+                                          // wotEnabled that means FAIL CLOSED (drop all)
     let userPubkey: String                // empty before bind
 
     init(mutedWords: Set<String>, blockedPubkeys: Set<String>, mutedThreads: Set<String>,
@@ -103,15 +104,50 @@ final class SafetyFilter: @unchecked Sendable {
             }
         }
 
-        if s.wotEnabled,
-           !Self.wotExemptKinds.contains(event.kind),
-           !s.qualifiedNetwork.isEmpty,
-           event.pubkey != s.userPubkey,
-           !s.qualifiedNetwork.contains(event.pubkey) {
-            return true
+        // Web of Trust — FAIL CLOSED: while the filter is on, any non-exempt
+        // event whose author can't be positively qualified is dropped, even
+        // when `qualifiedNetwork` is empty (never computed / cache lost). The
+        // settings toggle force-starts a graph compute and the login path
+        // auto-recomputes a stale one, so the empty-set state is brief — and a
+        // safety filter that hides graphic content must hide *everything*
+        // rather than silently no-op while that compute runs.
+        if s.wotEnabled, !Self.wotExemptKinds.contains(event.kind) {
+            switch event.kind {
+            case 9735:
+                // Zap receipts are signed by the LN service, not the zapper —
+                // judging `event.pubkey` here would drop every zap (or none)
+                // regardless of who sent it. `NotificationRepository.ingest`
+                // enforces WoT on the classified item's resolved zap-request
+                // signer instead.
+                break
+            case 6:
+                // Reposts must qualify on BOTH authors: the reposter and the
+                // wrapped original author — otherwise a qualified reposter
+                // leaks a stranger's content. An unparseable inner author
+                // fails closed. JSON parse cost is paid only for kind-6 with
+                // WoT on, same profile as the block check above.
+                if !wotQualifies(event.pubkey, s) { return true }
+                guard let inner = Self.repostInnerPubkey(event),
+                      wotQualifies(inner, s) else { return true }
+            default:
+                if !wotQualifies(event.pubkey, s) { return true }
+            }
         }
 
         return false
+    }
+
+    /// Whether `pubkey`'s content may render under the current snapshot's WoT
+    /// rules. True when WoT is off, for the user themself, and for qualified-
+    /// network members. Single `_current` load — safe from any actor, cheap
+    /// enough for render gates and in-memory purges.
+    func isWotQualified(_ pubkey: String) -> Bool {
+        let s = _current
+        return !s.wotEnabled || wotQualifies(pubkey, s)
+    }
+
+    private func wotQualifies(_ pubkey: String, _ s: SafetyFilterSnapshot) -> Bool {
+        pubkey == s.userPubkey || s.qualifiedNetwork.contains(pubkey)
     }
 
     /// Block-list-only gate used by the persistence chokepoint (`EventStore.persist`)
@@ -134,10 +170,17 @@ final class SafetyFilter: @unchecked Sendable {
 
     /// Install a freshly-built snapshot. Lockfree readers pick up the new pointer on their
     /// next read; old snapshots remain valid for any in-flight read.
+    ///
+    /// Posts `.safetyFilterChanged` so surfaces holding already-ingested events
+    /// (notifications list, open thread tree, feed window) re-filter their
+    /// in-memory state immediately — without it, content that newly fails the
+    /// WoT filter would stay visible until relaunch. Posted only on install
+    /// (rare: login, mute edit, WoT toggle/recompute), never on the read path.
     func install(_ snap: SafetyFilterSnapshot) {
         writeLock.lock()
         _current = snap
         writeLock.unlock()
+        NotificationCenter.default.post(name: .safetyFilterChanged, object: nil)
     }
 
     /// Rebuild the snapshot from the active sources. Called on login, after every mute /
@@ -192,6 +235,14 @@ final class SafetyFilter: @unchecked Sendable {
 /// Bounded FIFO of lowercased strings keyed by event id. Lookups are O(1);
 /// the eviction list lets us cap memory without an OS-managed NSCache (which
 /// can be aggressive under simulator-low-memory scenarios).
+extension Notification.Name {
+    /// Posted by `SafetyFilter.install` after every snapshot swap. Sibling of
+    /// `.userBlocked` (MuteRepository): that one announces a specific block-list
+    /// edit; this one announces "the filter rules changed, re-filter what you
+    /// hold" — the only mid-session propagation path for WoT toggle/recompute.
+    static let safetyFilterChanged = Notification.Name("WispSafetyFilterChanged")
+}
+
 private final class LowercaseCache: @unchecked Sendable {
     private let capacity: Int
     private let lock = NSLock()

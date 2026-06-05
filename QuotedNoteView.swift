@@ -139,6 +139,7 @@ struct QuotedNoteView: View {
     @State private var event: NostrEvent?
     @State private var loaded = false
     @State private var blocked = false
+    @State private var safetyHidden = false
     @State private var profile: ProfileData?
     @State private var contentExpanded = false
     @State private var attempt: Int = 0
@@ -159,6 +160,8 @@ struct QuotedNoteView: View {
         Group {
             if blocked {
                 blockedCard
+            } else if safetyHidden {
+                safetyHiddenCard
             } else if let event {
                 noteCard(event)
             } else if loaded {
@@ -168,6 +171,27 @@ struct QuotedNoteView: View {
             }
         }
         .task(id: TaskKey(eventId: eventId, attempt: attempt)) { await load() }
+        // Re-gate in place on snapshot installs (WoT toggle / recompute): the
+        // load()-time check only sees the snapshot of that moment, so an
+        // already-resolved quoted note would otherwise keep rendering after
+        // the filter tightens (and a hidden one would stay hidden after it
+        // relaxes).
+        .onReceive(NotificationCenter.default.publisher(for: .safetyFilterChanged)) { _ in
+            if let event,
+               !PrivateInteractionStore.shared.contains(event.id),
+               SafetyFilter.shared.shouldDrop(event: event, context: .feed) {
+                self.event = nil
+                safetyHidden = true
+                loaded = true
+            } else if safetyHidden {
+                // Re-attempt from cache under the relaxed rules: the attempt
+                // bump re-keys `.task`, and `load()` re-evaluates the cached
+                // event before any network fetch.
+                safetyHidden = false
+                loaded = false
+                attempt += 1
+            }
+        }
     }
 
     /// Composite key so a retry (attempt bump) re-runs `.task` the same way an
@@ -215,6 +239,30 @@ struct QuotedNoteView: View {
                 .stroke(Color.wispSurfaceVariant, lineWidth: 1)
         )
         .accessibilityLabel("Note from a blocked user")
+    }
+
+    /// Shown when the safety filter (Web of Trust, muted word) hides the
+    /// quoted note. Mirrors `blockedCard` — none of the event renders, and
+    /// there's no reveal affordance (the filter gates potentially graphic
+    /// content). Copy stays generic because `.feed`-context `shouldDrop`
+    /// covers more than WoT.
+    private var safetyHiddenCard: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "eye.slash")
+                .foregroundStyle(.secondary)
+            Text("Note hidden by your safety filters")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.wispSurfaceVariant.opacity(0.3))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.wispSurfaceVariant, lineWidth: 1)
+        )
+        .accessibilityLabel("Note hidden by your safety filters")
     }
 
     private var missingCard: some View {
@@ -376,6 +424,15 @@ struct QuotedNoteView: View {
                 loaded = true
                 return
             }
+            // WoT gate — a qualified author quoting a stranger's note would
+            // otherwise inline-render the stranger's content/media right past
+            // the filter. Private rumors keep their gift-wrap exemption.
+            if !PrivateInteractionStore.shared.contains(cached.id),
+               SafetyFilter.shared.shouldDrop(event: cached, context: .feed) {
+                self.safetyHidden = true
+                loaded = true
+                return
+            }
             self.event = cached
             self.profile = profiles[cached.pubkey] ?? ProfileRepository.shared.get(cached.pubkey)
             loaded = true
@@ -407,6 +464,12 @@ struct QuotedNoteView: View {
         if let result {
             if SafetyFilter.shared.snapshot.blockedPubkeys.contains(result.pubkey) {
                 self.blocked = true
+                loaded = true
+                return
+            }
+            if !PrivateInteractionStore.shared.contains(result.id),
+               SafetyFilter.shared.shouldDrop(event: result, context: .feed) {
+                self.safetyHidden = true
                 loaded = true
                 return
             }

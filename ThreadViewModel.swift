@@ -106,6 +106,12 @@ final class ThreadViewModel {
     @ObservationIgnored private var perTargetFloor: [String: Int] = [:]
     @ObservationIgnored private var hiddenSpamPubkeys: Set<String> = []
     @ObservationIgnored private var blockedEventIds: Set<String> = []
+    /// Events the WoT filter hides but which are structurally required (root /
+    /// focal / ancestors) or were already held when the filter tightened.
+    /// Marked rather than evicted — structural slots render a neutral
+    /// placeholder, replies drop from the rebuilt tree — so relaxing the
+    /// filter restores the thread without a refetch.
+    @ObservationIgnored private var wotHiddenEventIds: Set<String> = []
     @ObservationIgnored private var spamScoringInflight: Set<String> = []
     /// Memoized `Nip10.replyTarget` per event id. Events are immutable value
     /// types keyed by id, so the reply target never changes — caching it turns
@@ -132,6 +138,7 @@ final class ThreadViewModel {
     @ObservationIgnored private let relayListRepo = RelayListRepository.shared
     @ObservationIgnored private var publishObserver: NSObjectProtocol?
     @ObservationIgnored private var blockObserver: NSObjectProtocol?
+    @ObservationIgnored private var safetyObserver: NSObjectProtocol?
 
     private static let indexerRelays = RelayDefaults.indexers
 
@@ -171,11 +178,24 @@ final class ThreadViewModel {
                 self?.purgeAuthor(blocked)
             }
         }
+        // Re-filter the held tree on every safety-snapshot install (WoT toggle,
+        // graph recompute) — replies ingested under looser rules would otherwise
+        // stay visible until the thread is reopened.
+        safetyObserver = NotificationCenter.default.addObserver(
+            forName: .safetyFilterChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.reapplyWotFilter()
+            }
+        }
     }
 
     deinit {
         if let publishObserver { NotificationCenter.default.removeObserver(publishObserver) }
         if let blockObserver { NotificationCenter.default.removeObserver(blockObserver) }
+        if let safetyObserver { NotificationCenter.default.removeObserver(safetyObserver) }
     }
 
     @MainActor
@@ -191,6 +211,58 @@ final class ThreadViewModel {
             blockedEventIds.insert(id)
         }
         rebuildSlices()
+    }
+
+    /// Insert a structurally-required event (root / focal / ancestor) into the
+    /// tree, MARKING rather than dropping it when the safety filter wants it
+    /// hidden — the placeholder keeps the reply chain coherent where a plain
+    /// drop would collapse the thread. Replies do NOT route through here; they
+    /// drop outright at their ingest sites. Blocked authors get the blocked
+    /// placeholder (honest copy); everything else `shouldDrop(.thread)` flags
+    /// is the WoT filter, since word/thread mutes are disabled in that context.
+    @MainActor
+    private func insertStructural(_ event: NostrEvent) {
+        events[event.id] = event
+        guard event.pubkey != keypair.pubkey else { return }
+        guard !PrivateInteractionStore.shared.contains(event.id) else { return }
+        if SafetyFilter.shared.snapshot.blockedPubkeys.contains(event.pubkey) {
+            blockedEventIds.insert(event.id)
+        } else if SafetyFilter.shared.shouldDrop(event: event, context: .thread(rootId: rootId)) {
+            wotHiddenEventIds.insert(event.id)
+        }
+    }
+
+    /// Re-evaluate every held event against the freshly-installed safety
+    /// snapshot. Both directions: newly non-qualified authors get marked
+    /// (placeholder in structural slots, dropped from the rebuilt tree for
+    /// replies), and previously-hidden ids whose author re-qualified (a
+    /// recompute grew the network, or WoT was toggled off) get unmarked.
+    /// Marking instead of evicting means a toggle round-trip restores the
+    /// thread without refetching.
+    @MainActor
+    private func reapplyWotFilter() {
+        // Skip the O(n) tree scan on installs that can't change WoT state:
+        // WoT off AND nothing currently marked. When WoT turns off, the set is
+        // non-empty so the scan still runs once to un-mark everything; later
+        // mute/block installs then early-out here.
+        guard SafetyFilter.shared.snapshot.wotEnabled || !wotHiddenEventIds.isEmpty else { return }
+        var changed = false
+        for event in events.values {
+            let hide: Bool = {
+                guard event.pubkey != keypair.pubkey else { return false }
+                if PrivateInteractionStore.shared.contains(event.id) { return false }
+                // Blocked authors stay on the blocked path (purgeAuthor / seed
+                // marking) — don't relabel them as WoT-hidden.
+                if SafetyFilter.shared.snapshot.blockedPubkeys.contains(event.pubkey) { return false }
+                return SafetyFilter.shared.shouldDrop(event: event, context: .thread(rootId: rootId))
+            }()
+            if hide {
+                if wotHiddenEventIds.insert(event.id).inserted { changed = true }
+            } else if wotHiddenEventIds.remove(event.id) != nil {
+                changed = true
+            }
+        }
+        if changed { rebuildSlices() }
     }
 
     /// Ingest a kind-1 the user just published from outside this thread (typically the
@@ -557,7 +629,7 @@ final class ThreadViewModel {
             seedTargetId = focalEvent.id
             focalEventId = resolvedRoot
             rootId = resolvedRoot
-            events[focalEvent.id] = focalEvent
+            insertStructural(focalEvent)
             if focalEvent.id == resolvedRoot {
                 rootEvent = focalEvent
                 isLoading = false
@@ -574,7 +646,7 @@ final class ThreadViewModel {
         // renders without waiting on the network.
         if rootEvent == nil,
            let cachedRoot = await eventStore.eventsByIds([rootId]).first {
-            events[cachedRoot.id] = cachedRoot
+            insertStructural(cachedRoot)
             rootEvent = cachedRoot
             isLoading = false
         }
@@ -603,9 +675,14 @@ final class ThreadViewModel {
                 if !isPrivate, SafetyFilter.shared.shouldDrop(event: event, context: .thread(rootId: rootId)) {
                     continue
                 }
+                events[event.id] = event
+            } else {
+                // The root is structural: a WoT-hidden (or blocked) root keeps
+                // its slot as a placeholder so the visible replies still hang
+                // off a coherent thread shape.
+                insertStructural(event)
+                rootEvent = event
             }
-            events[event.id] = event
-            if event.id == rootId { rootEvent = event }
         }
 
         if !events.isEmpty {
@@ -722,7 +799,7 @@ final class ThreadViewModel {
 
     private func fetchRoot(from relays: [String]) async {
         guard let event = await fetchEvent(id: rootId, from: relays) else { return }
-        events[event.id] = event
+        insertStructural(event)
         rootEvent = event
         // The root we just fetched may itself be a reply; re-resolve and re-fetch.
         if let trueRoot = Nip10.rootId(of: event), trueRoot != rootId {
@@ -737,7 +814,7 @@ final class ThreadViewModel {
             }
             rootEvent = events[trueRoot]
             if rootEvent == nil, let upstreamRoot = await fetchEvent(id: trueRoot, from: relays) {
-                events[upstreamRoot.id] = upstreamRoot
+                insertStructural(upstreamRoot)
                 rootEvent = upstreamRoot
             }
         }
@@ -763,7 +840,7 @@ final class ThreadViewModel {
                 continue
             }
             guard let parent = await fetchEvent(id: parentId, from: relays) else { break }
-            events[parent.id] = parent
+            insertStructural(parent)
             await eventStore.persist([parent])
             if parent.id == rootId { rootEvent = parent }
             current = parent
@@ -1065,6 +1142,7 @@ final class ThreadViewModel {
         ThreadRow(
             event: event,
             isBlocked: isBlocked ?? blockedEventIds.contains(event.id),
+            isWotHidden: wotHiddenEventIds.contains(event.id),
             isPrivate: PrivateInteractionStore.shared.contains(event.id)
         )
     }
@@ -1103,13 +1181,21 @@ final class ThreadViewModel {
         // Direct replies are the focal's bucket — already sorted oldest-first.
         let directReplies = childrenByParent[focalEventId] ?? []
 
+        // WoT-hidden replies drop outright (no placeholder, no reveal — only
+        // structural slots like the focal/root render a placeholder). Filter
+        // BEFORE the spam split so a non-WoT reply can't surface through the
+        // "show hidden spam" disclosure either.
+        let wotVisibleReplies = wotHiddenEventIds.isEmpty
+            ? directReplies
+            : directReplies.filter { !wotHiddenEventIds.contains($0.id) }
+
         if hiddenSpamPubkeys.isEmpty {
-            replies = directReplies.map { makeRow($0) }
+            replies = wotVisibleReplies.map { makeRow($0) }
             hiddenSpamReplies = []
         } else {
             var visible: [ThreadRow] = []
             var hidden: [ThreadRow] = []
-            for event in directReplies {
+            for event in wotVisibleReplies {
                 let row = makeRow(event)
                 if row.isBlocked { visible.append(row); continue }
                 if hiddenSpamPubkeys.contains(event.pubkey) { hidden.append(row) }
@@ -1147,6 +1233,17 @@ final class ThreadViewModel {
             for kid in kids {
                 guard visited.insert(kid.id).inserted else { continue }
                 if blockedEventIds.contains(kid.id) { continue }
+                // WoT-hidden replies drop with their subtree, same rule as
+                // blocked/spam branches — UNLESS a visible (qualified / own)
+                // reply hangs below: then the hidden node renders the neutral
+                // placeholder and the walk continues, so a stranger replying
+                // mid-chain can't sever the user's own conversation.
+                if wotHiddenEventIds.contains(kid.id) {
+                    guard hasVisibleDescendant(of: kid.id, childrenByParent: childrenByParent, visited: visited) else { continue }
+                    result.append(NestedReplyRow(row: makeRow(kid), depth: depth))
+                    walk(parentId: kid.id, depth: depth + 1)
+                    continue
+                }
                 if hiddenSpamPubkeys.contains(kid.pubkey) { continue }
                 result.append(NestedReplyRow(
                     row: makeRow(kid, isBlocked: false),
@@ -1157,6 +1254,30 @@ final class ThreadViewModel {
         }
         walk(parentId: focalEventId, depth: 0)
         return result
+    }
+
+    /// Whether any descendant of `id` would render (not WoT-hidden, blocked,
+    /// or spam-hidden). Drives the placeholder-vs-drop decision for WoT-hidden
+    /// mid-tree replies. The read-only `visited` snapshot (plus the local
+    /// `probed` set) guards against id cycles in forged reply tags; nothing is
+    /// consumed, so the main walk still visits every kept node itself.
+    private func hasVisibleDescendant(of id: String, childrenByParent: [String: [NostrEvent]], visited: Set<String>) -> Bool {
+        var probed = Set<String>()
+        func probe(_ parentId: String) -> Bool {
+            guard let children = childrenByParent[parentId] else { return false }
+            for child in children {
+                guard probed.insert(child.id).inserted else { continue }
+                if visited.contains(child.id) { continue }
+                if !wotHiddenEventIds.contains(child.id),
+                   !blockedEventIds.contains(child.id),
+                   !hiddenSpamPubkeys.contains(child.pubkey) {
+                    return true
+                }
+                if probe(child.id) { return true }
+            }
+            return false
+        }
+        return probe(id)
     }
 
     /// Walk parent-of-parent from focal up to root, returning the chain in root → focal-1 order.
@@ -1220,6 +1341,10 @@ final class ThreadViewModel {
 struct ThreadRow: Identifiable {
     let event: NostrEvent
     var isBlocked: Bool = false
+    /// True when the Web-of-Trust filter hides this structurally-required
+    /// event (root / focal / ancestor) — renders the neutral WoT placeholder
+    /// instead of any content.
+    var isWotHidden: Bool = false
     /// True when the event is a gift-wrap-materialized private reply — drives
     /// the lock chip in `PostCardView` and the suppression of repost/quote.
     var isPrivate: Bool = false

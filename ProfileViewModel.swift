@@ -95,6 +95,7 @@ final class ProfileViewModel {
 
     @ObservationIgnored private let profileRepo = ProfileRepository.shared
     @ObservationIgnored private let eventStore = EventStore.shared
+    @ObservationIgnored private var safetyObserver: NSObjectProtocol?
 
     private static let indexerRelays = RelayDefaults.indexers
 
@@ -105,6 +106,30 @@ final class ProfileViewModel {
             self.profile = cached
             self.profiles[pubkey] = cached
         }
+        // Re-filter on safety-snapshot installs (WoT toggle / recompute) so an
+        // open profile's already-loaded notes vanish the moment the filter
+        // tightens — same contract as the feed and thread observers. The
+        // ingest paths all gate on `shouldDrop(.feed)`, so this only has to
+        // scrub what was loaded under looser rules.
+        safetyObserver = NotificationCenter.default.addObserver(
+            forName: .safetyFilterChanged, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                guard SafetyFilter.shared.snapshot.wotEnabled else { return }
+                let drop: (NostrEvent) -> Bool = {
+                    SafetyFilter.shared.shouldDrop(event: $0, context: .feed)
+                }
+                rootNotes.removeAll(where: drop)
+                replies.removeAll(where: drop)
+                sortedNotes.removeAll(where: drop)
+                sortedReplies.removeAll(where: drop)
+            }
+        }
+    }
+
+    deinit {
+        if let safetyObserver { NotificationCenter.default.removeObserver(safetyObserver) }
     }
 
     // MARK: - Lifecycle
