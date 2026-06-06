@@ -53,6 +53,13 @@ struct EmojiReactionPicker: View {
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity)
                 .frame(height: 36)
+                // Without an explicit content shape, the button's tap target
+                // is just the glyph + label bounds. The full-width frame is
+                // visual only — taps in the blank space on either side were
+                // missed. Filling the row's hit area makes "More reactions"
+                // the easiest target in the picker, matching what the user
+                // most often wants from this popover.
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
         }

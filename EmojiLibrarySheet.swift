@@ -38,6 +38,12 @@ struct EmojiLibrarySheet: View {
     /// catalog + custom pack list.
     @State private var unicodeMatches: [String] = []
     @State private var customMatches: [(shortcode: String, url: String)] = []
+    /// The user's currently-preferred Fitzpatrick tone applied to every
+    /// tone-capable cell. Mirrored in `UserDefaults` via
+    /// `EmojiSkinTonePreference` and re-read when the inline tone
+    /// selector writes a new value so all visible cells re-render with
+    /// the new tone.
+    @State private var preferredTone: EmojiSkinTone = EmojiSkinTonePreference.current
     /// When true, ignore scroll-driven tab updates briefly so a tab tap's
     /// `scrollTo` animation doesn't ping-pong with the position observer
     /// (the scroll lands on the target → observer sees it → tries to
@@ -59,6 +65,7 @@ struct EmojiLibrarySheet: View {
         NavigationStack {
             VStack(spacing: 0) {
                 searchField
+                skinToneSelector
                 if searchQuery.trimmingCharacters(in: .whitespaces).isEmpty {
                     tabStrip
                     Divider()
@@ -87,6 +94,11 @@ struct EmojiLibrarySheet: View {
             .onDisappear {
                 debounceTask?.cancel()
                 suppressResetTask?.cancel()
+            }
+            .onReceive(NotificationCenter.default.publisher(
+                for: .emojiSkinTonePreferenceDidChange
+            )) { _ in
+                preferredTone = EmojiSkinTonePreference.current
             }
         }
     }
@@ -285,15 +297,7 @@ struct EmojiLibrarySheet: View {
         let cols = [GridItem(.adaptive(minimum: 42, maximum: 56), spacing: 4)]
         return LazyVGrid(columns: cols, alignment: .leading, spacing: 4) {
             ForEach(items, id: \.self) { e in
-                Button {
-                    handleUnicodePick(e)
-                } label: {
-                    Text(e)
-                        .font(.system(size: 30))
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 42)
-                }
-                .buttonStyle(.plain)
+                toneAwareCell(baseEmoji: e)
             }
         }
     }
@@ -448,18 +452,69 @@ struct EmojiLibrarySheet: View {
                 .font(.headline)
             LazyVGrid(columns: cols, alignment: .leading, spacing: 4) {
                 ForEach(cat.emojis, id: \.self) { e in
-                    Button {
-                        handleUnicodePick(e)
-                    } label: {
-                        Text(e)
-                            .font(.system(size: 30))
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 42)
-                    }
-                    .buttonStyle(.plain)
+                    toneAwareCell(baseEmoji: e)
                 }
             }
         }
+    }
+
+    /// Single cell shared by the category and filtered grids. Renders the
+    /// emoji with the user's preferred Fitzpatrick tone applied if the base
+    /// is tone-capable; otherwise renders the base as-is. The tone is
+    /// chosen globally via `skinToneSelector` at the top of the sheet —
+    /// per-cell long-press was tried first but conflicted with the
+    /// Button's tap recognizer, and a global picker matches what GitHub /
+    /// Primal Spark do.
+    @ViewBuilder
+    private func toneAwareCell(baseEmoji: String) -> some View {
+        let toneCapable = EmojiToneCapability.accepts(baseEmoji)
+        let rendered = toneCapable
+            ? baseEmoji.applyingSkinTone(preferredTone)
+            : baseEmoji
+        Button {
+            handleUnicodePick(rendered)
+        } label: {
+            Text(rendered)
+                .font(.system(size: 30))
+                .frame(maxWidth: .infinity)
+                .frame(height: 42)
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Compact horizontal row of six tone swatches sitting above the tab
+    /// strip. Each swatch is the open-palm 👋 glyph rendered in that tone
+    /// so the user sees the actual color, not an abstract chip. Tapping a
+    /// swatch updates `EmojiSkinTonePreference` (persisted in
+    /// `UserDefaults`) and re-renders every tone-capable cell in the
+    /// sheet on the next body pass.
+    private var skinToneSelector: some View {
+        HStack(spacing: 6) {
+            Text("Skin tone")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+            ForEach(EmojiSkinTone.allCases) { tone in
+                Button {
+                    EmojiSkinTonePreference.current = tone
+                    preferredTone = tone
+                } label: {
+                    Text(tone.previewSwatch)
+                        .font(.system(size: 22))
+                        .frame(width: 32, height: 32)
+                        .background(
+                            Circle()
+                                .stroke(tone == preferredTone
+                                        ? Color.accentColor
+                                        : Color.clear,
+                                        lineWidth: 2)
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.bottom, 4)
     }
 
     // MARK: - Pick handlers
@@ -503,3 +558,4 @@ private struct SectionTopOffsetKey: PreferenceKey {
         value.merge(nextValue(), uniquingKeysWith: { _, new in new })
     }
 }
+
