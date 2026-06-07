@@ -1834,10 +1834,46 @@ struct PostCardView: View {
     /// when `walletStore` is unset, leaving the user wondering whether
     /// the tap registered).
     private func triggerZapOrWalletSetup() {
-        if let store = walletStore, store.mode != nil {
-            activeSheet = .zap
-        } else {
+        let resolved = resolveRepost()
+        let target = resolved.event
+        guard let store = walletStore, store.mode != nil else {
             showWalletSetupPrompt = true
+            return
+        }
+        if let composePresenter {
+            // Route to the app-root host. The zap sheet raises the keyboard
+            // (deferred amountFocused in ZapSheet.onAppear); presenting it
+            // from this recyclable row caused the open/close loop — a
+            // diagnostic trace (2026-06-07) showed keyboard willShow → row
+            // recycled ~2ms later → sheet torn down → the surviving @State
+            // re-presents, cycling every ~0.5s. Same cure as
+            // reply/quote/emoji: host from the never-recycled root.
+            let pollOptionIdx = zapPollOptionIndex
+            composePresenter.openZap(ZapSheetRequest(
+                recipientPubkey: target.pubkey,
+                recipientLud16: resolved.profile?.lud16,
+                recipientName: resolved.profile?.displayString,
+                eventId: target.id,
+                extraTags: pollOptionIdx.map { [["poll_option", String($0)]] } ?? [],
+                forcePrivate: isPrivate,
+                onSuccess: { sats in
+                    if target.kind == Nip69.kindZapPoll, let idx = pollOptionIdx,
+                       let me = NostrKey.load() {
+                        PollTallyRepository.shared.applyOptimisticZapVote(
+                            pollEvent: target,
+                            optionIndex: idx,
+                            voterPubkey: me.pubkey,
+                            sats: sats,
+                            ts: Int(Date().timeIntervalSince1970)
+                        )
+                    }
+                }
+            ))
+            // Consumed into the request above; clear so a later non-poll
+            // zap on this card doesn't inherit a stale option index.
+            zapPollOptionIndex = nil
+        } else {
+            activeSheet = .zap
         }
     }
 }

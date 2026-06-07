@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// App-level router for the keyboard-raising composers (reply / quote / emoji
-/// reaction) triggered from a `PostCardView` action bar.
+/// App-level router for the keyboard-raising sheets (reply / quote / emoji
+/// reaction composers, and the zap sheet) triggered from a `PostCardView`
+/// action bar.
 ///
 /// **Why this exists.** `PostCardView` lives inside a feed `LazyVStack`. When a
 /// composer is presented from the card's own `.sheet(item:)` and `ComposeView`
@@ -38,6 +39,18 @@ final class ComposePresenter {
     func openEmojiReaction(onPick: @escaping (PickedEmoji) -> Void) {
         request = .emoji(id: UUID(), onPick: onPick)
     }
+
+    /// The zap sheet raises the keyboard too (deferred `amountFocused` in
+    /// `ZapSheet.onAppear`), so it must be hosted from the stable root like
+    /// the composers. Leaving it on the card's own `.sheet` was the cause
+    /// of the residual drawer loop: a diagnostic trace (2026-06-07) showed
+    /// keyboard willShow → presenting row recycled ~2ms later → sheet torn
+    /// down → the card's surviving `@State` re-presents → keyboard rises
+    /// again, looping at ~0.5s per cycle with the model state never
+    /// changing.
+    func openZap(_ zap: ZapSheetRequest) {
+        request = .zap(zap)
+    }
 }
 
 /// Identifiable so it can drive `.sheet(item:)`. The emoji case carries its
@@ -48,12 +61,30 @@ enum ComposeRequest: Identifiable {
     case reply(parent: NostrEvent, root: NostrEvent?)
     case quote(NostrEvent)
     case emoji(id: UUID, onPick: (PickedEmoji) -> Void)
+    case zap(ZapSheetRequest)
 
     var id: String {
         switch self {
         case .reply(let parent, _): return "reply-\(parent.id)"
         case .quote(let event):     return "quote-\(event.id)"
         case .emoji(let id, _):     return "emoji-\(id.uuidString)"
+        case .zap(let zap):         return "zap-\(zap.eventId ?? zap.recipientPubkey)"
         }
     }
+}
+
+/// Everything `ZapSheet` needs, captured at tap time on the card. The
+/// `onSuccess` closure (poll-vote optimistic apply) rides inline like the
+/// emoji case's `onPick`, so its lifetime is bound to the presentation. The
+/// wallet store itself is NOT carried here — `MainView` owns it and passes
+/// it at the host `.sheet`; callers gate on wallet readiness before opening.
+struct ZapSheetRequest {
+    let recipientPubkey: String
+    let recipientLud16: String?
+    let recipientName: String?
+    let eventId: String?
+    var relayHints: [String] = []
+    var extraTags: [[String]] = []
+    var forcePrivate: Bool = false
+    var onSuccess: ((Int64) -> Void)? = nil
 }
