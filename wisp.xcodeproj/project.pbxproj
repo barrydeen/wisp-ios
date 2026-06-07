@@ -21,6 +21,7 @@
 		4CABCD0100000000000F2002 /* Nip10001.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD0000000000000F2002 /* Nip10001.swift */; };
 		4CABCD0100000000000F2003 /* PinNoteSender.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD0000000000000F2003 /* PinNoteSender.swift */; };
 		4CABCD0100000000000F2004 /* DeletionSender.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD0000000000000F2004 /* DeletionSender.swift */; };
+		DA5814B32D1A4ED8AF800C72 /* MediaSaveService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07C633F5326A411B9E8DF5A8 /* MediaSaveService.swift */; };
 		4CABCD0100000000000F2005 /* ProfileQrSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD0000000000000F2005 /* ProfileQrSheet.swift */; };
 		4CABCD0100000000000F2006 /* KeysSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD0000000000000F2006 /* KeysSettingsView.swift */; };
 		4CABCD0100000000000F2007 /* MediaGridView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD0000000000000F2007 /* MediaGridView.swift */; };
@@ -321,6 +322,7 @@
 		4CABCD0000000000000F2002 /* Nip10001.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Nip10001.swift; sourceTree = "<group>"; };
 		4CABCD0000000000000F2003 /* PinNoteSender.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PinNoteSender.swift; sourceTree = "<group>"; };
 		4CABCD0000000000000F2004 /* DeletionSender.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeletionSender.swift; sourceTree = "<group>"; };
+		07C633F5326A411B9E8DF5A8 /* MediaSaveService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaSaveService.swift; sourceTree = "<group>"; };
 		4CABCD0000000000000F2005 /* ProfileQrSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileQrSheet.swift; sourceTree = "<group>"; };
 		4CABCD0000000000000F2006 /* KeysSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeysSettingsView.swift; sourceTree = "<group>"; };
 		4CABCD0000000000000F2007 /* MediaGridView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaGridView.swift; sourceTree = "<group>"; };
@@ -895,6 +897,7 @@
 				4CABCD0000000000000F2002 /* Nip10001.swift */,
 				4CABCD0000000000000F2003 /* PinNoteSender.swift */,
 				4CABCD0000000000000F2004 /* DeletionSender.swift */,
+				07C633F5326A411B9E8DF5A8 /* MediaSaveService.swift */,
 				4CABCD0000000000000F2005 /* ProfileQrSheet.swift */,
 				4CABCD0000000000000F2006 /* KeysSettingsView.swift */,
 				4CABCD0000000000000F2007 /* MediaGridView.swift */,
@@ -1342,6 +1345,7 @@
 				4CABCD0100000000000F2002 /* Nip10001.swift in Sources */,
 				4CABCD0100000000000F2003 /* PinNoteSender.swift in Sources */,
 				4CABCD0100000000000F2004 /* DeletionSender.swift in Sources */,
+				DA5814B32D1A4ED8AF800C72 /* MediaSaveService.swift in Sources */,
 				4CABCD0100000000000F2005 /* ProfileQrSheet.swift in Sources */,
 				4CABCD0100000000000F2006 /* KeysSettingsView.swift in Sources */,
 				4CABCD0100000000000F2007 /* MediaGridView.swift in Sources */,
