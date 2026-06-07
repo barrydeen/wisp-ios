@@ -8,7 +8,8 @@ actor EventStore {
 
     // 1068, 1018, 6969 are NIP-88 polls / poll responses and NIP-69 zap polls.
     // 10030 / 30030 are NIP-30 user emoji list / emoji set (custom emoji packs).
-    private static let persistedKinds: Set<Int> = [0, 1, 6, 7, 9735, 10002, 10012, 10030, 20, 21, 22, 30000, 30002, 30003, 30030, 1068, 1018, 6969]
+    // 30023 is NIP-23 long-form articles.
+    private static let persistedKinds: Set<Int> = [0, 1, 6, 7, 9735, 10002, 10012, 10030, 20, 21, 22, 30000, 30002, 30003, 30023, 30030, 1068, 1018, 6969]
 
     /// Kinds retained on disk *even for a blocked author* so the block-list
     /// settings UI, name/avatar resolution, and installed emoji packs keep
@@ -505,6 +506,30 @@ actor EventStore {
             }
         } catch {
             return []
+        }
+    }
+
+    /// Load the newest persisted version of an addressable (NIP-33) event by
+    /// its `(kind, author, d-tag)` coordinate. The `d` tag lives inside the
+    /// opaque JSON `tags` column, so candidates are narrowed by kind + pubkey
+    /// in the query and the d-tag match happens in Swift — mirrors
+    /// `loadEmojiPacksByAddress`. Replaceable events can have several versions
+    /// on disk (each has a distinct event id), so the max `createdAt` wins.
+    func loadAddressable(kind: Int, author: String, dTag: String) -> NostrEvent? {
+        guard let box = ensureBox() else { return nil }
+        do {
+            let query = try box.query {
+                EventEntity.kind == kind && EventEntity.pubkey == author
+            }.build()
+            let candidates = try query.find(offset: 0, limit: 500)
+            return candidates
+                .compactMap { $0.toNostrEvent() }
+                .filter { event in
+                    event.tags.first(where: { $0.count >= 2 && $0[0] == "d" })?[1] == dTag
+                }
+                .max(by: { $0.createdAt < $1.createdAt })
+        } catch {
+            return nil
         }
     }
 

@@ -359,8 +359,21 @@ struct RichContentView: View {
                 onNoteTap: onNoteTap,
                 onHashtagTap: onHashtagTap
             )
-        case .nostrAddressable(let dTag, _, let author, let kind):
-            addressablePlaceholder(dTag: dTag, author: author, kind: kind)
+        case .nostrAddressable(let dTag, let relays, let author, let kind):
+            // Long-form articles get a full preview card; other addressable
+            // kinds keep the generic placeholder (matches Android, which only
+            // upgrades kinds it has dedicated cards for).
+            if kind == 30023, let author {
+                ArticleCardView(
+                    dTag: dTag,
+                    author: author,
+                    relayHints: relays,
+                    profiles: profiles,
+                    onProfileTap: onProfileTap
+                )
+            } else {
+                addressablePlaceholder(dTag: dTag, author: author, kind: kind)
+            }
         case .lightningInvoice(let invoice, let amount, let summary):
             LightningInvoiceView(invoice: invoice, amountSats: amount, summary: summary, isPreview: isPreview)
         default:
