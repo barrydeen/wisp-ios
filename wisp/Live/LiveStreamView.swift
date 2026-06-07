@@ -445,9 +445,14 @@ private struct LiveChatBubble: View {
                         .font(.caption2)
                         .foregroundStyle(Color.wispOnSurfaceVariant)
                 }
-                Text(message.content)
-                    .font(.subheadline)
-                    .fixedSize(horizontal: false, vertical: true)
+                EmojiText(
+                    message.content,
+                    emojiMap: message.emojiTags.merging(EmojiRepository.shared.resolvedCustomMap) { msgTag, _ in msgTag },
+                    textStyle: .subheadline,
+                    lineLimit: nil
+                )
+                .font(.subheadline)
+                .fixedSize(horizontal: false, vertical: true)
                 if !message.reactions.isEmpty {
                     reactionStrip
                 }
@@ -564,27 +569,29 @@ private struct ReplyQuoteBar: View {
 
 private struct LiveChatInputBar: View {
     @Bindable var vm: LiveStreamViewModel
-    @FocusState private var focused: Bool
 
     var body: some View {
-        HStack(spacing: 8) {
-            TextField("Message", text: $vm.messageText, axis: .vertical)
-                .lineLimit(1...4)
-                .focused($focused)
-                .submitLabel(.send)
-                .onSubmit { send() }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(Color.wispSurfaceVariant.opacity(0.5), in: RoundedRectangle(cornerRadius: 20))
-            Button(action: send) {
-                Image(systemName: "paperplane.fill")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .padding(10)
-                    .background(Color.wispPrimary, in: Circle())
+        VStack(spacing: 6) {
+            if !vm.emojiCandidates.isEmpty {
+                EmojiSuggestionBar(candidates: vm.emojiCandidates) { emoji in
+                    vm.selectEmoji(emoji)
+                }
             }
-            .disabled(vm.messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            .buttonStyle(.plain)
+            HStack(spacing: 8) {
+                EmojiComposerTextView(viewModel: vm, placeholder: "Message", maxLines: 4, onSubmit: { send() })
+                    .padding(.horizontal, 10)
+                    .frame(maxWidth: .infinity)
+                    .background(Color.wispSurfaceVariant.opacity(0.5), in: RoundedRectangle(cornerRadius: 20))
+                Button(action: send) {
+                    Image(systemName: "paperplane.fill")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(10)
+                        .background(Color.wispPrimary, in: Circle())
+                }
+                .disabled(vm.messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .buttonStyle(.plain)
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -592,7 +599,6 @@ private struct LiveChatInputBar: View {
     }
 
     private func send() {
-        focused = false
         hideKeyboard()
         vm.sendMessage()
     }

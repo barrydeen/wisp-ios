@@ -184,6 +184,14 @@ struct TrendingFeedView: View {
                         .buttonStyle(.plain)
                         .onAppear {
                             engagementRepo.markVisible(event: event)
+                            MediaLookaheadPrefetcher.shared.noteAppeared(
+                                eventId: event.id,
+                                in: viewModel.events,
+                                profiles: viewModel.profiles
+                            )
+                        }
+                        .onDisappear {
+                            engagementRepo.markInvisible(event: event)
                         }
                         Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
                     }

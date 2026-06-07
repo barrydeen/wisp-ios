@@ -23,12 +23,16 @@ protocol Wallet: AnyObject {
     func disconnect()
     func fetchBalance() async -> Result<Int64, WalletError>
     func payInvoice(_ bolt11: String) async -> Result<String, WalletError>
-    func makeInvoice(amountMsats: Int64, description: String) async -> Result<String, WalletError>
+    func makeInvoice(amountMsats: Int64, description: String, expirySecs: Int64) async -> Result<String, WalletError>
     func listTransactions(limit: Int, offset: Int) async -> Result<[WalletTransaction], WalletError>
 }
 
 struct WalletTransaction: Identifiable, Codable {
-    var id: String { paymentHash }
+    /// Composite of paymentHash + direction. A self-payment produces an
+    /// (incoming, outgoing) pair that share a paymentHash; SwiftUI's
+    /// `ForEach` collapses duplicate ids, so without the type suffix both
+    /// rows render as whichever direction `ForEach` picked.
+    var id: String { "\(paymentHash)|\(type.rawValue)" }
     let type: TransactionType
     let description: String?
     let paymentHash: String

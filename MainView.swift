@@ -28,7 +28,6 @@ struct MainView: View {
     @State private var drawerOpen = false
     @State private var drawerDragOffset: CGFloat = 0
     @State private var engagementRepo = EngagementRepository.shared
-    @State private var liveStreamRepo = LiveStreamRepository.shared
     @State private var showInterfaceSettings = false
     @State private var showKeys = false
     @State private var showCustomEmojis = false
@@ -36,6 +35,12 @@ struct MainView: View {
     @State private var showLists = false
     @State private var showPolls = false
     @State private var showCompose = false
+    /// App-level router for reply / quote / emoji-reaction composers triggered
+    /// from any feed card. Hosted from this view's stable root (see body) so the
+    /// composer sheet is never anchored to a recyclable `LazyVStack` row, which
+    /// is what caused the rare open/close loop. Injected into the environment so
+    /// every card in every tab routes through it.
+    @State private var composePresenter = ComposePresenter()
     @State private var showDraftsScheduled = false
     @State private var showRelayPicker = false
     @State private var showOnlineSheet = false
@@ -85,7 +90,8 @@ struct MainView: View {
     }
 
     var body: some View {
-        ZStack(alignment: .leading) {
+        @Bindable var presenter = composePresenter
+        return ZStack(alignment: .leading) {
             mainShell
 
             if drawerOpen {
@@ -198,7 +204,9 @@ struct MainView: View {
         }
         .background(Color.wispBackground)
         .overlay(SuccessToastOverlay())
+        .overlay(PostStatusPillOverlay())
         .environment(walletStore)
+        .environment(composePresenter)
         .onReceive(NotificationCenter.default.publisher(for: .openWalletTab)) { _ in
             // PostCardView posts this when the user tries to zap without
             // a configured wallet and chooses "Set Up Wallet" on the
@@ -273,9 +281,24 @@ struct MainView: View {
                 MuteRepository.shared.startSync(privkey32: priv)
             }
             Task.detached(priority: .utility) {
-                if await SafetyPreferences.shared.wotFilterEnabled,
-                   await ExtendedNetworkRepository.shared.isStale() {
+                guard await SafetyPreferences.shared.wotFilterEnabled,
+                      await ExtendedNetworkRepository.shared.isStale() else { return }
+                // With WoT enabled the filter is FAIL-CLOSED: an empty/corrupt
+                // cached network hides all non-exempt content until a recompute
+                // lands. Retry with backoff (launch offline, flaky relays)
+                // rather than staying dark until the next cold launch. A
+                // stale-but-populated network keeps filtering on the cached set
+                // after one freshen attempt — only the empty case retries.
+                // Deliberately NO auto-disable on failure: the user opted into
+                // a filter that gates graphic content; failing open without
+                // consent is worse than a temporarily empty feed.
+                for attempt in 0..<3 {
                     await ExtendedNetworkRepository.shared.recompute()
+                    let summary = await ExtendedNetworkRepository.shared.summary()
+                    if summary.qualifiedCount > 0 { return }
+                    if attempt < 2 {
+                        try? await Task.sleep(for: .seconds(20 * (attempt + 1)))
+                    }
                 }
             }
 
@@ -400,6 +423,22 @@ struct MainView: View {
         }
         .sheet(isPresented: $showCompose) {
             ComposeView(keypair: keypair, mode: .new)
+        }
+        // Reply / quote / emoji-reaction composers from any feed card present
+        // here, from the stable root — never from the recyclable card row. See
+        // `ComposePresenter`.
+        .sheet(item: $presenter.request) { req in
+            switch req {
+            case .reply(let parent, let root):
+                ComposeView(keypair: keypair, mode: .reply(parent: parent, root: root))
+            case .quote(let event):
+                ComposeView(keypair: keypair, mode: .quote(event))
+            case .emoji(_, let onPick):
+                EmojiLibrarySheet(mode: .pickForReaction { picked in
+                    onPick(picked)
+                    composePresenter.request = nil
+                })
+            }
         }
         .sheet(item: $reopenDraft) { draft in
             ComposeView(keypair: keypair, draft: draft)
@@ -1015,22 +1054,20 @@ struct MainView: View {
                         // Anchor for tap-Home-on-Home → scroll-to-top. Zero-height
                         // so it doesn't reserve layout space.
                         Color.clear.frame(height: 0).id("feedTop")
-                        let liveStreams = liveStreamRepo.liveNowSorted
-                        if !liveStreams.isEmpty {
-                            LiveNowRow(
-                                streams: liveStreams,
-                                profiles: viewModel.profiles,
-                                onSelect: { stream in
-                                    feedPath.append(LiveStreamRoute(
-                                        aTagValue: stream.aTagValue,
-                                        hostPubkey: stream.activity.hostPubkey,
-                                        dTag: stream.activity.dTag,
-                                        relayHints: stream.activity.relayHints
-                                    ))
-                                }
-                            )
-                            Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
-                        }
+                        // Self-contained so live-chat `streams` mutations
+                        // don't re-evaluate this feed body (and every
+                        // PostCardView in it) — see `FeedLiveNowSection`.
+                        FeedLiveNowSection(
+                            profiles: viewModel.profiles,
+                            onSelect: { stream in
+                                feedPath.append(LiveStreamRoute(
+                                    aTagValue: stream.aTagValue,
+                                    hostPubkey: stream.activity.hostPubkey,
+                                    dTag: stream.activity.dTag,
+                                    relayHints: stream.activity.relayHints
+                                ))
+                            }
+                        )
                         // Iterating events directly with `id: \.id` keeps row
                         // identity stable when the array shifts (new posts
                         // prepended). The previous `Array(events.enumerated())`
@@ -1048,6 +1085,10 @@ struct MainView: View {
                         // `events` list is much longer (most events
                         // were rejected by the filter).
                         let visible = viewModel.filteredEvents
+                        // Precompute the last-5 ids once per body eval so each
+                        // row's onAppear is an O(1) Set lookup instead of an
+                        // O(n) `firstIndex` scan (which made deep scroll O(n²)).
+                        let loadMoreTriggerIds = Set(visible.suffix(5).map(\.id))
                         ForEach(visible, id: \.id) { event in
                             PostCardView(
                                 event: event,
@@ -1064,6 +1105,10 @@ struct MainView: View {
                                     feedPath.append(HashtagFeedRoute(tag: tag))
                                 }
                             )
+                            // Skip re-rendering rows whose inputs are unchanged
+                            // (the LazyVStack re-invokes this builder with fresh
+                            // closures on every scroll tick). See PostCardView ==.
+                            .equatable()
                             // Programmatic push instead of wrapping the card in a
                             // NavigationLink — the link's press gesture loses races
                             // against the inner avatar / action-bar / link buttons,
@@ -1076,13 +1121,23 @@ struct MainView: View {
                             }
                             .onAppear {
                                 engagementRepo.markVisible(event: event)
-                                if let idx = visible.firstIndex(where: { $0.id == event.id }),
-                                   idx >= visible.count - 5 {
-                                    switch viewModel.currentKind {
-                                    case .follows: break
-                                    case .relay, .relaySet, .extendedNetwork: viewModel.loadMore()
-                                    }
+                                // Warm media (images / GIF bytes / posters /
+                                // avatars) for the next ~10 rows so they're
+                                // decoded before they scroll in. O(1) per
+                                // appear (internally cached index map).
+                                MediaLookaheadPrefetcher.shared.noteAppeared(
+                                    eventId: event.id,
+                                    in: visible,
+                                    profiles: viewModel.profiles
+                                )
+                                if loadMoreTriggerIds.contains(event.id) {
+                                    // Routes Follows → disk-replay scroll-back,
+                                    // relay/extended → relay loadMore.
+                                    viewModel.loadOlder()
                                 }
+                            }
+                            .onDisappear {
+                                engagementRepo.markInvisible(event: event)
                             }
                             Divider()
                                 .overlay(Color.wispSurfaceVariant.opacity(0.3))
@@ -1100,6 +1155,11 @@ struct MainView: View {
                         .transaction { $0.animation = nil }
                     }
                 }
+                // Keep the feed's layout stable when a composer raises the
+                // keyboard — without this the safe-area shrink reflows the
+                // LazyVStack and recycles rows. Parity with every other feed
+                // (Search, Hashtag, Trending, NoteList, PeopleList, Thread).
+                .ignoresSafeArea(.keyboard, edges: .bottom)
                 .refreshable { await viewModel.refresh() }
                 .onScrollPhaseChange { _, newPhase in
                     switch newPhase {

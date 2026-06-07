@@ -50,6 +50,13 @@ struct PostCardView: View {
     var onOpenQuoteCompose: ((NostrEvent) -> Void)? = nil
     @Environment(WalletStore.self) private var walletStore: WalletStore?
     @Environment(AppSettings.self) private var settings
+    /// App-level composer router (reply / quote / emoji reaction). Optional so
+    /// cards rendered outside the injected environment (previews, embeddings)
+    /// still compile and fall back to the in-card `.sheet(item:)`. When present,
+    /// it's preferred over the in-card sheet so the composer is hosted from the
+    /// stable app root rather than this recyclable `LazyVStack` row. See
+    /// `ComposePresenter`.
+    @Environment(ComposePresenter.self) private var composePresenter: ComposePresenter?
     @State private var expanded = false
     @State private var contentExpanded = false
     /// Largest rendered height we've observed for the body's *text* runs
@@ -91,7 +98,6 @@ struct PostCardView: View {
     /// with `.presentationCompactAdaptation(.popover)` keeps the
     /// anchored-popup feel without animating the launching icon.
     @State private var showRepostMenu = false
-    @State private var showRemoveReactionMenu = false
     @State private var showOverflowMenu = false
     /// True when the user tapped Zap but no wallet is configured. Surfaces a
     /// confirmation prompt that can launch the Wallet tab to set one up.
@@ -200,15 +206,33 @@ struct PostCardView: View {
     /// only on this card's box, not on the entire EngagementRepository dict.
     private var repoBox: EngagementBox { engagementRepo.box(for: displayEventId) }
 
-    private var myReactor: Reactor? {
-        guard let me = myPubkey else { return nil }
-        // Read the shared repo first so optimistic reactions reflect immediately.
-        if let mine = repoBox.counts.reactors.first(where: { $0.pubkey == me }) {
-            return mine
+    /// All reactions the current user has placed on this post, repo first so
+    /// optimistic reactions reflect immediately, deduped by emoji.
+    private var myReactors: [Reactor] {
+        guard let me = myPubkey else { return [] }
+        var seen = Set<String>()
+        var result: [Reactor] = []
+        for r in repoBox.counts.reactors where r.pubkey == me {
+            if seen.insert(r.emoji).inserted { result.append(r) }
         }
-        return engagement?.reactors.first(where: { $0.pubkey == me })
+        for r in (engagement?.reactors ?? []) where r.pubkey == me {
+            if seen.insert(r.emoji).inserted { result.append(r) }
+        }
+        return result
     }
+    private var myReactor: Reactor? { myReactors.first }
     private var iReactedEmoji: String? { myReactor?.emoji }
+    /// Picker keys the user has already reacted with, normalized so legacy
+    /// NIP-25 "+"/"" reactions match the ❤️ picker cell.
+    private var myReactedKeys: Set<String> {
+        Set(myReactors.map { Self.normalizeReactionKey($0.emoji) })
+    }
+
+    /// Map legacy NIP-25 `+` / empty content to the ❤️ picker key; otherwise
+    /// pass the emoji / `:shortcode:` key through unchanged.
+    private static func normalizeReactionKey(_ raw: String) -> String {
+        (raw == "+" || raw.isEmpty) ? "\u{2764}\u{FE0F}" : raw
+    }
     private var iReposted: Bool {
         guard let me = myPubkey else { return false }
         if repoBox.counts.reposters.contains(me) { return true }
@@ -374,15 +398,48 @@ struct PostCardView: View {
                 // shrink, which left InlineImageView's clipShape rounding the
                 // empty parent frame instead of the image edges. Render at
                 // natural size so corner rounding actually shows.
-                RichContentView(
-                    content: displayEvent.content,
-                    tags: displayEvent.tags,
-                    profiles: profiles,
-                    authorPubkey: displayEvent.pubkey,
-                    onProfileTap: nil,
-                    onNoteTap: onNoteTap,
-                    onHashtagTap: nil
-                )
+                //
+                // Action bar is included here so the user can react, reply,
+                // repost, zap, bookmark, or expand details on an ancestor
+                // (parent / grand-parent) note directly from the thread view
+                // without having to navigate into the ancestor's own thread.
+                // Polls and the top-zapper pill stay out of compact mode
+                // intentionally — those would crowd the slim ancestor row.
+                VStack(alignment: .leading, spacing: 8) {
+                    RichContentView(
+                        content: displayEvent.content,
+                        tags: displayEvent.tags,
+                        profiles: profiles,
+                        authorPubkey: displayEvent.pubkey,
+                        onProfileTap: nil,
+                        onNoteTap: onNoteTap,
+                        onHashtagTap: nil
+                    )
+
+                    if !activeUserIsWatchOnly { actionBar }
+
+                    if expanded {
+                        NoteDetailsPanel(
+                            zappers: repoBox.counts.zappers.isEmpty ? (engagement?.zappers ?? []) : repoBox.counts.zappers,
+                            reactors: repoBox.counts.reactors.isEmpty ? (engagement?.reactors ?? []) : repoBox.counts.reactors,
+                            reposters: repoBox.counts.reposters.isEmpty ? (engagement?.reposters ?? []) : repoBox.counts.reposters,
+                            quoters: repoBox.counts.quoters.isEmpty ? (engagement?.quoters ?? []) : repoBox.counts.quoters,
+                            relays: combinedRelays(for: displayEvent.id),
+                            tags: displayEvent.tags,
+                            createdAt: displayEvent.createdAt,
+                            profiles: profiles,
+                            onProfileTap: onProfileTap,
+                            onNoteTap: onNoteTap
+                        )
+                        .task(id: displayEvent.id) {
+                            engagementRepo.fetchQuoters(
+                                eventId: displayEvent.id,
+                                authorPubkey: displayEvent.pubkey
+                            )
+                        }
+                        .transition(.opacity)
+                    }
+                }
                 .padding(.horizontal, 16)
                 .padding(.top, 14)
                 .padding(.bottom, 12)
@@ -565,8 +622,23 @@ struct PostCardView: View {
         .modifier(TapToExpand(enabled: expandOnTap && !ancestorCompact, expanded: $expanded))
         .onAppear {
             let displayed = resolveRepost().event
+            #if DEBUG
+            // Stall-diagnostics breadcrumb: record which row is on screen so a
+            // MAIN STALL during this row's render names the offending note.
+            let imeta = displayed.tags.reduce(0) { $0 + ($1.first == "imeta" ? 1 : 0) }
+            let hasQuote = displayed.tags.contains { $0.first == "q" }
+                || displayed.content.contains("nostr:nevent")
+                || displayed.content.contains("nostr:note")
+            let snippet = displayed.content.prefix(48).replacingOccurrences(of: "\n", with: " ")
+            PerfTrace.enterRow(
+                note: String(displayed.id.prefix(12)),
+                media: "kind=\(displayed.kind) clen=\(displayed.content.count) imeta=\(imeta) quote=\(hasQuote) “\(snippet)”"
+            )
+            #endif
             if displayed.kind == Nip88.kindPoll || displayed.kind == Nip69.kindZapPoll {
-                PollTallyRepository.shared.markVisible(pollEvent: displayed)
+                // Deferred: markVisible can seed an @Observable tally box this
+                // card reads — avoid mutating observed state during the update.
+                Task { @MainActor in PollTallyRepository.shared.markVisible(pollEvent: displayed) }
             }
         }
         // Tag-only NIP-18 repost: `content` is empty so the inline JSON path
@@ -687,7 +759,10 @@ struct PostCardView: View {
         .onChange(of: zapStore.errors[displayEventId]) { _, message in
             guard let message else { return }
             actionAlert = ActionAlert(title: "Zap Failed", message: message)
-            zapStore.clearError(eventId: displayEventId)
+            // Deferred: clearError mutates the same @Observable store this
+            // onChange observes — mutating it inline publishes during the update.
+            let id = displayEventId
+            Task { @MainActor in zapStore.clearError(eventId: id) }
         }
     }
 
@@ -802,7 +877,14 @@ struct PostCardView: View {
         .padding(.top, 8)
         .padding(.horizontal, 16)
         .onAppear {
-            engagementRepo.seedReposter(eventId: displayEventId, reposterPubkey: wrapperPubkey)
+            // Defer one runloop tick: `seedReposter` mutates an @Observable
+            // EngagementBox this card observes, so running it synchronously here
+            // mutates observed state *during* the view-update commit — SwiftUI's
+            // "Publishing changes from within view updates" warning, which forces
+            // an extra render pass for every repost card as it scrolls into view.
+            let id = displayEventId
+            let pk = wrapperPubkey
+            Task { @MainActor in engagementRepo.seedReposter(eventId: id, reposterPubkey: pk) }
         }
     }
 
@@ -817,9 +899,11 @@ struct PostCardView: View {
     private var actionBar: some View {
         HStack(spacing: 0) {
             Button {
+                let target = resolveRepost().event
                 if let route = onOpenReplyCompose {
-                    let target = resolveRepost().event
                     route(target, replyRootStub(for: target))
+                } else if let composePresenter {
+                    composePresenter.openReply(parent: target, root: replyRootStub(for: target))
                 } else {
                     activeSheet = .replyCompose
                 }
@@ -830,11 +914,11 @@ struct PostCardView: View {
                 // event to stream in. `forcedReplyCount` (the in-thread
                 // visible count, blocked-author-aware) wins as more local
                 // replies arrive.
-                let networkCount = max(repoBox.counts.replies, engagement?.replies ?? 0)
+                let networkCount = max(repoBox.counts.replies, max(repoBox.diskReplyCount, engagement?.replies ?? 0))
                 let replyCount = max(forcedReplyCount ?? 0, networkCount)
                 actionItem(
                     icon: "bubble.right",
-                    count: replyCount > 0 ? replyCount : nil
+                    count: replyCount
                 )
             }
             .buttonStyle(.plain)
@@ -896,16 +980,25 @@ struct PostCardView: View {
                     .frame(width: 18, height: 18)
                     .frame(height: 28)
             } else {
-                actionItem(
-                    image: settings.zapImage,
-                    label: zapLabel(repoBox.counts.zapSats > 0 ? repoBox.counts.zapSats : (engagement?.zapSats ?? 0)),
-                    tint: iZapped ? Color.wispZapColor : nil
-                )
+                let zapSats = repoBox.counts.zapSats > 0 ? repoBox.counts.zapSats : (engagement?.zapSats ?? 0)
+                // Orange only when *we* zapped (mirrors iReposted / iReactedEmoji);
+                // otherwise grey, even when others have zapped the note.
+                let iconTint: Color = iZapped ? Color.wispZapColor : .secondary
+                let labelTint: Color = iZapped ? Color.wispZapColor : .secondary
+                HStack(spacing: 4) {
+                    settings.zapImage
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 18, height: 18)
+                        .foregroundStyle(iconTint)
+                    // Always show a number; plain "0" (not a fiat "$0.00") when unzapped.
+                    Text(zapSats > 0 ? (zapLabel(zapSats) ?? "0") : "0")
+                        .font(.caption)
+                        .foregroundStyle(labelTint)
+                }
+                .frame(height: 28)
             }
         }
-        // Dim on the user's own posts — self-zapping is a no-op that just
-        // round-trips sats minus routing fees.
-        .opacity(isOwnPost ? 0.35 : 1)
         .contentShape(Rectangle())
         // Tap = open composer. Recorded behind the `zapLongPressFired`
         // guard so the same touch sequence that fires an instant zap
@@ -978,7 +1071,7 @@ struct PostCardView: View {
         return Button {
             showRepostMenu = true
         } label: {
-            actionItem(icon: "arrow.2.squarepath", count: count > 0 ? count : nil, tint: tint)
+            actionItem(icon: "arrow.2.squarepath", count: count, tint: tint)
         }
         .buttonStyle(.plain)
         .popover(isPresented: $showRepostMenu) {
@@ -1009,6 +1102,8 @@ struct PostCardView: View {
                     showRepostMenu = false
                     if let route = onOpenQuoteCompose {
                         route(resolveRepost().event)
+                    } else if let composePresenter {
+                        composePresenter.openQuote(resolveRepost().event)
                     } else {
                         activeSheet = .quoteCompose
                     }
@@ -1117,22 +1212,17 @@ struct PostCardView: View {
                     Divider()
                 }
 
-                // ShareLink kept as-is — it opens the system share sheet
-                // and there's no `Menu`-style bouncy parent here, just a
-                // popover row that dismisses naturally when the sheet
-                // takes over.
-                ShareLink(item: shareItem) {
-                    HStack(spacing: 12) {
-                        Text("Share")
-                        Spacer(minLength: 0)
-                        Image(systemName: "square.and.arrow.up")
+                // A bare `ShareLink` here never presented: the row's tap both
+                // dismissed this popover and tried to present the share sheet,
+                // and the dismissal tore down the presenter first. Dismiss the
+                // popover, then present a `UIActivityViewController` on the VC
+                // beneath it (next runloop tick so the dismissal has settled).
+                popoverMenuItem(title: "Share", systemImage: "square.and.arrow.up") {
+                    showOverflowMenu = false
+                    DispatchQueue.main.async {
+                        ShareSheetPresenter.present(url: shareItem)
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
-                    .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
-                .simultaneousGesture(TapGesture().onEnded { showOverflowMenu = false })
                 Divider()
 
                 popoverMenuItem(
@@ -1181,7 +1271,6 @@ struct PostCardView: View {
         }
     }
 
-    private var myReactionEventId: String? { myReactor?.reactionEventId }
     private var myRepostEventId: String? {
         guard let me = myPubkey else { return nil }
         return repoBox.counts.reposterEventIds[me]
@@ -1190,30 +1279,27 @@ struct PostCardView: View {
     private var heartAction: some View {
         let displayed = displayReactedEmoji
         let custom = displayReactedCustomEmoji
-        let alreadyReacted = iReactedEmoji != nil
         return Button {
-            if alreadyReacted {
-                showRemoveReactionMenu = true
-            } else {
-                // Pick whichever side of the heart has more usable vertical
-                // space, then size the picker to fit that space so it scrolls
-                // internally instead of getting clipped by the popover. Reserve
-                // small margins for the status bar above and the home indicator
-                // / tab bar below. Frame is read live from the tracker so the
-                // anchor is correct for the heart's current scroll position.
-                let frame = heartFrameTracker.frame
-                let screenHeight = UIScreen.main.bounds.height
-                let topReserve: CGFloat = 60
-                let bottomReserve: CGFloat = 80
-                let popoverChrome: CGFloat = 32
-                let availableBelow = max(0, screenHeight - bottomReserve - frame.maxY - popoverChrome)
-                let availableAbove = max(0, frame.minY - topReserve - popoverChrome)
-                let preferBelow = availableBelow >= availableAbove
-                reactionArrowEdge = preferBelow ? .top : .bottom
-                let chosenSpace = preferBelow ? availableBelow : availableAbove
-                reactionPickerMaxHeight = min(192, max(80, chosenSpace))
-                showReactionPicker = true
-            }
+            // Always open the picker — existing reactions are highlighted in
+            // it and tapping one removes it. Pick whichever side of the heart
+            // has more usable vertical space, then size the picker to fit that
+            // space so it scrolls internally instead of getting clipped by the
+            // popover. Reserve small margins for the status bar above and the
+            // home indicator / tab bar below. Frame is read live from the
+            // tracker so the anchor is correct for the heart's current scroll
+            // position.
+            let frame = heartFrameTracker.frame
+            let screenHeight = UIScreen.main.bounds.height
+            let topReserve: CGFloat = 60
+            let bottomReserve: CGFloat = 80
+            let popoverChrome: CGFloat = 32
+            let availableBelow = max(0, screenHeight - bottomReserve - frame.maxY - popoverChrome)
+            let availableAbove = max(0, frame.minY - topReserve - popoverChrome)
+            let preferBelow = availableBelow >= availableAbove
+            reactionArrowEdge = preferBelow ? .top : .bottom
+            let chosenSpace = preferBelow ? availableBelow : availableAbove
+            reactionPickerMaxHeight = min(192, max(80, chosenSpace))
+            showReactionPicker = true
         } label: {
             if let emoji = displayed {
                 HStack(spacing: 4) {
@@ -1245,7 +1331,7 @@ struct PostCardView: View {
             } else {
                 actionItem(
                     icon: iReactedEmoji != nil ? "heart.fill" : "heart",
-                    count: resolvedReactionCount > 0 ? resolvedReactionCount : nil,
+                    count: resolvedReactionCount,
                     tint: iReactedEmoji != nil ? .pink : nil
                 )
             }
@@ -1265,35 +1351,23 @@ struct PostCardView: View {
                     }
             }
         )
-        .popover(isPresented: $showRemoveReactionMenu) {
-            Button(role: .destructive) {
-                showRemoveReactionMenu = false
-                undoReaction()
-            } label: {
-                HStack {
-                    Spacer()
-                    Label("Remove Reaction", systemImage: "minus.circle")
-                    Spacer()
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(Color.red)
-            .frame(minWidth: 200)
-            .presentationCompactAdaptation(.popover)
-        }
         .popover(isPresented: $showReactionPicker, arrowEdge: reactionArrowEdge) {
             EmojiReactionPicker(
+                reactedKeys: myReactedKeys,
                 onSelect: { picked in
                     showReactionPicker = false
-                    sendReaction(picked)
+                    if myReactedKeys.contains(Self.normalizeReactionKey(picked.frequencyKey)) {
+                        removeReaction(key: picked.frequencyKey)
+                    } else {
+                        sendReaction(picked)
+                    }
                 },
                 onPlus: {
                     showReactionPicker = false
                     if let route = onOpenEmojiLibrary {
                         route { picked in sendReaction(picked) }
+                    } else if let composePresenter {
+                        composePresenter.openEmojiReaction { picked in sendReaction(picked) }
                     } else {
                         activeSheet = .emojiLibrary
                     }
@@ -1385,11 +1459,14 @@ struct PostCardView: View {
         }
     }
 
-    private func undoReaction() {
-        guard let keypair = NostrKey.load(),
-              let me = myPubkey,
-              let reactor = myReactor,
-              let reactionEventId = myReactionEventId else { return }
+    /// Remove the user's reaction matching `key` (a picker key: a unicode char
+    /// or `:shortcode:`). Matches on the normalized key so a ❤️ tap also clears
+    /// a legacy NIP-25 `+` reaction.
+    private func removeReaction(key: String) {
+        guard let keypair = NostrKey.load(), let me = myPubkey else { return }
+        let nk = Self.normalizeReactionKey(key)
+        guard let reactor = myReactors.first(where: { Self.normalizeReactionKey($0.emoji) == nk }),
+              let reactionEventId = reactor.reactionEventId else { return }
         ReactionSender.shared.clearSent(pubkey: me, targetEventId: displayEventId, frequencyKey: reactor.emoji)
         EngagementRepository.shared.undoReaction(eventId: displayEventId, pubkey: me, emoji: reactor.emoji)
         Haptics.shared.blip()
@@ -1474,8 +1551,10 @@ struct PostCardView: View {
     }
 
     private func copyNoteId(_ target: NostrEvent) {
-        guard let bytes = Hex.decode(target.id),
-              let bech = Nip19.noteEncode(eventId: Array(bytes)) else { return }
+        let relays = Array(NoteSourceTracker.shared.relays(for: target.id).prefix(2))
+        guard let idBytes = Hex.decode(target.id) else { return }
+        let authorBytes = Hex.decode(target.pubkey).map { Array($0) }
+        guard let bech = Nip19.neventEncode(eventId32: Array(idBytes), relays: relays, author32: authorBytes) else { return }
         UIPasteboard.general.string = bech
         QuickFollowToast.shared.show("Copied")
     }
@@ -1544,7 +1623,7 @@ struct PostCardView: View {
                 .frame(width: 22, height: 17, alignment: .center)
             if let label, !label.isEmpty {
                 Text(label).font(.caption)
-            } else if let count, count > 0 {
+            } else if let count {
                 Text(formatCount(count)).font(.caption)
             }
         }
@@ -1563,7 +1642,7 @@ struct PostCardView: View {
                 .frame(width: 18, height: 18)
             if let label, !label.isEmpty {
                 Text(label).font(.caption)
-            } else if let count, count > 0 {
+            } else if let count {
                 Text(formatCount(count)).font(.caption)
             }
         }
@@ -1798,7 +1877,6 @@ private struct TopZapperPill: View {
                 if !zapper.message.isEmpty {
                     Text(zapper.message)
                         .font(.caption2)
-                        .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.tail)
                 }
@@ -2231,14 +2309,30 @@ private struct ChipFlowLayout: Layout {
     }
 }
 
+// Module-level, lazily-created once. `DateFormatter()` construction is
+// expensive and these were being rebuilt on every call — i.e. per row, per
+// body evaluation, during scroll. Reused here; both functions are MainActor-
+// isolated (default isolation) so no cross-thread access to the formatters.
+private let postCardMonthDayFormatter: DateFormatter = {
+    let f = DateFormatter()
+    f.dateFormat = "MMM d"
+    return f
+}()
+private let postCardAbsoluteDateFormatter: DateFormatter = {
+    let f = DateFormatter()
+    f.dateFormat = "MMM d, yyyy"
+    return f
+}()
+private let postCardAbsoluteTimeFormatter: DateFormatter = {
+    let f = DateFormatter()
+    f.timeStyle = .short
+    return f
+}()
+
 /// Twitter-style "Mar 5, 2026 · 8:52 PM" — used by ThreadView's focal post.
 func absoluteTimestamp(_ timestamp: Int) -> String {
     let date = Date(timeIntervalSince1970: Double(timestamp))
-    let dateFmt = DateFormatter()
-    dateFmt.dateFormat = "MMM d, yyyy"
-    let timeFmt = DateFormatter()
-    timeFmt.timeStyle = .short
-    return "\(dateFmt.string(from: date)) · \(timeFmt.string(from: date))"
+    return "\(postCardAbsoluteDateFormatter.string(from: date)) · \(postCardAbsoluteTimeFormatter.string(from: date))"
 }
 
 func relativeTime(from timestamp: Int) -> String {
@@ -2247,10 +2341,31 @@ func relativeTime(from timestamp: Int) -> String {
     if seconds < 3600 { return "\(seconds / 60)m" }
     if seconds < 86400 { return "\(seconds / 3600)h" }
     if seconds < 604_800 { return "\(seconds / 86400)d" }
-    if seconds >= 31_536_000 { return "\(seconds / 31_536_000)y" }
-    let formatter = DateFormatter()
-    formatter.dateFormat = "MMM d"
-    return formatter.string(from: Date(timeIntervalSince1970: Double(timestamp)))
+    if seconds >= 31_536_000 { return "\(Int((Double(seconds) / 31_536_000).rounded()))y" }
+    return postCardMonthDayFormatter.string(from: Date(timeIntervalSince1970: Double(timestamp)))
 }
 
 
+
+extension PostCardView: Equatable {
+    /// Lets `.equatable()` skip re-rendering a feed row whose meaningful inputs
+    /// are unchanged. The `LazyVStack` re-invokes the `ForEach` row builder on
+    /// every scroll tick and hands each card freshly-created closures; without
+    /// this gate SwiftUI re-runs every visible row's (2000+ line) body
+    /// repeatedly during scroll. Closures and the `profiles` dictionary are
+    /// intentionally excluded — closures aren't comparable and behave
+    /// identically per row, and per-event engagement still flows through the
+    /// `@Observable EngagementBox`, which invalidates regardless of this `==`.
+    /// (Inline mention names may resolve a beat later; fine for the scroll win.)
+    static func == (lhs: PostCardView, rhs: PostCardView) -> Bool {
+        lhs.event.id == rhs.event.id
+            && lhs.profile == rhs.profile
+            && lhs.engagement == rhs.engagement
+            && lhs.expandOnTap == rhs.expandOnTap
+            && lhs.ancestorCompact == rhs.ancestorCompact
+            && lhs.useAbsoluteTimestamp == rhs.useAbsoluteTimestamp
+            && lhs.forcedReplyCount == rhs.forcedReplyCount
+            && lhs.showReplyContext == rhs.showReplyContext
+            && lhs.isPrivate == rhs.isPrivate
+    }
+}

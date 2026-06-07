@@ -992,6 +992,23 @@ struct ReceiveInvoiceSheet: View {
     @State private var inFlight = false
     @State private var copied = false
     @State private var tab: ReceiveTab = .invoice
+    @State private var showCompose = false
+    @State private var expiryPreset: ExpiryPreset = .oneHour
+    @State private var customExpiryMinutes: String = ""
+
+    enum ExpiryPreset: String, CaseIterable {
+        case oneHour    = "1h"
+        case twentyFourHours = "24h"
+        case custom     = "Custom"
+
+        var seconds: Int64? {
+            switch self {
+            case .oneHour:         return 3600
+            case .twentyFourHours: return 86400
+            case .custom:          return nil
+            }
+        }
+    }
 
     enum ReceiveTab { case invoice, address }
 
@@ -1026,6 +1043,13 @@ struct ReceiveInvoiceSheet: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) { Button("Close", action: dismiss) }
+        }
+        .sheet(isPresented: $showCompose) {
+            if let bolt11 = invoice {
+                NavigationStack {
+                    ComposeView(keypair: store.keypair, initialText: bolt11)
+                }
+            }
         }
     }
 
@@ -1134,9 +1158,22 @@ struct ReceiveInvoiceSheet: View {
             }
             .background(Color.wispSurfaceVariant.opacity(0.4), in: RoundedRectangle(cornerRadius: 14))
 
+            // Post note
+            Button {
+                showCompose = true
+            } label: {
+                Label("Post note", systemImage: "square.and.pencil")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(Color.wispPrimary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(Color.wispSurfaceVariant.opacity(0.3), in: RoundedRectangle(cornerRadius: 14))
+            }
+            .buttonStyle(.plain)
+
             // New invoice
             Button {
-                invoice = nil; amount = ""; description = ""; copied = false
+                invoice = nil; amount = ""; description = ""; copied = false; expiryPreset = .oneHour; customExpiryMinutes = ""
             } label: {
                 Text("New invoice")
                     .font(.subheadline.weight(.medium))
@@ -1187,6 +1224,47 @@ struct ReceiveInvoiceSheet: View {
                     .background(Color.wispSurfaceVariant.opacity(0.4), in: RoundedRectangle(cornerRadius: 14))
             }
 
+            // Expiry
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Expires")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .textCase(.uppercase)
+                    .tracking(0.5)
+
+                HStack(spacing: 8) {
+                    ForEach(ExpiryPreset.allCases, id: \.self) { preset in
+                        Button {
+                            expiryPreset = preset
+                        } label: {
+                            Text(preset.rawValue)
+                                .font(.subheadline.weight(.medium))
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 8)
+                                .background(
+                                    expiryPreset == preset ? Color.wispZapColor : Color.wispSurfaceVariant.opacity(0.5),
+                                    in: Capsule()
+                                )
+                                .foregroundStyle(expiryPreset == preset ? .white : .primary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+
+                if expiryPreset == .custom {
+                    HStack {
+                        TextField("Minutes", text: $customExpiryMinutes)
+                            .keyboardType(.numberPad)
+                            .font(.subheadline)
+                        Text("minutes")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(14)
+                    .background(Color.wispSurfaceVariant.opacity(0.4), in: RoundedRectangle(cornerRadius: 14))
+                }
+            }
+
             if let status {
                 HStack(spacing: 8) {
                     Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.red)
@@ -1218,10 +1296,15 @@ struct ReceiveInvoiceSheet: View {
         }
     }
 
+    private var resolvedExpirySecs: Int64 {
+        if let fixed = expiryPreset.seconds { return fixed }
+        return Int64(customExpiryMinutes) ?? 60
+    }
+
     private func create() async {
         guard let sats = Int64(amount) else { return }
         inFlight = true; defer { inFlight = false }
-        switch await store.makeInvoice(amountSats: sats, description: description) {
+        switch await store.makeInvoice(amountSats: sats, description: description, expirySecs: resolvedExpirySecs) {
         case .success(let inv): invoice = inv
         case .failure(let err): status = err.localizedDescription
         }

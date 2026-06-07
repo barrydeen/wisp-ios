@@ -53,33 +53,35 @@ struct ProfileView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            unifiedHeader
-            // Divider between unifiedHeader and the scroll content was
-            // removed — the back-button / username row should sit
-            // seamlessly above the pinned tab bar (Notes / Replies /
-            // Gallery / Media / Following). The pinned tab bar provides
-            // its own visual separation when the user scrolls.
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                    ProfileHeaderView(
-                        viewModel: viewModel,
-                        isMe: isMe,
-                        isWatchOnly: NostrKey.isWatchOnly(pubkey: activeUserPubkey),
-                        selectedTab: selectedTab,
-                        onEditProfile: { showEditProfile = true },
-                        onProfileTap: onProfileTap,
-                        onNoteTap: onNoteTap,
-                        onHashtagTap: onHashtagTap
-                    )
-                    Section {
-                        tabBody
-                    } header: {
-                        ProfileTabBar(selected: $selectedTab, tabs: visibleTabs)
-                            .background(Color.wispBackground.opacity(0.92))
-                    }
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+                ProfileHeaderView(
+                    viewModel: viewModel,
+                    isMe: isMe,
+                    isWatchOnly: NostrKey.isWatchOnly(pubkey: activeUserPubkey),
+                    onEditProfile: { showEditProfile = true },
+                    onProfileTap: onProfileTap,
+                    onNoteTap: onNoteTap,
+                    onHashtagTap: onHashtagTap
+                )
+                Section {
+                    sortRow
+                    tabBody
+                } header: {
+                    ProfileTabBar(selected: $selectedTab, tabs: visibleTabs)
+                        .background(Color.wispBackground.opacity(0.92))
                 }
             }
+        }
+        // The back-button / username row is attached as a top safe-area inset
+        // rather than stacked above the ScrollView, so the scroll content
+        // (banner photo, notes) slides *underneath* it. That gives the header
+        // the exact same translucent treatment as the pinned tab strip below
+        // it: both composite the same `wispBackground.opacity(0.92)` over the
+        // scrolling photos, so there is no opacity seam between the two bars.
+        // The pinned tab bar still anchors directly below this inset.
+        .safeAreaInset(edge: .top, spacing: 0) {
+            unifiedHeader
         }
         .coordinateSpace(name: "profileScroll")
         .background(Color.wispBackground)
@@ -191,7 +193,45 @@ struct ProfileView: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
-        .background(Color.wispBackground.opacity(0.92))
+        // Extend the translucent fill up through the top safe area so the
+        // status-bar region reads as the same glass, not bare scrolling photos.
+        .background(
+            Color.wispBackground.opacity(0.92)
+                .ignoresSafeArea(edges: .top)
+        )
+    }
+
+    /// Notes/Replies sort control, on its own row directly beneath the pinned
+    /// tab bar (scrolls up under it). Previously sat in the header's stat row,
+    /// where it squished the follow/follower counts; only the sortable tabs
+    /// surface it, every other tab collapses this to nothing.
+    @ViewBuilder
+    private var sortRow: some View {
+        switch selectedTab {
+        case .notes:
+            sortRowBar(selection: viewModel.notesSortMode) { mode in
+                Task { await viewModel.setNotesSortMode(mode) }
+            }
+        case .replies:
+            sortRowBar(selection: viewModel.repliesSortMode) { mode in
+                Task { await viewModel.setRepliesSortMode(mode) }
+            }
+        default:
+            EmptyView()
+        }
+    }
+
+    private func sortRowBar(
+        selection: ProfileSortMode,
+        onSelect: @escaping (ProfileSortMode) -> Void
+    ) -> some View {
+        HStack {
+            Spacer(minLength: 0)
+            ProfileSortPicker(selection: selection, onSelect: onSelect)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
     }
 
     @ViewBuilder
@@ -288,7 +328,6 @@ private struct ProfileHeaderView: View {
     @Bindable var viewModel: ProfileViewModel
     var isMe: Bool = false
     var isWatchOnly: Bool = false
-    var selectedTab: ProfileTab = .notes
     var onEditProfile: () -> Void = {}
     var onProfileTap: ((String) -> Void)? = nil
     var onNoteTap: ((String) -> Void)? = nil
@@ -363,29 +402,28 @@ private struct ProfileHeaderView: View {
                     .buttonStyle(.plain)
                     .offset(y: -28)
                 } else if !isMe && !isWatchOnly {
-                    VStack(alignment: .trailing, spacing: 4) {
-                        actionButtons
-                        if viewModel.followsYou {
-                            Text("Follows you")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .offset(y: -28)
+                    actionButtons
+                        .offset(y: -28)
                 }
             }
             .padding(.horizontal, 16)
             .padding(.bottom, -16)
 
             VStack(alignment: .leading, spacing: 6) {
-                EmojiText(
-                    viewModel.profile?.displayString ?? shortKey(viewModel.pubkey),
-                    emojiMap: viewModel.profile?.emojiMap ?? [:],
-                    textStyle: .title3,
-                    weight: .bold,
-                    color: .label,
-                    lineLimit: 1
-                )
+                HStack(spacing: 8) {
+                    EmojiText(
+                        viewModel.profile?.displayString ?? shortKey(viewModel.pubkey),
+                        emojiMap: viewModel.profile?.emojiMap ?? [:],
+                        textStyle: .title3,
+                        weight: .bold,
+                        color: .label,
+                        lineLimit: 1
+                    )
+                    if viewModel.followsYou {
+                        followsYouBadge
+                    }
+                    Spacer(minLength: 0)
+                }
 
                 if let nip = viewModel.profile?.nip05, !nip.isEmpty {
                     HStack(spacing: 4) {
@@ -444,6 +482,23 @@ private struct ProfileHeaderView: View {
                 )
             }
         }
+    }
+
+    /// Small pill shown beside the display name when this profile's contact
+    /// list p-tags the active user — i.e. they follow you. `fixedSize` keeps it
+    /// intact so a long name truncates around it rather than squeezing it out.
+    private var followsYouBadge: some View {
+        HStack(spacing: 3) {
+            Image(systemName: "person.fill.checkmark")
+                .font(.system(size: 9, weight: .semibold))
+            Text("Follows you")
+                .font(.caption2.weight(.medium))
+        }
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(Color.wispSurfaceVariant, in: Capsule())
+        .fixedSize()
     }
 
     @ViewBuilder
@@ -556,34 +611,7 @@ private struct ProfileHeaderView: View {
                     ? "∞"
                     : formatCount(viewModel.followersCount)
             )
-            Spacer(minLength: 12)
-            sortPicker
-        }
-    }
-
-    /// The notes/replies sort control lives here, right-aligned next to the
-    /// follow counts, instead of in its own full-width row below the pinned
-    /// tab bar — collapsing two rows into one saves a band of vertical space.
-    /// Only the sortable tabs surface it; everything else leaves the slot empty.
-    @ViewBuilder
-    private var sortPicker: some View {
-        switch selectedTab {
-        case .notes:
-            ProfileSortPicker(
-                selection: viewModel.notesSortMode,
-                onSelect: { mode in
-                    Task { await viewModel.setNotesSortMode(mode) }
-                }
-            )
-        case .replies:
-            ProfileSortPicker(
-                selection: viewModel.repliesSortMode,
-                onSelect: { mode in
-                    Task { await viewModel.setRepliesSortMode(mode) }
-                }
-            )
-        default:
-            EmptyView()
+            Spacer(minLength: 0)
         }
     }
 

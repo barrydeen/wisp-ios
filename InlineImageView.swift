@@ -413,6 +413,8 @@ struct FullScreenImageView: View {
         } else {
             RetryingAsyncImage(
                 url: URL(string: url),
+                // Full-screen zoom: keep native resolution so pinch-zoom stays crisp.
+                maxPixelSize: nil,
                 content: { image in
                     image.resizable().scaledToFit()
                 },

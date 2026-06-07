@@ -39,9 +39,16 @@ enum PrivateInteractionRouter {
 
     private static func handlePrivateReaction(rumor: Rumor, relayUrl: String, keypair: Keypair) async {
         // The `k` tag disambiguates reactions targeting kind-1 private replies
-        // (k=1) from reactions on kind-14 DM messages (k=14). Anything else
-        // drops silently — we only handle private replies in this phase.
+        // (k=1) from reactions on kind-14 DM messages (k=14).
         let kTag = rumor.tags.first { $0.count >= 2 && $0[0] == "k" }?[1]
+
+        // Reactions on DM chat messages attach to the conversation thread.
+        if kTag == "14" {
+            handleDmReaction(rumor: rumor, keypair: keypair)
+            return
+        }
+
+        // Otherwise only kind-1 private-reply reactions are handled below.
         guard kTag == "1" else { return }
 
         // Resolve the reaction target — the last `e` tag per NIP-25.
@@ -101,6 +108,41 @@ enum PrivateInteractionRouter {
         }
 
         MissingProfileWatcher.shared.observe(synthetic)
+    }
+
+    // MARK: - DM message reactions (kind-7, k=14)
+
+    private static func handleDmReaction(rumor: Rumor, keypair: Keypair) {
+        // Block-list only — DM reactions are addressed to specific recipients (like DMs),
+        // so they bypass WoT/word/thread mutes the same way kind-14 messages do.
+        if SafetyFilter.shared.snapshot.blockedPubkeys.contains(rumor.pubkey) { return }
+
+        // Target message is the last `e` tag (NIP-25).
+        guard let eTag = rumor.tags.last(where: { $0.count >= 2 && $0[0] == "e" }), eTag.count >= 2 else { return }
+        let targetRumorId = eTag[1]
+
+        // Resolve a custom-emoji URL when the content is a `:shortcode:`.
+        var customEmojiUrl: String? = nil
+        let content = rumor.content
+        if content.hasPrefix(":"), content.hasSuffix(":") {
+            let shortcode = String(content.dropFirst().dropLast())
+            if let tag = rumor.tags.first(where: { $0.count >= 3 && $0[0] == "emoji" && $0[1] == shortcode }) {
+                customEmojiUrl = tag[2]
+            }
+        }
+
+        // The reaction rumor only carries the target author's p-tag, so this conversation
+        // key is a best-effort hint; `DmRepository.addReaction` resolves the real thread
+        // via the rumor-id index (and buffers if the target hasn't arrived yet).
+        let participants = Nip17.getConversationParticipants(rumor: rumor, myPubkey: keypair.pubkey)
+        let convKey = DmRepository.conversationKey(participants: participants + [keypair.pubkey])
+        let reaction = DmReaction(
+            authorPubkey: rumor.pubkey,
+            emoji: content,
+            timestamp: rumor.createdAt,
+            emojiUrl: customEmojiUrl
+        )
+        DmRepository.shared.addReaction(conversationKey: convKey, targetRumorId: targetRumorId, reaction: reaction)
     }
 
     // MARK: - Private replies

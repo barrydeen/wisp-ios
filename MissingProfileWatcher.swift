@@ -30,6 +30,13 @@ final class MissingProfileWatcher {
     @ObservationIgnored private var sweepTask: Task<Void, Never>?
     @ObservationIgnored private var continuations: [UUID: AsyncStream<String>.Continuation] = [:]
     @ObservationIgnored private var sources: [UUID: @MainActor () -> [NostrEvent]] = [:]
+    /// Event ids already walked by a prior `sweep()`. The sweep exists only to
+    /// catch events that raced the ingest observer (ObjectBox seeds, render-time
+    /// `nostr:npub` mentions); once an event has been swept there is nothing new
+    /// to learn from re-walking it. Skipping them keeps each 120 s sweep
+    /// proportional to genuinely-new events instead of re-walking the whole
+    /// ~800-event window every time. Reset on account switch.
+    @ObservationIgnored private var sweptIds: Set<String> = []
     @ObservationIgnored private var activePubkey: String?
 
     private static let maxAttempts = 5
@@ -73,6 +80,7 @@ final class MissingProfileWatcher {
         attempts.removeAll(keepingCapacity: true)
         exhausted.removeAll(keepingCapacity: true)
         exhaustedAt.removeAll(keepingCapacity: true)
+        sweptIds.removeAll(keepingCapacity: true)
     }
 
     // MARK: - Ingest
@@ -163,12 +171,18 @@ final class MissingProfileWatcher {
     /// ingest.
     func sweep() {
         guard !sources.isEmpty else { return }
-        var collected: [NostrEvent] = []
+        var fresh: [NostrEvent] = []
         for source in sources.values {
-            collected.append(contentsOf: source())
+            for event in source() where sweptIds.insert(event.id).inserted {
+                fresh.append(event)
+            }
         }
-        if !collected.isEmpty {
-            observe(collected)
+        // Guard against unbounded growth across a long session of feed/profile
+        // navigation; a reset just makes the next sweep re-walk once (now cheap,
+        // since `referencedAuthorPubkeys` is cached by id).
+        if sweptIds.count > 20_000 { sweptIds.removeAll(keepingCapacity: true) }
+        if !fresh.isEmpty {
+            observe(fresh)
         }
     }
 
@@ -251,6 +265,25 @@ final class MissingProfileWatcher {
 // MARK: - NostrEvent.referencedAuthorPubkeys
 
 extension NostrEvent {
+    /// Boxed cache value (NSCache requires reference types).
+    private final class AuthorPubkeysBox {
+        let pubkeys: [String]
+        init(_ pubkeys: [String]) { self.pubkeys = pubkeys }
+    }
+    /// Bounded id-keyed cache of `referencedAuthorPubkeys`. Events are immutable
+    /// (id = content hash), so the derived author set never changes for a given
+    /// id. This caches BOTH `ContentParser` regex passes (outer + kind-6 inner)
+    /// AND the kind-6 JSON decode in one entry — work that was otherwise re-run
+    /// uncached on every access: per-event in the feed's profile hydrate, in
+    /// `MissingProfileWatcher.observe`, in the in-session block sweep, in thread
+    /// rebuilds, and worst of all on every 120 s `sweep()` over the whole
+    /// ~800-event feed window. Mirrors `FeedViewModel.repostRefCache`.
+    private static let referencedAuthorPubkeysCache: NSCache<NSString, AuthorPubkeysBox> = {
+        let cache = NSCache<NSString, AuthorPubkeysBox>()
+        cache.countLimit = 4_000
+        return cache
+    }()
+
     /// Every pubkey whose kind-0 profile is needed to render this event: the
     /// outer author, the inner-repost author (kind 6), and any
     /// `nostr:npub` / `nostr:nprofile` mentions in the content (or in the
@@ -258,7 +291,18 @@ extension NostrEvent {
     ///
     /// Lifted from `FeedViewModel` so the missing-profile watcher can reuse
     /// the same author-resolution logic without depending on FeedViewModel.
+    /// Memoized per event id (see `referencedAuthorPubkeysCache`).
     var referencedAuthorPubkeys: [String] {
+        let key = id as NSString
+        if let box = Self.referencedAuthorPubkeysCache.object(forKey: key) {
+            return box.pubkeys
+        }
+        let computed = computeReferencedAuthorPubkeys()
+        Self.referencedAuthorPubkeysCache.setObject(AuthorPubkeysBox(computed), forKey: key)
+        return computed
+    }
+
+    private func computeReferencedAuthorPubkeys() -> [String] {
         var result: Set<String> = [pubkey]
         if let inner = repostInnerPubkey {
             result.insert(inner)

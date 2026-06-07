@@ -39,6 +39,10 @@ final class RelaySettingsRepository {
     /// `DEFAULT_INDEXER_RELAYS` so cross-client visibility matches.
     static let indexerRelays = RelayDefaults.onboarding
 
+    /// DM inbox relay auto-seeded for an account that has no published kind-10050, so DMs are
+    /// deliverable. Same value `SignUpViewModel` seeds for brand-new accounts.
+    static let defaultDmRelay = "wss://auth.nostr1.com"
+
     // MARK: - Lifecycle
 
     /// Idempotent — returns immediately once UserDefaults hydration has run for this pubkey.
@@ -92,7 +96,63 @@ final class RelaySettingsRepository {
             default: break
             }
         }
+
+        await ensureDmRelayList(keypair: keypair)
     }
+
+    /// After `bootstrap` (a thorough fetch of the user's own lists), guarantee the account has
+    /// a kind-10050 DM relay list so DMs are deliverable: on a *connectivity-confirmed* absence,
+    /// create one with `auth.nostr1.com` as the sole DM relay and broadcast it.
+    ///
+    /// Two safeguards make this non-destructive:
+    ///  - Runs at most ONCE per account (UserDefaults flag), so we never re-seed a list the user
+    ///    later empties on purpose, and never auto-seed an account that already has one.
+    ///  - Only acts when at least one relay actually answered the query (`relaysResponded > 0`).
+    ///    A blind seed on an offline launch would publish a fresh single-relay kind-10050 that,
+    ///    by `createdAt`, supersedes a real list we merely failed to fetch — silent data loss.
+    func ensureDmRelayList(keypair: Keypair) async {
+        // Watch-only accounts can't sign/broadcast a kind-10050 — don't seed local state we
+        // could never publish.
+        guard !keypair.isWatchOnly else { return }
+        let pubkey = keypair.pubkey
+        let flagKey = dmAutoSeedKey(pubkey)
+        guard !UserDefaults.standard.bool(forKey: flagKey) else { return }
+
+        // bootstrap already found a DM list (or one was cached): settle this account, never seed.
+        if !dmRelays.isEmpty {
+            UserDefaults.standard.set(true, forKey: flagKey)
+            return
+        }
+
+        // No list yet — confirm a genuine absence against a broad relay set first.
+        let relays = Array(Set(
+            topWriteRelays(pubkey: pubkey)
+            + Self.indexerRelays
+            + generalRelays.map(\.url)
+            + [Self.defaultDmRelay]
+        ))
+        let result = await RelayPool.queryDetailed(
+            relays: relays,
+            filter: NostrFilter(kinds: [Nip51Lists.kindDmRelays], authors: [pubkey], limit: 1),
+            timeout: 6,
+            waitForAllRelays: true
+        )
+        for event in result.events where event.kind == Nip51Lists.kindDmRelays {
+            ingestDmEvent(event, persist: true)
+        }
+
+        // Nobody answered → can't distinguish "no list" from "offline"; retry next launch.
+        guard result.relaysResponded > 0 else { return }
+        UserDefaults.standard.set(true, forKey: flagKey)
+
+        if dmRelays.isEmpty {
+            // addDmRelay appends + persists + publishes kind-10050 (to write relays, indexers,
+            // and the DM relays themselves) via Task.detached.
+            addDmRelay(Self.defaultDmRelay, keypair: keypair)
+        }
+    }
+
+    private func dmAutoSeedKey(_ pubkey: String) -> String { "relay_settings_dm_autoseed_\(pubkey)" }
 
     // MARK: - General relays (kind 10002)
 
@@ -327,7 +387,7 @@ final class RelaySettingsRepository {
 
     private func publishGeneral(keypair: Keypair) {
         guard let privkey = Hex.decode(keypair.privkey) else { return }
-        let now = Int(Date().timeIntervalSince1970)
+        let now = NostrClock.now()
         generalUpdatedAt = max(generalUpdatedAt + 1, now)
         let tags = Nip51Lists.buildGeneralRelayTags(generalRelays)
         publish(kind: Nip51Lists.kindRelayList, tags: tags,
@@ -337,7 +397,7 @@ final class RelaySettingsRepository {
 
     private func publishDm(keypair: Keypair) {
         guard let privkey = Hex.decode(keypair.privkey) else { return }
-        let now = Int(Date().timeIntervalSince1970)
+        let now = NostrClock.now()
         dmUpdatedAt = max(dmUpdatedAt + 1, now)
         let tags = Nip51Lists.buildRelaySetListTags(dmRelays)
         // Also send the announcement to the DM relays themselves, so peers querying any of
@@ -350,7 +410,7 @@ final class RelaySettingsRepository {
 
     private func publishSearch(keypair: Keypair) {
         guard let privkey = Hex.decode(keypair.privkey) else { return }
-        let now = Int(Date().timeIntervalSince1970)
+        let now = NostrClock.now()
         searchUpdatedAt = max(searchUpdatedAt + 1, now)
         let tags = Nip51Lists.buildRelaySetListTags(searchRelays)
         publish(kind: Nip51Lists.kindSearchRelays, tags: tags,
@@ -360,7 +420,7 @@ final class RelaySettingsRepository {
 
     private func publishBlocked(keypair: Keypair) {
         guard let privkey = Hex.decode(keypair.privkey) else { return }
-        let now = Int(Date().timeIntervalSince1970)
+        let now = NostrClock.now()
         blockedUpdatedAt = max(blockedUpdatedAt + 1, now)
         let tags = Nip51Lists.buildRelaySetListTags(blockedRelays)
         publish(kind: Nip51Lists.kindBlockedRelays, tags: tags,

@@ -4,31 +4,14 @@ struct ThreadView: View {
     @State private var viewModel: ThreadViewModel
     @State private var showError: Bool = false
     @State private var showHiddenSpam: Bool = false
+    /// Focal reply bar at the bottom of the thread. This composer is presented
+    /// from ThreadView's own root (a sibling of the `LazyVStack`, not a row
+    /// inside it), so it's already stable. Per-card reply / quote / emoji-react
+    /// instead route through the app-level `ComposePresenter` in the
+    /// environment (injected at `MainView`'s root).
     @State private var showReplyCompose: Bool = false
-    @State private var didScrollToFocal: Bool = false
     @State private var suppressNextDisappearChainRemoval: Bool = false
-    /// Hosts keyboard-using sheets (emoji library, reply / quote composer)
-    /// at the ThreadView level — outside the `LazyVStack` — so their
-    /// presentation isn't recycled when the keyboard shrinks the visible
-    /// area and a focal / ancestor / reply row gets re-windowed by the
-    /// lazy stack. Tap-time state captures the target event so any row's
-    /// action bar can route through a single shared sheet anchor.
-    @State private var showEmojiLibrary: Bool = false
-    @State private var emojiPickCallback: ((PickedEmoji) -> Void)?
-    @State private var pendingReplyTarget: PendingReplyTarget?
-    @State private var pendingQuoteTarget: PendingQuoteTarget?
     @Environment(\.dismiss) private var dismiss
-
-    private struct PendingReplyTarget: Identifiable {
-        let parent: NostrEvent
-        let root: NostrEvent?
-        var id: String { parent.id }
-    }
-
-    private struct PendingQuoteTarget: Identifiable {
-        let event: NostrEvent
-        var id: String { event.id }
-    }
 
     /// The active tab's NavigationStack path. Mutated directly by smart-pop so a
     /// tap on an ancestor that's already in the back stack pops to it instead of
@@ -82,7 +65,11 @@ struct ThreadView: View {
                         if let focal = viewModel.focal {
                             focalRow(focal)
                                 .id(focal.id)
-                        } else if viewModel.isLoading {
+                        } else if viewModel.isLoading && viewModel.nestedReplies.isEmpty {
+                            // On a cold deep-link the focal (now the conversation
+                            // root) may not be cached yet; don't float a spinner
+                            // above an already-populated tree — the tapped note
+                            // already renders (and highlights) as a row below.
                             loadingHeader
                         }
 
@@ -107,14 +94,22 @@ struct ThreadView: View {
                     }
                 }
                 .refreshable { await viewModel.refresh() }
-                .onChange(of: viewModel.focal?.id) { _, _ in scrollToFocalIfNeeded(proxy: proxy) }
-                .onChange(of: viewModel.ancestors.count) { _, _ in scrollToFocalIfNeeded(proxy: proxy) }
                 .onChange(of: viewModel.scrollTargetId) { _, targetId in
                     guard let targetId else { return }
                     withAnimation(.easeInOut(duration: 0.3)) {
                         proxy.scrollTo(targetId, anchor: .center)
                     }
                     viewModel.scrollTargetId = nil
+                }
+                .onChange(of: viewModel.highlightId) { _, newId in
+                    guard let newId else { return }
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(1500))
+                        // Same-id guard: don't let an old timer clear a newer flash.
+                        if viewModel.highlightId == newId {
+                            withAnimation(.easeOut(duration: 0.4)) { viewModel.highlightId = nil }
+                        }
+                    }
                 }
                 // Stable thread layout while sheets presented from a
                 // PostCardView row raise the keyboard — see
@@ -162,42 +157,15 @@ struct ThreadView: View {
             Button("OK") { viewModel.errorMessage = nil }
         } message: { msg in Text(msg) }
         .sheet(isPresented: $showReplyCompose) {
-            if let focalEvent = viewModel.focal?.event {
+            // Reply to the note the user opened the thread on, not the re-rooted
+            // focal (which is now the conversation root).
+            if let parent = viewModel.composerDefaultParent ?? viewModel.focal?.event {
                 ComposeView(
                     keypair: viewModel.keypair,
-                    mode: .reply(parent: focalEvent, root: viewModel.rootEvent)
+                    mode: .reply(parent: parent, root: viewModel.rootEvent)
                 )
             }
         }
-        .sheet(isPresented: $showEmojiLibrary) {
-            EmojiLibrarySheet(mode: .pickForReaction { picked in
-                emojiPickCallback?(picked)
-                emojiPickCallback = nil
-                showEmojiLibrary = false
-            })
-        }
-        .sheet(item: $pendingReplyTarget) { target in
-            ComposeView(
-                keypair: viewModel.keypair,
-                mode: .reply(parent: target.parent, root: target.root)
-            )
-        }
-        .sheet(item: $pendingQuoteTarget) { target in
-            ComposeView(keypair: viewModel.keypair, mode: .quote(target.event))
-        }
-    }
-
-    private func openEmojiLibrary(callback: @escaping (PickedEmoji) -> Void) {
-        emojiPickCallback = callback
-        showEmojiLibrary = true
-    }
-
-    private func openReplyCompose(parent: NostrEvent, root: NostrEvent?) {
-        pendingReplyTarget = PendingReplyTarget(parent: parent, root: root)
-    }
-
-    private func openQuoteCompose(event: NostrEvent) {
-        pendingQuoteTarget = PendingQuoteTarget(event: event)
     }
 
     // MARK: - Subviews
@@ -284,6 +252,8 @@ struct ThreadView: View {
     private func ancestorRow(_ row: ThreadRow) -> some View {
         if row.isBlocked {
             blockedPlaceholder
+        } else if row.isWotHidden {
+            wotHiddenPlaceholder
         } else {
             // See `replyRow` for the rationale on `.onTapGesture` vs a
             // wrapping `Button` — same nested-button hit-test issue on
@@ -301,14 +271,21 @@ struct ThreadView: View {
                 onNoteTap: { quotedId in
                     navigateToThread(eventId: quotedId, authorPubkey: row.event.pubkey)
                 },
-                onHashtagTap: { _ in },
-                onOpenEmojiLibrary: openEmojiLibrary,
-                onOpenReplyCompose: openReplyCompose,
-                onOpenQuoteCompose: openQuoteCompose
+                onHashtagTap: { _ in }
             )
+            // Gate row re-renders: the thread's `engagement` dict mutates per
+            // inbound reaction/zap/reply, which re-evaluates ThreadView.body.
+            // Without `==`, every visible row re-ran its full body each tick.
+            // PostCardView's `==` re-renders only the row whose engagement /
+            // profile actually changed — same as the feed.
+            .equatable()
             .contentShape(Rectangle())
+            // Ancestors are empty after re-root (focal == root), so this is
+            // effectively unreachable; kept consistent with reply rows —
+            // scroll in place rather than push.
             .onTapGesture {
-                navigateToThread(eventId: row.event.id, authorPubkey: row.event.pubkey)
+                viewModel.scrollTargetId = row.event.id
+                viewModel.highlightId = row.event.id
             }
         }
     }
@@ -319,6 +296,8 @@ struct ThreadView: View {
             Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
             if row.isBlocked {
                 blockedPlaceholder
+            } else if row.isWotHidden {
+                wotHiddenPlaceholder
             } else {
                 PostCardView(
                     event: row.event,
@@ -333,11 +312,9 @@ struct ThreadView: View {
                     onNoteTap: { quotedId in
                         navigateToThread(eventId: quotedId, authorPubkey: row.event.pubkey)
                     },
-                    onHashtagTap: { tag in push(HashtagFeedRoute(tag: tag)) },
-                    onOpenEmojiLibrary: openEmojiLibrary,
-                    onOpenReplyCompose: openReplyCompose,
-                    onOpenQuoteCompose: openQuoteCompose
+                    onHashtagTap: { tag in push(HashtagFeedRoute(tag: tag)) }
                 )
+                .equatable()
             }
             Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
         }
@@ -365,6 +342,13 @@ struct ThreadView: View {
             replyRow(item.row)
                 .padding(.leading, indentationWidth(for: item.depth))
         }
+        // Brief highlight of the note the user came from (or an in-place tap
+        // target). Applied on the row CONTAINER — outside the `.equatable()`
+        // PostCardView — so PostCardView's `==` re-render gate is untouched.
+        // The animation value MUST be the per-row Bool, not the optional, or
+        // every visible row would animate on any highlight change.
+        .background(viewModel.highlightId == item.row.id ? Color.wispPrimary.opacity(0.14) : Color.clear)
+        .animation(.easeInOut(duration: 0.3), value: viewModel.highlightId == item.row.id)
     }
 
     /// Per-level indent. Smaller step + cap of 5 keeps deep chains readable
@@ -377,6 +361,11 @@ struct ThreadView: View {
     private func replyRow(_ row: ThreadRow) -> some View {
         if row.isBlocked {
             blockedPlaceholder
+        } else if row.isWotHidden {
+            // Replies normally drop outright before reaching a row; this only
+            // renders if a WoT-hidden id slips into a slice (belt-and-
+            // suspenders — never show the content either way).
+            wotHiddenPlaceholder
         } else {
             // The whole card is the tap target — tapping pushes a new
             // ThreadView with this reply as its focal. Use
@@ -402,21 +391,26 @@ struct ThreadView: View {
                 onNoteTap: { quotedId in
                     navigateToThread(eventId: quotedId, authorPubkey: row.event.pubkey)
                 },
-                onHashtagTap: { tag in push(HashtagFeedRoute(tag: tag)) },
-                onOpenEmojiLibrary: openEmojiLibrary,
-                onOpenReplyCompose: openReplyCompose,
-                onOpenQuoteCompose: openQuoteCompose
+                onHashtagTap: { tag in push(HashtagFeedRoute(tag: tag)) }
             )
+            .equatable()
             .contentShape(Rectangle())
+            // Tap a reply row to scroll to it in place + flash it — the whole
+            // conversation is already on screen, so we never push a sub-thread.
+            // (Embedded quoted-note taps above still push: different conversation.)
             .onTapGesture {
-                navigateToThread(eventId: row.event.id, authorPubkey: row.event.pubkey)
+                viewModel.scrollTargetId = row.event.id
+                viewModel.highlightId = row.event.id
             }
         }
     }
 
-    /// Smart-nav: if the tapped event is already on the back stack, pop back
-    /// to it (skipping every level above) instead of pushing a duplicate
-    /// ThreadView. Tapping the current focal is a no-op. Otherwise push.
+    /// Smart-nav for opening a DIFFERENT conversation (an embedded quoted note).
+    /// Reply/ancestor ROW taps no longer call this — they scroll in place — so
+    /// this is now reached only from quoted-note `onNoteTap` closures.
+    /// If the tapped event is already on the back stack, pop back to it (skipping
+    /// every level above) instead of pushing a duplicate ThreadView. Tapping the
+    /// current focal is a no-op. Otherwise push.
     private func navigateToThread(eventId: String, authorPubkey: String) {
         if eventId == viewModel.seedEventId { return }
         if let idx = chain.firstIndex(of: eventId), idx < chain.count - 1 {
@@ -493,6 +487,26 @@ struct ThreadView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    /// Structural stand-in for a root/focal/ancestor the Web-of-Trust filter
+    /// hides. Deliberately renders NOTHING from the event — no content, no
+    /// author, no media, and no reveal affordance — the filter gates
+    /// potentially graphic content, so the placeholder only preserves the
+    /// thread's shape.
+    private var wotHiddenPlaceholder: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "eye.slash")
+                .font(.system(size: 13))
+                .foregroundStyle(.tertiary)
+            Text("Hidden by Web of Trust filter")
+                .font(.subheadline)
+                .foregroundStyle(.tertiary)
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     private var searchingAncestorRow: some View {
         HStack(spacing: 10) {
             ProgressView()
@@ -537,27 +551,6 @@ struct ThreadView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// Scroll the focal post to the top once both it and its ancestors have resolved.
-    /// Fires once per ThreadView lifetime so the user can scroll up freely afterward.
-    private func scrollToFocalIfNeeded(proxy: ScrollViewProxy) {
-        guard !didScrollToFocal else { return }
-        guard let focalId = viewModel.focal?.id else { return }
-        // No ancestors yet AND the focal is the root → nothing to scroll past, mark done.
-        if viewModel.ancestors.isEmpty && viewModel.rootId == focalId {
-            didScrollToFocal = true
-            return
-        }
-        // Otherwise wait for at least one ancestor to render before scrolling, so the
-        // focal lands at the top instead of in the middle of an empty view.
-        guard !viewModel.ancestors.isEmpty else { return }
-        didScrollToFocal = true
-        DispatchQueue.main.async {
-            withAnimation(.easeInOut(duration: 0.25)) {
-                proxy.scrollTo(focalId, anchor: .top)
-            }
-        }
-    }
-
     private var composer: some View {
         VStack(spacing: 0) {
             Divider().overlay(Color.wispSurfaceVariant.opacity(0.5))
@@ -576,7 +569,7 @@ struct ThreadView: View {
                 .background(Color.wispSurfaceVariant.opacity(0.5), in: RoundedRectangle(cornerRadius: 18))
             }
             .buttonStyle(.plain)
-            .disabled(viewModel.focal == nil)
+            .disabled(viewModel.composerDefaultParent == nil)
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
         }

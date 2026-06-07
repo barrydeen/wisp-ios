@@ -101,7 +101,13 @@ enum ContentParser {
         content: String,
         tags: [[String]],
         emojiMap: [String: String] = [:],
-        trimBlankLines: Bool = true
+        trimBlankLines: Bool = true,
+        // Surfaces that render `.link` segments as inline text (bio, quoted
+        // notes, drafts, group chat — anything passing `showLinkPreviews:
+        // false` to RichContentView) need pass 4 to treat `.link` like other
+        // inline neighbors. Otherwise a lone `"\n"` text between two `.link`s
+        // gets zeroed out and the folded inline links collide into one line.
+        linksAreInline: Bool = false
     ) -> [ContentSegment] {
         let imetaMap = parseImetaTags(tags)
         // Preserve imeta tag order so gallery posts (kind 20/21/22) display
@@ -118,7 +124,8 @@ enum ContentParser {
             emojiMap: emojiMap,
             imetaMap: imetaMap,
             imetaUrlOrder: imetaUrlOrder,
-            trimBlankLines: trimBlankLines
+            trimBlankLines: trimBlankLines,
+            linksAreInline: linksAreInline
         )
     }
 
@@ -127,7 +134,8 @@ enum ContentParser {
         emojiMap: [String: String] = [:],
         imetaMap: [String: MediaMeta] = [:],
         imetaUrlOrder: [String] = [],
-        trimBlankLines: Bool = true
+        trimBlankLines: Bool = true,
+        linksAreInline: Bool = false
     ) -> [ContentSegment] {
         var segments: [ContentSegment] = []
         let nsContent = content as NSString
@@ -230,6 +238,7 @@ enum ContentParser {
                 // or after a paragraph break, keeps the line break the user
                 // typed.
                 case .text, .inlineLink, .customEmoji, .hashtag, .nostrProfile: isBlock = false
+                case .link: isBlock = !linksAreInline
                 default: isBlock = true
                 }
                 if isBlock, case .text(let text) = segments[i] {

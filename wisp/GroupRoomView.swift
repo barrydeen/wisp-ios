@@ -115,21 +115,27 @@ struct GroupRoomView: View {
     }
 
     private var composer: some View {
-        HStack(spacing: 8) {
-            TextField("Message", text: $viewModel.messageText, axis: .vertical)
-                .textFieldStyle(.plain)
-                .padding(10)
-                .background(Color.wispSurfaceVariant, in: RoundedRectangle(cornerRadius: 18))
-                .lineLimit(1...5)
-            Button {
-                Task { await viewModel.sendMessage() }
-            } label: {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.system(size: 30))
-                    .foregroundStyle(viewModel.messageText.trimmingCharacters(in: .whitespaces).isEmpty
-                                     ? Color.gray : Color.wispPrimary)
+        VStack(spacing: 6) {
+            if !viewModel.emojiCandidates.isEmpty {
+                EmojiSuggestionBar(candidates: viewModel.emojiCandidates) { emoji in
+                    viewModel.selectEmoji(emoji)
+                }
             }
-            .disabled(viewModel.messageText.trimmingCharacters(in: .whitespaces).isEmpty || viewModel.isSending)
+            HStack(spacing: 8) {
+                EmojiComposerTextView(viewModel: viewModel, placeholder: "Message")
+                    .padding(.horizontal, 8)
+                    .frame(maxWidth: .infinity)
+                    .background(Color.wispSurfaceVariant, in: RoundedRectangle(cornerRadius: 18))
+                Button {
+                    Task { await viewModel.sendMessage() }
+                } label: {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.system(size: 30))
+                        .foregroundStyle(viewModel.messageText.trimmingCharacters(in: .whitespaces).isEmpty
+                                         ? Color.gray : Color.wispPrimary)
+                }
+                .disabled(viewModel.messageText.trimmingCharacters(in: .whitespaces).isEmpty || viewModel.isSending)
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -173,6 +179,13 @@ private struct GroupMessageBubble: View {
                 }
 
                 bubbleBody
+                    // Force the text to take all the vertical space it needs and
+                    // wrap, instead of SwiftUI intermittently laying it out as a
+                    // single tail-truncated ("…") line next to the row's Spacer.
+                    // The maxWidth:.infinity on the row gives it width; this gives
+                    // it height. Both are needed — width alone fixed most but not
+                    // all messages.
+                    .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                     .background(isMine ? Color.wispPrimary : Color.wispSurfaceVariant,
@@ -193,6 +206,10 @@ private struct GroupMessageBubble: View {
             if !isMine { Spacer(minLength: 40) }
         }
         .padding(.horizontal, 12)
+        // Give the row a definite full width so the bubble's text view receives
+        // a finite width proposal and wraps instead of clipping to one line —
+        // mirrors DmMessageBubbleView. Without this, long group messages truncate.
+        .frame(maxWidth: .infinity, alignment: isMine ? .trailing : .leading)
         .task(id: message.senderPubkey) {
             profile = ProfileRepository.shared.get(message.senderPubkey)
         }

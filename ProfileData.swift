@@ -1,6 +1,6 @@
 import Foundation
 
-struct ProfileData {
+struct ProfileData: Equatable {
     let pubkey: String
     var name: String?
     var displayName: String?

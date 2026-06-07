@@ -115,7 +115,7 @@ final class ComposeViewModel {
 
     // MARK: - Init
 
-    init(keypair: Keypair, mode: ComposeMode = .new) {
+    init(keypair: Keypair, mode: ComposeMode = .new, initialText: String = "") {
         self.keypair = keypair
         self.signingKeypair = keypair
         self.mode = mode
@@ -133,6 +133,7 @@ final class ComposeViewModel {
         // spliced at publish time, and reply context still lives in tags — only
         // the editor body is restored.
         loadLocalAutosave()
+        if !initialText.isEmpty { content = initialText }
     }
 
     // MARK: - Local autosave (instant restore on reopen)
@@ -518,14 +519,7 @@ final class ComposeViewModel {
 
     func selectEmoji(_ emoji: CustomEmoji) {
         guard let startOffset = emojiStartUtf16 else { return }
-        let s = content
-        guard let stringStart = s.utf16.index(s.utf16.startIndex, offsetBy: startOffset, limitedBy: s.utf16.endIndex),
-              let stringStartIdx = String.Index(stringStart, within: s) else { return }
-        var end = stringStartIdx
-        while end < s.endIndex, !s[end].isMentionTokenBreak { end = s.index(after: end) }
-        var newContent = s
-        newContent.replaceSubrange(stringStartIdx..<end, with: ":\(emoji.shortcode): ")
-        content = newContent
+        content = EmojiShortcode.insert(emoji.shortcode, into: content, atUtf16: startOffset)
         emojiQuery = nil
         emojiCandidates = []
         emojiStartUtf16 = nil
@@ -961,7 +955,7 @@ final class ComposeViewModel {
             innerTags.append(imeta)
         }
 
-        let now = Int(Date().timeIntervalSince1970)
+        let now = NostrClock.now()
         let innerJSON = Nip37.serializeInner(
             pubkeyHex: signingKeypair.pubkey, innerKind: innerKind,
             content: materialized, tags: innerTags, createdAt: now
@@ -1018,7 +1012,7 @@ final class ComposeViewModel {
     private func clearDraftOnPublish() async {
         guard let dTag = currentDraftId else { return }
         currentDraftId = nil
-        let now = Int(Date().timeIntervalSince1970)
+        let now = NostrClock.now()
         let innerJSON = Nip37.serializeInner(
             pubkeyHex: signingKeypair.pubkey, innerKind: 1, content: "", tags: [], createdAt: now
         )
@@ -1107,96 +1101,68 @@ final class ComposeViewModel {
 
         let kind = determineKind()
         let materialized = materializeMentions(content)
-        var tags = buildBaseTags(kind: kind, materializedContent: materialized)
+        let tags = buildBaseTags(kind: kind, materializedContent: materialized)
         let postContent = bodyForPublish(kind: kind, materialized: materialized)
 
-        let scheduleTimestamp: Int? = scheduleAt.map { Int($0.timeIntervalSince1970) }
-        var createdAt = scheduleTimestamp ?? Int(Date().timeIntervalSince1970)
-        // PoW + scheduling don't mix: mining picks `created_at` to satisfy the difficulty
-        // target, which would clobber the future timestamp the scheduler relay needs.
-        if powEnabled, scheduleTimestamp == nil {
-            isMining = true
-            miningAttempts = 0
-            let pubkey = signingKeypair.pubkey
-            let captured = (kind, createdAt, tags, postContent, powDifficulty)
-            let mined: Nip13.MineResult? = await withCheckedContinuation { cont in
-                let task = Task.detached(priority: .userInitiated) { [weak self] in
-                    let result = Nip13.mine(
-                        pubkey: pubkey,
-                        kind: captured.0,
-                        createdAt: captured.1,
-                        tags: captured.2,
-                        content: captured.3,
-                        targetBits: captured.4,
-                        onProgress: { attempts in
-                            Task { @MainActor [weak self] in self?.miningAttempts = attempts }
-                        }
-                    )
-                    cont.resume(returning: result)
-                    _ = self
-                }
-                self.mineTask = task
-            }
-            isMining = false
-            mineTask = nil
-            guard let mined else {
-                lastError = "Proof-of-work cancelled."
-                return
-            }
-            tags = mined.tags
-            createdAt = mined.createdAt
+        // Scheduled posts route through the scheduler relay synchronously — the
+        // sheet stays open until the relay ack returns. PoW + scheduling don't
+        // mix (mining mutates `created_at`), so PoW is silently skipped here.
+        if let scheduleTimestamp = scheduleAt.map({ Int($0.timeIntervalSince1970) }) {
+            await runScheduledPublish(
+                kind: kind, tags: tags, content: postContent, createdAt: scheduleTimestamp
+            )
+            return
         }
 
+        // Normal post: hand off to PostPublisher so the sheet can dismiss
+        // immediately while mining + broadcasting run in the background.
+        let createdAt = NostrClock.now()
+        let draft = PreparedDraft(
+            kind: kind,
+            tags: tags,
+            createdAt: createdAt,
+            content: postContent,
+            signingKeypair: signingKeypair,
+            powEnabled: powEnabled,
+            powDifficulty: powDifficulty,
+            relays: topWriteRelays(),
+            autosaveKeyToClear: autosaveKey,
+            draftIdToClear: currentDraftId
+        )
+        currentDraftId = nil
+        PostPublisher.shared.submit(draft)
+        Haptics.shared.pulse()
+        // Any non-nil id triggers the sheet's dismiss observer. The actual event
+        // id isn't known yet (PoW + signing happen in the publisher), and the
+        // existing observers that key off `publishedEventId` don't read it.
+        publishedEventId = "handed-off"
+    }
+
+    private func runScheduledPublish(kind: Int, tags: [[String]], content: String, createdAt: Int) async {
         let event: NostrEvent
         do {
             event = try await Signer.sign(
                 keypair: signingKeypair,
                 kind: kind,
                 tags: tags,
-                content: postContent,
+                content: content,
                 createdAt: createdAt
             )
         } catch {
             lastError = "Signing failed: \(error)"
             return
         }
-
-        if scheduleTimestamp != nil {
-            let relay = DraftsViewModel.schedulerRelay
-            await GroupRelayPool.shared.ensureRelay(relay, keypair: signingKeypair)
-            let result = await GroupRelayPool.shared.publishWithAuthRetry(event, to: relay)
-            switch result {
-            case .ok, .duplicate:
-                publishedEventId = event.id
-                clearLocalAutosave()
-                await clearDraftOnPublish()
-                Haptics.shared.pulse()
-            default:
-                lastError = "Scheduler relay rejected the post."
-            }
-            return
-        }
-
-        let relays = topWriteRelays()
-        let succeeded = await RelayPool.publish(event: event, to: relays, timeout: 8)
-        if succeeded.isEmpty {
-            lastError = "No relays accepted the post."
-        } else {
-            clearLocalAutosave()
-            // Persist + broadcast before flipping `publishedEventId`. The view's dismiss
-            // observer fires off the latter; persisting first means whatever the user
-            // navigates to next (e.g. a thread that seeds from cache on open) sees the
-            // new event, and the broadcast lets any already-open thread observer ingest
-            // it without a manual refresh.
-            await EventStore.shared.persist([event])
-            await clearDraftOnPublish()
-            NotificationCenter.default.post(
-                name: .nostrEventPublished,
-                object: nil,
-                userInfo: ["event": event]
-            )
+        let relay = DraftsViewModel.schedulerRelay
+        await GroupRelayPool.shared.ensureRelay(relay, keypair: signingKeypair)
+        let result = await GroupRelayPool.shared.publishWithAuthRetry(event, to: relay)
+        switch result {
+        case .ok, .duplicate:
             publishedEventId = event.id
+            clearLocalAutosave()
+            await clearDraftOnPublish()
             Haptics.shared.pulse()
+        default:
+            lastError = "Scheduler relay rejected the post."
         }
     }
 
@@ -1227,6 +1193,7 @@ final class ComposeViewModel {
             existingP.insert(pk)
         }
         for tag in hashtags { extras.append(["t", tag]) }
+        extras.append(contentsOf: EmojiShortcode.emojiTags(in: body))
         if let clientTag = NostrEvent.clientTagIfEnabled() { extras.append(clientTag) }
 
         do {
@@ -1555,6 +1522,7 @@ final class ComposeViewModel {
                 ))
             }
             if explicit { tags.append(["content-warning", ""]) }
+            tags.append(contentsOf: EmojiShortcode.emojiTags(in: materializedContent))
             if let clientTag = NostrEvent.clientTagIfEnabled() { tags.append(clientTag) }
             return tags
         }
@@ -1594,6 +1562,8 @@ final class ComposeViewModel {
         } else if explicit {
             tags.append(["content-warning", ""])
         }
+
+        tags.append(contentsOf: EmojiShortcode.emojiTags(in: materializedContent))
 
         if let clientTag = NostrEvent.clientTagIfEnabled() { tags.append(clientTag) }
 

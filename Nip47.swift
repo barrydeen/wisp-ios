@@ -16,7 +16,7 @@ nonisolated enum Nip47 {
         case getBalance
         case getInfo
         case payInvoice(bolt11: String)
-        case makeInvoice(amountMsats: Int64, description: String)
+        case makeInvoice(amountMsats: Int64, description: String, expirySecs: Int64)
         case lookupInvoice(paymentHash: String)
         case listTransactions(limit: Int, offset: Int)
     }
@@ -83,7 +83,7 @@ nonisolated enum Nip47 {
             privkey32: connection.clientSecret,
             pubkey: Hex.encode(connection.clientPubkey),
             kind: requestKind,
-            createdAt: Int(Date().timeIntervalSince1970),
+            createdAt: NostrClock.now(),
             tags: tags,
             content: encrypted
         )
@@ -98,9 +98,9 @@ nonisolated enum Nip47 {
             dict = ["method": "get_info", "params": [String: Any]()]
         case .payInvoice(let bolt11):
             dict = ["method": "pay_invoice", "params": ["invoice": bolt11]]
-        case .makeInvoice(let amount, let description):
+        case .makeInvoice(let amount, let description, let expiry):
             dict = ["method": "make_invoice",
-                    "params": ["amount": amount, "description": description]]
+                    "params": ["amount": amount, "description": description, "expiry": expiry]]
         case .lookupInvoice(let hash):
             dict = ["method": "lookup_invoice", "params": ["payment_hash": hash]]
         case .listTransactions(let limit, let offset):

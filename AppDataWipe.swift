@@ -39,6 +39,7 @@ enum AppDataWipe {
         //    against any in-flight persists from the same isolation domain.
         await EventStore.shared.removeAll()
         await GroupStore.shared.removeAll()
+        await DmStore.shared.removeAll()
 
         await ExtendedNetworkRepository.shared.unbind()
         await SafetyFilter.shared.rebuildSnapshot()

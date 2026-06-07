@@ -69,6 +69,14 @@ nonisolated final class FollowsCache: @unchecked Sendable {
         setByPubkey[pubkey] = set
         lock.unlock()
         UserDefaults.standard.set(follows, forKey: Self.key(for: pubkey))
+        // Notify avatar follow-status badges (and anything else tracking the
+        // follow set) to re-query. `update` is `nonisolated` and may run off
+        // the main thread; post on the main actor so observers (which mutate
+        // SwiftUI state) fire on main, and because the `Notification.Name`
+        // extension is main-actor isolated under default isolation.
+        Task { @MainActor in
+            NotificationCenter.default.post(name: .followsDidChange, object: nil)
+        }
     }
 
     /// Drop the cache entry for `pubkey`. Called from `NostrKey.deleteAccount`.

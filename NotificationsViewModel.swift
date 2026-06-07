@@ -10,6 +10,13 @@ final class NotificationsViewModel {
     var enabledTypes: Set<NotificationFilter> = Set(NotificationFilter.allCases)
     var isLoading: Bool = false
 
+    /// Id of the single currently-expanded notification row, or `nil` when none
+    /// is open. Lifted out of `NotificationRowView`'s local state so the list
+    /// behaves like an accordion — opening one row closes any other. Tracked
+    /// (not `@ObservationIgnored`) so every row re-evaluates its `expanded`
+    /// state when this changes.
+    var expandedItemId: String? = nil
+
     /// Hidden authors whose NSpam-classified notifications should not appear.
     /// Tracked (not `@ObservationIgnored`) so `filteredItems` re-evaluates when
     /// `maybeScoreReplyForSpam` or `unhideSpamAuthor` mutates this set.
@@ -92,6 +99,14 @@ final class NotificationsViewModel {
         for item in repo.flatItems {
             if hidden.contains(item.actorPubkey) { continue }
             if blocked.contains(item.actorPubkey) { continue }
+            // WoT render gate: rows ingested before the filter was enabled (or
+            // before a recompute shrank the network) are purged asynchronously
+            // on `.safetyFilterChanged`; this synchronous check guarantees they
+            // can't paint even for the one frame before the purge lands.
+            // Private (gift-wrap) rows and private/anonymous zaps keep their
+            // WoT exemption — same carve-outs as the ingest gate.
+            if !item.isPrivate, !item.isPrivateZap,
+               !SafetyFilter.shared.isWotQualified(item.actorPubkey) { continue }
             if !allowed.contains(NotificationFilter.bucket(for: item.kind)) { continue }
             if item.kind == .zap && !item.referencedEventId.isEmpty {
                 let key = "\(item.actorPubkey)|\(item.referencedEventId)"
@@ -349,6 +364,12 @@ final class NotificationsViewModel {
             limit: 100
         )
         let events = await RelayPool.query(relays: Array(relays), filter: filter, timeout: 6)
+        // Cache the poll events themselves so an incoming `.pollVote` notification
+        // (the gate is `selfEventIds.contains(pollId)`, the exact set fetched here)
+        // can resolve the voter's selected-option label in the collapsed row.
+        for e in events where e.kind == Nip88.kindPoll || e.kind == Nip69.kindZapPoll {
+            repo.cacheReferencedEvent(e)
+        }
         // Union with whatever the cache had so we don't shrink the horizon if a relay temporarily
         // returned a partial set.
         let before = repo.selfEventIds
@@ -482,6 +503,11 @@ final class NotificationsViewModel {
         var byId: [String: NostrEvent] = [:]
         for e in mine { byId[e.id] = e }
         for e in voted { byId[e.id] = e }
+
+        // Seed the notification cache from disk so a backfilled/live `.pollVote`
+        // row can resolve its selected-option label on cold start, before the
+        // `refreshSelfEventIds` network query returns.
+        for poll in byId.values { repo.cacheReferencedEvent(poll) }
 
         var notified = pollEndedNotifiedIds
         var added = false
@@ -681,6 +707,22 @@ final class NotificationsViewModel {
             }
         }
         listenerTasks.append(task)
+
+        // Snapshot installs (WoT toggle, graph recompute, mute edits) must both
+        // re-evaluate `filteredItems` (generation bump) and physically scrub
+        // rows that were ingested under looser WoT rules — render-gating alone
+        // would leave them inflating the 24h summary counters. The purge
+        // early-outs when WoT is off, so the block-edit case (which fires both
+        // `.userBlocked` and this) doesn't double-scan.
+        let snapshotTask = Task { @MainActor [weak self] in
+            let events = NotificationCenter.default.notifications(named: .safetyFilterChanged)
+            for await _ in events {
+                guard let self else { break }
+                self.safetyGeneration &+= 1
+                self.repo.purgeNonWotQualified()
+            }
+        }
+        listenerTasks.append(snapshotTask)
     }
 
     private func startDmObservation() {

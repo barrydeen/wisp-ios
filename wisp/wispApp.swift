@@ -9,9 +9,19 @@ struct wispApp: App {
     @State private var audioPlayer = AudioPlayerStore.shared
 
     init() {
+        #if DEBUG
+        // Diagnostics for the once-per-session feed freeze: logs any >250ms
+        // main-thread stall + the breadcrumb/note that triggered it. See
+        // MainThreadWatchdog.swift. No-op in release.
+        MainThreadWatchdog.shared.start()
+        #endif
         NsecPasteGuard.setUp()
         try? ObjectBoxSetup.setUp()
         GiphyConfig.bootstrap()
+        // Estimate device-clock skew so outgoing event `created_at` is correct even
+        // when the wall clock is off (relays reject future timestamps). Re-syncs on
+        // foreground entry, throttled inside NostrClock.
+        NostrClock.bootstrap()
         Task {
             await ExchangeRateService.shared.refresh()
             await ExchangeRateCache.shared.updateFromService()

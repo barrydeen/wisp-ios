@@ -103,9 +103,17 @@ struct PeopleListFeedView: View {
                         .buttonStyle(.plain)
                         .onAppear {
                             engagementRepo.markVisible(event: event)
+                            MediaLookaheadPrefetcher.shared.noteAppeared(
+                                eventId: event.id,
+                                in: viewModel.events,
+                                profiles: viewModel.profiles
+                            )
                             if event.id == viewModel.events.last?.id {
                                 viewModel.loadMore()
                             }
+                        }
+                        .onDisappear {
+                            engagementRepo.markInvisible(event: event)
                         }
                         Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
                     }

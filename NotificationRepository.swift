@@ -27,6 +27,17 @@ final class NotificationRepository {
 
     func event(forId id: String) -> NostrEvent? { eventCache[id] }
 
+    /// Cache a referenced poll event (kind 1068 / 6969) without creating a
+    /// notification row. Lets a collapsed `.pollVote` / `.zap` row resolve its
+    /// selected-option label(s) via `event(forId:)` — `classifyPollVote` only
+    /// stores the chosen option *ids*, and the human-readable labels live in
+    /// the poll's `option` / `poll_option` tags. Idempotent; never overwrites a
+    /// fuller copy already present.
+    func cacheReferencedEvent(_ event: NostrEvent) {
+        guard event.kind == Nip88.kindPoll || event.kind == Nip69.kindZapPoll else { return }
+        if eventCache[event.id] == nil { eventCache[event.id] = event }
+    }
+
     /// Caller-supplied set of the user's most-recent kind-1 ids. Drives reply/
     /// quote/repost/reaction reference-event ownership checks. NotificationsViewModel
     /// keeps this fresh.
@@ -94,6 +105,9 @@ final class NotificationRepository {
             if selfEventIds.insert(event.id).inserted {
                 persistSelfEventIds()
             }
+            // Cache the poll itself so a vote landing later this session can
+            // resolve its selected-option label(s) in the collapsed row.
+            cacheReferencedEvent(event)
         default:
             return
         }
@@ -125,7 +139,25 @@ final class NotificationRepository {
     @discardableResult
     func ingest(_ event: NostrEvent, relayUrl: String, isFromDmRelay: Bool = false, isPrivate: Bool = false, persist: Bool = true) -> Bool {
         guard !activePubkey.isEmpty else { return false }
-        guard insertSeen(event.id) else { return false }
+        // Safety chokepoint. Every caller — live subs, 24h backfill, disk
+        // hydration, future paths — funnels through ingest, so the full
+        // SafetyFilter gate lives HERE rather than at each call site (the
+        // backfill path once forgot its pre-filter and leaked unfiltered
+        // events). Runs before `insertSeen` so a drop under today's rules
+        // doesn't permanently mark the id seen — if the user later relaxes
+        // the filter, a re-delivered event can still notify. Two carve-outs:
+        // gift-wrap rumors (`isPrivate`) are e2e-private and WoT/word-exempt
+        // by design, and kind-9735 receipts are signed by the LN service —
+        // their real sender is judged post-classification below.
+        if !isPrivate, event.kind != 9735,
+           SafetyFilter.shared.shouldDrop(event: event, context: .notifications) {
+            return false
+        }
+        // Zaps defer the seen-mark until their actor gate below passes — the
+        // gate needs `classifyZap`'s resolved sender first, and marking a
+        // dropped receipt seen here would permanently silence it even after
+        // the user relaxes the filter.
+        guard event.kind == 9735 || insertSeen(event.id) else { return false }
 
         // Drop the user's own actions for non-zap kinds — your own reply/quote/repost/
         // reaction shouldn't ping you. Zaps are evaluated by the resolved zap-request
@@ -148,6 +180,35 @@ final class NotificationRepository {
         // Self-zap (zapping your own note from your own wallet) — drop after
         // classification, since `actorPubkey` is the resolved zap-request signer.
         if item.kind == .zap && item.actorPubkey == activePubkey { return false }
+        // Zap safety gate — the receipt's `pubkey` is the LN service, so the
+        // generic chokepoint above deliberately skipped kind-9735. Judge the
+        // resolved zap-request signer instead: blocked senders always drop;
+        // non-WoT senders drop unless the zap is private/anonymous
+        // (`isPrivateZap`, set by `classifyZap` — NOT the gift-wrap `isPrivate`
+        // param, which is never true for zaps): an e2e-private zap reached the
+        // user through the same trusted channel as a DM, and an anonymous one
+        // has no judgeable sender. Only after the gate passes does the receipt
+        // take its seen slot (deferred from the top of ingest).
+        if item.kind == .zap {
+            if SafetyFilter.shared.snapshot.blockedPubkeys.contains(item.actorPubkey) { return false }
+            if !item.isPrivateZap, !SafetyFilter.shared.isWotQualified(item.actorPubkey) { return false }
+            guard insertSeen(event.id) else { return false }
+        }
+        // Sub-thread suppression: don't notify about a reply whose NIP-10 chain
+        // includes a blocked author. When non-blocked A replies to blocked B's
+        // reply to your note, A's event p-tags B (the ancestor author) — and
+        // B's own reply is never persisted, so that p-tag is the only surviving
+        // signal. Scope is `.reply` only: a `.mention`/`.quote` targets your
+        // content directly and merely incidentally p-tags a blocked user, so
+        // dropping those would hide legitimate notifications. This is the single
+        // ingest chokepoint, so it also covers the disk-seed hydration path.
+        if item.kind == .reply {
+            let blocked = SafetyFilter.shared.snapshot.blockedPubkeys
+            if !blocked.isEmpty,
+               event.tags.contains(where: { $0.count >= 2 && $0[0] == "p" && blocked.contains($0[1]) }) {
+                return false
+            }
+        }
         eventCache[event.id] = event
         // Insert in timestamp-desc sorted position so the FIFO eviction at the
         // tail actually drops the oldest item. A backfill burst delivers items
@@ -276,16 +337,20 @@ final class NotificationRepository {
 
     private func classifyKind1(_ event: NostrEvent) -> FlatNotificationItem? {
         // Reply: any "e" tag pointing at one of my notes wins.
-        if let replyTarget = event.tags.first(where: { $0.first == "e" && $0.count >= 2 && selfEventIds.contains($0[1]) }) {
-            let refId = replyTarget[1]
-            let hint = replyTarget.count >= 3 ? [replyTarget[2]] : []
+        if let selfETag = event.tags.first(where: { $0.first == "e" && $0.count >= 2 && selfEventIds.contains($0[1]) }) {
+            // Show what the actor actually replied to — the immediate parent — which for a
+            // reply-to-a-reply is someone else's note nested under mine, not my root post.
+            let parentId = Nip10.replyTarget(of: event) ?? selfETag[1]
+            let parentTag = event.tags.first { $0.first == "e" && $0.count >= 2 && $0[1] == parentId }
+            let hint = (parentTag?.count ?? 0) >= 3 ? [parentTag![2]] : []
             return FlatNotificationItem(
                 id: event.id,
                 kind: .reply,
                 actorPubkey: event.pubkey,
-                referencedEventId: refId,
+                referencedEventId: parentId,
                 timestamp: event.createdAt,
-                relayHints: hint
+                relayHints: hint,
+                replyTargetIsMine: selfEventIds.contains(parentId)
             )
         }
         // Quote: "q" tag pointing at one of my notes (NIP-18-style quote).
@@ -424,8 +489,18 @@ final class NotificationRepository {
     /// Called when the user blocks someone — without this, notifications they
     /// triggered linger in `flatItems` and `eventCache` until cold-launch.
     func purgeAuthor(_ pubkey: String) {
-        eventCache = eventCache.filter { $0.value.pubkey != pubkey }
-        flatItems.removeAll { $0.actorPubkey == pubkey }
+        // Identify sub-thread rows BEFORE pruning eventCache: a reply by a
+        // non-blocked actor that p-tags the now-blocked `pubkey` is part of a
+        // sub-thread we no longer want (mirrors the ingest-time `.reply` drop).
+        // Its source event is the only place that link survives, so resolve it
+        // from the cache while it's still present.
+        let subThreadIds = Set(flatItems.compactMap { item -> String? in
+            guard item.kind == .reply, let ev = eventCache[item.id] else { return nil }
+            let involvesBlocked = ev.tags.contains { $0.count >= 2 && $0[0] == "p" && $0[1] == pubkey }
+            return involvesBlocked ? item.id : nil
+        })
+        eventCache = eventCache.filter { $0.value.pubkey != pubkey && !subThreadIds.contains($0.key) }
+        flatItems.removeAll { $0.actorPubkey == pubkey || subThreadIds.contains($0.id) }
         for (key, replies) in inlineReplies {
             let filtered = replies.filter { $0.pubkey != pubkey }
             if filtered.isEmpty {
@@ -434,6 +509,26 @@ final class NotificationRepository {
                 inlineReplies[key] = filtered
             }
         }
+        summary = computeSummary24h()
+    }
+
+    /// Drop every in-memory notification whose actor fails the current WoT
+    /// snapshot. Called on `.safetyFilterChanged` so enabling WoT (or a graph
+    /// recompute shrinking the qualified set) scrubs rows that were ingested
+    /// under looser rules — without this they'd render until cold relaunch and
+    /// keep inflating the 24h summary. Private (gift-wrap) items keep their
+    /// blanket WoT exemption; `inlineReplies` are the user's own optimistic
+    /// replies and need no pruning. O(flatItems ≤ cap), runs only on snapshot
+    /// installs.
+    func purgeNonWotQualified() {
+        guard SafetyFilter.shared.snapshot.wotEnabled else { return }
+        let dropIds = Set(flatItems.compactMap { item -> String? in
+            guard !item.isPrivate, !item.isPrivateZap else { return nil }
+            return SafetyFilter.shared.isWotQualified(item.actorPubkey) ? nil : item.id
+        })
+        guard !dropIds.isEmpty else { return }
+        eventCache = eventCache.filter { !dropIds.contains($0.key) }
+        flatItems.removeAll { dropIds.contains($0.id) }
         summary = computeSummary24h()
     }
 

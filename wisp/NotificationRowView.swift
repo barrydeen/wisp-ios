@@ -10,12 +10,15 @@ struct NotificationRowView: View {
     let onDmTap: (String) -> Void
     var onNoteTap: ((String, String?) -> Void)? = nil
 
-    @State private var expanded = false
     @State private var profiles: [String: ProfileData] = [:]
     @State private var sendingReply = false
 
     private let repo = NotificationRepository.shared
     private let profileRepo = ProfileRepository.shared
+
+    /// Single source of truth lives on the view model so only one row is open
+    /// at a time (accordion). See `NotificationsViewModel.expandedItemId`.
+    private var expanded: Bool { viewModel.expandedItemId == item.id }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -138,8 +141,10 @@ struct NotificationRowView: View {
                 quoteExpansion
             case .mention:
                 mentionExpansion
-            case .reaction, .repost, .pollVote, .pollEnded:
+            case .reaction, .repost:
                 referencedNoteExpansion
+            case .pollVote, .pollEnded:
+                pollExpansion
             case .zap:
                 zapExpansion
             }
@@ -164,7 +169,7 @@ struct NotificationRowView: View {
     private var replyExpansion: some View {
         if !item.referencedEventId.isEmpty {
             VStack(alignment: .leading, spacing: 6) {
-                Text("replying to your note")
+                Text(item.replyTargetIsMine ? "replying to your note" : "replying in your thread")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                 QuotedNoteView(
@@ -276,6 +281,28 @@ struct NotificationRowView: View {
             )
             .padding(.leading, Self.captionLeadingIndent)
             .padding(.trailing, 12)
+        }
+    }
+
+    /// Poll vote / poll-ended expansion: render the poll itself with its live
+    /// results inline (a full `PostCardView` of the poll event) so the user can
+    /// read the standings and vote without leaving the notifications screen. The
+    /// card's `.onAppear` registers the poll with `PollTallyRepository`, so the
+    /// tally fills in here just like in the feed. Falls back to the quoted-note
+    /// link if the poll event isn't cached yet.
+    @ViewBuilder
+    private var pollExpansion: some View {
+        if let poll = repo.event(forId: item.referencedEventId) {
+            PostCardView(
+                event: poll,
+                profile: profiles[poll.pubkey] ?? ProfileRepository.shared.get(poll.pubkey),
+                profiles: profiles,
+                onNoteTap: { _ in onNoteTap?(poll.id, poll.pubkey) }
+            )
+            .contentShape(Rectangle())
+            .onTapGesture { onNoteTap?(poll.id, poll.pubkey) }
+        } else {
+            referencedNoteExpansion
         }
     }
 
@@ -468,7 +495,9 @@ struct NotificationRowView: View {
             onDmTap(key)
             return
         }
-        withAnimation(.easeInOut(duration: 0.18)) { expanded.toggle() }
+        withAnimation(.easeInOut(duration: 0.18)) {
+            viewModel.expandedItemId = (viewModel.expandedItemId == item.id) ? nil : item.id
+        }
     }
 
     private func displayName(_ pubkey: String) -> String {

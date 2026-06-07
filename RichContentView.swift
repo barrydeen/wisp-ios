@@ -47,6 +47,10 @@ struct RichContentView: View {
     /// rather than the full screen. Used by `MediaGridView` to opt out of
     /// its feed-only edge-bleed layout.
     var nested: Bool = false
+    /// When true, interactive actions inside rich content are suppressed.
+    /// Used by the composer preview so e.g. a lightning invoice card's Pay
+    /// button is disabled — the note hasn't been posted yet.
+    var isPreview: Bool = false
     /// When true, each inline-text run publishes its rendered height up the
     /// `RichTextContentHeightKey` preference so the host card can base its
     /// "Show more" decision on text length alone. Off by default so nested
@@ -99,10 +103,17 @@ struct RichContentView: View {
 
     private func memoizedParse() -> [ContentSegment] {
         let generation = emojiRepo.generation
-        let key = "\(generation)|\(content)" as NSString
+        // `linksAreInline` is part of the key because the same content
+        // produces different segments when the host folds `.link` into inline
+        // — without it, a feed-card render would poison the cache entry
+        // consumed by a bio (or vice versa).
+        let key = "\(generation)|\(showLinkPreviews ? 1 : 0)|\(content)" as NSString
         if let box = Self.parseCache.object(forKey: key) { return box.segments }
         let signpostState = Signposts.render.beginInterval("parseCacheMiss")
         defer { Signposts.render.endInterval("parseCacheMiss", signpostState) }
+        #if DEBUG
+        PerfTrace.mark("content.parse")
+        #endif
         // Merge the user's resolved emoji packs under the note's own
         // `["emoji", shortcode, url]` tags — the inline tags carry the URL
         // the author/reactor signed for, so they win on shortcode collisions.
@@ -113,7 +124,12 @@ struct RichContentView: View {
         let segments = ContentParser.parse(
             content: content,
             tags: tags,
-            emojiMap: merged
+            emojiMap: merged,
+            // When the host hides link preview cards, `.link` segments get
+            // folded back into inline text below — tell the parser so its
+            // pass-4 blank-line trim treats them as inline neighbors and
+            // doesn't eat the separator newlines between adjacent URLs.
+            linksAreInline: !showLinkPreviews
         )
         Self.parseCache.setObject(SegmentBox(segments), forKey: key)
         return segments
@@ -346,7 +362,7 @@ struct RichContentView: View {
         case .nostrAddressable(let dTag, _, let author, let kind):
             addressablePlaceholder(dTag: dTag, author: author, kind: kind)
         case .lightningInvoice(let invoice, let amount, let summary):
-            LightningInvoiceView(invoice: invoice, amountSats: amount, summary: summary)
+            LightningInvoiceView(invoice: invoice, amountSats: amount, summary: summary, isPreview: isPreview)
         default:
             EmptyView()
         }

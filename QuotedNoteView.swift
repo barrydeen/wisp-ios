@@ -1,4 +1,6 @@
 import SwiftUI
+import QuartzCore
+import os
 
 @MainActor
 final class QuotedNoteCache {
@@ -70,7 +72,17 @@ final class QuotedNoteCache {
             return events.first(where: { $0.id == eventId })
         }
         inflight[eventId] = task
+        #if DEBUG
+        // Correlation: this fan-out has a 6s/10s timeout that matches the
+        // reported freeze duration. It's async so it shouldn't block main —
+        // if a MAIN STALL lines up with this log, a hidden sync hop is implicated.
+        let t0 = CACurrentMediaTime()
+        mediaPerfLog.log("quotedNote.fetch start id=\(String(eventId.prefix(12)), privacy: .public) attempt=\(attempt, privacy: .public)")
+        #endif
         let result = await task.value
+        #if DEBUG
+        mediaPerfLog.log("quotedNote.fetch done \(Int((CACurrentMediaTime() - t0) * 1000), privacy: .public)ms hit=\(result != nil, privacy: .public) id=\(String(eventId.prefix(12)), privacy: .public)")
+        #endif
         inflight[eventId] = nil
         if let result {
             cache[eventId] = result
@@ -126,6 +138,8 @@ struct QuotedNoteView: View {
 
     @State private var event: NostrEvent?
     @State private var loaded = false
+    @State private var blocked = false
+    @State private var safetyHidden = false
     @State private var profile: ProfileData?
     @State private var contentExpanded = false
     @State private var attempt: Int = 0
@@ -144,7 +158,11 @@ struct QuotedNoteView: View {
 
     var body: some View {
         Group {
-            if let event {
+            if blocked {
+                blockedCard
+            } else if safetyHidden {
+                safetyHiddenCard
+            } else if let event {
                 noteCard(event)
             } else if loaded {
                 missingCard
@@ -153,6 +171,27 @@ struct QuotedNoteView: View {
             }
         }
         .task(id: TaskKey(eventId: eventId, attempt: attempt)) { await load() }
+        // Re-gate in place on snapshot installs (WoT toggle / recompute): the
+        // load()-time check only sees the snapshot of that moment, so an
+        // already-resolved quoted note would otherwise keep rendering after
+        // the filter tightens (and a hidden one would stay hidden after it
+        // relaxes).
+        .onReceive(NotificationCenter.default.publisher(for: .safetyFilterChanged)) { _ in
+            if let event,
+               !PrivateInteractionStore.shared.contains(event.id),
+               SafetyFilter.shared.shouldDrop(event: event, context: .feed) {
+                self.event = nil
+                safetyHidden = true
+                loaded = true
+            } else if safetyHidden {
+                // Re-attempt from cache under the relaxed rules: the attempt
+                // bump re-keys `.task`, and `load()` re-evaluates the cached
+                // event before any network fetch.
+                safetyHidden = false
+                loaded = false
+                attempt += 1
+            }
+        }
     }
 
     /// Composite key so a retry (attempt bump) re-runs `.task` the same way an
@@ -178,6 +217,52 @@ struct QuotedNoteView: View {
             RoundedRectangle(cornerRadius: 12)
                 .stroke(Color.wispSurfaceVariant, lineWidth: 1)
         )
+    }
+
+    /// Shown when the quoted note's author is blocked. Their content is never
+    /// rendered; a neutral stub keeps the surrounding card from looking broken
+    /// (or showing a misleading "Quoted note not found").
+    private var blockedCard: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "nosign")
+                .foregroundStyle(.secondary)
+            Text("Note from a blocked user")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.wispSurfaceVariant.opacity(0.3))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.wispSurfaceVariant, lineWidth: 1)
+        )
+        .accessibilityLabel("Note from a blocked user")
+    }
+
+    /// Shown when the safety filter (Web of Trust, muted word) hides the
+    /// quoted note. Mirrors `blockedCard` — none of the event renders, and
+    /// there's no reveal affordance (the filter gates potentially graphic
+    /// content). Copy stays generic because `.feed`-context `shouldDrop`
+    /// covers more than WoT.
+    private var safetyHiddenCard: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "eye.slash")
+                .foregroundStyle(.secondary)
+            Text("Note hidden by your safety filters")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.wispSurfaceVariant.opacity(0.3))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.wispSurfaceVariant, lineWidth: 1)
+        )
+        .accessibilityLabel("Note hidden by your safety filters")
     }
 
     private var missingCard: some View {
@@ -334,6 +419,20 @@ struct QuotedNoteView: View {
 
     private func load() async {
         if let cached = QuotedNoteCache.shared.cached(eventId: eventId) {
+            if SafetyFilter.shared.snapshot.blockedPubkeys.contains(cached.pubkey) {
+                self.blocked = true
+                loaded = true
+                return
+            }
+            // WoT gate — a qualified author quoting a stranger's note would
+            // otherwise inline-render the stranger's content/media right past
+            // the filter. Private rumors keep their gift-wrap exemption.
+            if !PrivateInteractionStore.shared.contains(cached.id),
+               SafetyFilter.shared.shouldDrop(event: cached, context: .feed) {
+                self.safetyHidden = true
+                loaded = true
+                return
+            }
             self.event = cached
             self.profile = profiles[cached.pubkey] ?? ProfileRepository.shared.get(cached.pubkey)
             loaded = true
@@ -363,6 +462,17 @@ struct QuotedNoteView: View {
         if Task.isCancelled { return }
 
         if let result {
+            if SafetyFilter.shared.snapshot.blockedPubkeys.contains(result.pubkey) {
+                self.blocked = true
+                loaded = true
+                return
+            }
+            if !PrivateInteractionStore.shared.contains(result.id),
+               SafetyFilter.shared.shouldDrop(event: result, context: .feed) {
+                self.safetyHidden = true
+                loaded = true
+                return
+            }
             self.event = result
             self.profile = profiles[result.pubkey] ?? ProfileRepository.shared.get(result.pubkey)
             loaded = true

@@ -328,8 +328,9 @@ final class SparkWallet: Wallet {
             let response = try await sdk.lnurlPay(request: LnurlPayRequest(prepareResponse: prepare))
             return .success(response.payment.id)
         } catch {
-            emit("Payment failed: \(error.localizedDescription)")
-            return .failure(.other(error.localizedDescription))
+            let friendly = Self.friendlyPayError(error)
+            emit("Payment failed: \(friendly)")
+            return .failure(.other(friendly))
         }
     }
 
@@ -356,12 +357,35 @@ final class SparkWallet: Wallet {
             )
             return .success(response.payment.id)
         } catch {
-            emit("Payment failed: \(error.localizedDescription)")
-            return .failure(.other(error.localizedDescription))
+            let friendly = Self.friendlyPayError(error)
+            emit("Payment failed: \(friendly)")
+            return .failure(.other(friendly))
         }
     }
 
-    func makeInvoice(amountMsats: Int64, description: String) async -> Result<String, WalletError> {
+    /// Translates raw Spark SDK errors into user-readable strings. The SDK
+    /// surfaces full gRPC envelopes including internal field names and byte
+    /// arrays — exposing those in the Send sheet is hostile. Falls back to
+    /// `localizedDescription` for unknown errors.
+    private static func friendlyPayError(_ error: Error) -> String {
+        let raw = error.localizedDescription
+        let lower = raw.lowercased()
+        if lower.contains("alreadyexists") || lower.contains("preimage request already exists") {
+            return "This invoice has already been paid."
+        }
+        if lower.contains("insufficient") {
+            return "Insufficient balance to pay this invoice."
+        }
+        if lower.contains("expired") {
+            return "This invoice has expired."
+        }
+        if lower.contains("route") && lower.contains("not found") {
+            return "Could not find a payment route. Try again in a moment."
+        }
+        return raw
+    }
+
+    func makeInvoice(amountMsats: Int64, description: String, expirySecs: Int64) async -> Result<String, WalletError> {
         guard let sdk else { return .failure(.notConnected) }
         do {
             let amountSats = UInt64(max(amountMsats / 1000, 1))
@@ -370,7 +394,7 @@ final class SparkWallet: Wallet {
                     paymentMethod: ReceivePaymentMethod.bolt11Invoice(
                         description: description.isEmpty ? "Wisp wallet" : description,
                         amountSats: amountSats,
-                        expirySecs: 3600,
+                        expirySecs: UInt32(min(expirySecs, Int64(UInt32.max))),
                         paymentHash: nil
                     )
                 )

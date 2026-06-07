@@ -1,6 +1,5 @@
 import SwiftUI
 import UIKit
-import os.signpost
 
 /// Drop-in replacement for `AsyncImage` that:
 ///   - reads from `DecodedImageCache` first so a cell scrolled back into view
@@ -15,6 +14,12 @@ import os.signpost
 struct RetryingAsyncImage<Content: View, Loading: View, Failure: View>: View {
     let url: URL?
     let maxAttempts: Int
+    /// Longest-edge pixel cap for the decode. Defaults to 1024 (matches the
+    /// inline animated / video-poster cap) so feed / grid / gallery images are
+    /// downsampled to a bounded size instead of decompressing the full source
+    /// on the main thread at draw time. Full-screen zoom passes `nil` to keep
+    /// native resolution.
+    let maxPixelSize: CGFloat?
     @ViewBuilder let content: (Image) -> Content
     @ViewBuilder let loading: () -> Loading
     @ViewBuilder let failure: () -> Failure
@@ -32,22 +37,38 @@ struct RetryingAsyncImage<Content: View, Loading: View, Failure: View>: View {
     init(
         url: URL?,
         maxAttempts: Int = 3,
+        maxPixelSize: CGFloat? = 1024,
         @ViewBuilder content: @escaping (Image) -> Content,
         @ViewBuilder loading: @escaping () -> Loading,
         @ViewBuilder failure: @escaping () -> Failure
     ) {
         self.url = url
         self.maxAttempts = maxAttempts
+        self.maxPixelSize = maxPixelSize
         self.content = content
         self.loading = loading
         self.failure = failure
+    }
+
+    /// Synchronous decoded-cache pre-read (DecodedImageCache is @MainActor).
+    /// `.task` only fires AFTER the first body render, so without this a
+    /// recycled row flashes the loader for one frame even on a cache hit —
+    /// the same fix CachedAvatarView already applies.
+    private var cachedImage: UIImage? {
+        guard let url else { return nil }
+        let key = InlineMediaLoader.staticKey(url: url, maxPixelSize: maxPixelSize)
+        return DecodedImageCache.staticImage(for: key)
     }
 
     var body: some View {
         Group {
             switch phase {
             case .empty, .loading:
-                loading()
+                if let cachedImage {
+                    content(Image(uiImage: cachedImage))
+                } else {
+                    loading()
+                }
             case .success(let image):
                 content(Image(uiImage: image))
             case .failure:
@@ -77,9 +98,10 @@ struct RetryingAsyncImage<Content: View, Loading: View, Failure: View>: View {
             phase = .failure
             return
         }
-        let key = url.absoluteString
-
-        // Cache hit — render immediately with no loading state.
+        // Cache hit — render immediately with no loading state. (Key is
+        // url + pixel cap so the inline-capped (1024) and full-screen-
+        // uncapped variants of the same URL don't collide.)
+        let key = InlineMediaLoader.staticKey(url: url, maxPixelSize: maxPixelSize)
         if let cached = DecodedImageCache.staticImage(for: key) {
             phase = .success(cached)
             return
@@ -93,24 +115,19 @@ struct RetryingAsyncImage<Content: View, Loading: View, Failure: View>: View {
         }
 
         phase = .loading
-        let image: UIImage? = await Task.detached(priority: .utility) {
-            let signpostId = Signposts.media.makeSignpostID()
-            let signpostState = Signposts.media.beginInterval("fetchStaticImage", id: signpostId)
-            defer { Signposts.media.endInterval("fetchStaticImage", signpostState) }
-            do {
-                let (data, response) = try await URLSession.shared.data(from: url)
-                if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-                    return nil
-                }
-                return UIImage(data: data)
-            } catch {
-                return nil
-            }
-        }.value
+        // Shared in-flight-deduped fetch+decode: if the lookahead prefetcher
+        // (or another mounted view) already started this URL, attach to that
+        // task instead of fetching again. This view's `.task` being cancelled
+        // on scroll-away does NOT cancel the shared load — the result still
+        // lands in DecodedImageCache for the next appearance.
+        let image = await InlineMediaLoader.staticImage(
+            url: url,
+            maxPixelSize: maxPixelSize,
+            source: .foreground
+        )
 
         if Task.isCancelled { return }
         if let image {
-            DecodedImageCache.storeStatic(image, for: key)
             phase = .success(image)
         } else if attempt < maxAttempts {
             attempt += 1  // Triggers another `task` cycle via TaskKey change.

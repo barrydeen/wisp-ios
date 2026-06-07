@@ -47,6 +47,11 @@ struct ComposeView: View {
         _viewModel = State(initialValue: ComposeViewModel(keypair: keypair, mode: .new))
     }
 
+    init(keypair: Keypair, initialText: String) {
+        self.initialDraft = nil
+        _viewModel = State(initialValue: ComposeViewModel(keypair: keypair, initialText: initialText))
+    }
+
     var body: some View {
         NavigationStack {
             ZStack {
@@ -829,39 +834,16 @@ struct ComposeView: View {
     }
 
     private var emojiPopup: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                ForEach(viewModel.emojiCandidates) { emoji in
-                    Button {
-                        viewModel.selectEmoji(emoji)
-                    } label: {
-                        HStack(spacing: 4) {
-                            AsyncImage(url: URL(string: emoji.url)) { phase in
-                                switch phase {
-                                case .success(let img): img.resizable()
-                                default: Color.clear
-                                }
-                            }
-                            .frame(width: 18, height: 18)
-                            Text(":\(emoji.shortcode):")
-                                .font(.caption2.weight(.medium))
-                        }
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 5)
-                        .background(Color.wispSurfaceVariant.opacity(0.6),
-                                    in: RoundedRectangle(cornerRadius: 8))
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(.horizontal, 12)
+        EmojiSuggestionBar(candidates: viewModel.emojiCandidates) { emoji in
+            viewModel.selectEmoji(emoji)
         }
     }
 
     // MARK: - Actions row (under text editor)
 
     private var actionsRow: some View {
-        HStack(spacing: 22) {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 22) {
             if !viewModel.galleryMode, !viewModel.pollEnabled {
                 Button {
                     presentPhotoPicker(max: 4)
@@ -965,11 +947,10 @@ struct ComposeView: View {
                     .foregroundStyle(viewModel.scheduleEnabled ? Color.wispPrimary : .secondary)
             }
             .disabled(viewModel.isPrivate)
-
-            Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 4)
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 4)
     }
 
     // MARK: - Bottom publish bar
@@ -1043,8 +1024,15 @@ struct ComposeView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .onChange(of: viewModel.publishedEventId) { _, newId in
-            guard newId != nil else { return }
-            SuccessToast.shared.show(publishToastMessage)
+            guard let newId else { return }
+            // Normal posts hand off to `PostPublisher` which drives a bottom
+            // pill ("Mining…" → "Broadcasting n/N" → "Posted to N relays").
+            // The pill is the single source of confirmation — suppress the
+            // top toast in that case. DMs and scheduled posts still finish
+            // in-sheet and surface through the toast as before.
+            if newId != "handed-off" {
+                SuccessToast.shared.show(publishToastMessage)
+            }
             dismiss()
         }
     }
