@@ -424,9 +424,9 @@ struct MainView: View {
         .sheet(isPresented: $showCompose) {
             ComposeView(keypair: keypair, mode: .new)
         }
-        // Reply / quote / emoji-reaction composers from any feed card present
-        // here, from the stable root — never from the recyclable card row. See
-        // `ComposePresenter`.
+        // Reply / quote / emoji-reaction composers and the zap sheet from any
+        // feed card present here, from the stable root — never from the
+        // recyclable card row. See `ComposePresenter`.
         .sheet(item: $presenter.request) { req in
             switch req {
             case .reply(let parent, let root):
@@ -438,6 +438,25 @@ struct MainView: View {
                     onPick(picked)
                     composePresenter.request = nil
                 })
+            case .zap(let zap):
+                // Hosted here for the same reason as the composers: the zap
+                // sheet raises the keyboard, and presenting it from the
+                // recyclable card row produced the open/close loop (a
+                // diagnostic trace on 2026-06-07 showed keyboard willShow →
+                // presenting row recycled ~2ms later → sheet torn down → the
+                // card's surviving @State re-presents, looping).
+                ZapSheet(
+                    store: walletStore,
+                    recipientPubkey: zap.recipientPubkey,
+                    recipientLud16: zap.recipientLud16,
+                    recipientName: zap.recipientName,
+                    eventId: zap.eventId,
+                    relayHints: zap.relayHints,
+                    extraTags: zap.extraTags,
+                    forcePrivate: zap.forcePrivate,
+                    onSuccess: zap.onSuccess,
+                    dismiss: { composePresenter.request = nil }
+                )
             }
         }
         .sheet(item: $reopenDraft) { draft in

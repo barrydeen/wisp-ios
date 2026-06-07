@@ -9,10 +9,22 @@ struct NotificationComposer: View {
     let viewModel: NotificationsViewModel
 
     @State private var showCompose = false
+    /// Root router for keyboard-raising sheets. This row lives in the
+    /// notifications lazy feed; presenting the composer from its own
+    /// `.sheet` is the recycle-loop mechanism a diagnostic trace proved on
+    /// 2026-06-07 (keyboard rises → presenting row recycled → the row's
+    /// surviving `@State` re-presents, looping until force-quit), so
+    /// replies route to the app-root host. The local sheet below survives
+    /// only as the fallback for a missing environment injection.
+    @Environment(ComposePresenter.self) private var composePresenter: ComposePresenter?
 
     var body: some View {
         Button {
-            showCompose = true
+            if let composePresenter {
+                composePresenter.openReply(parent: targetEvent, root: replyRoot())
+            } else {
+                showCompose = true
+            }
         } label: {
             HStack(spacing: 10) {
                 Text("Reply\u{2026}")
