@@ -19,8 +19,6 @@ struct DmConversationView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
-            Divider().overlay(Color.wispSurfaceVariant.opacity(0.5))
             if showRelayInfo {
                 relayPanel
                     .transition(.move(edge: .top).combined(with: .opacity))
@@ -30,6 +28,7 @@ struct DmConversationView: View {
             composer
         }
         .background(Color.wispBackground)
+        .wispTopHeader { header }
         .toolbar(.hidden, for: .navigationBar)
         .onAppear {
             viewModel.refresh()
