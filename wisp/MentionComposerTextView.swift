@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 extension NSAttributedString.Key {
     /// Carries the pill fill color over a `@mention` run. `WispPillLayoutManager`
@@ -151,6 +152,12 @@ enum ComposerTextStyling {
 // MARK: - Self-sizing editable text view
 
 final class ComposerSizingTextView: UITextView {
+    /// Hooked by `MentionComposerTextView` so the long-press Paste menu can
+    /// route image clipboard contents into the composer's upload pipeline.
+    /// Without this, `paste(_:)` falls through to UITextView's text-only
+    /// implementation and an image on the clipboard silently no-ops.
+    var onPasteImageProviders: (([NSItemProvider]) -> Void)?
+
     convenience init() {
         let storage = NSTextStorage()
         let layout = WispPillLayoutManager()
@@ -171,6 +178,42 @@ final class ComposerSizingTextView: UITextView {
 
     override var intrinsicContentSize: CGSize {
         CGSize(width: UIView.noIntrinsicMetric, height: UIView.noIntrinsicMetric)
+    }
+
+    /// Make Paste show in the long-press menu whenever the clipboard has
+    /// either text (default behavior) or an image. UITextView's stock check
+    /// only enables Paste for text — without this override, an image-only
+    /// clipboard has no menu entry to surface.
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        if action == #selector(paste(_:)) {
+            if UIPasteboard.general.hasStrings { return true }
+            if pasteboardImageProviders().isEmpty == false { return true }
+            if UIPasteboard.general.image != nil { return true }
+            return false
+        }
+        return super.canPerformAction(action, withSender: sender)
+    }
+
+    /// Intercept Paste. Image content goes through the composer's upload
+    /// pipeline; text content falls through to UITextView's default.
+    override func paste(_ sender: Any?) {
+        let providers = pasteboardImageProviders()
+        if !providers.isEmpty {
+            onPasteImageProviders?(providers)
+            return
+        }
+        if let image = UIPasteboard.general.image, let png = image.pngData() {
+            let provider = NSItemProvider(item: png as NSData, typeIdentifier: UTType.png.identifier)
+            onPasteImageProviders?([provider])
+            return
+        }
+        super.paste(sender)
+    }
+
+    private func pasteboardImageProviders() -> [NSItemProvider] {
+        UIPasteboard.general.itemProviders.filter {
+            $0.hasItemConformingToTypeIdentifier(UTType.image.identifier)
+        }
     }
 }
 
@@ -193,6 +236,12 @@ struct MentionComposerTextView: UIViewRepresentable {
             for: viewModel.content, mentions: viewModel.mentions, font: font
         )
         tv.typingAttributes = ComposerTextStyling.baseAttributes(font: font)
+        // Route long-press Paste of image content into the upload pipeline.
+        // Text content still uses UITextView's default paste path.
+        let vm = viewModel
+        tv.onPasteImageProviders = { providers in
+            Task { @MainActor in await vm.addPastedImages(providers) }
+        }
         context.coordinator.lastSyncedPlain = viewModel.content
         // Mirror the previous TextEditor behavior: the composer takes focus as
         // soon as it appears.
