@@ -7,6 +7,7 @@ struct InterfaceSettingsView: View {
 
     @State private var showAccentPicker = false
     @State private var showCurrencyPicker = false
+    @State private var showDefaultReactionPicker = false
     @State private var rateUpdatedAt: Date? = nil
     @State private var themesExpanded = false
     #if DEBUG
@@ -124,6 +125,28 @@ struct InterfaceSettingsView: View {
                     Text("Gallery: horizontal swipe through every photo and video. Stack: each item full-width below the next.")
                         .font(.system(size: 12))
                         .foregroundStyle(theme.palette.onSurfaceVariant)
+                }
+
+                section(title: "Reactions") {
+                    Button { showDefaultReactionPicker = true } label: {
+                        HStack(spacing: 12) {
+                            Text(settings.defaultReactionEmoji)
+                                .font(.system(size: 28))
+                                .frame(width: 36, height: 36)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Default reaction")
+                                    .foregroundStyle(theme.palette.onSurface)
+                                Text("Sent when you tap the heart on a post. Long-press to choose a different emoji.")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(theme.palette.onSurfaceVariant)
+                                    .multilineTextAlignment(.leading)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .foregroundStyle(theme.palette.onSurfaceVariant)
+                        }
+                        .padding(.vertical, 8)
+                    }
                 }
 
                 section(title: "Posting") {
@@ -372,6 +395,11 @@ struct InterfaceSettingsView: View {
                     .navigationTitle("Currency")
                     .navigationBarTitleDisplayMode(.inline)
             }
+        }
+        .sheet(isPresented: $showDefaultReactionPicker) {
+            EmojiLibrarySheet(mode: .pickForDefaultReaction { picked in
+                settings.defaultReactionEmoji = picked
+            })
         }
         .task {
             await ExchangeRateCache.shared.updateFromService()

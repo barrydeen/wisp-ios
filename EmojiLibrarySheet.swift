@@ -15,6 +15,12 @@ struct EmojiLibrarySheet: View {
         case pickForReaction((PickedEmoji) -> Void)
         case pickForQuickList
         case pickForDirectEmojiList((String, String) -> Void)
+        /// Pick mode used by the "Default reaction emoji" settings row. The
+        /// callback receives the raw emoji string the user picked (unicode
+        /// emoji, or `:shortcode:` for a custom emoji) — no quick-list side
+        /// effect, no PickedEmoji wrapper. The caller writes it straight to
+        /// `AppSettings.defaultReactionEmoji`.
+        case pickForDefaultReaction((String) -> Void)
     }
 
     let mode: Mode
@@ -303,6 +309,7 @@ struct EmojiLibrarySheet: View {
         case .pickForReaction: return "Add reaction"
         case .pickForQuickList: return "Add to quick reactions"
         case .pickForDirectEmojiList: return "Pick custom emoji"
+        case .pickForDefaultReaction: return "Default reaction"
         }
     }
 
@@ -472,6 +479,9 @@ struct EmojiLibrarySheet: View {
         case .pickForQuickList:
             emojiRepo.addToQuickList(emoji)
             dismiss()
+        case .pickForDefaultReaction(let cb):
+            cb(emoji)
+            dismiss()
         case .pickForDirectEmojiList:
             // Direct-emoji list only accepts custom shortcodes.
             break
@@ -485,6 +495,9 @@ struct EmojiLibrarySheet: View {
             cb(.custom(shortcode: shortcode, url: url))
         case .pickForQuickList:
             emojiRepo.addToQuickList(":\(shortcode):")
+            dismiss()
+        case .pickForDefaultReaction(let cb):
+            cb(":\(shortcode):")
             dismiss()
         case .pickForDirectEmojiList(let cb):
             cb(shortcode, url)

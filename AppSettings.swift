@@ -42,6 +42,7 @@ final class AppSettings {
         static let autoApproveRelayAuth = "wisp_settings_auto_approve_relay_auth"
         static let zapIconStyle = "wisp_settings_zap_icon_style"
         static let videoLoop = "wisp_settings_video_loop"
+        static let defaultReactionEmoji = "wisp_settings_default_reaction_emoji"
         static func quickZapEnabled(for pubkey: String?) -> String {
             pubkey.map { "wisp_settings_quick_zap_enabled_\($0)" } ?? "wisp_settings_quick_zap_enabled"
         }
@@ -123,6 +124,15 @@ final class AppSettings {
     var videoLoop: Bool {
         didSet { UserDefaults.standard.set(videoLoop, forKey: Keys.videoLoop) }
     }
+    /// Emoji applied when the user taps the heart button on a post without
+    /// long-pressing into the picker. Default 🧡 — chosen to match the
+    /// existing first quick-reaction so behaviour is unchanged for users
+    /// who never visit the setting. Stored verbatim as the unicode emoji
+    /// (or a `:shortcode:` for custom emoji); the reaction publisher
+    /// resolves shortcodes through `EmojiRepository`.
+    var defaultReactionEmoji: String {
+        didSet { UserDefaults.standard.set(defaultReactionEmoji, forKey: Keys.defaultReactionEmoji) }
+    }
     /// When true, a single tap of the zap button on a post sends the configured
     /// amount immediately. Long-press still opens the zap composer. Surfaces in
     /// settings as "Instant zaps" while in bitcoin mode and "Instant payments"
@@ -184,6 +194,7 @@ final class AppSettings {
         let zapRaw = defaults.string(forKey: Keys.zapIconStyle) ?? ZapIconStyle.bitcoin.rawValue
         self.zapIconStyle = ZapIconStyle(rawValue: zapRaw) ?? .bitcoin
         self.videoLoop = defaults.object(forKey: Keys.videoLoop) as? Bool ?? true
+        self.defaultReactionEmoji = defaults.string(forKey: Keys.defaultReactionEmoji) ?? "🧡"
         let qzPubkey = NostrKey.load()?.pubkey
         self.quickZapEnabled = defaults.object(forKey: Keys.quickZapEnabled(for: qzPubkey)) as? Bool ?? false
         let storedQuickInt = defaults.integer(forKey: Keys.quickZapAmountSats(for: qzPubkey))

@@ -1279,28 +1279,7 @@ struct PostCardView: View {
     private var heartAction: some View {
         let displayed = displayReactedEmoji
         let custom = displayReactedCustomEmoji
-        return Button {
-            // Always open the picker — existing reactions are highlighted in
-            // it and tapping one removes it. Pick whichever side of the heart
-            // has more usable vertical space, then size the picker to fit that
-            // space so it scrolls internally instead of getting clipped by the
-            // popover. Reserve small margins for the status bar above and the
-            // home indicator / tab bar below. Frame is read live from the
-            // tracker so the anchor is correct for the heart's current scroll
-            // position.
-            let frame = heartFrameTracker.frame
-            let screenHeight = UIScreen.main.bounds.height
-            let topReserve: CGFloat = 60
-            let bottomReserve: CGFloat = 80
-            let popoverChrome: CGFloat = 32
-            let availableBelow = max(0, screenHeight - bottomReserve - frame.maxY - popoverChrome)
-            let availableAbove = max(0, frame.minY - topReserve - popoverChrome)
-            let preferBelow = availableBelow >= availableAbove
-            reactionArrowEdge = preferBelow ? .top : .bottom
-            let chosenSpace = preferBelow ? availableBelow : availableAbove
-            reactionPickerMaxHeight = min(192, max(80, chosenSpace))
-            showReactionPicker = true
-        } label: {
+        return Group {
             if let emoji = displayed {
                 HStack(spacing: 4) {
                     Text(emoji)
@@ -1336,7 +1315,22 @@ struct PostCardView: View {
                 )
             }
         }
-        .buttonStyle(.plain)
+        .contentShape(Rectangle())
+        // Tap = fire (or remove) the configured default reaction emoji.
+        // Long-press = open the full reaction picker. The previous
+        // `Button { } + .onLongPressGesture` combo had the iOS quirk
+        // where Button's tap fires on touch-up *after* the long press
+        // has already opened the picker, so the user got the picker
+        // AND an unintended default reaction. Plain
+        // `.onTapGesture` + `.onLongPressGesture` on the same view
+        // are mutually exclusive — only one fires per interaction.
+        .onTapGesture {
+            applyDefaultReaction()
+        }
+        .onLongPressGesture(minimumDuration: 0.35) {
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            openReactionPicker()
+        }
         // Continuously track the heart's global frame in a reference-type
         // box so the popover anchor stays correct as the user scrolls. The
         // write goes to a class property, not `@State` — so it doesn't
@@ -1375,6 +1369,59 @@ struct PostCardView: View {
             )
             .presentationCompactAdaptation(.popover)
         }
+    }
+
+    /// Fire (or toggle off) the configured default reaction emoji.
+    /// `AppSettings.defaultReactionEmoji` holds the raw key — a unicode
+    /// emoji or a `:shortcode:` for a custom emoji. Shortcodes resolve
+    /// through `EmojiRepository.resolvedCustomMap`; if the source is no
+    /// longer present (custom pack uninstalled, etc.) fall back to the
+    /// picker so the user can pick something else.
+    private func applyDefaultReaction() {
+        // If the user has ANY reaction on this post, tap behaves like
+        // long-press: open the picker. The picker highlights their
+        // existing reaction so tapping it removes the original (works
+        // for both the default emoji and a non-default the user picked
+        // earlier). This avoids the older "tap = remove default
+        // directly" behaviour, which made undoing a default reaction
+        // ambiguous compared to undoing a non-default one — both now
+        // route through the same picker-tap flow.
+        if !myReactedKeys.isEmpty {
+            openReactionPicker()
+            return
+        }
+
+        // No reaction yet → fire the configured default.
+        let key = settings.defaultReactionEmoji
+        if key.hasPrefix(":"), key.hasSuffix(":") {
+            let shortcode = String(key.dropFirst().dropLast())
+            if let url = EmojiRepository.shared.resolvedCustomMap[shortcode] {
+                sendReaction(.custom(shortcode: shortcode, url: url))
+            } else {
+                openReactionPicker()
+            }
+        } else {
+            sendReaction(.unicode(key))
+        }
+    }
+
+    /// Compute popover placement against the live heart frame and present
+    /// the reaction picker. Extracted from the previous Button tap action
+    /// so both the long-press gesture and the custom-emoji fallback in
+    /// `applyDefaultReaction` can reach it.
+    private func openReactionPicker() {
+        let frame = heartFrameTracker.frame
+        let screenHeight = UIScreen.main.bounds.height
+        let topReserve: CGFloat = 60
+        let bottomReserve: CGFloat = 80
+        let popoverChrome: CGFloat = 32
+        let availableBelow = max(0, screenHeight - bottomReserve - frame.maxY - popoverChrome)
+        let availableAbove = max(0, frame.minY - topReserve - popoverChrome)
+        let preferBelow = availableBelow >= availableAbove
+        reactionArrowEdge = preferBelow ? .top : .bottom
+        let chosenSpace = preferBelow ? availableBelow : availableAbove
+        reactionPickerMaxHeight = min(192, max(80, chosenSpace))
+        showReactionPicker = true
     }
 
     private func sendReaction(_ picked: PickedEmoji) {
