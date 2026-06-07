@@ -1,4 +1,5 @@
 import SwiftUI
+import Translation
 
 struct PostCardView: View {
     let event: NostrEvent
@@ -143,6 +144,15 @@ struct PostCardView: View {
     @State private var sourceTracker = NoteSourceTracker.shared
     @State private var engagementRepo = EngagementRepository.shared
     @State private var zapStore = ZapAnimationStore.shared
+    @State private var translationRepo = TranslationRepository.shared
+    /// Whether the translated text (vs the original) is shown once a
+    /// translation is done. Toggled from the overflow menu; mirrors Android
+    /// wisp's local `showTranslation` state in PostCard.
+    @State private var showTranslation = true
+    /// Drives the `.translationTask` on the card root. Set by
+    /// `startTranslation` (menu tap) or the auto-translate task; the
+    /// view-bound session it creates performs the actual translation.
+    @State private var translationConfig: TranslationSession.Configuration?
     /// Inner kind-1 fetched for a kind-6 repost whose `content` is empty
     /// (NIP-18 tag-only form). The JSON-embedded variant resolves
     /// synchronously inside `resolveRepost()`; this state covers reposts
@@ -557,6 +567,8 @@ struct PostCardView: View {
                     }
                 }
 
+                translationInline(for: displayEvent)
+
                 if displayEvent.kind == Nip88.kindPoll || displayEvent.kind == Nip69.kindZapPoll {
                     PollSection(
                         pollEvent: displayEvent,
@@ -652,6 +664,71 @@ struct PostCardView: View {
         // switches from spinner to a tap-to-retry button.
         .task(id: InnerFetchTaskKey(eventId: event.id, attempt: innerFetchAttempt)) {
             await fetchInnerForRepost()
+        }
+        // Translation runs through this view-bound session — TranslationSession
+        // can only be obtained via this modifier. `startTranslation` (menu tap)
+        // or the auto-translate task below set `translationConfig`, which spins
+        // up a session scoped to this card. Progress and results land in the
+        // shared TranslationRepository keyed by the repost-resolved event id,
+        // so completed state survives row recycling.
+        .translationTask(translationConfig) { session in
+            let target = resolveRepost().event
+            // The action also re-runs when an already-translated card
+            // re-appears with its config still set — only proceed when work
+            // is actually pending, so a terminal state isn't clobbered back
+            // into a spinner (and translated again from scratch).
+            let status = translationRepo.state(for: target.id).status
+            guard status == .identifyingLanguage
+                || status == .downloadingModel
+                || status == .translating else { return }
+            do {
+                translationRepo.markDownloadingModel(eventId: target.id)
+                // Shows the system download-consent sheet when the language
+                // pair's model isn't installed yet.
+                try await session.prepareTranslation()
+                translationRepo.markTranslating(eventId: target.id)
+                let response = try await session.translate(target.content)
+                translationRepo.finish(eventId: target.id, translatedText: response.targetText)
+            } catch is CancellationError {
+                // View-bound session torn down mid-flight (row recycled /
+                // navigation). Reset so the card doesn't show a permanent
+                // spinner with the menu item disabled; the user can re-tap.
+                translationRepo.resetToIdle(eventId: target.id)
+            } catch {
+                // Mirror Android's `e.message ?: "Translation failed"`.
+                translationRepo.fail(eventId: target.id, message: error.localizedDescription)
+            }
+        }
+        // Auto-translate (mirrors Android wisp's LaunchedEffect in PostCard).
+        // iOS deviation: only fires when the language model is already
+        // installed — prepareTranslation() would pop the system download
+        // sheet mid-scroll otherwise. A manual Translate tap is the consent
+        // path that downloads the model.
+        .task(id: displayEventId) {
+            // Ancestor-compact rows have no overflow menu and no inline
+            // translation render site — don't burn detection/translation
+            // work on them.
+            guard !ancestorCompact, settings.autoTranslate else { return }
+            let target = resolveRepost().event
+            guard !target.content.isEmpty,
+                  translationRepo.state(for: target.id).status == .idle else { return }
+            guard let source = translationRepo.beginTranslation(
+                eventId: target.id,
+                content: target.content
+            ) else { return }
+            switch await LanguageAvailability().status(from: source, to: translationRepo.targetLanguage) {
+            case .installed:
+                armTranslation(source: source)
+            case .supported:
+                // Model not downloaded — skip silently (terminal, so
+                // re-appearing doesn't re-detect); the menu still offers
+                // Translate as the manual consent/download path.
+                translationRepo.markSkippedNotInstalled(eventId: target.id)
+            case .unsupported:
+                translationRepo.fail(eventId: target.id, message: "Unsupported source language")
+            @unknown default:
+                break
+            }
         }
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
@@ -1265,9 +1342,129 @@ struct PostCardView: View {
                         showDeleteConfirm = true
                     }
                 }
+
+                // Last row, matching Android wisp's PostCard menu order. The
+                // label tracks the translation lifecycle: idle → "Translate",
+                // done → a Show Original / Show Translation toggle, and a
+                // disabled "Same Language" when the note already matches the
+                // device language.
+                let tState = translationRepo.state(for: target.id)
+                let translating = tState.status == .identifyingLanguage
+                    || tState.status == .downloadingModel
+                    || tState.status == .translating
+                Divider()
+                popoverMenuItem(
+                    title: {
+                        switch tState.status {
+                        case .done: return showTranslation ? "Show Original" : "Show Translation"
+                        case .sameLanguage: return "Same Language"
+                        default: return "Translate"
+                        }
+                    }(),
+                    systemImage: "character.bubble",
+                    disabled: translating || tState.status == .sameLanguage
+                ) {
+                    showOverflowMenu = false
+                    if tState.status == .done {
+                        showTranslation.toggle()
+                    } else {
+                        startTranslation(target)
+                    }
+                }
             }
             .frame(minWidth: 240)
             .presentationCompactAdaptation(.popover)
+        }
+    }
+
+    /// Inline translation status / result block rendered directly below the
+    /// note content. Ported from Android wisp's PostCard translation UI:
+    /// spinner + status text while working, divider + "Translated from X" +
+    /// the translated text (same rich-content renderer as the body) when
+    /// done, red error text on failure.
+    @ViewBuilder
+    private func translationInline(for displayEvent: NostrEvent) -> some View {
+        let s = translationRepo.state(for: displayEvent.id)
+        switch s.status {
+        case .identifyingLanguage, .downloadingModel, .translating:
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(Color.wispPrimary)
+                Text(s.status == .identifyingLanguage ? "Detecting language…"
+                     : s.status == .downloadingModel ? "Downloading language model…"
+                     : "Translating…")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.wispOnSurfaceVariant)
+            }
+            .padding(.vertical, 4)
+        case .done:
+            if showTranslation {
+                VStack(alignment: .leading, spacing: 4) {
+                    Divider().overlay(Color.wispOutline.opacity(0.3))
+                    Text("Translated from \(s.sourceLanguage)")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Color.wispOnSurfaceVariant)
+                    RichContentView(
+                        content: s.translatedText,
+                        // Strip imeta tags: the parser appends orphan imeta
+                        // media not referenced in the content, which would
+                        // duplicate the note's gallery below the translated
+                        // text. Keep the rest (custom-emoji tags etc.).
+                        tags: displayEvent.tags.filter { $0.first != "imeta" },
+                        profiles: profiles,
+                        authorPubkey: displayEvent.pubkey,
+                        onProfileTap: onProfileTap,
+                        onNoteTap: onNoteTap,
+                        onHashtagTap: onHashtagTap,
+                        onPlainTextTap: { onNoteTap?(displayEvent.id) },
+                        linksEnabled: true
+                    )
+                }
+                .padding(.top, 4)
+            }
+        case .error:
+            Text(s.errorMessage)
+                .font(.system(size: 12))
+                .foregroundStyle(.red)
+                .padding(.vertical, 4)
+        case .idle, .sameLanguage, .skippedNotInstalled:
+            EmptyView()
+        }
+    }
+
+    /// Kick off detection + translation for the (repost-resolved) note.
+    /// Mirrors Android wisp's FeedViewModel.translateEvent →
+    /// TranslationRepository.translate. The repository performs detection
+    /// and the same-language short-circuit; on a translatable note, setting
+    /// `translationConfig` drives the `.translationTask` on the card root,
+    /// which owns the actual session.
+    private func startTranslation(_ target: NostrEvent) {
+        guard let source = translationRepo.beginTranslation(
+            eventId: target.id,
+            content: target.content
+        ) else { return }
+        showTranslation = true
+        armTranslation(source: source)
+    }
+
+    /// Set or re-arm the configuration driving `.translationTask`.
+    /// `TranslationSession.Configuration` is Equatable with an internal
+    /// version counter that only `invalidate()` bumps — a freshly
+    /// constructed config with the same language pair compares EQUAL to the
+    /// old value and would never re-run the task (a retry after an error
+    /// would hang on the spinner forever). So re-triggers must mutate +
+    /// invalidate the existing config instead of replacing it.
+    private func armTranslation(source: Locale.Language) {
+        if translationConfig != nil {
+            translationConfig?.source = source
+            translationConfig?.target = translationRepo.targetLanguage
+            translationConfig?.invalidate()
+        } else {
+            translationConfig = TranslationSession.Configuration(
+                source: source,
+                target: translationRepo.targetLanguage
+            )
         }
     }
 

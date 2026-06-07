@@ -109,6 +109,7 @@
 		4CFADE0100000000000F100A /* NSpamCalibration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFADE0000000000000F100A /* NSpamCalibration.swift */; };
 		4CFADE0100000000000F100B /* SpamScorer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFADE0000000000000F100B /* SpamScorer.swift */; };
 		4CFADE0100000000000F100C /* SafetySettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFADE0000000000000F100C /* SafetySettingsView.swift */; };
+		4CFADE0100000000000F100D /* TranslationRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFADE0000000000000F100D /* TranslationRepository.swift */; };
 		4CFF010100000000000000A1 /* Nip19.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF010000000000000000A1 /* Nip19.swift */; };
 		4CFF010300000000000000A2 /* Bolt11.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF010200000000000000A2 /* Bolt11.swift */; };
 		4CFF010500000000000000A3 /* ContentParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF010400000000000000A3 /* ContentParser.swift */; };
@@ -419,6 +420,7 @@
 		4CFADE0000000000000F100A /* NSpamCalibration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NSpamCalibration.swift; sourceTree = "<group>"; };
 		4CFADE0000000000000F100B /* SpamScorer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpamScorer.swift; sourceTree = "<group>"; };
 		4CFADE0000000000000F100C /* SafetySettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafetySettingsView.swift; sourceTree = "<group>"; };
+		4CFADE0000000000000F100D /* TranslationRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslationRepository.swift; sourceTree = "<group>"; };
 		4CFF010000000000000000A1 /* Nip19.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Nip19.swift; sourceTree = "<group>"; };
 		4CFF010200000000000000A2 /* Bolt11.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Bolt11.swift; sourceTree = "<group>"; };
 		4CFF010400000000000000A3 /* ContentParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentParser.swift; sourceTree = "<group>"; };
@@ -900,6 +902,7 @@
 				4CFADE0000000000000F100A /* NSpamCalibration.swift */,
 				4CFADE0000000000000F100B /* SpamScorer.swift */,
 				4CFADE0000000000000F100C /* SafetySettingsView.swift */,
+				4CFADE0000000000000F100D /* TranslationRepository.swift */,
 				4CFF610000000000000A0001 /* GiphyConfig.swift */,
 				4CFF610000000000000A0004 /* GifPickerView.swift */,
 				4CFF610000000000000A0007 /* GifBlossomUploader.swift */,
@@ -1354,6 +1357,7 @@
 				4CFADE0100000000000F100A /* NSpamCalibration.swift in Sources */,
 				4CFADE0100000000000F100B /* SpamScorer.swift in Sources */,
 				4CFADE0100000000000F100C /* SafetySettingsView.swift in Sources */,
+				4CFADE0100000000000F100D /* TranslationRepository.swift in Sources */,
 				4CFF610100000000000A0001 /* GiphyConfig.swift in Sources */,
 				4CFF610100000000000A0004 /* GifPickerView.swift in Sources */,
 				4CFF610100000000000A0007 /* GifBlossomUploader.swift in Sources */,

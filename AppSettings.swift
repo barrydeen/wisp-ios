@@ -42,6 +42,7 @@ final class AppSettings {
         static let autoApproveRelayAuth = "wisp_settings_auto_approve_relay_auth"
         static let zapIconStyle = "wisp_settings_zap_icon_style"
         static let videoLoop = "wisp_settings_video_loop"
+        static let autoTranslate = "wisp_settings_auto_translate"
         static func quickZapEnabled(for pubkey: String?) -> String {
             pubkey.map { "wisp_settings_quick_zap_enabled_\($0)" } ?? "wisp_settings_quick_zap_enabled"
         }
@@ -123,6 +124,11 @@ final class AppSettings {
     var videoLoop: Bool {
         didSet { UserDefaults.standard.set(videoLoop, forKey: Keys.videoLoop) }
     }
+    /// When true, notes that aren't in the device language are translated
+    /// automatically as they render. Mirrors Android's "auto_translate".
+    var autoTranslate: Bool {
+        didSet { UserDefaults.standard.set(autoTranslate, forKey: Keys.autoTranslate) }
+    }
     /// When true, a single tap of the zap button on a post sends the configured
     /// amount immediately. Long-press still opens the zap composer. Surfaces in
     /// settings as "Instant zaps" while in bitcoin mode and "Instant payments"
@@ -184,6 +190,7 @@ final class AppSettings {
         let zapRaw = defaults.string(forKey: Keys.zapIconStyle) ?? ZapIconStyle.bitcoin.rawValue
         self.zapIconStyle = ZapIconStyle(rawValue: zapRaw) ?? .bitcoin
         self.videoLoop = defaults.object(forKey: Keys.videoLoop) as? Bool ?? true
+        self.autoTranslate = defaults.object(forKey: Keys.autoTranslate) as? Bool ?? false
         let qzPubkey = NostrKey.load()?.pubkey
         self.quickZapEnabled = defaults.object(forKey: Keys.quickZapEnabled(for: qzPubkey)) as? Bool ?? false
         let storedQuickInt = defaults.integer(forKey: Keys.quickZapAmountSats(for: qzPubkey))

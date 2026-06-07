@@ -126,6 +126,14 @@ struct InterfaceSettingsView: View {
                         .foregroundStyle(theme.palette.onSurfaceVariant)
                 }
 
+                section(title: "Translation") {
+                    Toggle("Auto-translate notes", isOn: $settings.autoTranslate)
+                        .toggleStyle(SwitchToggleStyle(tint: theme.primary))
+                    Text("Automatically translate notes that aren't in your device language.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(theme.palette.onSurfaceVariant)
+                }
+
                 section(title: "Posting") {
                     Toggle("Wisp client tag", isOn: $settings.clientTagEnabled)
                         .toggleStyle(SwitchToggleStyle(tint: theme.primary))
