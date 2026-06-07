@@ -364,6 +364,12 @@ final class NotificationsViewModel {
             limit: 100
         )
         let events = await RelayPool.query(relays: Array(relays), filter: filter, timeout: 6)
+        // Cache the poll events themselves so an incoming `.pollVote` notification
+        // (the gate is `selfEventIds.contains(pollId)`, the exact set fetched here)
+        // can resolve the voter's selected-option label in the collapsed row.
+        for e in events where e.kind == Nip88.kindPoll || e.kind == Nip69.kindZapPoll {
+            repo.cacheReferencedEvent(e)
+        }
         // Union with whatever the cache had so we don't shrink the horizon if a relay temporarily
         // returned a partial set.
         let before = repo.selfEventIds
@@ -497,6 +503,11 @@ final class NotificationsViewModel {
         var byId: [String: NostrEvent] = [:]
         for e in mine { byId[e.id] = e }
         for e in voted { byId[e.id] = e }
+
+        // Seed the notification cache from disk so a backfilled/live `.pollVote`
+        // row can resolve its selected-option label on cold start, before the
+        // `refreshSelfEventIds` network query returns.
+        for poll in byId.values { repo.cacheReferencedEvent(poll) }
 
         var notified = pollEndedNotifiedIds
         var added = false

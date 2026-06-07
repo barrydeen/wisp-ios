@@ -141,8 +141,10 @@ struct NotificationRowView: View {
                 quoteExpansion
             case .mention:
                 mentionExpansion
-            case .reaction, .repost, .pollVote, .pollEnded:
+            case .reaction, .repost:
                 referencedNoteExpansion
+            case .pollVote, .pollEnded:
+                pollExpansion
             case .zap:
                 zapExpansion
             }
@@ -279,6 +281,28 @@ struct NotificationRowView: View {
             )
             .padding(.leading, Self.captionLeadingIndent)
             .padding(.trailing, 12)
+        }
+    }
+
+    /// Poll vote / poll-ended expansion: render the poll itself with its live
+    /// results inline (a full `PostCardView` of the poll event) so the user can
+    /// read the standings and vote without leaving the notifications screen. The
+    /// card's `.onAppear` registers the poll with `PollTallyRepository`, so the
+    /// tally fills in here just like in the feed. Falls back to the quoted-note
+    /// link if the poll event isn't cached yet.
+    @ViewBuilder
+    private var pollExpansion: some View {
+        if let poll = repo.event(forId: item.referencedEventId) {
+            PostCardView(
+                event: poll,
+                profile: profiles[poll.pubkey] ?? ProfileRepository.shared.get(poll.pubkey),
+                profiles: profiles,
+                onNoteTap: { _ in onNoteTap?(poll.id, poll.pubkey) }
+            )
+            .contentShape(Rectangle())
+            .onTapGesture { onNoteTap?(poll.id, poll.pubkey) }
+        } else {
+            referencedNoteExpansion
         }
     }
 
