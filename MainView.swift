@@ -572,6 +572,9 @@ struct MainView: View {
                                 LiveStreamView(route: route, keypair: keypair)
                                     .environment(walletStore)
                             }
+                            .navigationDestination(for: ArticleRoute.self) { route in
+                                ArticleView(route: route, keypair: keypair, path: $feedPath)
+                            }
                             .navigationDestination(for: HashtagFeedRoute.self) { route in
                                 hashtagFeedView(for: route)
                             }
@@ -646,6 +649,9 @@ struct MainView: View {
                                     scrollToId: route.scrollToId
                                 )
                             }
+                            .navigationDestination(for: ArticleRoute.self) { route in
+                                ArticleView(route: route, keypair: keypair, path: $searchPath)
+                            }
                             .toolbar(.hidden, for: .navigationBar)
                     }
                 case .notifications:
@@ -689,6 +695,9 @@ struct MainView: View {
                                 scrollToId: route.scrollToId
                             )
                         }
+                        .navigationDestination(for: ArticleRoute.self) { route in
+                            ArticleView(route: route, keypair: keypair, path: $notificationsPath)
+                        }
                         .toolbar(.hidden, for: .navigationBar)
                     }
                 case .wallet:
@@ -711,6 +720,9 @@ struct MainView: View {
                                     chain: $placeholderThreadChain,
                                     scrollToId: route.scrollToId
                                 )
+                            }
+                            .navigationDestination(for: ArticleRoute.self) { route in
+                                ArticleView(route: route, keypair: keypair, path: $placeholderPath)
                             }
                             .toolbar(.hidden, for: .navigationBar)
                     }
