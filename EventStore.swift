@@ -198,6 +198,50 @@ actor EventStore {
         return out
     }
 
+    /// Returns cached poll votes (kind-1018 responses) and zap receipts
+    /// (kind-9735) whose tags point at any of `pollIds`. Used to disk-seed
+    /// `PollTallyRepository` so a previously-seen poll renders its full tally
+    /// instantly on cold start — and so the user's own prior vote is detected
+    /// before the live subscription returns (driving the "already voted →
+    /// results, no re-vote" gate). Mirrors `loadEngagement`'s substring
+    /// pre-filter + Swift tag-walk. Target rule matches the live ingest path:
+    /// kind-1018 → first `e` tag; kind-9735 → last non-`mention` `e` tag.
+    func loadPollVotes(forPollIds pollIds: Set<String>) -> [NostrEvent] {
+        guard let box = ensureBox(), !pollIds.isEmpty else { return [] }
+        var out: [NostrEvent] = []
+        var seenIds = Set<String>()
+        for target in pollIds {
+            do {
+                let query = try box.query {
+                    (EventEntity.kind == Nip88.kindPollResponse || EventEntity.kind == 9735)
+                    && EventEntity.tags.contains(target)
+                }.build()
+                let candidates = try query.find(offset: 0, limit: 5000)
+                for entity in candidates {
+                    guard let event = entity.toNostrEvent(), !seenIds.contains(event.id) else { continue }
+                    let matches: Bool
+                    if event.kind == Nip88.kindPollResponse {
+                        matches = Nip88.getPollEventId(event).map { pollIds.contains($0) } ?? false
+                    } else {
+                        let eTargets = event.tags.compactMap { tag -> String? in
+                            guard tag.count >= 2, tag[0] == "e" else { return nil }
+                            if tag.count >= 4, tag[3] == "mention" { return nil }
+                            return tag[1]
+                        }
+                        matches = eTargets.last.map { pollIds.contains($0) } ?? false
+                    }
+                    if matches {
+                        seenIds.insert(event.id)
+                        out.append(event)
+                    }
+                }
+            } catch {
+                continue
+            }
+        }
+        return out
+    }
+
     /// Per-target reply counts from disk: how many cached kind:1 events reply to
     /// each of `targetIds`. Count-only (no `NostrEvent` materialization) because
     /// the feed card renders just a reply *number* — this lets the feed seed a

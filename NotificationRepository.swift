@@ -27,6 +27,17 @@ final class NotificationRepository {
 
     func event(forId id: String) -> NostrEvent? { eventCache[id] }
 
+    /// Cache a referenced poll event (kind 1068 / 6969) without creating a
+    /// notification row. Lets a collapsed `.pollVote` / `.zap` row resolve its
+    /// selected-option label(s) via `event(forId:)` — `classifyPollVote` only
+    /// stores the chosen option *ids*, and the human-readable labels live in
+    /// the poll's `option` / `poll_option` tags. Idempotent; never overwrites a
+    /// fuller copy already present.
+    func cacheReferencedEvent(_ event: NostrEvent) {
+        guard event.kind == Nip88.kindPoll || event.kind == Nip69.kindZapPoll else { return }
+        if eventCache[event.id] == nil { eventCache[event.id] = event }
+    }
+
     /// Caller-supplied set of the user's most-recent kind-1 ids. Drives reply/
     /// quote/repost/reaction reference-event ownership checks. NotificationsViewModel
     /// keeps this fresh.
@@ -94,6 +105,9 @@ final class NotificationRepository {
             if selfEventIds.insert(event.id).inserted {
                 persistSelfEventIds()
             }
+            // Cache the poll itself so a vote landing later this session can
+            // resolve its selected-option label(s) in the collapsed row.
+            cacheReferencedEvent(event)
         default:
             return
         }
