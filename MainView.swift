@@ -1,5 +1,13 @@
 import SwiftUI
 
+/// Identifiable wrapper so a PiP-restore request can drive a
+/// `fullScreenCover(item:)` for re-opening a popped-out video.
+private struct PiPVideoRestoreItem: Identifiable {
+    let id = UUID()
+    let url: String
+    let startSeconds: Double
+}
+
 struct MainView: View {
     let keypair: Keypair
     let onLogout: () -> Void
@@ -71,6 +79,12 @@ struct MainView: View {
     /// top" because rubber-banding can briefly leave the offset slightly
     /// positive even when the user is visually parked at the top.
     @State private var feedAtTop: Bool = true
+    /// Active Picture-in-Picture session, observed so the floating window's
+    /// "return to app" button can re-open the live stream / fullscreen video.
+    @State private var pipCoordinator = VideoPiPCoordinator.shared
+    /// Drives the fullscreen-video restore cover (set when a popped-out feed or
+    /// fullscreen video's restore button is tapped).
+    @State private var pipRestoreVideo: PiPVideoRestoreItem?
 
     private let drawerWidth: CGFloat = 320
 
@@ -530,6 +544,20 @@ struct MainView: View {
                 }
             )
             .presentationDetents([.medium, .large])
+        }
+        .onChange(of: pipCoordinator.restoreRequest) { _, request in
+            guard let request else { return }
+            switch request {
+            case .liveStream(let route):
+                selectedTab = .home
+                feedPath.append(route)
+            case .fullscreenVideo(let url, let atSeconds):
+                pipRestoreVideo = PiPVideoRestoreItem(url: url, startSeconds: atSeconds)
+            }
+            pipCoordinator.clearRestoreRequest()
+        }
+        .fullScreenCover(item: $pipRestoreVideo) { item in
+            FullScreenVideoView(url: item.url, startSeconds: item.startSeconds)
         }
     }
 
