@@ -828,7 +828,9 @@ struct MainView: View {
                     } else {
                         ForEach(viewModel.connectedRelays, id: \.url) { relay in
                             let host = URL(string: relay.url)?.host ?? relay.url
-                            Button { } label: {
+                            Button {
+                                viewModel.selectRelay(url: relay.url)
+                            } label: {
                                 Text("\(host) (\(relay.authorCount))")
                             }
                         }

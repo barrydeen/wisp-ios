@@ -798,7 +798,11 @@ final class FeedViewModel {
         connectedRelayCount = relays.count
         let filter = NostrFilter(kinds: Self.relayFeedKinds, limit: 100)
         let subId = "relay-feed-\(UUID().uuidString.prefix(8).lowercased())"
-        let sub = RelayPool.subscribe(relays: relays, filter: filter, id: subId)
+        // The active relay feed is the user's one explicit choice — bypass the
+        // pool's connection cap so it connects 100% of the time even when the
+        // always-on subs (follows/DM/notifications) have the pool at capacity.
+        let sub = RelayPool.subscribe(relays: relays, filter: filter, id: subId,
+                                      bypassConnectionCap: true)
         liveSubscription = sub
 
         // 15s "first event" watchdog — flips to noEvents if nothing arrives.
