@@ -22,12 +22,27 @@ final class WispPillLayoutManager: NSLayoutManager {
         let charRange = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
         textStorage.enumerateAttribute(.wispMentionPill, in: charRange, options: []) { value, range, _ in
             guard let color = value as? UIColor else { return }
+            let font = (textStorage.attribute(.font, at: range.location, effectiveRange: nil) as? UIFont)
+                ?? UIFont.preferredFont(forTextStyle: .body)
             let glyphRange = self.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
             guard let container = self.textContainer(forGlyphAt: glyphRange.location, effectiveRange: nil) else { return }
-            self.enumerateLineFragments(forGlyphRange: glyphRange) { _, _, _, lineGlyphRange, _ in
+            self.enumerateLineFragments(forGlyphRange: glyphRange) { _, usedRect, _, lineGlyphRange, _ in
                 let slice = NSIntersectionRange(lineGlyphRange, glyphRange)
                 guard slice.length > 0 else { return }
-                var rect = self.boundingRect(forGlyphRange: slice, in: container)
+                let glyphRect = self.boundingRect(forGlyphRange: slice, in: container)
+                // Horizontal extent comes from the glyphs; height is pinned to
+                // the run's font line-height centered on the line's used rect.
+                // `boundingRect(forGlyphRange:)` spans the whole line fragment,
+                // which includes the paragraph style's `lineSpacing`. Drawing
+                // the pill at that height — even at the original `dy: -1`
+                // inset — made each chip tall enough to overlap the lines
+                // above and below, colliding with mentions on adjacent rows.
+                var rect = CGRect(
+                    x: glyphRect.minX,
+                    y: usedRect.midY - font.lineHeight / 2,
+                    width: glyphRect.width,
+                    height: font.lineHeight
+                )
                 rect.origin.x += origin.x
                 rect.origin.y += origin.y
                 let pill = rect.insetBy(dx: -4, dy: -1)
