@@ -123,6 +123,8 @@
 		4CAA770800000000000000B4 /* MarkdownBlocks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CAA770700000000000000B4 /* MarkdownBlocks.swift */; };
 		4CAA770A00000000000000B5 /* ArticleViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CAA770900000000000000B5 /* ArticleViewModel.swift */; };
 		4CFF010F00000000000000A8 /* InlineVideoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF010E00000000000000A8 /* InlineVideoView.swift */; };
+		4CFF020100000000000000A8 /* VideoPiPCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF020000000000000000A8 /* VideoPiPCoordinator.swift */; };
+		4CFF020300000000000000A8 /* PiPPlayerViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF020200000000000000A8 /* PiPPlayerViewController.swift */; };
 		4CFF011100000000000000A9 /* InlineAudioView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF011000000000000000A9 /* InlineAudioView.swift */; };
 		4CFF011300000000000000AA /* InlineImageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF011200000000000000AA /* InlineImageView.swift */; };
 		4CFF011500000000000000AB /* AnimatedImageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF011400000000000000AB /* AnimatedImageView.swift */; };
@@ -434,6 +436,8 @@
 		4CAA770700000000000000B4 /* MarkdownBlocks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownBlocks.swift; sourceTree = "<group>"; };
 		4CAA770900000000000000B5 /* ArticleViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArticleViewModel.swift; sourceTree = "<group>"; };
 		4CFF010E00000000000000A8 /* InlineVideoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InlineVideoView.swift; sourceTree = "<group>"; };
+		4CFF020000000000000000A8 /* VideoPiPCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoPiPCoordinator.swift; sourceTree = "<group>"; };
+		4CFF020200000000000000A8 /* PiPPlayerViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiPPlayerViewController.swift; sourceTree = "<group>"; };
 		4CFF011000000000000000A9 /* InlineAudioView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InlineAudioView.swift; sourceTree = "<group>"; };
 		4CFF011200000000000000AA /* InlineImageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InlineImageView.swift; sourceTree = "<group>"; };
 		4CFF011400000000000000AB /* AnimatedImageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnimatedImageView.swift; sourceTree = "<group>"; };
@@ -722,6 +726,8 @@
 				4CAA770700000000000000B4 /* MarkdownBlocks.swift */,
 				4CAA770900000000000000B5 /* ArticleViewModel.swift */,
 				4CFF010E00000000000000A8 /* InlineVideoView.swift */,
+				4CFF020000000000000000A8 /* VideoPiPCoordinator.swift */,
+				4CFF020200000000000000A8 /* PiPPlayerViewController.swift */,
 				4CFF011000000000000000A9 /* InlineAudioView.swift */,
 				4CFF011200000000000000AA /* InlineImageView.swift */,
 				4CFF011400000000000000AB /* AnimatedImageView.swift */,
@@ -1177,6 +1183,8 @@
 				4CAA770800000000000000B4 /* MarkdownBlocks.swift in Sources */,
 				4CAA770A00000000000000B5 /* ArticleViewModel.swift in Sources */,
 				4CFF010F00000000000000A8 /* InlineVideoView.swift in Sources */,
+				4CFF020100000000000000A8 /* VideoPiPCoordinator.swift in Sources */,
+				4CFF020300000000000000A8 /* PiPPlayerViewController.swift in Sources */,
 				4CFF011100000000000000A9 /* InlineAudioView.swift in Sources */,
 				4CFF011300000000000000AA /* InlineImageView.swift in Sources */,
 				4CFF011500000000000000AB /* AnimatedImageView.swift in Sources */,
