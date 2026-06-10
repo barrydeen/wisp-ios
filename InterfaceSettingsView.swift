@@ -126,6 +126,14 @@ struct InterfaceSettingsView: View {
                         .foregroundStyle(theme.palette.onSurfaceVariant)
                 }
 
+                section(title: "Feed") {
+                    Toggle("Include replies in feeds", isOn: $settings.includeRepliesInFeed)
+                        .toggleStyle(SwitchToggleStyle(tint: theme.primary))
+                    Text("Shows replies from people you follow, with context about who they're replying to. When off, only top-level posts appear.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(theme.palette.onSurfaceVariant)
+                }
+
                 section(title: "Translation") {
                     Toggle("Auto-translate notes", isOn: $settings.autoTranslate)
                         .toggleStyle(SwitchToggleStyle(tint: theme.primary))

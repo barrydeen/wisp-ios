@@ -43,6 +43,7 @@ final class AppSettings {
         static let zapIconStyle = "wisp_settings_zap_icon_style"
         static let videoLoop = "wisp_settings_video_loop"
         static let autoTranslate = "wisp_settings_auto_translate"
+        static let includeRepliesInFeed = "wisp_settings_include_replies_in_feed"
         static func quickZapEnabled(for pubkey: String?) -> String {
             pubkey.map { "wisp_settings_quick_zap_enabled_\($0)" } ?? "wisp_settings_quick_zap_enabled"
         }
@@ -129,6 +130,16 @@ final class AppSettings {
     var autoTranslate: Bool {
         didSet { UserDefaults.standard.set(autoTranslate, forKey: Keys.autoTranslate) }
     }
+    /// When true, the Follows feed shows replies from followed authors,
+    /// rendered with their "Replying to …" context row. Off by default —
+    /// replies are stripped from the feed, the original behaviour.
+    var includeRepliesInFeed: Bool {
+        didSet {
+            UserDefaults.standard.set(includeRepliesInFeed, forKey: Keys.includeRepliesInFeed)
+            guard oldValue != includeRepliesInFeed else { return }
+            NotificationCenter.default.post(name: .feedRepliesSettingChanged, object: nil)
+        }
+    }
     /// When true, a single tap of the zap button on a post sends the configured
     /// amount immediately. Long-press still opens the zap composer. Surfaces in
     /// settings as "Instant zaps" while in bitcoin mode and "Instant payments"
@@ -191,6 +202,7 @@ final class AppSettings {
         self.zapIconStyle = ZapIconStyle(rawValue: zapRaw) ?? .bitcoin
         self.videoLoop = defaults.object(forKey: Keys.videoLoop) as? Bool ?? true
         self.autoTranslate = defaults.object(forKey: Keys.autoTranslate) as? Bool ?? false
+        self.includeRepliesInFeed = defaults.object(forKey: Keys.includeRepliesInFeed) as? Bool ?? false
         let qzPubkey = NostrKey.load()?.pubkey
         self.quickZapEnabled = defaults.object(forKey: Keys.quickZapEnabled(for: qzPubkey)) as? Bool ?? false
         let storedQuickInt = defaults.integer(forKey: Keys.quickZapAmountSats(for: qzPubkey))
@@ -258,4 +270,10 @@ nonisolated extension Color {
     static func hex(_ argb: UInt32) -> Color {
         Color(argb: Int(bitPattern: UInt(argb)))
     }
+}
+
+extension Notification.Name {
+    /// Posted by `AppSettings.includeRepliesInFeed.didSet` when the value
+    /// actually changes. `FeedViewModel` re-filters the Follows feed in place.
+    static let feedRepliesSettingChanged = Notification.Name("WispFeedRepliesSettingChanged")
 }
