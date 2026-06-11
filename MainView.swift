@@ -160,6 +160,14 @@ struct MainView: View {
                         feedPath.append(ProfileRoute(pubkey: keypair.pubkey))
                     }
                 },
+                onOpenProfileByPubkey: { scannedPubkey in
+                    closeDrawer()
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(280))
+                        selectedTab = .home
+                        feedPath.append(ProfileRoute(pubkey: scannedPubkey))
+                    }
+                },
                 onOpenInterface: {
                     closeDrawer()
                     showInterfaceSettings = true
