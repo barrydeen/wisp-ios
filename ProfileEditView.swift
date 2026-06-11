@@ -239,6 +239,13 @@ struct ProfileEditView: View {
             if advancedExpanded {
                 field(label: "Picture URL", text: $viewModel.picture, placeholder: "https://…", keyboard: .URL, autocaps: false)
                 field(label: "Banner URL", text: $viewModel.banner, placeholder: "https://…", keyboard: .URL, autocaps: false)
+                VStack(alignment: .leading, spacing: 6) {
+                    field(label: "CLINK offer", text: $viewModel.clinkOffer, placeholder: "noffer1…", autocaps: false)
+                    Text("Self-custodial Lightning payments. Generate one with Zeus, ShockWallet or Lightning.Pub.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 4)
+                }
             }
         }
         .padding(.top, 8)

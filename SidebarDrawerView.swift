@@ -178,7 +178,8 @@ struct SidebarDrawerView: View {
                 pubkey: pubkey,
                 displayName: displayName,
                 avatarUrl: profile?.picture,
-                lud16: profile?.lud16
+                lud16: profile?.lud16,
+                clinkOffer: profile?.clinkOffer
             )
         }
     }
