@@ -10,6 +10,9 @@ struct SidebarDrawerView: View {
     var onSwitchAccount: (Keypair) -> Void = { _ in }
     var onAddAccount: () -> Void = {}
     var onOpenProfile: () -> Void = {}
+    /// Route to another user's profile by hex pubkey — used when the QR sheet
+    /// scans someone else's Nostr QR.
+    var onOpenProfileByPubkey: (String) -> Void = { _ in }
     var onOpenInterface: () -> Void = {}
     var onOpenKeys: () -> Void = {}
     var onOpenDraftsScheduled: () -> Void = {}
@@ -178,7 +181,8 @@ struct SidebarDrawerView: View {
                 pubkey: pubkey,
                 displayName: displayName,
                 avatarUrl: profile?.picture,
-                lud16: profile?.lud16
+                lud16: profile?.lud16,
+                onOpenProfile: onOpenProfileByPubkey
             )
         }
     }

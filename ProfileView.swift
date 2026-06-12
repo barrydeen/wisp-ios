@@ -105,7 +105,8 @@ struct ProfileView: View {
                 pubkey: pubkey,
                 displayName: viewModel.profile?.displayString ?? shortKey(pubkey),
                 avatarUrl: viewModel.profile?.picture,
-                lud16: viewModel.profile?.lud16
+                lud16: viewModel.profile?.lud16,
+                onOpenProfile: onProfileTap
             )
         }
         .sheet(isPresented: $showEditProfile) {
