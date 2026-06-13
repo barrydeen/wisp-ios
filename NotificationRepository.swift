@@ -177,6 +177,16 @@ final class NotificationRepository {
         if isPrivate { item?.isPrivate = true }
 
         guard let item else { return false }
+        // Hellthread reference suppression: reactions/zaps/reposts whose target
+        // event is a hellthread pass the p-tag count check (they have few p-tags
+        // themselves) but are still noise. If the referenced event is already in
+        // cache, drop immediately; if not, the event was never ingested so the
+        // notification is orphaned and will show nothing useful anyway.
+        let hellSnap = SafetyFilter.shared.snapshot
+        if hellSnap.hellthreadFilterEnabled,
+           !item.referencedEventId.isEmpty,
+           let referenced = eventCache[item.referencedEventId],
+           referenced.isHellthread(threshold: hellSnap.hellthreadThreshold) { return false }
         // Self-zap (zapping your own note from your own wallet) — drop after
         // classification, since `actorPubkey` is the resolved zap-request signer.
         if item.kind == .zap && item.actorPubkey == activePubkey { return false }
