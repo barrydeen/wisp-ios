@@ -504,10 +504,11 @@ final class NotificationsViewModel {
         for e in mine { byId[e.id] = e }
         for e in voted { byId[e.id] = e }
 
-        // Seed the notification cache from disk so a backfilled/live `.pollVote`
-        // row can resolve its selected-option label on cold start, before the
-        // `refreshSelfEventIds` network query returns.
-        for poll in byId.values { repo.cacheReferencedEvent(poll) }
+        // Cache every poll event (active or ended) so consolidated `.pollVote`
+        // rows can resolve their per-choice labels — the poll itself is never
+        // ingested as a notification (it's the user's own event), so this is
+        // the only place the row's label source gets seeded.
+        for poll in byId.values { repo.cachePollEvent(poll) }
 
         var notified = pollEndedNotifiedIds
         var added = false

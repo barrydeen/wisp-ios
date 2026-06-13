@@ -61,6 +61,7 @@ struct NotificationRowView: View {
                             .accessibilityLabel("Private")
                     }
                     mergedZapsBadge
+                    pollVotersBadge
                 }
                 voteOptionLabel
                 if let snippet = referencedSnippet {
@@ -98,20 +99,54 @@ struct NotificationRowView: View {
         }
     }
 
+    /// Pill shown next to "voted on your poll" when a consolidated poll row
+    /// stands in for more than one voter. Tapping the row expands the poll.
+    @ViewBuilder
+    private var pollVotersBadge: some View {
+        if item.kind == .pollVote, item.pollVoterCount > 1 {
+            let n = item.pollVoterCount
+            Text("\(n) votes")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(Color.wispPrimary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(
+                    Capsule().fill(Color.wispPrimary.opacity(0.15))
+                )
+                .accessibilityLabel("\(n) votes")
+        }
+    }
+
     @ViewBuilder
     private var voteOptionLabel: some View {
-        // NIP-88 poll votes: show selected option labels.
-        if item.kind == .pollVote, !item.voteOptionIds.isEmpty,
-           let pollEvent = repo.event(forId: item.referencedEventId) {
-            let options = Nip88.parsePollOptions(pollEvent)
-            let labels = item.voteOptionIds.compactMap { id in
-                options.first(where: { $0.id == id })?.label
-            }
-            if !labels.isEmpty {
-                Text(labels.joinToString())
-                    .font(.caption)
-                    .foregroundStyle(Color.wispPrimary)
-                    .lineLimit(1)
+        // NIP-88 poll votes consolidate per poll — show each chosen option with
+        // its current voter count, ordered by the poll's option order. Falls
+        // back to the most-recent voter's choice when the poll event (the label
+        // source) isn't cached yet.
+        if item.kind == .pollVote {
+            if let pollEvent = repo.event(forId: item.referencedEventId) {
+                let options = Nip88.parsePollOptions(pollEvent)
+                let counts = item.pollVoteCounts
+                let parts = options.compactMap { opt -> String? in
+                    let c = counts[opt.id] ?? 0
+                    return c > 0 ? "\(opt.label) (\(c))" : nil
+                }
+                if !parts.isEmpty {
+                    Text(parts.joined(separator: " · "))
+                        .font(.caption)
+                        .foregroundStyle(Color.wispPrimary)
+                        .lineLimit(2)
+                } else if !item.voteOptionIds.isEmpty {
+                    let labels = item.voteOptionIds.compactMap { id in
+                        options.first(where: { $0.id == id })?.label
+                    }
+                    if !labels.isEmpty {
+                        Text(labels.joinToString())
+                            .font(.caption)
+                            .foregroundStyle(Color.wispPrimary)
+                            .lineLimit(1)
+                    }
+                }
             }
         }
         // Kind-6969 zap polls: show selected option label.
