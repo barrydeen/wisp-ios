@@ -437,6 +437,7 @@ struct PostCardView: View {
                             relays: combinedRelays(for: displayEvent.id),
                             tags: displayEvent.tags,
                             createdAt: displayEvent.createdAt,
+                            pollEvent: (displayEvent.kind == Nip88.kindPoll || displayEvent.kind == Nip69.kindZapPoll) ? displayEvent : nil,
                             profiles: profiles,
                             onProfileTap: onProfileTap,
                             onNoteTap: onNoteTap
@@ -2275,7 +2276,7 @@ private struct NoteDetailsPanel: View {
         detail: String,
         voterCount: Int,
         tint: Color,
-        @ViewBuilder content: () -> Content
+        @ViewBuilder content: @escaping () -> Content
     ) -> some View {
         let header = HStack(spacing: 8) {
             Text(label)
@@ -2285,7 +2286,7 @@ private struct NoteDetailsPanel: View {
             Spacer(minLength: 4)
             Text(detail)
                 .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.primary)
         }
 
         if voterCount == 0 {
@@ -2301,7 +2302,7 @@ private struct NoteDetailsPanel: View {
             } label: {
                 header
             }
-            .tint(tint)
+            .tint(.secondary)
         }
     }
 

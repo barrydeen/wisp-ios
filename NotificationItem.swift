@@ -110,8 +110,8 @@ enum NotificationFilter: String, CaseIterable, Hashable {
     case zaps
     case reposts
     case mentions
-    case votes
     case dms
+    case votes
 
     /// Map a `NotificationKind` to its filter bucket.
     /// Quote+mention collapse to .mentions; pollVote and pollEnded → .votes.

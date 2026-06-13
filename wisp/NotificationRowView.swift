@@ -40,36 +40,48 @@ struct NotificationRowView: View {
         HStack(alignment: .center, spacing: 8) {
             NotificationTypeIcon(item: item)
 
-            CachedAvatarView(url: profiles[item.actorPubkey]?.picture, size: 32)
-                .onTapGesture { onPeerTap(item.actorPubkey) }
-                .quickFollowOnLongPress(pubkey: item.actorPubkey)
+            if !(item.kind == .pollVote && item.pollVoterCount > 1) {
+                CachedAvatarView(url: profiles[item.actorPubkey]?.picture, size: 32)
+                    .onTapGesture { onPeerTap(item.actorPubkey) }
+                    .quickFollowOnLongPress(pubkey: item.actorPubkey)
+            }
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(displayName(item.actorPubkey))
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(1)
-                        .layoutPriority(1)
-                    Text(NotificationStyle.actionText(item.kind))
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                    if item.isPrivate || item.isPrivateZap {
-                        Image(systemName: "lock.fill")
-                            .font(.caption2)
-                            .foregroundStyle(Color.wispPrimary)
-                            .accessibilityLabel("Private")
+                    if item.kind == .pollVote, item.pollVoterCount > 1 {
+                        Text("\(item.pollVoterCount) votes")
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
+                            .layoutPriority(1)
+                        Text("on your poll")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    } else {
+                        Text(displayName(item.actorPubkey))
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
+                            .layoutPriority(1)
+                        Text(NotificationStyle.actionText(item.kind))
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                        if item.isPrivate || item.isPrivateZap {
+                            Image(systemName: "lock.fill")
+                                .font(.caption2)
+                                .foregroundStyle(Color.wispPrimary)
+                                .accessibilityLabel("Private")
+                        }
+                        mergedZapsBadge
                     }
-                    mergedZapsBadge
-                    pollVotersBadge
                 }
-                voteOptionLabel
                 if let snippet = referencedSnippet {
                     Text(snippet)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                 }
+                voteOptionLabel
             }
 
             Spacer(minLength: 8)
