@@ -126,7 +126,7 @@ struct RetryingAsyncImage<Content: View, Loading: View, Failure: View>: View {
                     }
             }
         }
-        .task(id: TaskKey(url: url, attempt: attempt)) {
+        .task(id: TaskKey(url: url, attempt: attempt, maxPixelSize: maxPixelSize)) {
             await load()
         }
     }
@@ -137,6 +137,10 @@ struct RetryingAsyncImage<Content: View, Loading: View, Failure: View>: View {
     private struct TaskKey: Hashable {
         let url: URL?
         let attempt: Int
+        /// Part of the identity so a caller that raises `maxPixelSize` (e.g.
+        /// the fullscreen viewer upgrading to full resolution on deep zoom)
+        /// kicks off a fresh, higher-resolution decode.
+        let maxPixelSize: CGFloat?
     }
 
     private func load() async {
@@ -163,7 +167,10 @@ struct RetryingAsyncImage<Content: View, Loading: View, Failure: View>: View {
             if Task.isCancelled { return }
         }
 
-        phase = .loading
+        // Keep any already-decoded image on screen while a re-decode runs
+        // (e.g. a deep-zoom upgrade to full resolution) so the viewer doesn't
+        // flash a loader over the image the user is actively zooming.
+        if case .success = phase {} else { phase = .loading }
         // Shared in-flight-deduped fetch+decode: if the lookahead prefetcher
         // (or another mounted view) already started this URL, attach to that
         // task instead of fetching again. This view's `.task` being cancelled
