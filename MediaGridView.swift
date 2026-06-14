@@ -257,6 +257,7 @@ private struct MediaTileImage: View {
             } else {
                 RetryingAsyncImage(
                     url: URL(string: item.url),
+                    maxPixelSize: ImagePixelBudget.feed,
                     content: { image in image.resizable().scaledToFill() },
                     loading: { placeholder },
                     failure: { placeholder }

@@ -48,6 +48,7 @@ struct InlineImageView: View {
                 } else {
                     RetryingAsyncImage(
                         url: URL(string: meta.url),
+                        maxPixelSize: ImagePixelBudget.feed,
                         content: { image in
                             image.resizable()
                                 .aspectRatio(contentMode: .fit)
@@ -413,8 +414,7 @@ struct FullScreenImageView: View {
         } else {
             RetryingAsyncImage(
                 url: URL(string: url),
-                // Full-screen zoom: keep native resolution so pinch-zoom stays crisp.
-                maxPixelSize: nil,
+                maxPixelSize: ImagePixelBudget.fullscreen,
                 content: { image in
                     image.resizable().scaledToFit()
                 },
