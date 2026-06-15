@@ -1566,7 +1566,13 @@ final class ComposeViewModel {
             } else {
                 tags.append(["e", parent.id, "", "reply"])
             }
-            tags.append(["p", parent.pubkey])
+            // Re-emit every distinct `p` tag carried in the parent so everyone
+            // already in the thread stays notified, then the parent author.
+            // (Mirrors the private-reply path.) Without the carry-forward we'd
+            // only tag the direct parent author, so a reply to a note that
+            // itself p-tagged others silently drops them — e.g. A↔B then B
+            // replying to B's own note would lose A.
+            tags.append(contentsOf: Nip10.participantTags(replyingTo: parent))
         case .quote(let q):
             tags.append(contentsOf: Nip18.buildQuoteTags(event: q))
         }

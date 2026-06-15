@@ -47,16 +47,30 @@ nonisolated enum Nip10 {
             tags.append(["e", replyTo.id, relayHint, "root"])
         }
 
+        tags.append(contentsOf: participantTags(replyingTo: replyTo))
+
+        return tags
+    }
+
+    /// The `p` tags a reply to `parent` must carry so the whole thread stays
+    /// notified: every distinct `p` tag already on `parent`, in order, followed
+    /// by `parent.pubkey` if it isn't already among them.
+    ///
+    /// This is the carry-forward that keeps a deep chain intact — e.g. with A↔B
+    /// and then B replying to B's own note, A's pubkey rides along from the
+    /// parent's `p` tags instead of being dropped. Used by both the public
+    /// composer path and `buildReplyTags`.
+    static func participantTags(replyingTo parent: NostrEvent) -> [[String]] {
+        var tags: [[String]] = []
         var seenP = Set<String>()
-        for tag in replyTo.tags where tag.count >= 2 && tag[0] == "p" {
+        for tag in parent.tags where tag.count >= 2 && tag[0] == "p" {
             if seenP.insert(tag[1]).inserted {
                 tags.append(["p", tag[1]])
             }
         }
-        if seenP.insert(replyTo.pubkey).inserted {
-            tags.append(["p", replyTo.pubkey])
+        if seenP.insert(parent.pubkey).inserted {
+            tags.append(["p", parent.pubkey])
         }
-
         return tags
     }
 
