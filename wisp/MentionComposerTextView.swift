@@ -45,7 +45,7 @@ final class WispPillLayoutManager: NSLayoutManager {
                 )
                 rect.origin.x += origin.x
                 rect.origin.y += origin.y
-                let pill = rect.insetBy(dx: -4, dy: -1)
+                let pill = rect.insetBy(dx: -5, dy: -1)
                 let path = UIBezierPath(roundedRect: pill, cornerRadius: pill.height / 2)
                 color.setFill()
                 path.fill()
@@ -129,9 +129,20 @@ enum ComposerTextStyling {
         storage.setAttributes(base, range: full)
         let pills = pillRanges(in: text, mentions: mentions).map(\.range)
         applyLinkColor(to: storage, text: text, avoiding: pills)
+        let ns = text as NSString
         for r in pills {
             storage.addAttribute(.foregroundColor, value: pillTextColor, range: r)
             storage.addAttribute(.wispMentionPill, value: pillFillColor, range: r)
+            // Widen the space characters immediately before and after the pill by
+            // the same amount as the background's dx expansion so the pill's
+            // background never visually consumes the surrounding word spaces.
+            if r.location > 0 && ns.character(at: r.location - 1) == 0x0020 {
+                storage.addAttribute(.kern, value: CGFloat(5), range: NSRange(location: r.location - 1, length: 1))
+            }
+            let tail = r.location + r.length
+            if tail < ns.length && ns.character(at: tail) == 0x0020 {
+                storage.addAttribute(.kern, value: CGFloat(5), range: NSRange(location: tail, length: 1))
+            }
         }
         storage.endEditing()
     }
