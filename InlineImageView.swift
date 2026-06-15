@@ -48,6 +48,7 @@ struct InlineImageView: View {
                 } else {
                     RetryingAsyncImage(
                         url: URL(string: meta.url),
+                        maxPixelSize: ImagePixelBudget.feed,
                         content: { image in
                             image.resizable()
                                 .aspectRatio(contentMode: .fit)
@@ -204,6 +205,16 @@ struct FullScreenImageView: View {
     /// auto-dismisses after a short window.
     @State private var copiedToastVisible = false
     @State private var showPhotosAlert = false
+    /// Latched true once the user zooms in past `fullResZoomThreshold`, which
+    /// swaps the downsampled decode for a full-resolution one in place. Stays
+    /// true after zooming back out — the full-res bitmap is already cached, so
+    /// there's nothing to gain from reverting.
+    @State private var loadFullRes = false
+
+    /// Zoom level at or above which the viewer upgrades from its downsampled
+    /// decode (`ImagePixelBudget.fullscreen`, ~2× screen width) to the full
+    /// source. Below this the downsample is indistinguishable from full res.
+    private static let fullResZoomThreshold: CGFloat = 2.0
 
     /// True when this view runs standalone (handles its own dismiss) vs
     /// embedded inside `FullScreenMediaPager` (forwards drags to the pager).
@@ -413,8 +424,7 @@ struct FullScreenImageView: View {
         } else {
             RetryingAsyncImage(
                 url: URL(string: url),
-                // Full-screen zoom: keep native resolution so pinch-zoom stays crisp.
-                maxPixelSize: nil,
+                maxPixelSize: loadFullRes ? nil : ImagePixelBudget.fullscreen,
                 content: { image in
                     image.resizable().scaledToFit()
                 },
@@ -443,6 +453,7 @@ struct FullScreenImageView: View {
         pinching = true
         let newScale = min(Self.maxScale, max(1.0, lastScale * magValue))
         scale = newScale
+        upgradeToFullResIfNeeded(scale: newScale)
         // Apply scale + centroid translation in one go so the image follows
         // the two-finger pivot as the user pinches. Rubber-band lets the
         // offset overshoot bounds smoothly; spring-back on end settles it.
@@ -458,6 +469,7 @@ struct FullScreenImageView: View {
         let newScale = min(Self.maxScale, max(1.0, lastScale * magValue))
         scale = newScale
         lastScale = newScale
+        upgradeToFullResIfNeeded(scale: newScale)
         if newScale <= 1.0 {
             withAnimation(.spring(response: 0.3)) {
                 scale = 1.0
@@ -521,7 +533,16 @@ struct FullScreenImageView: View {
             } else {
                 scale = 2.0
                 lastScale = 2.0
+                upgradeToFullResIfNeeded(scale: 2.0)
             }
+        }
+    }
+
+    /// Latch `loadFullRes` once zoom reaches `fullResZoomThreshold` so the
+    /// decode upgrades to full resolution. One-way — see `loadFullRes`.
+    private func upgradeToFullResIfNeeded(scale: CGFloat) {
+        if !loadFullRes && scale >= Self.fullResZoomThreshold {
+            loadFullRes = true
         }
     }
 }

@@ -204,7 +204,21 @@ struct RichContentView: View {
         /// produced when the user's `mediaLayoutStyle` is `.grid`; otherwise
         /// each media item stays a separate `.block` and stacks vertically.
         case mediaGroup([ContentSegment])
+        /// Terminal tile for a stacked media run that exceeded
+        /// `maxStackedMedia`. `remaining` is how many items were folded away;
+        /// `url` is the first folded item so a tap can open the post-wide
+        /// pager at the right page. Caps the non-grid path so a note with
+        /// dozens of images can't instantiate dozens of `InlineImageView`s
+        /// (each eagerly decoding a full-resolution image) in one non-lazy
+        /// VStack — the stack-layout half of the "client killer" note.
+        case mediaOverflow(remaining: Int, url: String)
     }
+
+    /// Maximum number of media items a non-grid (stacked) run renders inline
+    /// before the rest collapse into a single "＋N more" tile. Grid runs are
+    /// unaffected — their `MediaGridView` carousel is a `LazyHStack` that only
+    /// materialises visible tiles.
+    private static let maxStackedMedia = 8
 
     private func groupSegments(_ segments: [ContentSegment], gridLayout: Bool) -> [SegmentGroup] {
         var groups: [SegmentGroup] = []
@@ -234,6 +248,16 @@ struct RichContentView: View {
                 }
                 if gridLayout && run.count >= 2 {
                     groups.append(.mediaGroup(run))
+                } else if run.count > Self.maxStackedMedia {
+                    // Stacked run too long to render every item inline. Show
+                    // the first `maxStackedMedia` as normal blocks, then fold
+                    // the remainder into one "＋N more" tile that opens the
+                    // pager at the first hidden item.
+                    for m in run.prefix(Self.maxStackedMedia) { groups.append(.block(m)) }
+                    let hidden = run.count - Self.maxStackedMedia
+                    if let firstHiddenUrl = mediaItem(from: run[Self.maxStackedMedia])?.url {
+                        groups.append(.mediaOverflow(remaining: hidden, url: firstHiddenUrl))
+                    }
                 } else {
                     for m in run { groups.append(.block(m)) }
                 }
@@ -315,7 +339,43 @@ struct RichContentView: View {
                     openPager(for: runItems[localIdx].url, in: allMediaItems)
                 }
             )
+        case .mediaOverflow(let remaining, let url):
+            mediaOverflowTile(remaining: remaining, url: url, allMediaItems: allMediaItems)
         }
+    }
+
+    /// Tappable "＋N more" tile that stands in for the tail of an
+    /// over-long stacked media run. Opens the post-wide pager at the first
+    /// hidden item so the user can still swipe through everything.
+    private func mediaOverflowTile(
+        remaining: Int,
+        url: String,
+        allMediaItems: [MediaGridView.MediaItem]
+    ) -> some View {
+        Button {
+            openPager(for: url, in: allMediaItems)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "photo.stack")
+                    .font(.title3)
+                Text("+\(remaining) more")
+                    .font(.callout.weight(.semibold))
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .foregroundStyle(.primary)
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.wispSurfaceVariant.opacity(0.3))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(Color.wispSurfaceVariant, lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
     }
 
     private func mediaItem(from segment: ContentSegment) -> MediaGridView.MediaItem? {

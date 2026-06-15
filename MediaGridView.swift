@@ -257,6 +257,7 @@ private struct MediaTileImage: View {
             } else {
                 RetryingAsyncImage(
                     url: URL(string: item.url),
+                    maxPixelSize: ImagePixelBudget.feed,
                     content: { image in image.resizable().scaledToFill() },
                     loading: { placeholder },
                     failure: { placeholder }
@@ -351,8 +352,22 @@ struct FullScreenMediaPager: View {
 
                 HStack(spacing: 0) {
                     ForEach(Array(items.enumerated()), id: \.offset) { i, item in
-                        pageContent(for: item)
-                            .frame(width: geo.size.width, height: geo.size.height)
+                        // Only the current page and its immediate neighbours
+                        // build real image/video content; every other slot
+                        // stays an empty placeholder of the same size so the
+                        // `-index * width` paging math is unchanged. Without
+                        // this window, opening the pager on a note with dozens
+                        // of images instantiates every full-resolution decode
+                        // at once and jetsam-kills the app (the "client
+                        // killer" stress-test note).
+                        Group {
+                            if abs(i - index) <= 1 {
+                                pageContent(for: item)
+                            } else {
+                                Color.clear
+                            }
+                        }
+                        .frame(width: geo.size.width, height: geo.size.height)
                     }
                 }
                 .frame(width: geo.size.width, height: geo.size.height, alignment: .leading)
@@ -364,19 +379,20 @@ struct FullScreenMediaPager: View {
                 .onChange(of: geo.size.width) { _, new in pageWidth = new }
 
                 if items.count > 1 {
-                    HStack(spacing: 6) {
-                        ForEach(0..<items.count, id: \.self) { i in
-                            Circle()
-                                .fill(Color.white.opacity(i == index ? 0.9 : 0.35))
-                                .frame(width: 6, height: 6)
-                        }
-                    }
-                    .padding(.vertical, 6)
-                    .padding(.horizontal, 10)
-                    .background(Color.black.opacity(0.4), in: Capsule())
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                    .padding(.bottom, 24)
-                    .allowsHitTesting(false)
+                    // A numeric `N / M` badge, matching the in-feed gallery's
+                    // `indexBadge`. A per-item dot row overflowed the viewport
+                    // once a post carried more than ~25 images; numbers stay a
+                    // fixed-width capsule at any count and read consistently
+                    // with the feed.
+                    Text("\(index + 1) / \(items.count)")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.9))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(Color.black.opacity(0.4), in: Capsule())
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                        .padding(.bottom, 24)
+                        .allowsHitTesting(false)
                 }
             }
         }
