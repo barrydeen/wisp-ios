@@ -299,7 +299,7 @@ enum EmojiData {
                 "🟥", "🟧", "🟨", "🟩", "🟦",
                 "🟪", "🟫",
                 "🔴", "🟠", "🟡", "🟢", "🔵",
-                "🟣", "🟤", "⚫", "⚪",
+                "🟣", "🟤", "⚫", "⚪", "⭕",
                 "🔔", "🔕", "📣", "📢", "🔇",
                 "🔈", "🔉", "🔊",
                 "▶️", "⏸️", "⏹️", "⏺️", "⏭️",
@@ -409,7 +409,8 @@ enum EmojiData {
         // Common short forms
         "💯": ["100", "hundred"],
         "🆗": ["ok"],
-        "🆕": ["new"]
+        "🆕": ["new"],
+        "⭕": ["circle", "o", "ring"]
     ]
 
     /// Reverse index used by `searchEmojis`. Built once on first access so
