@@ -96,6 +96,7 @@ final class ProfileViewModel {
     @ObservationIgnored private let profileRepo = ProfileRepository.shared
     @ObservationIgnored private let eventStore = EventStore.shared
     @ObservationIgnored private var safetyObserver: NSObjectProtocol?
+    @ObservationIgnored private var followsObserver: NSObjectProtocol?
 
     private static let indexerRelays = RelayDefaults.indexers
 
@@ -111,6 +112,12 @@ final class ProfileViewModel {
         // tightens — same contract as the feed and thread observers. The
         // ingest paths all gate on `shouldDrop(.feed)`, so this only has to
         // scrub what was loaded under looser rules.
+        followsObserver = NotificationCenter.default.addObserver(
+            forName: .followsDidChange, object: nil, queue: .main
+        ) { [weak self] _ in
+            guard let self else { return }
+            youFollow = FollowsCache.shared.followsSet(for: activeUserPubkey).contains(pubkey)
+        }
         safetyObserver = NotificationCenter.default.addObserver(
             forName: .safetyFilterChanged, object: nil, queue: .main
         ) { [weak self] _ in
@@ -129,6 +136,7 @@ final class ProfileViewModel {
     }
 
     deinit {
+        if let followsObserver { NotificationCenter.default.removeObserver(followsObserver) }
         if let safetyObserver { NotificationCenter.default.removeObserver(safetyObserver) }
     }
 
