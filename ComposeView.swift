@@ -121,6 +121,9 @@ struct ComposeView: View {
                                 ComposerPreviewCard(
                                     content: viewModel.previewContent,
                                     tags: previewTags,
+                                    pollOptions: viewModel.pollEnabled
+                                        ? viewModel.pollOptions.filter { !$0.isEmpty }
+                                        : nil,
                                     userProfile: ProfileRepository.shared.get(viewModel.signingKeypair.pubkey)
                                 )
                                 .id(previewAnchorID)
