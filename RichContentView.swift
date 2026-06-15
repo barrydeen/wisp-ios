@@ -431,6 +431,14 @@ struct RichContentView: View {
                     profiles: profiles,
                     onProfileTap: onProfileTap
                 )
+            } else if kind == MusicTrackCache.kind, let author {
+                MusicTrackCardView(
+                    dTag: dTag,
+                    author: author,
+                    relayHints: relays,
+                    profiles: profiles,
+                    onProfileTap: onProfileTap
+                )
             } else {
                 addressablePlaceholder(dTag: dTag, author: author, kind: kind)
             }
@@ -490,6 +498,7 @@ struct RichContentView: View {
     private func addressableTitle(kind: Int?) -> String {
         switch kind {
         case 30023: return "Long-form article"
+        case 36787: return "Music track"
         case 30311: return "Live stream"
         case 30030: return "Emoji pack"
         case 34550: return "Community"
