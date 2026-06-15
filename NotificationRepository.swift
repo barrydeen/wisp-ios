@@ -210,6 +210,18 @@ final class NotificationRepository {
             }
         }
         eventCache[event.id] = event
+
+        // Poll votes don't get a row each — they fold into one consolidated
+        // per-poll row grouped by choice. This both matches how the poll
+        // breakdown reads elsewhere and stops a heavily-voted poll from
+        // pushing itself (and everything else) out of the capped flat buffer.
+        if item.kind == .pollVote {
+            let changed = mergePollVote(item)
+            if changed, persist {
+                Task { await EventPersistQueue.shared.enqueue(event) }
+            }
+            return changed
+        }
         // Insert in timestamp-desc sorted position so the FIFO eviction at the
         // tail actually drops the oldest item. A backfill burst delivers items
         // out of order — without this, old events get placed at index 0 and
@@ -282,6 +294,65 @@ final class NotificationRepository {
         summary = computeSummary24h()
         bumpLatestTimestamp(item.timestamp)
         return true
+    }
+
+    /// Fold a single kind-1018 vote into a per-poll consolidated row, keyed
+    /// `poll-votes:<pollId>`. Latest-wins per voter so a re-vote updates the
+    /// tally in place. Returns true when the row was created or its tally
+    /// actually changed (older/duplicate votes are a no-op).
+    private func mergePollVote(_ vote: FlatNotificationItem) -> Bool {
+        let pollId = vote.referencedEventId
+        let rowId = "poll-votes:\(pollId)"
+        let record = PollVoteRecord(timestamp: vote.timestamp, optionIds: vote.voteOptionIds)
+
+        if let idx = flatItems.firstIndex(where: { $0.id == rowId }) {
+            var row = flatItems[idx]
+            if let prev = row.pollVotes[vote.actorPubkey], vote.timestamp <= prev.timestamp {
+                return false   // older or duplicate vote — ignore
+            }
+            row.pollVotes[vote.actorPubkey] = record
+            // Surface the most-recent voter + their choice on the collapsed row
+            // and float the row up to the newest vote's time.
+            if vote.timestamp >= row.timestamp {
+                row.actorPubkey = vote.actorPubkey
+                row.voteOptionIds = vote.voteOptionIds
+                row.timestamp = vote.timestamp
+            }
+            withTransaction(Transaction(animation: nil)) {
+                flatItems.remove(at: idx)
+                let insertIdx = flatItems.firstIndex(where: { $0.timestamp < row.timestamp }) ?? flatItems.count
+                flatItems.insert(row, at: insertIdx)
+            }
+            summary = computeSummary24h()
+            bumpLatestTimestamp(row.timestamp)
+            return true
+        }
+
+        var row = FlatNotificationItem(
+            id: rowId,
+            kind: .pollVote,
+            actorPubkey: vote.actorPubkey,
+            referencedEventId: pollId,
+            timestamp: vote.timestamp,
+            voteOptionIds: vote.voteOptionIds
+        )
+        row.pollVotes = [vote.actorPubkey: record]
+        withTransaction(Transaction(animation: nil)) {
+            let insertIdx = flatItems.firstIndex(where: { $0.timestamp < row.timestamp }) ?? flatItems.count
+            flatItems.insert(row, at: insertIdx)
+            if flatItems.count > Self.flatCap { flatItems.removeLast(flatItems.count - Self.flatCap) }
+        }
+        summary = computeSummary24h()
+        bumpLatestTimestamp(row.timestamp)
+        return true
+    }
+
+    /// Seed a poll event into the cache so consolidated `.pollVote` rows can
+    /// resolve choice labels even for polls that are still active (the
+    /// poll-ended scan only caches polls that have closed).
+    func cachePollEvent(_ event: NostrEvent) {
+        guard event.kind == Nip88.kindPoll || event.kind == Nip69.kindZapPoll else { return }
+        eventCache[event.id] = event
     }
 
     func addInlineReply(_ event: NostrEvent, targetEventId: String) {

@@ -437,6 +437,7 @@ struct PostCardView: View {
                             relays: combinedRelays(for: displayEvent.id),
                             tags: displayEvent.tags,
                             createdAt: displayEvent.createdAt,
+                            pollEvent: (displayEvent.kind == Nip88.kindPoll || displayEvent.kind == Nip69.kindZapPoll) ? displayEvent : nil,
                             profiles: profiles,
                             onProfileTap: onProfileTap,
                             onNoteTap: onNoteTap
@@ -601,6 +602,7 @@ struct PostCardView: View {
                         relays: combinedRelays(for: displayEvent.id),
                         tags: displayEvent.tags,
                         createdAt: displayEvent.createdAt,
+                        pollEvent: (displayEvent.kind == Nip88.kindPoll || displayEvent.kind == Nip69.kindZapPoll) ? displayEvent : nil,
                         profiles: profiles,
                         onProfileTap: onProfileTap,
                         onNoteTap: onNoteTap
@@ -2135,6 +2137,9 @@ private struct NoteDetailsPanel: View {
     let relays: [String]
     let tags: [[String]]
     let createdAt: Int
+    /// Set when the note is a NIP-88 (1068) or NIP-69 (6969) poll. Drives the
+    /// "Votes" section that groups voters under their chosen option.
+    let pollEvent: NostrEvent?
     let profiles: [String: ProfileData]
     let onProfileTap: ((String) -> Void)?
     /// Tap on a quote-post avatar navigates to that quote's thread. Wired
@@ -2142,6 +2147,9 @@ private struct NoteDetailsPanel: View {
     let onNoteTap: ((String) -> Void)?
 
     @State private var relaysExpanded = false
+    /// Option ids / zap-option keys whose voter list is currently expanded.
+    @State private var expandedVoteOptions: Set<String> = []
+    @State private var tallyRepo = PollTallyRepository.shared
 
     private static let relayChipLimit = 6
 
@@ -2153,6 +2161,9 @@ private struct NoteDetailsPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            if pollEvent != nil {
+                pollVotesSection
+            }
             if !zappers.isEmpty {
                 zapsSection
             }
@@ -2185,12 +2196,153 @@ private struct NoteDetailsPanel: View {
             // MissingProfileWatcher never sees them during feed load.
             // Submit them here so their profiles are fetched and broadcast
             // back into FeedViewModel's profiles dict for the avatar rows.
-            let unknown = Set(zappers.map(\.pubkey) + reposters + reactors.map(\.pubkey) + quoters.map(\.pubkey))
-                .filter { profiles[$0] == nil }
+            var actors = Set(zappers.map(\.pubkey) + reposters + reactors.map(\.pubkey) + quoters.map(\.pubkey))
+            if let pollEvent {
+                let breakdown = PollTallyRepository.shared.voteBreakdown(for: pollEvent.id)
+                actors.formUnion(breakdown.votersByOption.values.flatMap { $0 })
+                actors.formUnion(breakdown.zappersByOption.values.flatMap { $0.map(\.pubkey) })
+            }
+            let unknown = actors.filter { profiles[$0] == nil }
             if !unknown.isEmpty {
                 MissingProfileWatcher.shared.observePubkeys(unknown)
             }
         }
+    }
+
+    // MARK: - Poll votes (grouped by choice)
+
+    /// Renders each poll choice as an expandable tab. Collapsed, a tab shows the
+    /// option label and its tally; expanded, it lists the voters who picked it.
+    /// Choices are ordered by tally (votes, or sats for zap polls) descending so
+    /// the leading option leads.
+    @ViewBuilder
+    private var pollVotesSection: some View {
+        if let pollEvent {
+            // Touch `version` so live vote ingestion re-renders the section.
+            let _ = tallyRepo.version
+            let isZap = pollEvent.kind == Nip69.kindZapPoll
+            let tally = PollTallyRepository.shared.tally(for: pollEvent.id)
+            let breakdown = PollTallyRepository.shared.voteBreakdown(for: pollEvent.id)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Votes")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+
+                if isZap {
+                    let options = Nip69.parseZapPollOptions(pollEvent)
+                        .sorted { (tally.satsCounts[$0.index] ?? 0) > (tally.satsCounts[$1.index] ?? 0) }
+                    ForEach(options, id: \.index) { option in
+                        let zappers = breakdown.zappersByOption[option.index] ?? []
+                        voteTab(
+                            key: "z\(option.index)",
+                            label: option.label,
+                            detail: "\(tally.satsCounts[option.index] ?? 0) sats · \(zappers.count)",
+                            voterCount: zappers.count,
+                            tint: Color.wispZapColor
+                        ) {
+                            ForEach(Array(zappers.enumerated()), id: \.offset) { _, z in
+                                voterRow(pubkey: z.pubkey, trailing: "\(z.sats) sats", tint: Color.wispZapColor)
+                            }
+                        }
+                    }
+                } else {
+                    let options = Nip88.parsePollOptions(pollEvent)
+                        .sorted { (tally.voteCounts[$0.id] ?? 0) > (tally.voteCounts[$1.id] ?? 0) }
+                    ForEach(options, id: \.id) { option in
+                        let voters = breakdown.votersByOption[option.id] ?? []
+                        let count = tally.voteCounts[option.id] ?? 0
+                        voteTab(
+                            key: option.id,
+                            label: option.label,
+                            detail: voteDetail(count: count, total: tally.totalVotes),
+                            voterCount: voters.count,
+                            tint: Color.wispPrimary
+                        ) {
+                            ForEach(Array(voters.enumerated()), id: \.offset) { _, pk in
+                                voterRow(pubkey: pk, trailing: nil, tint: Color.wispPrimary)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func voteTab<Content: View>(
+        key: String,
+        label: String,
+        detail: String,
+        voterCount: Int,
+        tint: Color,
+        @ViewBuilder content: @escaping () -> Content
+    ) -> some View {
+        let header = HStack(spacing: 8) {
+            Text(label)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+            Spacer(minLength: 4)
+            Text(detail)
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.primary)
+        }
+
+        if voterCount == 0 {
+            // No voters to reveal — render a flat, non-expandable row.
+            header
+                .padding(.vertical, 2)
+        } else {
+            DisclosureGroup(isExpanded: voteOptionBinding(key)) {
+                VStack(alignment: .leading, spacing: 4) {
+                    content()
+                }
+                .padding(.top, 4)
+            } label: {
+                header
+            }
+            .tint(.secondary)
+        }
+    }
+
+    private func voteOptionBinding(_ key: String) -> Binding<Bool> {
+        Binding(
+            get: { expandedVoteOptions.contains(key) },
+            set: { expand in
+                if expand { expandedVoteOptions.insert(key) } else { expandedVoteOptions.remove(key) }
+            }
+        )
+    }
+
+    @ViewBuilder
+    private func voterRow(pubkey: String, trailing: String?, tint: Color) -> some View {
+        let profile = profiles[pubkey] ?? ProfileRepository.shared.get(pubkey)
+        Button {
+            onProfileTap?(pubkey)
+        } label: {
+            HStack(spacing: 8) {
+                CachedAvatarView(url: profile?.picture, size: 24)
+                Text(profile?.displayString ?? short(pubkey))
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                if let trailing {
+                    Text(trailing)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(tint)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .padding(.leading, 8)
+    }
+
+    private func voteDetail(count: Int, total: Int) -> String {
+        guard total > 0 else { return "\(count)" }
+        let pct = Int((Double(count) / Double(total) * 100).rounded())
+        return "\(count) · \(pct)%"
     }
 
     /// Multiple zaps from the same pubkey collapse into one row showing the

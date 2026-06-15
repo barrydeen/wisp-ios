@@ -158,29 +158,34 @@ private struct DailySummaryBar: View {
 
     var body: some View {
         let s = viewModel.summary
-        HStack(spacing: 0) {
-            stat(filter: .replies, label: "\(s.replyCount)") {
-                Image(systemName: "bubble.right").font(.system(size: 14))
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 4) {
+                stat(filter: .replies, label: "\(s.replyCount)") {
+                    Image(systemName: "bubble.right").font(.system(size: 14))
+                }
+                stat(filter: .reactions, label: "\(s.reactionCount)") {
+                    Image(systemName: "heart").font(.system(size: 14))
+                }
+                stat(filter: .zaps, label: s.zapSats > 0 ? "\(NotificationStyle.formatSats(s.zapSats))" : "0") {
+                    BoltIcon(tint: tint(for: .zaps))
+                        .frame(width: 12, height: 14)
+                }
+                stat(filter: .reposts, label: "\(s.repostCount)") {
+                    Image(systemName: "arrow.2.squarepath").font(.system(size: 14))
+                }
+                stat(filter: .mentions, label: "\(s.mentionCount + s.quoteCount)") {
+                    Image(systemName: "at").font(.system(size: 14))
+                }
+                stat(filter: .dms, label: "\(s.dmCount)") {
+                    Image(systemName: "envelope").font(.system(size: 14))
+                }
+                stat(filter: .votes, label: "\(s.pollVoteCount + s.pollEndedCount)") {
+                    Image(systemName: "chart.bar").font(.system(size: 14))
+                }
             }
-            stat(filter: .reactions, label: "\(s.reactionCount)") {
-                Image(systemName: "heart").font(.system(size: 14))
-            }
-            stat(filter: .zaps, label: s.zapSats > 0 ? "\(NotificationStyle.formatSats(s.zapSats))" : "0") {
-                BoltIcon(tint: tint(for: .zaps))
-                    .frame(width: 12, height: 14)
-            }
-            stat(filter: .reposts, label: "\(s.repostCount)") {
-                Image(systemName: "arrow.2.squarepath").font(.system(size: 14))
-            }
-            stat(filter: .mentions, label: "\(s.mentionCount + s.quoteCount)") {
-                Image(systemName: "at").font(.system(size: 14))
-            }
-            stat(filter: .dms, label: "\(s.dmCount)") {
-                Image(systemName: "envelope").font(.system(size: 14))
-            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
         .background(Color.wispSurfaceVariant.opacity(0.35))
     }
 
@@ -204,7 +209,7 @@ private struct DailySummaryBar: View {
                     .font(.caption)
                     .foregroundStyle(active ? Color.wispPrimary : .secondary)
             }
-            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 10)
             .padding(.vertical, 4)
             .background(
                 active

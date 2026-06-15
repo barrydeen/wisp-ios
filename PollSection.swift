@@ -13,6 +13,21 @@ struct PollSection: View {
 
     private var isZapPoll: Bool { pollEvent.kind == Nip69.kindZapPoll }
 
+    private func timeLabel(ended: Bool, endsAt: Int?) -> String? {
+        guard let endsAt else { return nil }
+        let date = Date(timeIntervalSince1970: TimeInterval(endsAt))
+        if ended { return nil }
+        let diff = date.timeIntervalSinceNow
+        if diff <= 0 { return nil }
+        let days = Int(diff / 86400)
+        let hours = Int(diff / 3600) % 24
+        let minutes = Int(diff / 60) % 60
+        if days > 0 { return "\(days) \(days == 1 ? "day" : "days") left" }
+        if hours > 0 { return "\(hours) \(hours == 1 ? "hour" : "hours") left" }
+        let m = max(1, minutes)
+        return "\(m) \(m == 1 ? "minute" : "minutes") left"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if isZapPoll {
@@ -37,7 +52,8 @@ struct PollSection: View {
         let pollType = Nip88.parsePollType(pollEvent)
         let ended = Nip88.isPollEnded(pollEvent)
         let hasVoted = !tally.userVotes.isEmpty
-        let showResults = hasVoted || ended
+        let isAuthor = pollEvent.pubkey == NostrKey.load()?.pubkey
+        let showResults = hasVoted || ended || isAuthor
 
         return VStack(alignment: .leading, spacing: 8) {
             ForEach(options, id: \.id) { option in
@@ -97,6 +113,14 @@ struct PollSection: View {
                     Text("· Poll ended")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                } else if let t = timeLabel(ended: ended, endsAt: Nip88.parseEndsAt(pollEvent)) {
+                    Text("· \(t)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("· ∞ left")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
         }
@@ -108,7 +132,8 @@ struct PollSection: View {
         let options = Nip69.parseZapPollOptions(pollEvent)
         let closed = Nip69.isZapPollClosed(pollEvent)
         let hasVoted = tally.userOptionIndex != nil
-        let showResults = hasVoted || closed
+        let isAuthor = pollEvent.pubkey == NostrKey.load()?.pubkey
+        let showResults = hasVoted || closed || isAuthor
         let minSats = Nip69.parseValueMinimum(pollEvent)
         let maxSats = Nip69.parseValueMaximum(pollEvent)
 
@@ -154,6 +179,14 @@ struct PollSection: View {
                     .foregroundStyle(.secondary)
                 if closed {
                     Text("· Poll ended")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else if let t = timeLabel(ended: closed, endsAt: Nip69.parseClosedAt(pollEvent)) {
+                    Text("· \(t)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("· ∞ left")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

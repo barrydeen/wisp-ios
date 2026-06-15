@@ -40,35 +40,48 @@ struct NotificationRowView: View {
         HStack(alignment: .center, spacing: 8) {
             NotificationTypeIcon(item: item)
 
-            CachedAvatarView(url: profiles[item.actorPubkey]?.picture, size: 32)
-                .onTapGesture { onPeerTap(item.actorPubkey) }
-                .quickFollowOnLongPress(pubkey: item.actorPubkey)
+            if !(item.kind == .pollVote && item.pollVoterCount > 1) {
+                CachedAvatarView(url: profiles[item.actorPubkey]?.picture, size: 32)
+                    .onTapGesture { onPeerTap(item.actorPubkey) }
+                    .quickFollowOnLongPress(pubkey: item.actorPubkey)
+            }
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(displayName(item.actorPubkey))
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(1)
-                        .layoutPriority(1)
-                    Text(NotificationStyle.actionText(item.kind))
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                    if item.isPrivate || item.isPrivateZap {
-                        Image(systemName: "lock.fill")
-                            .font(.caption2)
-                            .foregroundStyle(Color.wispPrimary)
-                            .accessibilityLabel("Private")
+                    if item.kind == .pollVote, item.pollVoterCount > 1 {
+                        Text("\(item.pollVoterCount) votes")
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
+                            .layoutPriority(1)
+                        Text("on your poll")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    } else {
+                        Text(displayName(item.actorPubkey))
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
+                            .layoutPriority(1)
+                        Text(NotificationStyle.actionText(item.kind))
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                        if item.isPrivate || item.isPrivateZap {
+                            Image(systemName: "lock.fill")
+                                .font(.caption2)
+                                .foregroundStyle(Color.wispPrimary)
+                                .accessibilityLabel("Private")
+                        }
+                        mergedZapsBadge
                     }
-                    mergedZapsBadge
                 }
-                voteOptionLabel
                 if let snippet = referencedSnippet {
                     Text(snippet)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                 }
+                voteOptionLabel
             }
 
             Spacer(minLength: 8)
@@ -98,20 +111,54 @@ struct NotificationRowView: View {
         }
     }
 
+    /// Pill shown next to "voted on your poll" when a consolidated poll row
+    /// stands in for more than one voter. Tapping the row expands the poll.
+    @ViewBuilder
+    private var pollVotersBadge: some View {
+        if item.kind == .pollVote, item.pollVoterCount > 1 {
+            let n = item.pollVoterCount
+            Text("\(n) votes")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(Color.wispPrimary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(
+                    Capsule().fill(Color.wispPrimary.opacity(0.15))
+                )
+                .accessibilityLabel("\(n) votes")
+        }
+    }
+
     @ViewBuilder
     private var voteOptionLabel: some View {
-        // NIP-88 poll votes: show selected option labels.
-        if item.kind == .pollVote, !item.voteOptionIds.isEmpty,
-           let pollEvent = repo.event(forId: item.referencedEventId) {
-            let options = Nip88.parsePollOptions(pollEvent)
-            let labels = item.voteOptionIds.compactMap { id in
-                options.first(where: { $0.id == id })?.label
-            }
-            if !labels.isEmpty {
-                Text(labels.joinToString())
-                    .font(.caption)
-                    .foregroundStyle(Color.wispPrimary)
-                    .lineLimit(1)
+        // NIP-88 poll votes consolidate per poll — show each chosen option with
+        // its current voter count, ordered by the poll's option order. Falls
+        // back to the most-recent voter's choice when the poll event (the label
+        // source) isn't cached yet.
+        if item.kind == .pollVote {
+            if let pollEvent = repo.event(forId: item.referencedEventId) {
+                let options = Nip88.parsePollOptions(pollEvent)
+                let counts = item.pollVoteCounts
+                let parts = options.compactMap { opt -> String? in
+                    let c = counts[opt.id] ?? 0
+                    return c > 0 ? "\(opt.label) (\(c))" : nil
+                }
+                if !parts.isEmpty {
+                    Text(parts.joined(separator: " · "))
+                        .font(.caption)
+                        .foregroundStyle(Color.wispPrimary)
+                        .lineLimit(2)
+                } else if !item.voteOptionIds.isEmpty {
+                    let labels = item.voteOptionIds.compactMap { id in
+                        options.first(where: { $0.id == id })?.label
+                    }
+                    if !labels.isEmpty {
+                        Text(labels.joinToString())
+                            .font(.caption)
+                            .foregroundStyle(Color.wispPrimary)
+                            .lineLimit(1)
+                    }
+                }
             }
         }
         // Kind-6969 zap polls: show selected option label.

@@ -17,6 +17,19 @@ struct PollTally: Hashable {
     var userOptionIndex: Int? = nil
 }
 
+/// Per-choice voter breakdown surfaced in the post-details drawer. Keyed by
+/// the same option id (kind 1068) / option index (kind 6969) the tally uses.
+struct PollVoteBreakdown {
+    struct Zapper {
+        let pubkey: String
+        let sats: Int64
+    }
+    /// optionId -> voter pubkeys, newest vote first (kind 1068).
+    var votersByOption: [String: [String]] = [:]
+    /// optionIndex -> zappers, highest sats first (kind 6969).
+    var zappersByOption: [Int: [Zapper]] = [:]
+}
+
 /// In-memory store of poll tallies keyed by poll event id. Modeled on
 /// `EngagementRepository`: viewport-driven REQ fan-out with 300 ms debounce, outbox routing,
 /// per-(relay, kind) subscriptions with a 12 s watchdog. Latest-wins per voter on both
@@ -91,6 +104,32 @@ final class PollTallyRepository {
 
     func tally(for pollId: String) -> PollTally {
         tallies[pollId] ?? PollTally()
+    }
+
+    /// Per-choice voter lists for the details-drawer "Votes" section.
+    /// Built from the latest-wins voter state so each voter appears under
+    /// their current choice only.
+    func voteBreakdown(for pollId: String) -> PollVoteBreakdown {
+        var result = PollVoteBreakdown()
+        if let voters = pollVoters[pollId] {
+            // Newest vote first so the freshest voters surface at the top of
+            // each expanded choice.
+            let ordered = voters.sorted { $0.value.ts > $1.value.ts }
+            for (pubkey, info) in ordered {
+                for optionId in info.options {
+                    result.votersByOption[optionId, default: []].append(pubkey)
+                }
+            }
+        }
+        if let zappers = zapPollVoters[pollId] {
+            // Highest zap first — the loudest backers of each choice lead.
+            let ordered = zappers.sorted { $0.value.sats > $1.value.sats }
+            for (pubkey, info) in ordered {
+                result.zappersByOption[info.optionIndex, default: []]
+                    .append(PollVoteBreakdown.Zapper(pubkey: pubkey, sats: info.sats))
+            }
+        }
+        return result
     }
 
     // MARK: - Optimistic writes
