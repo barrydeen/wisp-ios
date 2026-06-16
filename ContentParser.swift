@@ -5,14 +5,7 @@ struct MediaMeta: Hashable {
     let mime: String?
     let dimension: String?
     let blurhash: String?
-    /// Optional poster image URL — typically supplied alongside a video via the
-    /// NIP-92 imeta `image <url>` field. Lets the gallery / inline player show a
-    /// frame preview before the user taps to play, without having to pre-decode
-    /// the video itself.
     let posterUrl: String?
-    /// SHA-256 digest of the file (NIP-92 imeta `x`, falling back to `ox`). Used
-    /// to dedupe the same content-addressed file when it's served from more than
-    /// one host (e.g. a Blossom mirror in `content` vs the host in the imeta tag).
     let sha256: String?
 
     init(url: String, mime: String? = nil, dimension: String? = nil, blurhash: String? = nil, posterUrl: String? = nil, sha256: String? = nil) {
@@ -52,12 +45,12 @@ enum ContentParser {
     private static let audioMimePrefixes: Set<String> = ["audio/mpeg", "audio/wav", "audio/ogg", "audio/mp4", "audio/flac", "audio/aac", "audio/x-wav"]
 
     private static let blossomPathRegex = try! NSRegularExpression(
-        pattern: #"^/[0-9a-f]{64}$"#,
+        pattern: #"^/[0-9a-f]{64}(\.[a-zA-Z0-9]+)?$"#,
         options: [.caseInsensitive]
     )
 
-    private static let sha256Regex = try! NSRegularExpression(
-        pattern: #"^[0-9a-f]{64}$"#,
+    private static let sha256HashRegex = try! NSRegularExpression(
+        pattern: #"/([0-9a-f]{64})(\.[a-zA-Z0-9]+)?/?$"#,
         options: [.caseInsensitive]
     )
 
@@ -116,11 +109,6 @@ enum ContentParser {
         tags: [[String]],
         emojiMap: [String: String] = [:],
         trimBlankLines: Bool = true,
-        // Surfaces that render `.link` segments as inline text (bio, quoted
-        // notes, drafts, group chat — anything passing `showLinkPreviews:
-        // false` to RichContentView) need pass 4 to treat `.link` like other
-        // inline neighbors. Otherwise a lone `"\n"` text between two `.link`s
-        // gets zeroed out and the folded inline links collide into one line.
         linksAreInline: Bool = false
     ) -> [ContentSegment] {
         let imetaMap = parseImetaTags(tags)
@@ -365,17 +353,17 @@ enum ContentParser {
         return ""
     }
 
-    /// Extracts a content-addressed SHA-256 digest from a media URL when the
-    /// final path component is a 64-char hex string (optionally with a file
-    /// extension), as used by Blossom and most Nostr media hosts. Returns the
-    /// lowercased hash, or nil if the filename isn't a digest.
-    private static func sha256Hash(fromUrl url: String) -> String? {
+    /// Extracts the content-addressed SHA-256 digest from a media URL.
+    /// Anchors the match to the end of the path component to avoid false
+    /// positives from query parameters, tracking tokens, or mid-path segments.
+    static func sha256Hash(fromUrl url: String) -> String? {
         guard let parsed = URL(string: url) else { return nil }
-        let last = parsed.lastPathComponent
-        let base = last.split(separator: ".").first.map(String.init) ?? last
-        let r = NSRange(location: 0, length: (base as NSString).length)
-        guard sha256Regex.firstMatch(in: base, range: r) != nil else { return nil }
-        return base.lowercased()
+        let path = parsed.path
+        let nsPath = path as NSString
+        guard let match = sha256HashRegex.firstMatch(in: path, range: NSRange(location: 0, length: nsPath.length)) else { return nil }
+        let hashRange = match.range(at: 1)
+        guard hashRange.location != NSNotFound else { return nil }
+        return nsPath.substring(with: hashRange).lowercased()
     }
 
     private static func isBlossomUrl(_ url: String) -> Bool {

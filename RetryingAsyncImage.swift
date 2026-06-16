@@ -57,15 +57,8 @@ private func downsampledImage(from data: Data, maxPixel: CGFloat) -> UIImage? {
 struct RetryingAsyncImage<Content: View, Loading: View, Failure: View>: View {
     let url: URL?
     let maxAttempts: Int
-    /// When set, the source bytes decode down to a thumbnail whose longest
-    /// edge is at most this many pixels, rather than at full resolution. Bounds
-    /// retained memory so a gallery of large images can't accumulate dozens of
-    /// multi-megapixel `UIImage`s. Nil (the default) preserves full-resolution
-    /// decoding for callers that need it (avatars, draft thumbnails). The
-    /// decoded result is cached per `url`+`maxPixelSize`, so a small tile
-    /// decode and a larger fullscreen decode of the same URL coexist instead of
-    /// clobbering each other.
     let maxPixelSize: CGFloat?
+    let authorPubkey: String?
     @ViewBuilder let content: (Image) -> Content
     @ViewBuilder let loading: () -> Loading
     @ViewBuilder let failure: () -> Failure
@@ -84,6 +77,7 @@ struct RetryingAsyncImage<Content: View, Loading: View, Failure: View>: View {
         url: URL?,
         maxAttempts: Int = 3,
         maxPixelSize: CGFloat? = nil,
+        authorPubkey: String? = nil,
         @ViewBuilder content: @escaping (Image) -> Content,
         @ViewBuilder loading: @escaping () -> Loading,
         @ViewBuilder failure: @escaping () -> Failure
@@ -91,6 +85,7 @@ struct RetryingAsyncImage<Content: View, Loading: View, Failure: View>: View {
         self.url = url
         self.maxAttempts = maxAttempts
         self.maxPixelSize = maxPixelSize
+        self.authorPubkey = authorPubkey
         self.content = content
         self.loading = loading
         self.failure = failure
@@ -137,9 +132,6 @@ struct RetryingAsyncImage<Content: View, Loading: View, Failure: View>: View {
     private struct TaskKey: Hashable {
         let url: URL?
         let attempt: Int
-        /// Part of the identity so a caller that raises `maxPixelSize` (e.g.
-        /// the fullscreen viewer upgrading to full resolution on deep zoom)
-        /// kicks off a fresh, higher-resolution decode.
         let maxPixelSize: CGFloat?
     }
 
@@ -188,6 +180,22 @@ struct RetryingAsyncImage<Content: View, Loading: View, Failure: View>: View {
         } else if attempt < maxAttempts {
             attempt += 1  // Triggers another `task` cycle via TaskKey change.
         } else {
+            // Phase 3: BUD-03 Fallback Retrieval
+            if let authorPubkey, let fallbackData = await BlossomFallbackFetcher.fetch(url: url, authorPubkey: authorPubkey) {
+                let fallbackImage: UIImage?
+                if let maxPixel = maxPixelSize {
+                    fallbackImage = downsampledImage(from: fallbackData, maxPixel: maxPixel)
+                } else {
+                    fallbackImage = UIImage(data: fallbackData)
+                }
+                
+                if let image = fallbackImage {
+                    // Cache the successfully fetched fallback image (reuse existing `key`)
+                    DecodedImageCache.storeStatic(image, for: key)
+                    phase = .success(image)
+                    return
+                }
+            }
             phase = .failure
         }
     }

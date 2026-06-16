@@ -30,3 +30,6 @@ local.xcconfig
 model-wisp.json.bak
 ## Local notes
 temp/
+
+## Kilo configuration
+.kilo/
