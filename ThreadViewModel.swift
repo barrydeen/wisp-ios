@@ -666,14 +666,23 @@ final class ThreadViewModel {
                     blockedEventIds.insert(event.id)
                     continue
                 }
-                // Private rumors (gift-wrap-materialized kind-1s) bypass the
-                // shared SafetyFilter — kind-1 isn't in `wotExemptKinds`, so
-                // `shouldDrop(.thread)` would otherwise silently swallow every
-                // private reply whose sender isn't in the user's WoT network.
-                // Block list already applied above; that's enough for rumors.
+                // Private rumors bypass the shared SafetyFilter — kind-1 isn't
+                // in `wotExemptKinds`, so WoT would silently swallow every
+                // private reply whose sender isn't in the network.
                 let isPrivate = PrivateInteractionStore.shared.contains(event.id)
-                if !isPrivate, SafetyFilter.shared.shouldDrop(event: event, context: .thread(rootId: rootId)) {
-                    continue
+                if !isPrivate {
+                    let snap = SafetyFilter.shared.snapshot
+                    if snap.wotEnabled,
+                       !SafetyFilter.wotExemptKinds.contains(event.kind),
+                       event.pubkey != snap.userPubkey,
+                       !snap.qualifiedNetwork.contains(event.pubkey) {
+                        // Mark as WoT-hidden rather than dropping — renders as a
+                        // placeholder so qualified users' replies to this event
+                        // remain navigable.
+                        events[event.id] = event
+                        wotHiddenEventIds.insert(event.id)
+                        continue
+                    }
                 }
                 events[event.id] = event
             } else {
@@ -891,7 +900,17 @@ final class ThreadViewModel {
                     self.ingestReply(event, blocked: true, coalesceRebuild: true)
                     continue
                 }
-                if SafetyFilter.shared.shouldDrop(event: event, context: .thread(rootId: rootId)) { continue }
+                // WoT-outside replies render as a placeholder rather than being
+                // dropped — so a qualified user's reply to an unqualified one
+                // remains navigable, with the unqualified post showing the
+                // "Hidden by Web of Trust filter" indicator.
+                if snap.wotEnabled,
+                   !SafetyFilter.wotExemptKinds.contains(event.kind),
+                   event.pubkey != snap.userPubkey,
+                   !snap.qualifiedNetwork.contains(event.pubkey) {
+                    self.ingestReply(event, wotHidden: true, coalesceRebuild: true)
+                    continue
+                }
                 self.ingestReply(event, coalesceRebuild: true)
                 self.maybeScoreReplyForSpam(event)
             }
@@ -908,15 +927,15 @@ final class ThreadViewModel {
         streamTasks.append(watchdog)
     }
 
-    private func ingestReply(_ event: NostrEvent, blocked: Bool = false, coalesceRebuild: Bool = false) {
+    private func ingestReply(_ event: NostrEvent, blocked: Bool = false, wotHidden: Bool = false, coalesceRebuild: Bool = false) {
         guard events[event.id] == nil else { return }
         events[event.id] = event
         if blocked { blockedEventIds.insert(event.id) }
+        if wotHidden { wotHiddenEventIds.insert(event.id) }
         // Blocked authors' replies are kept only as an in-session placeholder
-        // (the in-memory `events` map above) — never persisted. `EventStore.persist`
-        // would drop them anyway, and writing them would contradict "blocked
-        // content must never exist on disk." On a cold reopen the placeholder is
-        // simply absent; child replies still resolve via their `e` tags.
+        // (the in-memory `events` map above) — never persisted. WoT-hidden replies
+        // ARE persisted: WoT is a reversible preference and the event should be
+        // available if the filter is toggled off.
         if !blocked { Task { await eventStore.persist([event]) } }
 
         // Hydrate every referenced author (note author + repost inner + npub mentions) from
@@ -1181,13 +1200,11 @@ final class ThreadViewModel {
         // Direct replies are the focal's bucket — already sorted oldest-first.
         let directReplies = childrenByParent[focalEventId] ?? []
 
-        // WoT-hidden replies drop outright (no placeholder, no reveal — only
-        // structural slots like the focal/root render a placeholder). Filter
-        // BEFORE the spam split so a non-WoT reply can't surface through the
-        // "show hidden spam" disclosure either.
-        let wotVisibleReplies = wotHiddenEventIds.isEmpty
-            ? directReplies
-            : directReplies.filter { !wotHiddenEventIds.contains($0.id) }
+        // WoT-hidden replies are NOT dropped — they render as a placeholder
+        // ("Hidden by Web of Trust filter") so the user knows a reply exists
+        // and any qualified reply to it remains navigable. Only spam-hidden
+        // replies move to the separate disclosure group.
+        let wotVisibleReplies = directReplies
 
         if hiddenSpamPubkeys.isEmpty {
             replies = wotVisibleReplies.map { makeRow($0) }
@@ -1239,7 +1256,9 @@ final class ThreadViewModel {
                 // placeholder and the walk continues, so a stranger replying
                 // mid-chain can't sever the user's own conversation.
                 if wotHiddenEventIds.contains(kid.id) {
-                    guard hasVisibleDescendant(of: kid.id, childrenByParent: childrenByParent, visited: visited) else { continue }
+                    // Always render a placeholder — never drop silently. A qualified
+                    // user may have replied to this node; dropping it would orphan
+                    // their visible reply at the wrong depth.
                     result.append(NestedReplyRow(row: makeRow(kid), depth: depth))
                     walk(parentId: kid.id, depth: depth + 1)
                     continue

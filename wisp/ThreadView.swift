@@ -75,9 +75,13 @@ struct ThreadView: View {
                         // inline with depth-based indentation. Tap still pushes
                         // a focused sub-thread, but it's no longer the only way
                         // to see grandchildren.
-                        ForEach(viewModel.nestedReplies) { item in
-                            nestedReplyRow(item)
-                                .id(item.row.id)
+                        ForEach(groupedNestedReplies) { item in
+                            switch item {
+                            case .single(let row):
+                                nestedReplyRow(row).id(row.id)
+                            case .wotGroup(let count, let depth, _):
+                                nestedWotGroupRow(count: count, depth: depth)
+                            }
                         }
 
                         if !viewModel.hiddenSpamReplies.isEmpty {
@@ -350,10 +354,71 @@ struct ThreadView: View {
         .animation(.easeInOut(duration: 0.3), value: viewModel.highlightId == item.row.id)
     }
 
+    @ViewBuilder
+    private func nestedWotGroupRow(count: Int, depth: Int) -> some View {
+        ZStack(alignment: .leading) {
+            ReplyConnectorShape(cornerRadius: 8, showVertical: depth > 0)
+                .stroke(
+                    Color.wispSurfaceVariant.opacity(0.5),
+                    style: StrokeStyle(lineWidth: 1, lineCap: .butt, lineJoin: .round)
+                )
+                .padding(.leading, depth > 0 ? indentationWidth(for: depth) - 8 : indentationWidth(for: depth))
+            HStack(spacing: 8) {
+                Image(systemName: "eye.slash")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.tertiary)
+                Text(count == 1 ? "Post hidden by WoT filter" : "\(count) posts hidden by WoT filter")
+                    .font(.subheadline)
+                    .foregroundStyle(.tertiary)
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.leading, indentationWidth(for: depth))
+        }
+    }
+
     /// Per-level indent. Smaller step + cap of 5 keeps deep chains readable
     /// on phones without compressing the post body.
     private func indentationWidth(for depth: Int) -> CGFloat {
         CGFloat(min(depth, 5)) * 12
+    }
+
+    private enum NestedReplyDisplayItem: Identifiable {
+        case single(NestedReplyRow)
+        case wotGroup(count: Int, depth: Int, id: String)
+        var id: String {
+            switch self {
+            case .single(let r): return r.id
+            case .wotGroup(_, _, let gid): return "wot-\(gid)"
+            }
+        }
+    }
+
+    private var groupedNestedReplies: [NestedReplyDisplayItem] {
+        var result: [NestedReplyDisplayItem] = []
+        let items = viewModel.nestedReplies
+        var i = 0
+        while i < items.count {
+            let item = items[i]
+            if item.row.isWotHidden {
+                let groupDepth = item.depth
+                let groupId = item.id
+                var count = 1
+                var j = i + 1
+                while j < items.count && items[j].row.isWotHidden && items[j].depth == groupDepth {
+                    count += 1
+                    j += 1
+                }
+                result.append(.wotGroup(count: count, depth: groupDepth, id: groupId))
+                i = j
+            } else {
+                result.append(.single(item))
+                i += 1
+            }
+        }
+        return result
     }
 
     @ViewBuilder
