@@ -244,6 +244,15 @@ final class ProfileViewModel {
         followingCount = pubkeys.count
         // Their contact list p-tags the active user → they follow us.
         followsYou = pubkeys.contains(activeUserPubkey)
+
+        // When this IS our own profile, push the freshest relay copy into the
+        // local follow cache so a list edited in another client replaces our
+        // frozen snapshot before the next in-app follow/unfollow rebuilds off
+        // it. Gated on `created_at`, so a stale relay copy can't undo a newer
+        // local edit.
+        if pubkey == activeUserPubkey {
+            FollowsCache.shared.reconcile(pubkey: pubkey, follows: pubkeys, createdAt: best.createdAt)
+        }
     }
 
     private func loadTargetWriteRelays() async {
