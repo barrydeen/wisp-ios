@@ -57,7 +57,18 @@ private func downsampledImage(from data: Data, maxPixel: CGFloat) -> UIImage? {
 struct RetryingAsyncImage<Content: View, Loading: View, Failure: View>: View {
     let url: URL?
     let maxAttempts: Int
+    /// When set, the source bytes decode down to a thumbnail whose longest
+    /// edge is at most this many pixels, rather than at full resolution. Bounds
+    /// retained memory so a gallery of large images can't accumulate dozens of
+    /// multi-megapixel `UIImage`s. Nil (the default) preserves full-resolution
+    /// decoding for callers that need it (avatars, draft thumbnails). The
+    /// decoded result is cached per `url`+`maxPixelSize`, so a small tile
+    /// decode and a larger fullscreen decode of the same URL coexist instead of
+    /// clobbering each other.
     let maxPixelSize: CGFloat?
+    /// Hex pubkey of the event author that owns a piece of media. When set and
+    /// the primary URL and all retries fail, `BlossomFallbackFetcher` is called
+    /// with this pubkey to attempt recovery from the author's kind-10063 servers.
     let authorPubkey: String?
     @ViewBuilder let content: (Image) -> Content
     @ViewBuilder let loading: () -> Loading
@@ -132,6 +143,9 @@ struct RetryingAsyncImage<Content: View, Loading: View, Failure: View>: View {
     private struct TaskKey: Hashable {
         let url: URL?
         let attempt: Int
+        /// Part of the identity so a caller that raises `maxPixelSize` (e.g.
+        /// the fullscreen viewer upgrading to full resolution on deep zoom)
+        /// kicks off a fresh, higher-resolution decode.
         let maxPixelSize: CGFloat?
     }
 

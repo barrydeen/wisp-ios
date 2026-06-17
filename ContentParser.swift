@@ -5,8 +5,19 @@ struct MediaMeta: Hashable {
     let mime: String?
     let dimension: String?
     let blurhash: String?
+    /// Optional poster image URL — typically supplied alongside a video via the
+    /// NIP-92 imeta `image <url>` field. Lets the gallery / inline player show a
+    /// frame preview before the user taps to play, without having to pre-decode
+    /// the video itself.
     let posterUrl: String?
+    /// SHA-256 digest of the file (NIP-92 imeta `x`, falling back to `ox`). Used
+    /// to dedupe the same content-addressed file when it's served from more than
+    /// one host (e.g. a Blossom mirror in `content` vs the host in the imeta tag),
+    /// and by `BlossomFallbackFetcher` to verify retrieved bytes.
     let sha256: String?
+    /// Hex pubkey of the event author that owns this media. When set, flows
+    /// through `RetryingAsyncImage` → `BlossomFallbackFetcher` to recover the
+    /// image from the author's kind-10063 server list on primary load failure.
     let authorPubkey: String?
 
     init(url: String, mime: String? = nil, dimension: String? = nil, blurhash: String? = nil, posterUrl: String? = nil, sha256: String? = nil, authorPubkey: String? = nil) {
@@ -106,6 +117,16 @@ enum ContentParser {
 
     // MARK: - Public parse entry
 
+    /// Parse event content into renderable segments.
+    /// - Parameters:
+    ///   - linksAreInline: Surfaces that render `.link` segments as inline text
+    ///     (bio, quoted notes, drafts, group chat — anything passing
+    ///     `showLinkPreviews: false` to `RichContentView`) need pass 4 to treat
+    ///     `.link` like other inline neighbors. Otherwise a lone `"\n"` text
+    ///     between two `.link`s gets zeroed out and the folded inline links
+    ///     collide into one line.
+    ///   - authorPubkey: Hex pubkey of the event author. Threads through to
+    ///     `MediaMeta.authorPubkey` for fallback retrieval on image load failure.
     static func parse(
         content: String,
         tags: [[String]],
