@@ -22,6 +22,52 @@ enum BlossomClient {
         server.hasSuffix("/") ? String(server.dropLast()) : server
     }
 
+    /// Returns `true` if two hosts share the same registrable (base) domain.
+    /// A simple last-two-label heuristic (no public-suffix list); good enough
+    /// for the Blossom CDN scenario (e.g., `cdn.azzamo.media` and
+    /// `blossom.azzamo.media` both reduce to base `azzamo.media`).
+    ///
+    /// False positives are possible with `.co.uk`-style multi-level TLDs, but
+    /// that is acceptable here because:
+    ///   • the mirror target server is chosen by the user from their kind-10063 list;
+    ///   • the mirror server independently validates the fetched blob hash against
+    ///     the authorized `x` tag (BUD-04 Step 5); hash mismatch → 409 Conflict.
+    static func areSameRegistrableDomain(_ hostA: String, _ hostB: String) -> Bool {
+        let a = hostA.lowercased().split(separator: ".").map(String.init)
+        let b = hostB.lowercased().split(separator: ".").map(String.init)
+        guard a.count >= 2, b.count >= 2 else { return false }
+        return a.suffix(2) == b.suffix(2)
+    }
+
+    /// Pick the URL that should be sent as the mirror payload (BUD-04).
+    ///
+    /// Trusts the upload server's own response URL when the host matches the
+    /// upload host exactly or is a sibling on the same registrable domain
+    /// (e.g., a CDN subdomain like `cdn.example.media`). Falls back to the
+    /// canonical origin URL for unrelated hosts.
+    ///
+    /// `mirrorBlob` itself is kept independently hardened — mirror targets are
+    /// limited to the user's configured kind-10063 server list.
+    static func sanitizeMirrorURL(
+        serverReturnedURL: String,
+        uploadHost: String,
+        fallbackURL: String
+    ) -> String {
+        guard let resultURL = URL(string: serverReturnedURL),
+              let resultHost = resultURL.host,
+              !resultHost.isEmpty else {
+            return fallbackURL
+        }
+        let uploadHostLower = uploadHost.lowercased()
+        let resultHostLower = resultHost.lowercased()
+
+        if resultHostLower == uploadHostLower { return serverReturnedURL }
+        if areSameRegistrableDomain(resultHostLower, uploadHostLower) {
+            return serverReturnedURL
+        }
+        return fallbackURL
+    }
+
     /// Compute the lowercase hex SHA-256 of the given bytes.
     static func sha256Hex(_ data: Data) -> String {
         let digest = SHA256.hash(data: data)
@@ -93,15 +139,17 @@ enum BlossomClient {
                 do {
                     let result = try await uploadOnce(bytes: bytes, mime: mime, hash: hash, url: url, auth: auth)
 
-                    // Validate returned URL to prevent SSRF in mirror payload, fallback to local construction
-                    let safePublicURL: String
-                    if let resultURL = URL(string: result.url),
-                       let normalizedURL = URL(string: normalized),
-                       resultURL.host == normalizedURL.host {
-                        safePublicURL = result.url
-                    } else {
-                        safePublicURL = normalized + "/" + hash
-                    }
+                    // Mirror payload URL (BUD-04): trust the server's own URL when the host
+                    // matches the upload host OR is a sibling subdomain (e.g., cdn.example.media
+                    // alongside blossom.example.media). This lets CDN-enabled servers deliver
+                    // via fast CDN paths instead of forcing mirror servers to fetch from the
+                    // rate-limited blossom endpoint. Falls back to the canonical origin
+                    // <normalize>/<hash> for any host the check rejects.
+                    let safePublicURL = sanitizeMirrorURL(
+                        serverReturnedURL: result.url,
+                        uploadHost: URL(string: normalized)?.host ?? "",
+                        fallbackURL: normalized + "/" + hash
+                    )
 
                     // Mirror to remaining servers in background (Phase 5)
                     Task.detached(priority: .utility) {
