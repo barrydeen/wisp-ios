@@ -25,7 +25,7 @@ enum BlossomClient {
 
     /// Returns `true` if two hosts share the same registrable (base) domain.
     /// A simple last-two-label heuristic (no public-suffix list); good enough
-    /// for the Blossom CDN scenario (e.g., `cdn.azzamo.media` and
+    /// for the Blossom CDN scenario (e.g. `cdn.azzamo.media` and
     /// `blossom.azzamo.media` both reduce to base `azzamo.media`).
     ///
     /// False positives are possible with `.co.uk`-style multi-level TLDs, but
@@ -44,7 +44,7 @@ enum BlossomClient {
     ///
     /// Trusts the upload server's own response URL when the host matches the
     /// upload host exactly or is a sibling on the same registrable domain
-    /// (e.g., a CDN subdomain like `cdn.example.media`). Falls back to the
+    /// (e.g. a CDN subdomain like `cdn.example.media`). Falls back to the
     /// canonical origin URL for unrelated hosts.
     ///
     /// `mirrorBlob` itself is kept independently hardened — mirror targets are
@@ -76,10 +76,9 @@ enum BlossomClient {
     }
 
     /// Build the `Authorization: Nostr <base64url>` header value for a Blossom request.
-    /// `action` should be "upload", "media", "get", "delete", or "mirror".
+    /// `action` should be one of "upload", "media", or "get" per BUD-11.
     /// `expirationOffset` is seconds from now; defaults to 5 minutes.
     /// Async because remote-signer accounts dispatch the auth-event sign over a relay.
-    @MainActor
     static func makeAuthHeader(
         keypair: Keypair,
         action: String,
@@ -122,10 +121,26 @@ enum BlossomClient {
         return "Nostr \(decodedData.base64EncodedString())"
     }
 
+    /// Shared helper: perform a network operation with BUD-11 auth. On 401 (auth rejection),
+    /// retry once with legacy standard-Base64 encoding. Eliminates duplication between
+    /// `upload()`, `mirrorOnce()`, and `headOnce()`. (Fix #12: single source of truth)
+    private static func withLegacyFallback<T>(
+        bud11Auth: String,
+        attempt: (String) async throws -> T
+    ) async throws -> T {
+        do {
+            return try await attempt(bud11Auth)
+        } catch BlossomError.authRejected(statusCode: 401) {
+            if let legacyAuth = convertToLegacyBase64Auth(bud11Auth) {
+                return try await attempt(legacyAuth)
+            }
+            throw BlossomError.authRejected(statusCode: 401)
+        }
+    }
+
     /// Upload `bytes` to one of the given Blossom servers. Tries `/media` (BUD-05) first
     /// and falls back to `/upload` on 404, then moves on to the next server on other errors.
     /// Returns the public URL of the uploaded blob on the first success.
-    @MainActor
     static func upload(
         bytes: Data,
         mime: String,
@@ -135,50 +150,83 @@ enum BlossomClient {
         guard !servers.isEmpty else { throw BlossomError.allServersFailed(nil) }
         let hash = sha256Hex(bytes)
 
-        // BUD-06 pre-flight HEAD uses a "get" action tag, per BUD-11.
-        guard let getAuth = await makeAuthHeader(keypair: keypair, action: "get", sha256Hex: hash),
-              let mediaAuth = await makeAuthHeader(keypair: keypair, action: "media", sha256Hex: hash) else {
+        // BUD-01 blob-existence HEAD check (NOT BUD-06). Runs all servers in parallel
+        // with a short deadline. Returns the canonical URL on first hit.
+        // (Fix #2: clarify this is BUD-01, not BUD-06. Fix #4: parallelized.)
+        guard let getAuth = await makeAuthHeader(keypair: keypair, action: "get", sha256Hex: hash) else {
             throw BlossomError.authFailed
         }
-        // uploadAuth generated lazily below — only if the first server rejects /media and also /upload must be attempted.
+
+        let existingURL = await withTaskGroup(of: String?.self) { group in
+            for server in servers {
+                let normalized = normalizeServerURL(server)
+                guard let headUrl = URL(string: normalized + "/" + hash) else { continue }
+                group.addTask {
+                    // Fix #8: headOnce retries with legacy auth on 401.
+                    let exists = await headWithLegacyFallback(
+                        hash: hash,
+                        url: headUrl,
+                        bud11Auth: getAuth
+                    )
+                    return exists ? (normalized + "/" + hash) : nil
+                }
+            }
+            for await result in group {
+                if let result {
+                    group.cancelAll()
+                    return result as String?
+                }
+            }
+            return nil as String?
+        }
+
+        if let existing = existingURL {
+            os_log(.debug, "Blossom HEAD hit: blob already exists, skipping upload")
+            return BlossomUploadResult(url: existing, sha256Hex: hash, mime: mime, size: bytes.count)
+        }
+
+        // Pre-generate media and upload auth headers.
+        guard let mediaAuth = await makeAuthHeader(keypair: keypair, action: "media", sha256Hex: hash),
+              let uploadAuth = await makeAuthHeader(keypair: keypair, action: "upload", sha256Hex: hash) else {
+            throw BlossomError.authFailed
+        }
 
         var lastError: String?
-        var uploadAuth: String?
         var legacyBase64 = false
 
         for server in servers {
             let normalized = normalizeServerURL(server)
 
-            // Pre-flight HEAD check (BUD-06) — fast timeout, non-fatal.
-            // If blob already exists, return canonical URL directly (no mirror needed).
-            guard let headUrl = URL(string: normalized + "/" + hash) else { continue }
-            let exists = (try? await headOnce(hash: hash, url: headUrl, auth: getAuth)) ?? false
-            if exists {
-                os_log(.debug, "Blossom HEAD hit: blob exists on %@, skipping upload", server)
-                return BlossomUploadResult(url: normalized + "/" + hash, sha256Hex: hash, mime: mime, size: bytes.count)
-            }
+            // Per-server legacy-auth cache. Computed ONCE when legacy mode flips (Fix #10).
+            var legacyCache: (media: String, upload: String)? = nil
 
-            // Generate uploadAuth lazily on first use (saves one remote-signer round-trip on happy path).
-            if uploadAuth == nil {
-                uploadAuth = await makeAuthHeader(keypair: keypair, action: "upload", sha256Hex: hash)
-                guard let ua = uploadAuth else { throw BlossomError.authFailed }
-                uploadAuth = ua
-            }
-            guard let resolvedUploadAuth = uploadAuth else { throw BlossomError.authFailed }
+            // Labeled loop: when a 401 flips legacyBase64, `continue serverAttempt` retries
+            // this SAME server with legacy auth instead of skipping to the next server.
+            serverAttempt: while true {
+                let passMediaAuth: String
+                let passUploadAuth: String
+                if legacyBase64 {
+                    if legacyCache == nil {
+                        legacyCache = (
+                            convertToLegacyBase64Auth(mediaAuth) ?? mediaAuth,
+                            convertToLegacyBase64Auth(uploadAuth) ?? uploadAuth
+                        )
+                    }
+                    passMediaAuth = legacyCache!.media
+                    passUploadAuth = legacyCache!.upload
+                } else {
+                    passMediaAuth = mediaAuth
+                    passUploadAuth = uploadAuth
+                }
 
-            // Retry loop: when legacyBase64 flips true, both /media and /upload are retried
-            // on this server with standard Base64 encoding before moving on.
-            var needsLegacyRetry = true
-            var pathError: String?
+                let pathAuthPairs: [(String, String)] = [
+                    ("/media", passMediaAuth),
+                    ("/upload", passUploadAuth)
+                ]
 
-            while needsLegacyRetry {
-                needsLegacyRetry = false
+                var pathError: String?
 
-                let authPairs: [(String, String)] = [("/media", mediaAuth), ("/upload", resolvedUploadAuth)]
-                for (path, rawAuth) in authPairs {
-                    let auth = legacyBase64
-                        ? (convertToLegacyBase64Auth(rawAuth) ?? rawAuth)
-                        : rawAuth
+                for (path, auth) in pathAuthPairs {
                     guard let url = URL(string: normalized + path) else { continue }
                     do {
                         let result = try await uploadOnce(bytes: bytes, mime: mime, hash: hash, url: url, auth: auth)
@@ -191,30 +239,38 @@ enum BlossomClient {
 
                         // Fire-and-forget mirror to remaining servers (BUD-04).
                         Task.detached(priority: .utility) {
-                            await mirrorBlob(hash: hash, publicURL: safePublicURL, servers: servers, currentServer: normalized, keypair: keypair)
+                            await mirrorBlob(
+                                hash: hash,
+                                publicURL: safePublicURL,
+                                servers: servers,
+                                currentServer: normalized,
+                                keypair: keypair
+                            )
                         }
-                        // Return canonical content-addressed URL to caller.
+
                         return BlossomUploadResult(url: safePublicURL, sha256Hex: hash, mime: mime, size: bytes.count)
                     } catch BlossomError.authRejected(statusCode: 401) where !legacyBase64 {
-                        // BUD-11 backward-compat: switch to standard Base64 and re-try this server.
+                        // BUD-11 backward-compat: flip to legacy mode and retry THIS server.
                         legacyBase64 = true
                         os_log(.debug, "Blossom server %@ rejected BUD-11 Base64URL (401), falling back to standard Base64", server)
-                        needsLegacyRetry = true
-                        break  // Restart the path loop on this server with legacy encoding.
+                        continue serverAttempt  // Restart server loop iteration with legacy auth.
                     } catch BlossomError.authRejected(let code) {
                         pathError = "HTTP \(code)"
-                        continue  // Other auth errors → try next path.
+                        continue  // Try next path.
                     } catch BlossomError.allServersFailed(let msg) where msg == "404" {
                         pathError = msg
                         continue  // /media not supported → try /upload.
                     } catch {
                         pathError = "\(error)"
-                        break  // Network/unexpected error → stop this server.
+                        break  // Network error → stop this server.
                     }
                 }
-            }
-            if let pathError {
-                lastError = pathError
+
+                // Reached here without success or server-401 retry — move to next server.
+                if let pathError {
+                    lastError = pathError
+                }
+                break serverAttempt
             }
         }
         throw BlossomError.allServersFailed(lastError)
@@ -249,11 +305,21 @@ enum BlossomClient {
         return BlossomUploadResult(url: publicURL, sha256Hex: hash, mime: mime, size: bytes.count)
     }
 
+    /// HEAD check for blob existence (BUD-01). Wraps headOnce with legacy-fallback
+    /// so non-BUD-11 servers aren't mis-reported as "no blob". (Fix #8)
+    private static func headWithLegacyFallback(hash: String, url: URL, bud11Auth: String) async -> Bool {
+        return (try? await withLegacyFallback(bud11Auth: bud11Auth) { auth in
+            try await headOnce(hash: hash, url: url, auth: auth)
+        }) ?? false
+    }
+
     private static func headOnce(hash: String, url: URL, auth: String) async throws -> Bool {
         var req = URLRequest(url: url)
         req.httpMethod = "HEAD"
         req.setValue(auth, forHTTPHeaderField: "Authorization")
         req.setValue(hash, forHTTPHeaderField: "X-SHA-256")
+        // Short timeout — blob-existence HEAD is a non-fatal optimization, must
+        // not block the upload path for more than ~5s total across all servers.
         req.timeoutInterval = 5
 
         let (_, resp) = try await URLSession.shared.data(for: req)
@@ -268,7 +334,10 @@ enum BlossomClient {
     private static let mirrorMaxConcurrent = 3
 
     private static func mirrorBlob(hash: String, publicURL: String, servers: [String], currentServer: String, keypair: Keypair) async {
-        guard let auth = await makeAuthHeader(keypair: keypair, action: "mirror", sha256Hex: hash) else {
+        // Fix #1: BUD-11 requires `t=upload` for /mirror, not a separate "mirror" verb.
+        // BUD-04 example flow: "Client sends the url to Server B /mirror using the
+        // original upload authorization token".
+        guard let auth = await makeAuthHeader(keypair: keypair, action: "upload", sha256Hex: hash) else {
             os_log(.fault, "Blossom mirror: failed to generate auth header for hash %@", hash)
             return
         }
@@ -285,7 +354,6 @@ enum BlossomClient {
         }
 
         // Concurrency cap via a simple semaphore-free chunk approach.
-        // withTaskGroup naturally runs all tasks concurrently, so we partition into batches.
         for chunk in stride(from: 0, to: targets.count, by: mirrorMaxConcurrent) {
             let slice = Array(targets[chunk..<min(chunk + mirrorMaxConcurrent, targets.count)])
             await withTaskGroup(of: Void.self) { group in
@@ -298,38 +366,34 @@ enum BlossomClient {
         }
     }
 
-    /// Execute a single mirror PUT. On 401 (BUD-11 auth rejection), retry once with
-    /// standard Base64 encoding. Logs the outcome for observability.
+    /// Execute a single mirror PUT. Uses `withLegacyFallback` to retry on 401.
+    /// Logs the outcome for observability. (Fix #5: retry strictly on 401 only.)
     private static func mirrorOnce(server: String, url: URL, auth: String, hash: String, bodyData: Data) async {
         do {
-            let firstResult = try await mirrorPUT(url: url, auth: auth, hash: hash, bodyData: bodyData)
-            guard let firstResult else {
-                // nil = 404/405 — endpoint unsupported on this server, no retry.
+            let statusCode = try await withLegacyFallback(bud11Auth: auth) { currentAuth -> Int? in
+                return try await mirrorPUT(url: url, auth: currentAuth, hash: hash, bodyData: bodyData)
+            }
+
+            guard let statusCode else {
+                // nil = 404/405 — endpoint unsupported, log only.
                 os_log(.debug, "Blossom mirror: server %@ does not support /mirror endpoint", server)
                 return
             }
-            if firstResult {
-                os_log(.debug, "Blossom mirror to %@ succeeded", server)
-                return
+
+            if (200..<300).contains(statusCode) {
+                os_log(.debug, "Blossom mirror to %@ succeeded with HTTP %@", server, String(statusCode))
+            } else {
+                os_log(.fault, "Blossom mirror to %@ failed after legacy retry with HTTP %@", server, String(statusCode))
             }
-            // firstResult == false: got 401 (or other non-2xx) → retry with legacy Base64.
-            if let legacyAuth = convertToLegacyBase64Auth(auth) {
-                let retryResult = try await mirrorPUT(url: url, auth: legacyAuth, hash: hash, bodyData: bodyData)
-                if retryResult == true {
-                    os_log(.debug, "Blossom mirror to %@ succeeded with legacy Base64", server)
-                    return
-                }
-            }
-            os_log(.fault, "Blossom mirror to %@ failed after legacy Base64 retry (status: %@)", server, firstResult ? "unknown" : "non-2xx")
         } catch {
             os_log(.fault, "Blossom mirror to %@ threw: %@", server, error.localizedDescription)
         }
     }
 
-    /// Performs a single mirror PUT. Returns `true` when 2xx, `false` when the
-    /// server returned a non-2xx (non-404/405) status, or `nil` when 404/405
-    /// (endpoint unsupported — log only, no retry).
-    private static func mirrorPUT(url: URL, auth: String, hash: String, bodyData: Data) async throws -> Bool? {
+    /// Performs a single mirror PUT. Returns the HTTP status code, or `nil` for 404/405
+    /// (endpoint unsupported). Throws `BlossomError.authRejected` on 401 so the caller's
+    /// `withLegacyFallback` wrapper can retry with legacy encoding. (Fix #5)
+    private static func mirrorPUT(url: URL, auth: String, hash: String, bodyData: Data) async throws -> Int? {
         var req = URLRequest(url: url)
         req.httpMethod = "PUT"
         req.setValue(auth, forHTTPHeaderField: "Authorization")
@@ -341,8 +405,11 @@ enum BlossomClient {
         let (_, resp) = try await URLSession.shared.data(for: req)
         guard let http = resp as? HTTPURLResponse else { return nil }
         if http.statusCode == 404 || http.statusCode == 405 {
-            return nil  // Endpoint unsupported — not an error worth retrying.
+            return nil
         }
-        return (200..<300).contains(http.statusCode)
+        if http.statusCode == 401 {
+            throw BlossomError.authRejected(statusCode: 401)
+        }
+        return http.statusCode
     }
 }

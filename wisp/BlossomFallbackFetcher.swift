@@ -4,6 +4,15 @@ import os
 /// Fetches a blob from a Blossom server when the primary URL fails, using the
 /// author's kind-10063 server list (BUD-03). Verifies the SHA-256 digest of the
 /// downloaded data before returning it.
+///
+/// Privacy design: this fetcher ONLY performs unauthenticated public GETs. We
+/// intentionally do not send the user's Nostr auth event to the author's servers,
+/// because those servers are chosen by the AUTHOR, not the reader — a malicious
+/// author could deanonymize viewers by collecting reader pubkeys from auth attempts.
+/// If an author's fallback server requires auth (401), fallback silently skips it.
+/// (Fix #6: remove auth to prevent deanonymization. This also fixes Fix #7 —
+/// `makeAuthHeader`'s `@MainActor` is no longer on the fast path of fallback,
+/// eliminating the serialized auth-generation bottleneck during feed scroll.)
 enum BlossomFallbackFetcher {
 
     /// Cooldown cache to prevent repeated fallback attempts for the same hash.
@@ -19,7 +28,7 @@ enum BlossomFallbackFetcher {
     /// - Parameters:
     ///   - url: The originally failed URL (used to extract the hash and optionally extension).
     ///   - authorPubkey: The pubkey of the event author, to look up their kind-10063 server list.
-    /// - Returns: The verified `Data` if successful, or nil if all servers fail or verification fails.
+    /// - Returns: The verified `Data` if successful, or nil if all servers reject/skip.
     static func fetch(url: URL, authorPubkey: String) async -> Data? {
         guard let expectedHash = ContentParser.sha256Hash(fromUrl: url.absoluteString) else {
             return nil
@@ -43,14 +52,13 @@ enum BlossomFallbackFetcher {
         let servers = BlossomServerList.cached(for: authorPubkey)
         let ext = fileExtension(from: url)
 
-        // Pre-compute auth header once for all servers in the task group.
-        let keypair = NostrKey.load()
-        let bud11Auth: String? = if let kp = keypair {
-            await BlossomClient.makeAuthHeader(keypair: kp, action: "get", sha256Hex: expectedHash)
-        } else {
-            nil
+        // Short circuit: if no servers available, bail out early. This also means
+        // the task group has no tasks, which returns nil immediately — but we log
+        // it explicitly for observability.
+        guard !servers.isEmpty else {
+            os_log(.debug, "BlossomFallbackFetcher: no servers available for author %@", authorPubkey)
+            return nil
         }
-        let legacyAuth: String? = if let b = bud11Auth { BlossomClient.convertToLegacyBase64Auth(b) } else { nil }
 
         return await withTaskGroup(of: Data?.self) { group in
             for server in servers {
@@ -59,12 +67,7 @@ enum BlossomFallbackFetcher {
                 guard let fetchURL = URL(string: normalized + path) else { continue }
 
                 group.addTask {
-                    return try? await fetchOnce(
-                        url: fetchURL,
-                        hash: expectedHash,
-                        bud11Auth: bud11Auth,
-                        legacyAuth: legacyAuth
-                    )
+                    return try? await fetchOncePublic(url: fetchURL, hash: expectedHash)
                 }
             }
 
@@ -78,54 +81,33 @@ enum BlossomFallbackFetcher {
         }
     }
 
-    private static func fetchOnce(url: URL, hash: String, bud11Auth: String?, legacyAuth: String?) async throws -> Data {
+    /// Unauthenticated public GET. Returns data if 2xx AND SHA-256 matches.
+    /// Throws `URLError` on non-2xx (including 401 auth rejection — we intentionally
+    /// do not retry with auth to avoid deanonymizing the reader to author-controlled servers).
+    /// (Fix #9: clean error propagation with specific URL errors.)
+    private static func fetchOncePublic(url: URL, hash: String) async throws -> Data {
         var req = URLRequest(url: url)
         req.httpMethod = "GET"
         req.timeoutInterval = 15
 
-        // First attempt without auth (public blob).
-        var requestData: Data
-        var lastResponse: URLResponse
-
-        do {
-            (requestData, lastResponse) = try await URLSession.shared.data(for: req)
-        } catch {
-            throw URLError(.badServerResponse)
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        guard let http = resp as? HTTPURLResponse else {
+            throw URLError(.cannotParseResponse)
         }
-        guard let http = lastResponse as? HTTPURLResponse else { throw URLError(.cannotParseResponse) }
-
-        // On 401, retry with BUD-11 Base64URL auth, then legacy Base64 if server rejects BUD-11.
-        if http.statusCode == 401, let auth = bud11Auth {
-            req.setValue(auth, forHTTPHeaderField: "Authorization")
-            do {
-                (requestData, lastResponse) = try await URLSession.shared.data(for: req)
-            } catch {
-                throw URLError(.badServerResponse)
-            }
-            guard let retryHttp = lastResponse as? HTTPURLResponse else { throw URLError(.cannotParseResponse) }
-
-            if retryHttp.statusCode == 401, let legacy = legacyAuth {
-                req.setValue(legacy, forHTTPHeaderField: "Authorization")
-                do {
-                    (requestData, lastResponse) = try await URLSession.shared.data(for: req)
-                } catch {
-                    throw URLError(.badServerResponse)
-                }
-            }
-        }
-
-        guard let finalHttp = lastResponse as? HTTPURLResponse, (200..<300).contains(finalHttp.statusCode) else {
+        guard (200..<300).contains(http.statusCode) else {
+            // 401/403 are auth-required / forbidden — we intentionally don't retry with
+            // auth. The caller returns nil from this task, the task group falls through
+            // to the next server.
             throw URLError(.badServerResponse)
         }
 
-        // Verify SHA-256 (BUD-03) before returning data.
-        let computedHash = BlossomClient.sha256Hex(requestData)
+        let computedHash = BlossomClient.sha256Hex(data)
         guard computedHash == hash else {
             os_log(.fault, "BlossomFallbackFetcher: SHA-256 mismatch. Expected %@, got %@", hash, computedHash)
             throw URLError(.cannotDecodeContentData)
         }
 
-        return requestData
+        return data
     }
 
     private static func fileExtension(from url: URL) -> String {

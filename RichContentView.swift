@@ -106,8 +106,13 @@ struct RichContentView: View {
         // `linksAreInline` is part of the key because the same content
         // produces different segments when the host folds `.link` into inline
         // — without it, a feed-card render would poison the cache entry
-        // consumed by a bio (or vice versa).
-        let key = "\(generation)|\(showLinkPreviews ? 1 : 0)|\(content)" as NSString
+        // consumed by a bio (or vice versa). `authorPubkey` must also be
+        // part of the key: two events with identical content but different
+        // authors produce `MediaMeta` with different `authorPubkey`, so
+        // `BlossomFallbackFetcher` would otherwise use the wrong author
+        // server list on a cache hit.
+        // (Fix #3: authorPubkey added to key)
+        let key = "\(generation)|\(showLinkPreviews ? 1 : 0)|\(authorPubkey ?? "")|\(content)" as NSString
         if let box = Self.parseCache.object(forKey: key) { return box.segments }
         let signpostState = Signposts.render.beginInterval("parseCacheMiss")
         defer { Signposts.render.endInterval("parseCacheMiss", signpostState) }
