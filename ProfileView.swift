@@ -339,6 +339,12 @@ private struct ProfileHeaderView: View {
     @State private var followBusy = false
     @State private var showDmSheet = false
     @State private var showZapSheet = false
+    /// No-wallet fallback: QR + copy + open-in-external-wallet for the
+    /// profile's lightning address.
+    @State private var showLightningPay = false
+    /// Own profile: shows the receive QR for the user's own lightning
+    /// address (you can't zap yourself).
+    @State private var showLightningReceive = false
     /// Whether the bio is currently shown in full or capped to the
     /// collapsed height. Long bios start collapsed so the lightning
     /// address, follow stats, and tab bar stay above the fold; the
@@ -451,10 +457,7 @@ private struct ProfileHeaderView: View {
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
-                    .onTapGesture {
-                        UIPasteboard.general.string = lud16
-                        QuickFollowToast.shared.show("Copied")
-                    }
+                    .onTapGesture { handleLightningTap(lud16) }
                 }
 
                 statRow
@@ -482,6 +485,39 @@ private struct ProfileHeaderView: View {
                     dismiss: { showZapSheet = false }
                 )
             }
+        }
+        .sheet(isPresented: $showLightningPay) {
+            if let lud16 = viewModel.profile?.lud16, !lud16.isEmpty {
+                LightningPaySheet(
+                    lud16: lud16,
+                    avatarUrl: viewModel.profile?.picture,
+                    allowOpenInWallet: true
+                )
+            }
+        }
+        .sheet(isPresented: $showLightningReceive) {
+            if let lud16 = viewModel.profile?.lud16, !lud16.isEmpty {
+                LightningPaySheet(
+                    lud16: lud16,
+                    avatarUrl: viewModel.profile?.picture,
+                    allowOpenInWallet: false
+                )
+            }
+        }
+    }
+
+    /// Tapping a profile's lightning address. On someone else's profile this
+    /// is a zap intent: open the in-app zap composer when a wallet is
+    /// connected, otherwise a QR + copy pay sheet. On your own profile you
+    /// can't zap yourself — show your receive QR (no external-wallet "pay"
+    /// affordance) instead of routing to a pay sheet.
+    private func handleLightningTap(_ lud16: String) {
+        if isMe {
+            showLightningReceive = true
+        } else if let store = walletStore, store.mode != nil {
+            showZapSheet = true
+        } else {
+            showLightningPay = true
         }
     }
 

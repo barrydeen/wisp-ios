@@ -116,6 +116,7 @@
 		4CFF010700000000000000A4 /* LinkPreviewService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF010600000000000000A4 /* LinkPreviewService.swift */; };
 		4CFF010900000000000000A5 /* LinkPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF010800000000000000A5 /* LinkPreviewView.swift */; };
 		4CFF010B00000000000000A6 /* LightningInvoiceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF010A00000000000000A6 /* LightningInvoiceView.swift */; };
+		4CFF0A0100000000000000B1 /* LightningPaySheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF0A0000000000000000B1 /* LightningPaySheet.swift */; };
 		4CFF010D00000000000000A7 /* QuotedNoteView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF010C00000000000000A7 /* QuotedNoteView.swift */; };
 		4CAA770200000000000000B1 /* ArticleRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CAA770100000000000000B1 /* ArticleRoute.swift */; };
 		4CAA770400000000000000B2 /* ArticleCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CAA770300000000000000B2 /* ArticleCache.swift */; };
@@ -429,6 +430,7 @@
 		4CFF010600000000000000A4 /* LinkPreviewService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkPreviewService.swift; sourceTree = "<group>"; };
 		4CFF010800000000000000A5 /* LinkPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkPreviewView.swift; sourceTree = "<group>"; };
 		4CFF010A00000000000000A6 /* LightningInvoiceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LightningInvoiceView.swift; sourceTree = "<group>"; };
+		4CFF0A0000000000000000B1 /* LightningPaySheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LightningPaySheet.swift; sourceTree = "<group>"; };
 		4CFF010C00000000000000A7 /* QuotedNoteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotedNoteView.swift; sourceTree = "<group>"; };
 		4CAA770100000000000000B1 /* ArticleRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArticleRoute.swift; sourceTree = "<group>"; };
 		4CAA770300000000000000B2 /* ArticleCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArticleCache.swift; sourceTree = "<group>"; };
@@ -719,6 +721,7 @@
 				4CFF010600000000000000A4 /* LinkPreviewService.swift */,
 				4CFF010800000000000000A5 /* LinkPreviewView.swift */,
 				4CFF010A00000000000000A6 /* LightningInvoiceView.swift */,
+				4CFF0A0000000000000000B1 /* LightningPaySheet.swift */,
 				4CFF010C00000000000000A7 /* QuotedNoteView.swift */,
 				4CAA770100000000000000B1 /* ArticleRoute.swift */,
 				4CAA770300000000000000B2 /* ArticleCache.swift */,
@@ -1176,6 +1179,7 @@
 				4CFF010700000000000000A4 /* LinkPreviewService.swift in Sources */,
 				4CFF010900000000000000A5 /* LinkPreviewView.swift in Sources */,
 				4CFF010B00000000000000A6 /* LightningInvoiceView.swift in Sources */,
+				4CFF0A0100000000000000B1 /* LightningPaySheet.swift in Sources */,
 				4CFF010D00000000000000A7 /* QuotedNoteView.swift in Sources */,
 				4CAA770200000000000000B1 /* ArticleRoute.swift in Sources */,
 				4CAA770400000000000000B2 /* ArticleCache.swift in Sources */,
