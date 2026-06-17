@@ -178,7 +178,7 @@ final class MediaLookaheadPrefetcher {
     private func plan(for event: NostrEvent) -> [PlanItem] {
         if let box = planCache.object(forKey: event.id as NSString) { return box.items }
         var items: [PlanItem] = []
-        for segment in ContentParser.parse(content: event.content, tags: event.tags) {
+        for segment in ContentParser.parse(content: event.content, tags: event.tags, authorPubkey: event.pubkey) {
             switch segment {
             case .image(let meta), .unknownMedia(let meta):
                 guard let url = URL(string: meta.url) else { continue }

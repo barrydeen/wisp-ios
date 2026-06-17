@@ -180,17 +180,8 @@ struct RetryingAsyncImage<Content: View, Loading: View, Failure: View>: View {
         } else if attempt < maxAttempts {
             attempt += 1  // Triggers another `task` cycle via TaskKey change.
         } else {
-            // Phase 3: BUD-03 Fallback Retrieval
             if let authorPubkey, let fallbackData = await BlossomFallbackFetcher.fetch(url: url, authorPubkey: authorPubkey) {
-                let fallbackImage: UIImage?
-                if let maxPixel = maxPixelSize {
-                    fallbackImage = downsampledImage(from: fallbackData, maxPixel: maxPixel)
-                } else {
-                    fallbackImage = UIImage(data: fallbackData)
-                }
-                
-                if let image = fallbackImage {
-                    // Cache the successfully fetched fallback image (reuse existing `key`)
+                if let image = AnimatedImageDecoder.decodeStatic(data: fallbackData, maxPixelSize: maxPixelSize) {
                     DecodedImageCache.storeStatic(image, for: key)
                     phase = .success(image)
                     return

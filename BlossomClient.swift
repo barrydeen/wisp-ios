@@ -104,6 +104,23 @@ enum BlossomClient {
         return "Nostr \(data.base64URLEncodedString())"
     }
 
+    /// Convert a BUD-11 (Base64URL) auth header back to standard Base64 encoding.
+    /// Used as a fallback for older Blossom servers that haven't implemented BUD-11.
+    /// No re-signing required — re-encodes the same signed event JSON.
+    static func convertToLegacyBase64Auth(_ header: String) -> String? {
+        guard header.hasPrefix("Nostr ") else { return nil }
+        let b64url = String(header.dropFirst(6))
+        var standardBase64 = b64url
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        let remainder = standardBase64.count % 4
+        if remainder > 0 {
+            standardBase64 += String(repeating: "=", count: 4 - remainder)
+        }
+        guard let decodedData = Data(base64Encoded: standardBase64) else { return nil }
+        return "Nostr \(decodedData.base64EncodedString())"
+    }
+
     /// Upload `bytes` to one of the given Blossom servers. Tries `/media` (BUD-05) first
     /// and falls back to `/upload` on 404, then moves on to the next server on other errors.
     /// Returns the public URL of the uploaded blob on the first success.
@@ -116,46 +133,59 @@ enum BlossomClient {
     ) async throws -> BlossomUploadResult {
         guard !servers.isEmpty else { throw BlossomError.allServersFailed(nil) }
         let hash = sha256Hex(bytes)
-        
-        guard let mediaAuth = await makeAuthHeader(keypair: keypair, action: "media", sha256Hex: hash),
-              let uploadAuth = await makeAuthHeader(keypair: keypair, action: "upload", sha256Hex: hash) else {
+
+        // BUD-06 pre-flight HEAD uses a "get" action tag, per BUD-11.
+        guard let getAuth = await makeAuthHeader(keypair: keypair, action: "get", sha256Hex: hash),
+              let mediaAuth = await makeAuthHeader(keypair: keypair, action: "media", sha256Hex: hash) else {
             throw BlossomError.authFailed
         }
-        
+        // uploadAuth generated lazily below — only if the first server rejects /media.
+
         var lastError: String?
+        var uploadAuth: String?
+        var legacyBase64 = false
+
         for server in servers {
             let normalized = normalizeServerURL(server)
 
-            // Pre-flight HEAD check (BUD-06) - target the specific resource path once per server
+            // Pre-flight HEAD check (BUD-06) — fast timeout, non-fatal.
             guard let headUrl = URL(string: normalized + "/" + hash) else { continue }
-            let exists = (try? await headOnce(hash: hash, url: headUrl, auth: mediaAuth)) ?? false
+            let exists = (try? await headOnce(hash: hash, url: headUrl, auth: getAuth)) ?? false
             if exists {
                 return BlossomUploadResult(url: normalized + "/" + hash, sha256Hex: hash, mime: mime, size: bytes.count)
             }
 
+            // Generate uploadAuth on first use.
+            if uploadAuth == nil {
+                uploadAuth = await makeAuthHeader(keypair: keypair, action: "upload", sha256Hex: hash)
+                guard uploadAuth != nil else { throw BlossomError.authFailed }
+            }
+
             var pathError: String?
-            for (path, auth) in [("/media", mediaAuth), ("/upload", uploadAuth)] {
+            for (path, rawAuth) in [("/media", mediaAuth), ("/upload", uploadAuth!)] {
+                let auth = legacyBase64 ? (convertToLegacyBase64Auth(rawAuth) ?? rawAuth) : rawAuth
                 guard let url = URL(string: normalized + path) else { continue }
                 do {
                     let result = try await uploadOnce(bytes: bytes, mime: mime, hash: hash, url: url, auth: auth)
 
-                    // Mirror payload URL (BUD-04): trust the server's own URL when the host
-                    // matches the upload host OR is a sibling subdomain (e.g., cdn.example.media
-                    // alongside blossom.example.media). This lets CDN-enabled servers deliver
-                    // via fast CDN paths instead of forcing mirror servers to fetch from the
-                    // rate-limited blossom endpoint. Falls back to the canonical origin
-                    // <normalize>/<hash> for any host the check rejects.
                     let safePublicURL = sanitizeMirrorURL(
                         serverReturnedURL: result.url,
                         uploadHost: URL(string: normalized)?.host ?? "",
                         fallbackURL: normalized + "/" + hash
                     )
 
-                    // Mirror to remaining servers in background (Phase 5)
                     Task.detached(priority: .utility) {
                         await mirrorBlob(hash: hash, publicURL: safePublicURL, servers: servers, currentServer: normalized, keypair: keypair)
                     }
                     return result
+                } catch BlossomError.allServersFailed(let msg) where msg == "401" {
+                    // BUD-11 backward-compat: retry with standard Base64 on 401.
+                    if !legacyBase64 {
+                        legacyBase64 = true
+                        continue
+                    }
+                    pathError = msg
+                    continue
                 } catch BlossomError.allServersFailed(let msg) where msg == "404" {
                     pathError = msg
                     continue
@@ -183,6 +213,9 @@ enum BlossomClient {
 
         let (data, resp) = try await URLSession.shared.data(for: req)
         guard let http = resp as? HTTPURLResponse else { throw BlossomError.invalidResponse }
+        if http.statusCode == 401 {
+            throw BlossomError.allServersFailed("401")
+        }
         if http.statusCode == 404 {
             throw BlossomError.allServersFailed("404")
         }
@@ -202,7 +235,7 @@ enum BlossomClient {
         req.httpMethod = "HEAD"
         req.setValue(auth, forHTTPHeaderField: "Authorization")
         req.setValue(hash, forHTTPHeaderField: "X-SHA-256")
-        req.timeoutInterval = 15
+        req.timeoutInterval = 5
 
         let (_, resp) = try await URLSession.shared.data(for: req)
         guard let http = resp as? HTTPURLResponse else { return false }
@@ -214,13 +247,13 @@ enum BlossomClient {
         // Hoist auth header and body generation outside the loop since they are invariant.
         guard let auth = await makeAuthHeader(keypair: keypair, action: "mirror", sha256Hex: hash) else { return }
         guard let bodyData = try? JSONSerialization.data(withJSONObject: ["url": publicURL]) else { return }
-        
+
         await withTaskGroup(of: Void.self) { group in
             for server in servers {
                 let normalizedServer = normalizeServerURL(server)
                 guard normalizedServer != currentServer else { continue }
                 guard let url = URL(string: normalizedServer + "/mirror") else { continue }
-                
+
                 group.addTask {
                     do {
                         var req = URLRequest(url: url)

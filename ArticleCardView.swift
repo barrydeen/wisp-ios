@@ -224,7 +224,7 @@ struct ArticleCardView: View {
     /// `aspectRatio(ratio) / heightIn(max = 180.dp)` + Crop scaling.
     @ViewBuilder
     private func heroImage(_ url: URL, event: NostrEvent, urlString: String, title: String?) -> some View {
-        let meta = ContentParser.parseImetaTags(event.tags)[urlString]
+        let meta = ContentParser.parseImetaTags(event.tags, authorPubkey: event.pubkey)[urlString]
         let ratio = ContentParser.parseAspectRatio(meta?.dimension)
         // A malformed imeta dim ("0x100") parses to ratio 0 — treat any
         // non-positive ratio as missing so the frame never degenerates.
@@ -236,6 +236,7 @@ struct ArticleCardView: View {
             .overlay(
                 RetryingAsyncImage(
                     url: url,
+                    authorPubkey: event.pubkey,
                     content: { image in
                         image
                             .resizable()

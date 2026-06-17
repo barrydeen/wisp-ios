@@ -49,6 +49,7 @@ struct InlineImageView: View {
                     RetryingAsyncImage(
                         url: URL(string: meta.url),
                         maxPixelSize: ImagePixelBudget.feed,
+                        authorPubkey: meta.authorPubkey,
                         content: { image in
                             image.resizable()
                                 .aspectRatio(contentMode: .fit)

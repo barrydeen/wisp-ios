@@ -129,7 +129,8 @@ struct RichContentView: View {
             // folded back into inline text below — tell the parser so its
             // pass-4 blank-line trim treats them as inline neighbors and
             // doesn't eat the separator newlines between adjacent URLs.
-            linksAreInline: !showLinkPreviews
+            linksAreInline: !showLinkPreviews,
+            authorPubkey: authorPubkey
         )
         Self.parseCache.setObject(SegmentBox(segments), forKey: key)
         return segments
