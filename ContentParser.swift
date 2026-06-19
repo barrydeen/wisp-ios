@@ -15,19 +15,14 @@ struct MediaMeta: Hashable {
     /// one host (e.g. a Blossom mirror in `content` vs the host in the imeta tag),
     /// and by `BlossomFallbackFetcher` to verify retrieved bytes.
     let sha256: String?
-    /// Hex pubkey of the event author that owns this media. When set, flows
-    /// through `RetryingAsyncImage` → `BlossomFallbackFetcher` to recover the
-    /// image from the author's kind-10063 server list on primary load failure.
-    let authorPubkey: String?
 
-    init(url: String, mime: String? = nil, dimension: String? = nil, blurhash: String? = nil, posterUrl: String? = nil, sha256: String? = nil, authorPubkey: String? = nil) {
+    init(url: String, mime: String? = nil, dimension: String? = nil, blurhash: String? = nil, posterUrl: String? = nil, sha256: String? = nil) {
         self.url = url
         self.mime = mime
         self.dimension = dimension
         self.blurhash = blurhash
         self.posterUrl = posterUrl
         self.sha256 = sha256
-        self.authorPubkey = authorPubkey
     }
 }
 
@@ -100,7 +95,7 @@ enum ContentParser {
 
     // MARK: - imeta tags (NIP-92)
 
-    static func parseImetaTags(_ tags: [[String]], authorPubkey: String? = nil) -> [String: MediaMeta] {
+    static func parseImetaTags(_ tags: [[String]]) -> [String: MediaMeta] {
         var map: [String: MediaMeta] = [:]
         for tag in tags {
             guard tag.first == "imeta", tag.count >= 2 else { continue }
@@ -121,7 +116,7 @@ enum ContentParser {
                 else if entry.hasPrefix("x ") { x = String(entry.dropFirst(2)) }
             }
             if let url {
-                map[url] = MediaMeta(url: url, mime: mime, dimension: dim, blurhash: blur, posterUrl: image, sha256: x ?? ox, authorPubkey: authorPubkey)
+                map[url] = MediaMeta(url: url, mime: mime, dimension: dim, blurhash: blur, posterUrl: image, sha256: x ?? ox)
             }
         }
         return map
@@ -137,17 +132,14 @@ enum ContentParser {
     ///     `.link` like other inline neighbors. Otherwise a lone `"\n"` text
     ///     between two `.link`s gets zeroed out and the folded inline links
     ///     collide into one line.
-    ///   - authorPubkey: Hex pubkey of the event author. Threads through to
-    ///     `MediaMeta.authorPubkey` for fallback retrieval on image load failure.
     static func parse(
         content: String,
         tags: [[String]],
         emojiMap: [String: String] = [:],
         trimBlankLines: Bool = true,
-        linksAreInline: Bool = false,
-        authorPubkey: String? = nil
+        linksAreInline: Bool = false
     ) -> [ContentSegment] {
-        let imetaMap = parseImetaTags(tags, authorPubkey: authorPubkey)
+        let imetaMap = parseImetaTags(tags)
         // Preserve imeta tag order so gallery posts (kind 20/21/22) display
         // images in the publisher's intended sequence rather than dict order.
         var imetaUrlOrder: [String] = []
@@ -163,8 +155,7 @@ enum ContentParser {
             imetaMap: imetaMap,
             imetaUrlOrder: imetaUrlOrder,
             trimBlankLines: trimBlankLines,
-            linksAreInline: linksAreInline,
-            authorPubkey: authorPubkey
+            linksAreInline: linksAreInline
         )
     }
 
@@ -174,8 +165,7 @@ enum ContentParser {
         imetaMap: [String: MediaMeta] = [:],
         imetaUrlOrder: [String] = [],
         trimBlankLines: Bool = true,
-        linksAreInline: Bool = false,
-        authorPubkey: String? = nil
+        linksAreInline: Bool = false
     ) -> [ContentSegment] {
         var segments: [ContentSegment] = []
         let nsContent = content as NSString
@@ -198,7 +188,7 @@ enum ContentParser {
                 segments.append(.hashtag(hashtag))
             } else if let bareDomain, !bareDomain.isEmpty, !token.lowercased().hasPrefix("http") {
                 let url = "https://\(bareDomain)"
-                segments.append(classifyUrl(url, content: content, range: range, imetaMap: imetaMap, authorPubkey: authorPubkey))
+                segments.append(classifyUrl(url, content: content, range: range, imetaMap: imetaMap))
             } else if token.lowercased().hasPrefix("nostr:") {
                 segments.append(decodeNostrToken(token))
             } else if isBareBech32(token) {
@@ -206,7 +196,7 @@ enum ContentParser {
             } else {
                 // full URL match (http/https/ws/wss)
                 let trimmed = trimTrailingPunctuation(token)
-                segments.append(classifyUrl(trimmed, content: content, range: range, imetaMap: imetaMap, authorPubkey: authorPubkey))
+                segments.append(classifyUrl(trimmed, content: content, range: range, imetaMap: imetaMap))
             }
 
             lastEnd = range.location + range.length
@@ -356,7 +346,7 @@ enum ContentParser {
         }
     }
 
-    private static func classifyUrl(_ url: String, content: String, range: NSRange, imetaMap: [String: MediaMeta], authorPubkey: String? = nil) -> ContentSegment {
+    private static func classifyUrl(_ url: String, content: String, range: NSRange, imetaMap: [String: MediaMeta]) -> ContentSegment {
         let meta = imetaMap[url]
         let mime = meta?.mime
         let imetaClass = mime.flatMap { classifyByMime($0) }
@@ -366,11 +356,11 @@ enum ContentParser {
         if imetaClass == "image" { return .image(meta!) }
         if imetaClass == "video" { return .video(meta!) }
         if imetaClass == "audio" { return .audio(meta!) }
-        if imageExtensions.contains(ext) { return .image(meta ?? MediaMeta(url: url, authorPubkey: authorPubkey)) }
-        if videoExtensions.contains(ext) { return .video(meta ?? MediaMeta(url: url, authorPubkey: authorPubkey)) }
-        if audioExtensions.contains(ext) { return .audio(meta ?? MediaMeta(url: url, authorPubkey: authorPubkey)) }
+        if imageExtensions.contains(ext) { return .image(meta ?? MediaMeta(url: url)) }
+        if videoExtensions.contains(ext) { return .video(meta ?? MediaMeta(url: url)) }
+        if audioExtensions.contains(ext) { return .audio(meta ?? MediaMeta(url: url)) }
         if isWebSocket { return .inlineLink(url) }
-        if isBlossomUrl(url) { return .unknownMedia(meta ?? MediaMeta(url: url, authorPubkey: authorPubkey)) }
+        if isBlossomUrl(url) { return .unknownMedia(meta ?? MediaMeta(url: url)) }
         if isStandaloneUrl(content: content, range: range) { return .link(url) }
         return .inlineLink(url)
     }

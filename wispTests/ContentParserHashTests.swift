@@ -10,41 +10,51 @@ import Testing
 
 struct ContentParserHashTests {
 
+    private let hash = "423a2423e536349b9adb8eaa1835f230b7a42798c5a181727b1b4601f96e0e91"
+
     @Test func extractsHashFromEndOfPath() {
-        let url = "https://example.com/media/423a2423e536349b9adb8eaa1835f230b7a42798c5a181727b1b4601f96e0e91.png"
-        let hash = ContentParser.sha256Hash(fromUrl: url)
-        #expect(hash == "423a2423e536349b9adb8eaa1835f230b7a42798c5a181727b1b4601f96e0e91")
+        let url = "https://example.com/media/\(hash).png"
+        #expect(ContentParser.sha256Hash(fromUrl: url) == hash)
     }
 
     @Test func extractsHashWithoutExtension() {
-        let url = "https://example.com/media/423a2423e536349b9adb8eaa1835f230b7a42798c5a181727b1b4601f96e0e91"
-        let hash = ContentParser.sha256Hash(fromUrl: url)
-        #expect(hash == "423a2423e536349b9adb8eaa1835f230b7a42798c5a181727b1b4601f96e0e91")
+        #expect(ContentParser.sha256Hash(fromUrl: "https://example.com/media/\(hash)") == hash)
     }
 
     @Test func ignoresHashInQueryParameters() {
-        // The regex is anchored to the end of the path, so it should ignore query params
-        let url = "https://example.com/media/image.png?token=423a2423e536349b9adb8eaa1835f230b7a42798c5a181727b1b4601f96e0e91"
-        let hash = ContentParser.sha256Hash(fromUrl: url)
-        #expect(hash == nil)
+        // Regex is anchored to the path end; query params must be ignored.
+        let url = "https://example.com/media/image.png?token=\(hash)"
+        #expect(ContentParser.sha256Hash(fromUrl: url) == nil)
     }
 
     @Test func ignoresMidPathHexStrings() {
-        // Should not match a 64-char hex string that is not at the end of the path
-        let url = "https://example.com/423a2423e536349b9adb8eaa1835f230b7a42798c5a181727b1b4601f96e0e91/image.png"
-        let hash = ContentParser.sha256Hash(fromUrl: url)
-        #expect(hash == nil)
+        // Hash in a non-terminal path segment should not be extracted.
+        let url = "https://example.com/\(hash)/image.png"
+        #expect(ContentParser.sha256Hash(fromUrl: url) == nil)
     }
 
     @Test func returnsNilForNonHexPath() {
-        let url = "https://example.com/media/regular-image-name.jpg"
-        let hash = ContentParser.sha256Hash(fromUrl: url)
-        #expect(hash == nil)
+        #expect(ContentParser.sha256Hash(fromUrl: "https://example.com/media/regular-image-name.jpg") == nil)
     }
 
     @Test func handlesTrailingSlashAfterHash() {
-        let url = "https://example.com/media/423a2423e536349b9adb8eaa1835f230b7a42798c5a181727b1b4601f96e0e91/"
-        let hash = ContentParser.sha256Hash(fromUrl: url)
-        #expect(hash == "423a2423e536349b9adb8eaa1835f230b7a42798c5a181727b1b4601f96e0e91")
+        let url = "https://example.com/media/\(hash)/"
+        #expect(ContentParser.sha256Hash(fromUrl: url) == hash)
+    }
+
+    @Test func handlesURLWithPort() {
+        // URL.path strips scheme/host/port; regex should match correctly.
+        let url = "https://server.com:8080/\(hash).png"
+        #expect(ContentParser.sha256Hash(fromUrl: url) == hash)
+    }
+
+    @Test func handlesFragmentAfterHash() {
+        // URL.path strips the fragment; the hash at path end should be found.
+        let url = "https://example.com/\(hash)#section"
+        #expect(ContentParser.sha256Hash(fromUrl: url) == hash)
+    }
+
+    @Test func returnsNilForInvalidURL() {
+        #expect(ContentParser.sha256Hash(fromUrl: "not a url") == nil)
     }
 }

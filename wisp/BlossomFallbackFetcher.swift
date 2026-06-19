@@ -19,9 +19,19 @@ import os
 /// enable full BUD-03 multi-server fallback.
 enum BlossomFallbackFetcher {
 
-    /// Cooldown cache to prevent repeated fallback attempts for the same hash.
-    /// Key: hash, Value: timestamp of last attempt. TTL: 5 minutes.
+    /// Maximum concurrent fallback GETs per fetch call.
+    /// Matches `BlossomClient.mirrorMaxConcurrent` — consistent cap across all Blossom
+    /// network operations to prevent connection/bandwidth bursts during feed scroll.
+    private static let maxConcurrentFetches = 3
+
+    /// Cooldown cache to prevent repeated fallback attempts for the same (hash + author).
+    /// Key: "<hash>|<authorPubkey>", Value: timestamp of last *failed* attempt. TTL: 5 minutes.
     /// Capped at 512 entries to prevent unbounded memory growth in long sessions.
+    ///
+    /// Keyed by (hash, authorPubkey) rather than hash alone so that two authors posting
+    /// the same content-addressed image with different server lists get independent attempts.
+    /// Recorded ONLY on failure so that a transient network error during the first attempt
+    /// does not permanently suppress a retry that might succeed after connectivity recovers.
     private static let cooldownCache: NSCache<NSString, NSDate> = {
         let cache = NSCache<NSString, NSDate>()
         cache.countLimit = 512
@@ -31,9 +41,7 @@ enum BlossomFallbackFetcher {
     private static let cooldownTTLSeconds: TimeInterval = 300  // 5 minutes
 
     /// Attempts to fetch and verify a blob from the author's Blossom servers.
-    /// Uses the cached kind-10063 list (set during feed load / prefetch) rather than
-    /// triggering a relay query per failure — avoids the N+1 relay pattern when
-    /// several images fail in a single feed.
+    /// Uses the cached kind-10063 list to avoid triggering relay queries per failure.
     /// - Parameters:
     ///   - url: The originally failed URL (used to extract the hash and optionally extension).
     ///   - authorPubkey: The pubkey of the event author, to look up their kind-10063 server list.
@@ -43,18 +51,16 @@ enum BlossomFallbackFetcher {
             return nil
         }
 
-        // Check cooldown cache — skip if this hash was recently attempted.
-        let hashKey = expectedHash as NSString
-        if let lastAttempt = cooldownCache.object(forKey: hashKey) {
-            let elapsed = Date().timeIntervalSince(lastAttempt as Date)
+        // Cooldown check — keyed by (hash, authorPubkey) so different authors get
+        // independent cooldowns for the same content-addressed blob.
+        let cooldownKey = "\(expectedHash)|\(authorPubkey)" as NSString
+        if let lastFailedAt = cooldownCache.object(forKey: cooldownKey) {
+            let elapsed = Date().timeIntervalSince(lastFailedAt as Date)
             if elapsed < cooldownTTLSeconds {
                 os_log(.debug, "BlossomFallbackFetcher: skipping fallback for %{private}@ (cooldown: %.0fs remaining)", expectedHash, cooldownTTLSeconds - elapsed)
                 return nil
             }
         }
-
-        // Mark this attempt in the cooldown cache.
-        cooldownCache.setObject(NSDate(), forKey: hashKey)
 
         // Use cached list — no relay query. For the current user, these are populated
         // by compose/upload flows. For arbitrary content authors (not yet prefetched),
@@ -63,39 +69,42 @@ enum BlossomFallbackFetcher {
         let servers = BlossomServerList.cached(for: authorPubkey)
         let ext = fileExtension(from: url)
 
-        // Short circuit: if no servers available, bail out early. This also means
-        // the task group has no tasks, which returns nil immediately — but we log
-        // it explicitly for observability.
-        guard !servers.isEmpty else {
-            os_log(.debug, "BlossomFallbackFetcher: no servers available for author %{private}@", authorPubkey)
-            return nil
-        }
-
-        return await withTaskGroup(of: Data?.self) { group in
+        // Cap concurrency to avoid bursting connections when many images fail at once.
+        let result = await withTaskGroup(of: Data?.self) { group in
+            var launched = 0
             for server in servers {
-                let normalized = BlossomClient.normalizeServerURL(server)
+                guard launched < maxConcurrentFetches else { break }
+                let normalized = BlossomClient.normalizeServerURL(server) ?? server
                 let path = ext.isEmpty ? "/\(expectedHash)" : "/\(expectedHash).\(ext)"
                 guard let fetchURL = URL(string: normalized + path) else { continue }
 
                 group.addTask {
                     return try? await fetchOncePublic(url: fetchURL, hash: expectedHash)
                 }
+                launched += 1
             }
 
-            for await result in group {
-                if let data = result {
+            for await taskResult in group {
+                if let data = taskResult {
                     group.cancelAll()
-                    return data
+                    return data as Data?
                 }
             }
-            return nil
+            return nil as Data?
         }
+
+        if result == nil {
+            // Record failure in the cooldown cache so we don't hammer author-controlled
+            // servers on every scroll event.
+            cooldownCache.setObject(NSDate(), forKey: cooldownKey)
+        }
+
+        return result
     }
 
-    /// Unauthenticated public GET. Returns data if 2xx AND SHA-256 matches.
-    /// Throws `URLError` on non-2xx (including 401 auth rejection — we intentionally
-    /// do not retry with auth to avoid deanonymizing the reader to author-controlled servers).
-    /// (Fix #9: clean error propagation with specific URL errors.)
+    /// Unauthenticated public GET. Returns data only if 2xx AND SHA-256 matches.
+    /// Non-2xx responses (including 401 auth rejection) throw `URLError.badServerResponse` —
+    /// we do not retry with auth to avoid deanonymizing the reader to author-controlled servers.
     private static func fetchOncePublic(url: URL, hash: String) async throws -> Data {
         var req = URLRequest(url: url)
         req.httpMethod = "GET"
@@ -106,9 +115,6 @@ enum BlossomFallbackFetcher {
             throw URLError(.cannotParseResponse)
         }
         guard (200..<300).contains(http.statusCode) else {
-            // 401/403 are auth-required / forbidden — we intentionally don't retry with
-            // auth. The caller returns nil from this task, the task group falls through
-            // to the next server.
             throw URLError(.badServerResponse)
         }
 

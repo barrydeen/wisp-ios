@@ -2,6 +2,10 @@ import SwiftUI
 
 struct InlineImageView: View {
     let meta: MediaMeta
+    /// Hex pubkey of the note author that owns this media. When set and the primary
+    /// URL fails all retries, `BlossomFallbackFetcher` is invoked with this pubkey
+    /// to attempt recovery from the author's kind-10063 server list.
+    var authorPubkey: String? = nil
     /// When set, the inline tap fires this closure instead of presenting
     /// the single-image `FullScreenImageView`. Used by `RichContentView` to
     /// route inline image taps through `FullScreenMediaPager` so the user
@@ -49,7 +53,7 @@ struct InlineImageView: View {
                     RetryingAsyncImage(
                         url: URL(string: meta.url),
                         maxPixelSize: ImagePixelBudget.feed,
-                        authorPubkey: meta.authorPubkey,
+                        authorPubkey: authorPubkey,
                         content: { image in
                             image.resizable()
                                 .aspectRatio(contentMode: .fit)
