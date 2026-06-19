@@ -20,7 +20,11 @@ enum BlossomClient {
     static let kindAuth = 24242
 
     static func normalizeServerURL(_ server: String) -> String {
-        server.hasSuffix("/") ? String(server.dropLast()) : server
+        var result = server
+        while result.hasSuffix("/") {
+            result = String(result.dropLast())
+        }
+        return result
     }
 
     /// Returns `true` if two hosts share the same registrable (base) domain.
@@ -33,6 +37,11 @@ enum BlossomClient {
     ///   • the mirror target server is chosen by the user from their kind-10063 list;
     ///   • the mirror server independently validates the fetched blob hash against
     ///     the authorized `x` tag (BUD-04 Step 5); hash mismatch → 409 Conflict.
+    ///
+    /// Note: This heuristic works well for most real-world domains (e.g., `.media`,
+    /// `.com`, `.net`, `.io`, `.dev`). For multi-level TLDs like `.co.uk`, `.com.au`,
+    /// or `.ac.uk`, this may incorrectly match subdomains. However, given the two
+    /// layers of defense above, this is an acceptable trade-off for simplicity.
     static func areSameRegistrableDomain(_ hostA: String, _ hostB: String) -> Bool {
         let a = hostA.lowercased().split(separator: ".").map(String.init)
         let b = hostB.lowercased().split(separator: ".").map(String.init)
@@ -107,6 +116,9 @@ enum BlossomClient {
     /// Convert a BUD-11 (Base64URL) auth header back to standard Base64 encoding.
     /// Used as a fallback for older Blossom servers that haven't implemented BUD-11.
     /// No re-signing required — re-encodes the same signed event JSON.
+    ///
+    /// This validates that the decoded data is a valid Nostr event JSON before
+    /// re-encoding, to prevent passing garbage data to non-compliant servers.
     static func convertToLegacyBase64Auth(_ header: String) -> String? {
         guard header.hasPrefix("Nostr ") else { return nil }
         let b64url = String(header.dropFirst(6))
@@ -118,23 +130,37 @@ enum BlossomClient {
             standardBase64 += String(repeating: "=", count: 4 - remainder)
         }
         guard let decodedData = Data(base64Encoded: standardBase64) else { return nil }
-        return "Nostr \(decodedData.base64EncodedString())"
+        // Validate that decoded data is valid JSON and has the expected kind field
+        // to prevent passing garbage data to legacy servers.
+        if let json = try? JSONSerialization.jsonObject(with: decodedData, options: [.fragmentsAllowed]) as? [String: Any],
+           let kind = json["kind"] as? Int,
+           kind == 24242 {
+            return "Nostr \(decodedData.base64EncodedString())"
+        }
+        return nil
     }
 
     /// Shared helper: perform a network operation with BUD-11 auth. On 401 (auth rejection),
     /// retry once with legacy standard-Base64 encoding. Eliminates duplication between
     /// `upload()`, `mirrorOnce()`, and `headOnce()`. (Fix #12: single source of truth)
+    ///
+    /// If the legacy conversion fails, the original 401 error is thrown.
+    /// If the legacy retry itself fails, that error propagates instead. (Fix #9)
     private static func withLegacyFallback<T>(
         bud11Auth: String,
         attempt: (String) async throws -> T
     ) async throws -> T {
         do {
             return try await attempt(bud11Auth)
-        } catch BlossomError.authRejected(statusCode: 401) {
+        } catch let blossomError as BlossomError {
+            guard case .authRejected(statusCode: 401) = blossomError else {
+                throw blossomError  // Propagate non-401 BlossomError
+            }
+            // 401: try legacy Base64 fallback
             if let legacyAuth = convertToLegacyBase64Auth(bud11Auth) {
                 return try await attempt(legacyAuth)
             }
-            throw BlossomError.authRejected(statusCode: 401)
+            throw blossomError  // Legacy conversion failed, throw original error
         }
     }
 
@@ -238,7 +264,20 @@ enum BlossomClient {
                         )
 
                         // Fire-and-forget mirror to remaining servers (BUD-04).
+                        // This is non-blocking for the caller. Mirror tasks are untracked and
+                        // will be cancelled if the app is suspended. This is acceptable because:
+                        // - Mirrors are best-effort redundancy, not critical for the upload
+                        // - Mirror servers are from the user's kind-10063 list (trusted)
+                        // - Each mirror server validates the blob hash (defense in depth)
+                        // - The mirror itself uses withLegacyFallback for resilience
+                        //
+                        // Limitation: No lifecycle tracking. If mirrors fail, there's no retry
+                        // or failure reporting. A proper implementation would use BGTaskScheduler
+                        // for background completion, but that requires Info.plist configuration
+                        // and background mode entitlement. For now, this fire-and-forget pattern
+                        // is sufficient for BUD-04 compliance.
                         Task.detached(priority: .utility) {
+                            os_log(.debug, "Starting mirror task for hash %{private}@ to %d servers", hash, servers.count - 1)
                             await mirrorBlob(
                                 hash: hash,
                                 publicURL: safePublicURL,
@@ -338,11 +377,11 @@ enum BlossomClient {
         // BUD-04 example flow: "Client sends the url to Server B /mirror using the
         // original upload authorization token".
         guard let auth = await makeAuthHeader(keypair: keypair, action: "upload", sha256Hex: hash) else {
-            os_log(.fault, "Blossom mirror: failed to generate auth header for hash %@", hash)
+            os_log(.fault, "Blossom mirror: failed to generate auth header for hash %{private}@", hash)
             return
         }
         guard let bodyData = try? JSONSerialization.data(withJSONObject: ["url": publicURL]) else {
-            os_log(.fault, "Blossom mirror: failed to serialize mirror body for %@", publicURL)
+            os_log(.fault, "Blossom mirror: failed to serialize mirror body for %{private}@", publicURL)
             return
         }
 
@@ -376,17 +415,17 @@ enum BlossomClient {
 
             guard let statusCode else {
                 // nil = 404/405 — endpoint unsupported, log only.
-                os_log(.debug, "Blossom mirror: server %@ does not support /mirror endpoint", server)
+                os_log(.debug, "Blossom mirror: server %{public}@ does not support /mirror endpoint", server)
                 return
             }
 
             if (200..<300).contains(statusCode) {
-                os_log(.debug, "Blossom mirror to %@ succeeded with HTTP %@", server, String(statusCode))
+                os_log(.debug, "Blossom mirror to %{public}@ succeeded with HTTP %{public}@", server, String(statusCode))
             } else {
-                os_log(.fault, "Blossom mirror to %@ failed after legacy retry with HTTP %@", server, String(statusCode))
+                os_log(.fault, "Blossom mirror to %{public}@ failed after legacy retry with HTTP %{public}@", server, String(statusCode))
             }
         } catch {
-            os_log(.fault, "Blossom mirror to %@ threw: %@", server, error.localizedDescription)
+            os_log(.fault, "Blossom mirror to %{public}@ threw: %{public}@", server, error.localizedDescription)
         }
     }
 

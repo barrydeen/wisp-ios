@@ -57,11 +57,23 @@ enum ContentParser {
     private static let videoMimePrefixes: Set<String> = ["video/mp4", "video/quicktime", "video/webm", "application/vnd.apple.mpegurl", "application/x-mpegurl"]
     private static let audioMimePrefixes: Set<String> = ["audio/mpeg", "audio/wav", "audio/ogg", "audio/mp4", "audio/flac", "audio/aac", "audio/x-wav"]
 
+    // MARK: - Blossom Path Regexes (BUD-01)
+
+    // These two regexes serve complementary purposes for BUD-01 (Blossom URLs):
+
+    /// Strict validator: matches ONLY when the entire path IS a SHA-256 hash.
+    /// Used by `isBlossomUrl()` to classify a URL as a Blossom URL.
+    /// Example match: `/abc123...def789.png` (entire path is hash)
+    /// Example non-match: `/users/123/abc123...def789.png` (path has other components)
     private static let blossomPathRegex = try! NSRegularExpression(
         pattern: #"^/[0-9a-f]{64}(\.[a-zA-Z0-9]+)?$"#,
         options: [.caseInsensitive]
     )
 
+    /// Extractor: finds the SHA-256 hash at the END of a path, regardless of prefix.
+    /// Used by `sha256Hash()` to extract the hash from URLs that may contain it.
+    /// Example match: `/users/123/abc123...def789.png` (extracts abc123...def789)
+    /// Example non-match: `/abc123...def789/users/123` (hash is NOT at the end)
     private static let sha256HashRegex = try! NSRegularExpression(
         pattern: #"/([0-9a-f]{64})(\.[a-zA-Z0-9]+)?/?$"#,
         options: [.caseInsensitive]
@@ -382,6 +394,9 @@ enum ContentParser {
     /// Extracts the content-addressed SHA-256 digest from a media URL.
     /// Anchors the match to the end of the path component to avoid false
     /// positives from query parameters, tracking tokens, or mid-path segments.
+    ///
+    /// This is internal (not private) because it's used by `BlossomFallbackFetcher`
+    /// to validate the hash when retrieving images from author servers.
     static func sha256Hash(fromUrl url: String) -> String? {
         guard let parsed = URL(string: url) else { return nil }
         let path = parsed.path

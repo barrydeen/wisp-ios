@@ -10,14 +10,23 @@ import os
 /// because those servers are chosen by the AUTHOR, not the reader — a malicious
 /// author could deanonymize viewers by collecting reader pubkeys from auth attempts.
 /// If an author's fallback server requires auth (401), fallback silently skips it.
-/// (Fix #6: remove auth to prevent deanonymization. This also fixes Fix #7 —
-/// `makeAuthHeader`'s `@MainActor` is no longer on the fast path of fallback,
-/// eliminating the serialized auth-generation bottleneck during feed scroll.)
+///
+/// Server resolution: uses cached kind-10063 lists for the given authorPubkey.
+/// In practice, these caches are populated for the current user's pubkey (via
+/// compose/upload flows) but NOT for arbitrary content authors. For unknown authors,
+/// this falls back to the default server (primal.net per BlossomServerList.defaultServer).
+/// Future enhancement: prefetch kind-10063 for content authors during feed load to
+/// enable full BUD-03 multi-server fallback.
 enum BlossomFallbackFetcher {
 
     /// Cooldown cache to prevent repeated fallback attempts for the same hash.
     /// Key: hash, Value: timestamp of last attempt. TTL: 5 minutes.
-    private static let cooldownCache = NSCache<NSString, NSDate>()
+    /// Capped at 512 entries to prevent unbounded memory growth in long sessions.
+    private static let cooldownCache: NSCache<NSString, NSDate> = {
+        let cache = NSCache<NSString, NSDate>()
+        cache.countLimit = 512
+        return cache
+    }()
 
     private static let cooldownTTLSeconds: TimeInterval = 300  // 5 minutes
 
@@ -39,7 +48,7 @@ enum BlossomFallbackFetcher {
         if let lastAttempt = cooldownCache.object(forKey: hashKey) {
             let elapsed = Date().timeIntervalSince(lastAttempt as Date)
             if elapsed < cooldownTTLSeconds {
-                os_log(.debug, "BlossomFallbackFetcher: skipping fallback for %{public}@ (cooldown: %.0fs remaining)", expectedHash, cooldownTTLSeconds - elapsed)
+                os_log(.debug, "BlossomFallbackFetcher: skipping fallback for %{private}@ (cooldown: %.0fs remaining)", expectedHash, cooldownTTLSeconds - elapsed)
                 return nil
             }
         }
@@ -47,8 +56,10 @@ enum BlossomFallbackFetcher {
         // Mark this attempt in the cooldown cache.
         cooldownCache.setObject(NSDate(), forKey: hashKey)
 
-        // Use cached list — no relay query. The refresh is performed by
-        // MediaLookaheadPrefetcher / feed prefetch during scroll, not per-image.
+        // Use cached list — no relay query. For the current user, these are populated
+        // by compose/upload flows. For arbitrary content authors (not yet prefetched),
+        // this returns the default primal.net server.
+        // TODO: Prefetch kind-10063 for content authors during feed load.
         let servers = BlossomServerList.cached(for: authorPubkey)
         let ext = fileExtension(from: url)
 
@@ -56,7 +67,7 @@ enum BlossomFallbackFetcher {
         // the task group has no tasks, which returns nil immediately — but we log
         // it explicitly for observability.
         guard !servers.isEmpty else {
-            os_log(.debug, "BlossomFallbackFetcher: no servers available for author %@", authorPubkey)
+            os_log(.debug, "BlossomFallbackFetcher: no servers available for author %{private}@", authorPubkey)
             return nil
         }
 
@@ -103,7 +114,7 @@ enum BlossomFallbackFetcher {
 
         let computedHash = BlossomClient.sha256Hex(data)
         guard computedHash == hash else {
-            os_log(.fault, "BlossomFallbackFetcher: SHA-256 mismatch. Expected %@, got %@", hash, computedHash)
+            os_log(.fault, "BlossomFallbackFetcher: SHA-256 mismatch. Expected %{private}@, got %{private}@", hash, computedHash)
             throw URLError(.cannotDecodeContentData)
         }
 
