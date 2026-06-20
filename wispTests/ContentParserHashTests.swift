@@ -75,6 +75,19 @@ struct ContentParserHashTests {
         }
     }
 
+    @Test func classifiesWebSocketURLWithHexPathAsInlineLink() {
+        // A WebSocket URL whose path happens to be a 64-char hex string
+        // must NOT be classified as a Blossom URL (scheme check).
+        let url = "wss://relay.example.com/\(hash)"
+        let segments = ContentParser.parse(content: url, tags: [])
+        #expect(segments.count == 1)
+        if case .inlineLink(let linkUrl) = segments.first {
+            #expect(linkUrl == url)
+        } else {
+            Issue.record("Expected .inlineLink for WebSocket URL, got \(String(describing: segments.first))")
+        }
+    }
+
     @Test func doesNotExtractHashFromNonBlossomUrlDuringDedup() {
         // A regular link whose last path component happens to be 64 hex chars
         // should not be treated as content-addressed during imeta dedup.

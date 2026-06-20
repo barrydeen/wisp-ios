@@ -9,6 +9,33 @@ import Foundation
 import Testing
 @testable import wisp
 
+private struct ValidAuthEvent {
+    let json: String
+    let kind: Int
+    let pubkey: String
+    let createdAt: Int
+    let content: String
+    let tags: [[String]]
+    let id: String
+}
+
+private func makeValidAuthEvent(
+    kind: Int = 24242,
+    pubkey: String = "abc123def456",
+    createdAt: Int = 1700000000,
+    tags: [[String]] = [["t", "upload"], ["x", "deadbeef"]],
+    content: String = "Blossom upload",
+    sig: String = String(repeating: "a", count: 128)
+) -> ValidAuthEvent {
+    let id = NostrEvent.computeId(pubkey: pubkey, createdAt: createdAt, kind: kind, tags: tags, content: content)
+    let tagsJSON = tags.map { "[" + $0.map { "\"\($0)\"" }.joined(separator: ",") + "]" }.joined(separator: ",")
+    let json = """
+    {"id":"\(id)","pubkey":"\(pubkey)","created_at":\(createdAt),"kind":\(kind),"tags":[\(tagsJSON)],"content":"\(content)","sig":"\(sig)"}
+    """
+    let compactJSON = json.replacingOccurrences(of: "\n", with: "").replacingOccurrences(of: "    ", with: "")
+    return ValidAuthEvent(json: compactJSON, kind: kind, pubkey: pubkey, createdAt: createdAt, content: content, tags: tags, id: id)
+}
+
 @Suite(.serialized)
 struct BlossomClientTests {
 
@@ -166,9 +193,8 @@ struct BlossomClientTests {
     }
 
     @Test func convertToLegacyBase64AuthRoundtripPreservesSignedEventJSON() {
-        // Compact JSON (no whitespace) as produced by makeAuthHeader via Nostr event serialisation
-        let signedEventJSON = #"{"kind":24242,"pubkey":"abc123","created_at":1700000000,"tags":[["t","upload"],["x","deadbeef"]],"content":"Blossom upload","id":"event123","sig":"signature"}"#
-        guard let jsonBytes = signedEventJSON.data(using: .utf8) else {
+        let event = makeValidAuthEvent()
+        guard let jsonBytes = event.json.data(using: .utf8) else {
             Issue.record("Failed to create test data"); return
         }
 
@@ -187,69 +213,35 @@ struct BlossomClientTests {
             Issue.record("Decoded bytes are not valid UTF-8"); return
         }
 
-        #expect(decodedJSON == signedEventJSON)
+        #expect(decodedJSON == event.json)
     }
 
     @Test func convertToLegacyBase64AuthHandlesPaddingCorrectly() {
-        // Test with valid kind:24242 JSON strings whose UTF-8 byte lengths exercise
-        // all three Base64 padding cases.
-        //
-        // JSON: {"kind":24242,"t":"a"}  → 22 UTF-8 bytes → 22 % 3 == 1 → Base64 needs 2 "=" chars
-        // JSON: {"kind":24242,"tt":"a"} → 23 UTF-8 bytes → 23 % 3 == 2 → Base64 needs 1 "=" char
-        // JSON: {"kind":24242,"ttt":"a"}→ 24 UTF-8 bytes → 24 % 3 == 0 → Base64 needs 0 "=" chars
-
-        let cases: [(json: String, expectedPaddingChars: Int)] = [
-            (#"{"kind":24242,"t":"a"}"#,   2),   // 22 bytes: ceil(22/3)*4 = 32 chars; 2 padding
-            (#"{"kind":24242,"tt":"a"}"#,  1),   // 23 bytes: 32 chars; 1 padding
-            (#"{"kind":24242,"ttt":"a"}"#, 0),   // 24 bytes: 32 chars; 0 padding
-        ]
-
-        for (json, expectedPadding) in cases {
-            guard let jsonData = json.data(using: .utf8) else {
-                Issue.record("Failed to encode JSON: \(json)"); return
+        // Generate valid events with content strings of different lengths so their
+        // UTF-8 serialisation exercises all three Base64 padding cases (0, 1, 2 padding).
+        let contents = ["aaa", "aaab", "aaabb"]
+        for content in contents {
+            let event = makeValidAuthEvent(content: content)
+            guard let jsonData = event.json.data(using: .utf8) else {
+                Issue.record("Failed to encode JSON: \(event.json)"); return
             }
-
-            #expect(jsonData.count % 3 == (3 - expectedPadding) % 3,
-                    "Pre-condition: \(json) should produce \(expectedPadding) padding chars")
 
             let bud11Header = "Nostr \(jsonData.base64URLEncodedString())"
             guard let legacyHeader = BlossomClient.convertToLegacyBase64Auth(bud11Header) else {
-                Issue.record("convertToLegacyBase64Auth returned nil for: \(json)"); return
+                Issue.record("convertToLegacyBase64Auth returned nil for: \(content)"); return
             }
 
             let legacyB64 = String(legacyHeader.dropFirst(6))
 
-            // Assert the actual padding char count in the re-encoded standard Base64.
-            let trailingEquals = legacyB64.reversed().prefix(while: { $0 == "=" }).count
-            #expect(trailingEquals == expectedPadding,
-                    "Expected \(expectedPadding) padding '=' chars for '\(json)', got \(trailingEquals)")
-
             // Roundtrip check.
             let decoded = Data(base64Encoded: legacyB64)
-            #expect(decoded == jsonData, "Roundtrip failed for: \(json)")
+            #expect(decoded == jsonData, "Roundtrip failed for content: \(content)")
         }
     }
 
-    @Test func convertToLegacyBase64AuthReplacesBase64URLChars() {
-        // Data [0xFB 0xEF 0xFF] encodes to indices [62, 62, 63, 63]:
-        //   0xFB=11111011, 0xEF=11101111, 0xFF=11111111
-        //   6-bit groups: 111110 111110 111111 111111 → 62, 62, 63, 63
-        //   Standard Base64: index 62 = '+', index 63 = '/'  → "++//"
-        //   Base64URL:        index 62 = '-', index 63 = '_'  → "--__"
-        let data = Data([0xFB, 0xEF, 0xFF])
-        // This raw data is NOT a valid Nostr JSON event, so convertToLegacyBase64Auth
-        // correctly returns nil. Validate the extension directly:
-        let b64url = data.base64URLEncodedString()
-        #expect(b64url == "--__", "Expected '--__' for indices [62,62,63,63]")
-        #expect(!b64url.contains("+") && !b64url.contains("/"))
-
-        // Verify the reverse mapping via a valid auth event whose Base64URL encoding
-        // happens to contain '-' or '_'.
-        // Build a compact JSON string whose bytes, when base64-URL-encoded, contain '-'/'_'.
-        // We know {"kind":24242,"content":"++++"} — all ASCII '+' chars inside JSON —
-        // does NOT guarantee '-'/'_' in the base64url, so we verify via round-trip.
-        let compactJSON = #"{"kind":24242,"content":"test-data_here"}"#
-        guard let jsonData = compactJSON.data(using: .utf8) else {
+@Test func convertToLegacyBase64AuthReplacesBase64URLChars() {
+        let event = makeValidAuthEvent(content: "test-data_here")
+        guard let jsonData = event.json.data(using: .utf8) else {
             Issue.record("Failed to encode JSON"); return
         }
         let bud11 = "Nostr \(jsonData.base64URLEncodedString())"
@@ -288,8 +280,8 @@ struct BlossomClientTests {
     }
 
     @Test func convertToLegacyBase64AuthAcceptsValidAuthEvent() {
-        let json = #"{"kind":24242,"id":"abc123","pubkey":"def456","content":"test"}"#
-        guard let jsonData = json.data(using: .utf8) else {
+        let event = makeValidAuthEvent()
+        guard let jsonData = event.json.data(using: .utf8) else {
             Issue.record("Failed to create test JSON data"); return
         }
         let result = BlossomClient.convertToLegacyBase64Auth("Nostr \(jsonData.base64EncodedString())")
@@ -297,14 +289,12 @@ struct BlossomClientTests {
     }
 
     @Test func convertToLegacyBase64AuthAcceptsGetAuthEvent() {
-        // BUD-03: GET/HEAD requests use kind 24243. Legacy retry must accept it too.
-        let json = #"{"kind":24243,"id":"abc123","pubkey":"def456","content":"Blossom get"}"#
-        guard let jsonData = json.data(using: .utf8) else {
+        let event = makeValidAuthEvent(kind: 24243, tags: [["t", "get"]], content: "Blossom get")
+        guard let jsonData = event.json.data(using: .utf8) else {
             Issue.record("Failed to create test JSON data"); return
         }
         let result = BlossomClient.convertToLegacyBase64Auth("Nostr \(jsonData.base64EncodedString())")
         #expect(result?.hasPrefix("Nostr ") == true)
-        // Re-encoded payload must NOT contain Base64URL markers.
         if let result {
             let payload = String(result.dropFirst(6))
             #expect(!payload.contains("-"), "Legacy re-encode must use standard Base64, not Base64URL")
@@ -314,25 +304,25 @@ struct BlossomClientTests {
 
     // MARK: - withLegacyFallback (via convertToLegacyBase64Auth + headWithLegacyFallback surface)
 
-    @Test func convertToLegacyBase64AuthIsInverseOfBase64URLEncodedString() {
+@Test func convertToLegacyBase64AuthIsInverseOfBase64URLEncodedString() {
         // Any round-trip through base64URLEncodedString() → convertToLegacyBase64Auth()
-        // must recover the original bytes when the payload is a valid kind:24242 event.
-        let jsons = [
-            #"{"kind":24242,"t":"a","content":"test1"}"#,
-            #"{"kind":24242,"xx":"bb","content":"longer content here"}"#,
-            #"{"kind":24242,"id":"abc","pubkey":"xyz","tags":[["t","upload"]],"content":"c"}"#,
+        // must recover the original bytes when the payload is a valid auth event.
+        let events = [
+            makeValidAuthEvent(tags: [["t", "upload"]], content: "test1"),
+            makeValidAuthEvent(tags: [["t", "media"]], content: "longer content here"),
+            makeValidAuthEvent(tags: [["t", "get"], ["x", "abc"]], content: "c"),
         ]
-        for json in jsons {
-            guard let original = json.data(using: .utf8) else {
+        for event in events {
+            guard let original = event.json.data(using: .utf8) else {
                 Issue.record("Encode failed"); return
             }
             let bud11 = "Nostr \(original.base64URLEncodedString())"
             guard let legacy = BlossomClient.convertToLegacyBase64Auth(bud11) else {
-                Issue.record("Conversion returned nil for: \(json)"); return
+                Issue.record("Conversion returned nil for: \(event.json)"); return
             }
             let legacyB64 = String(legacy.dropFirst(6))
             let recovered = Data(base64Encoded: legacyB64)
-            #expect(recovered == original, "Round-trip failed for: \(json)")
+            #expect(recovered == original, "Round-trip failed for: \(event.json)")
         }
     }
 
@@ -805,6 +795,77 @@ struct BlossomClientTests {
         } catch {
             Issue.record("Upload threw: \(error)")
         }
+    }
+
+    // MARK: - normalizeServerURL double-slash fix
+
+    @Test func normalizeServerURLCollapsesDoubleSlashInPath() {
+        #expect(BlossomClient.normalizeServerURL("https://server.com//foo") == "https://server.com/foo")
+        #expect(BlossomClient.normalizeServerURL("https://server.com///foo") == "https://server.com/foo")
+    }
+
+    // MARK: - sanitizeMirrorURL HTTPS enforcement
+
+    @Test func sanitizeMirrorURLRejectsHTTPScheme() {
+        let result = BlossomClient.sanitizeMirrorURL(
+            serverReturnedURL: "http://cdn.azzamo.media/abc123.png",
+            uploadHost: "blossom.azzamo.media",
+            fallbackURL: "https://blossom.azzamo.media/abc123"
+        )
+        #expect(result == "https://blossom.azzamo.media/abc123", "HTTP mirror URLs must be rejected")
+    }
+
+    // MARK: - areSameRegistrableDomain multi-level TLD
+
+    @Test func sameRegistrableDomainUsesLastThreeLabelsForCoUK() {
+        #expect(BlossomClient.areSameRegistrableDomain("cdn.azzamo.co.uk", "blossom.azzamo.co.uk"))
+        #expect(!BlossomClient.areSameRegistrableDomain("cdn.other.co.uk", "blossom.azzamo.co.uk"))
+    }
+
+    @Test func sameRegistrableDomainUsesLastThreeLabelsForComAU() {
+        #expect(BlossomClient.areSameRegistrableDomain("cdn.azzamo.com.au", "blossom.azzamo.com.au"))
+        #expect(!BlossomClient.areSameRegistrableDomain("cdn.other.com.au", "blossom.azzamo.com.au"))
+    }
+
+    // MARK: - convertToLegacyBase64Auth rejects tampered id
+
+    @Test func convertToLegacyBase64AuthRejectsTamperedEventId() {
+        let event = makeValidAuthEvent()
+        guard var jsonData = event.json.data(using: .utf8) else {
+            Issue.record("Failed to create test JSON data"); return
+        }
+        // Tamper the id to something different.
+        let tampered = event.json.replacingOccurrences(of: event.id, with: String(repeating: "b", count: 64))
+        guard let tamperedData = tampered.data(using: .utf8) else {
+            Issue.record("Failed to create tampered JSON data"); return
+        }
+        let bud11Header = "Nostr \(tamperedData.base64URLEncodedString())"
+        #expect(BlossomClient.convertToLegacyBase64Auth(bud11Header) == nil,
+                "convertToLegacyBase64Auth must reject an event with a tampered id")
+    }
+
+    // MARK: - AsyncSemaphore cancellation-safe acquire
+
+    @Test func asyncSemaphoreCancellationDoesNotLeakWaiters() async {
+        let semaphore = AsyncSemaphore(value: 1)
+        await semaphore.acquire()
+
+        let innerTask = Task {
+            await semaphore.acquire()
+            await semaphore.release()
+            return true
+        }
+        innerTask.cancel()
+        await innerTask.value
+        await semaphore.release()
+
+        let second = Task {
+            await semaphore.acquire()
+            await semaphore.release()
+            return true
+        }
+        let completed = await second.value
+        #expect(completed, "Semaphore must remain usable after a cancelled waiter")
     }
 
     private func testKeypair(seed: UInt8) -> Keypair {

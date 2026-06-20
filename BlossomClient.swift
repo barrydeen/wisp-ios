@@ -8,9 +8,17 @@ import os
 /// `CheckedContinuation` so waiting tasks are parked rather than spinning
 /// via `Task.yield()`, which avoids wasting cooperative-thread-pool cycles
 /// when multiple media images fail simultaneously during scroll.
+///
+/// Cancellation: `acquire()` is cancellation-aware — a caller whose task is
+/// cancelled while parked removes itself from the waiter queue via
+/// `withTaskCancellationHandler` so `release()` doesn't resume a dead task.
+/// Callers that wrap this in `withTaskGroup` see correct group drain semantics
+/// (the cancelled task returns without leaking a continuation or starving the
+/// semaphore).
 actor AsyncSemaphore {
     private var available: Int
-    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var waiters: [(token: UInt64, continuation: CheckedContinuation<Void, Never>)] = []
+    private var nextToken: UInt64 = 0
 
     init(value: Int) {
         precondition(value > 0, "AsyncSemaphore value must be positive")
@@ -22,18 +30,30 @@ actor AsyncSemaphore {
             available -= 1
             return
         }
-        await withCheckedContinuation { continuation in
-            waiters.append(continuation)
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                let token = nextToken
+                nextToken += 1
+                waiters.append((token: token, continuation: continuation))
+            }
+        } onCancel: {
+            Task { await self.cancelLastWaiter() }
         }
     }
 
     func release() {
-        if let waiter = waiters.first {
-            waiters.removeFirst()
-            waiter.resume()
+        if !waiters.isEmpty {
+            let waiter = waiters.removeFirst()
+            waiter.continuation.resume()
         } else {
             available += 1
         }
+    }
+
+    private func cancelLastWaiter() {
+        guard let last = waiters.popLast() else { return }
+        available += 1
+        last.continuation.resume()
     }
 }
 
@@ -85,8 +105,13 @@ enum BlossomClient {
             for item in items {
                 group.addTask {
                     await semaphore.acquire()
-                    defer { Task { await semaphore.release() } }
-                    return await work(item)
+                    if Task.isCancelled {
+                        await semaphore.release()
+                        return .skip
+                    }
+                    let outcome = await work(item)
+                    await semaphore.release()
+                    return outcome
                 }
             }
             for await outcome in group {
@@ -117,27 +142,42 @@ enum BlossomClient {
     ) async -> [U] {
         guard !items.isEmpty else { return [] }
         let semaphore = AsyncSemaphore(value: chunkSize)
-        return await withTaskGroup(of: U.self) { group in
+        return await withTaskGroup(of: U?.self) { group in
             for item in items {
                 group.addTask {
                     await semaphore.acquire()
-                    defer { Task { await semaphore.release() } }
-                    return await work(item)
+                    if Task.isCancelled {
+                        await semaphore.release()
+                        return nil
+                    }
+                    let result = await work(item)
+                    await semaphore.release()
+                    return result
                 }
             }
             var results: [U] = []
             for await result in group {
-                results.append(result)
+                if let result { results.append(result) }
             }
             return results
         }
     }
 
-    /// Prevents overlapping mirror dispatches for the same blob hash.
-    /// Rapid multi-image compose could otherwise spawn an unbounded number
-    /// of detached mirror tasks.
+    /// Prevents overlapping mirror dispatches for the same blob hash. Rapid
+    /// multi-image compose could otherwise spawn an unbounded number of
+    /// detached mirror tasks. Each entry carries the timestamp it was
+    /// inserted so we can prune stale entries (e.g. crashed mirror tasks)
+    /// that never finished and would otherwise leak the slot forever.
     private static let activeMirrorsLock = NSLock()
-    private static var activeMirrors: Set<String> = []
+    private static var activeMirrors: [String: Date] = [:]
+    private static let activeMirrorTTLSeconds: TimeInterval = 60
+
+    /// Drop mirror entries whose TTL has expired. Called under `activeMirrorsLock`
+    /// before each new insertion so crashed/abandoned mirror tasks can't leak
+    /// their hash slot permanently.
+    private static func pruneActiveMirrorsLocked(now: Date) {
+        activeMirrors = activeMirrors.filter { now.timeIntervalSince($0.value) < activeMirrorTTLSeconds }
+    }
 
     #if DEBUG
     private static let sessionOverrideLock = NSLock()
@@ -201,6 +241,12 @@ enum BlossomClient {
             while path.hasSuffix("/") {
                 path = String(path.dropLast())
             }
+            // Collapse runs of leading "/" to a single "/" so an input like
+            // `https://server.com//foo` doesn't produce `https://server.com//foo`.
+            // Foundation keeps the duplicate slashes in url.path verbatim.
+            while path.hasPrefix("//") {
+                path = String(path.dropFirst())
+            }
             if !path.isEmpty {
                 result += path
             }
@@ -208,20 +254,29 @@ enum BlossomClient {
         return result
     }
 
+    /// Two-label public-suffix exceptions that must be treated as a single TLD for
+    /// registrable-domain comparison. Curated set covering the multi-level
+    /// suffixes that actually show up on Blossom server lists in practice.
+    /// (Full Public Suffix List parsing is intentionally avoided — it's a
+    /// several-MB data file and we only need a handful of entries.)
+    private static let multiLevelTLDs: Set<String> = [
+        "co.uk", "ac.uk", "gov.uk", "org.uk", "net.uk",
+        "co.jp", "ac.jp", "go.jp",
+        "com.au", "net.au", "org.au", "edu.au", "gov.au",
+        "co.nz", "net.nz", "org.nz", "govt.nz",
+        "com.br", "net.br", "org.br", "gov.br",
+        "co.in", "net.in", "org.in", "gov.in",
+        "co.za", "org.za",
+        "com.mx", "com.ar", "com.cn", "com.hk", "com.tw", "com.sg", "com.tr",
+        "co.kr", "co.id", "co.il", "co.th",
+    ]
+
     /// Returns `true` if two hosts share the same registrable (base) domain.
-    /// A simple last-two-label heuristic (no public-suffix list); good enough
-    /// for the Blossom CDN scenario (e.g. `cdn.azzamo.media` and
-    /// `blossom.azzamo.media` both reduce to base `azzamo.media`).
-    ///
-    /// False positives are possible with `.co.uk`-style multi-level TLDs, but
-    /// that is acceptable here because:
-    ///   • the mirror target server is chosen by the user from their kind-10063 list;
-    ///   • the mirror server independently validates the fetched blob hash against
-    ///     the authorized `x` tag (BUD-04 Step 5); hash mismatch → 409 Conflict.
-    ///
-    /// Note: Works well for most real-world domains (`.media`, `.com`, `.net`, `.io`,
-    /// `.dev`). For multi-level TLDs like `.co.uk`, `.com.au`, or `.ac.uk`, this may
-    /// incorrectly match subdomains — an acceptable trade-off given the two defenses.
+    /// Uses a last-two-label heuristic by default, but checks `multiLevelTLDs`
+    /// first so `.co.uk`-style suffixes use a last-three-label match. False
+    /// positives remain acceptable for unrelated Blossom CDNs because the
+    /// mirror target is independently validated against the authorized `x`
+    /// tag (BUD-04 Step 5); hash mismatch → 409 Conflict.
     static func areSameRegistrableDomain(_ hostA: String, _ hostB: String) -> Bool {
         let a = hostA.lowercased().split(separator: ".").map(String.init)
         let b = hostB.lowercased().split(separator: ".").map(String.init)
@@ -235,6 +290,14 @@ enum BlossomClient {
         let bIsIP = b.allSatisfy { Int($0) != nil }
         if aIsIP || bIsIP {
             return a == b
+        }
+        // Multi-level TLD override: drop one extra label from the suffix.
+        if a.count >= 3, b.count >= 3 {
+            let aTLD = "\(a[a.count - 2]).\(a[a.count - 1])"
+            let bTLD = "\(b[b.count - 2]).\(b[b.count - 1])"
+            if multiLevelTLDs.contains(aTLD) && multiLevelTLDs.contains(bTLD) && aTLD == bTLD {
+                return a.suffix(3) == b.suffix(3)
+            }
         }
         guard a.count >= 2, b.count >= 2 else { return false }
         return a.suffix(2) == b.suffix(2)
@@ -255,9 +318,11 @@ enum BlossomClient {
         fallbackURL: String
     ) -> String {
         guard let resultURL = URL(string: serverReturnedURL),
+              let scheme = resultURL.scheme?.lowercased(),
+              scheme == "https",
               let resultHost = resultURL.host,
               !resultHost.isEmpty else {
-            os_log(.debug, "Blossom: server returned unparseable mirror URL, using fallback")
+            os_log(.debug, "Blossom: server returned invalid mirror URL, using fallback")
             return fallbackURL
         }
         let uploadHostLower = uploadHost.lowercased()
@@ -349,12 +414,23 @@ enum BlossomClient {
         // or kind 24243 for GET/HEAD per BUD-03) before re-encoding, to prevent
         // passing garbage data to legacy servers.
         // Note: `.fragmentsAllowed` is intentionally omitted — only JSON objects are valid here.
-        if let json = try? JSONSerialization.jsonObject(with: decodedData) as? [String: Any],
-           let kind = json["kind"] as? Int,
-           kind == 24242 || kind == 24243 {
-            return "Nostr \(decodedData.base64EncodedString())"
+        guard let json = try? JSONSerialization.jsonObject(with: decodedData) as? [String: Any],
+              let kind = json["kind"] as? Int,
+              kind == 24242 || kind == 24243 else {
+            return nil
         }
-        return nil
+        // Recompute the canonical event id and compare with the embedded "id"
+        // field. Catches tampered payloads that happen to include the right kind.
+        guard let pubkey = json["pubkey"] as? String,
+              let createdAt = json["created_at"] as? Int,
+              let tags = json["tags"] as? [[String]],
+              let content = json["content"] as? String,
+              let claimedId = json["id"] as? String,
+              NostrEvent.computeId(pubkey: pubkey, createdAt: createdAt, kind: kind, tags: tags, content: content) == claimedId.lowercased() else {
+            os_log(.error, "Blossom: legacy auth re-encode rejected — id mismatch")
+            return nil
+        }
+        return "Nostr \(decodedData.base64EncodedString())"
     }
 
     /// Shared helper: perform a network operation with BUD-11 auth. On 401 (auth rejection),
@@ -413,24 +489,17 @@ enum BlossomClient {
             throw BlossomError.authFailed
         }
 
-        // BUD-01 blob-existence check: run a HEAD /<hash> in parallel against all servers.
-        // If any already has the blob, return early — no upload or mirror needed.
-        let existingURL = await withTaskGroup(of: String?.self) { group in
-            for normalized in validServers {
-                guard let headUrl = URL(string: normalized + "/" + hash) else { continue }
-                group.addTask {
-                    // HEAD retries with kind-24242 re-sign on 401 (non-BUD-03 servers).
-                    let exists = await headWithLegacyFallback(hash: hash, url: headUrl, keypair: keypair)
-                    return exists ? (normalized + "/" + hash) : nil
-                }
-            }
-            for await result in group {
-                if let result {
-                    group.cancelAll()
-                    return result as String?
-                }
-            }
-            return nil as String?
+        // BUD-01 blob-existence check: run a HEAD /<hash> against all servers, capped
+        // at `maxConcurrentOperations` so we don't fan out unbounded tasks. First
+        // hit short-circuits the rest. `headWithLegacyFallback` retries 401 with
+        // kind-24242 + standard Base64 to support pre-BUD-03/11 servers.
+        let headTargets: [(url: URL, origin: String)] = validServers.compactMap { normalized in
+            guard let headUrl = URL(string: normalized + "/" + hash) else { return nil }
+            return (url: headUrl, origin: normalized)
+        }
+        let existingURL: String? = await chunkedFirstSuccess(items: headTargets, chunkSize: maxConcurrentOperations) { target -> ChunkedOutcome<String> in
+            let exists = await headWithLegacyFallback(hash: hash, url: target.url, keypair: keypair)
+            return exists ? .success(target.origin + "/" + hash) : .skip
         }
 
         if let existing = existingURL {
@@ -489,14 +558,16 @@ enum BlossomClient {
                         // detached task may be silently dropped if the app suspends.
                         // Each mirror server independently validates the blob hash.
                         activeMirrorsLock.lock()
-                        let shouldMirror = activeMirrors.insert(hash).inserted
+                        pruneActiveMirrorsLocked(now: Date())
+                        let shouldMirror = (activeMirrors[hash] == nil)
+                        if shouldMirror { activeMirrors[hash] = Date() }
                         activeMirrorsLock.unlock()
                         if shouldMirror {
                             Task.detached(priority: .utility) {
                                 os_log(.debug, "Blossom: starting mirror for hash %{private}@ to %d server(s)", hash, validServers.count - 1)
                                 defer {
                                     activeMirrorsLock.lock()
-                                    activeMirrors.remove(hash)
+                                    activeMirrors.removeValue(forKey: hash)
                                     activeMirrorsLock.unlock()
                                 }
                                 await mirrorBlob(
@@ -608,34 +679,6 @@ enum BlossomClient {
         return (try? await headOnce(hash: hash, url: url, auth: legacyAuth)) ?? false
     }
 
-    /// Variant of `makeAuthHeader` that lets the caller override the event kind.
-    /// Used for legacy retry paths where the original kind is not recognised by
-    /// the server (e.g., HEAD on pre-BUD-03 servers expect kind 24242).
-    static func makeAuthHeaderWithKind(
-        keypair: Keypair,
-        action: String,
-        sha256Hex: String,
-        kind: Int,
-        expirationOffset: Int = 300
-    ) async -> String? {
-        let now = NostrClock.now()
-        let tags: [[String]] = [
-            ["t", action],
-            ["x", sha256Hex],
-            ["expiration", String(now + expirationOffset)]
-        ]
-        guard let signed = try? await Signer.sign(
-            keypair: keypair,
-            kind: kind,
-            tags: tags,
-            content: "Blossom \(action)",
-            createdAt: now
-        ) else { return nil }
-        let json = signed.toJSON()
-        guard let data = json.data(using: .utf8) else { return nil }
-        return "Nostr \(data.base64URLEncodedString())"
-    }
-
     private static func headOnce(hash: String, url: URL, auth: String) async throws -> Bool {
         var req = URLRequest(url: url)
         req.httpMethod = "HEAD"
@@ -664,11 +707,11 @@ enum BlossomClient {
         // BUD-04 example flow: "Client sends the url to Server B /mirror using the
         // original upload authorization token" — so the action tag is "upload", not "mirror".
         guard let auth = await makeAuthHeader(keypair: keypair, action: "upload", sha256Hex: hash) else {
-            os_log(.fault, "Blossom mirror: failed to generate auth header for hash %{private}@", hash)
+            os_log(.error, "Blossom mirror: failed to generate auth header for hash %{private}@", hash)
             return
         }
         guard let bodyData = try? JSONSerialization.data(withJSONObject: ["url": publicURL]) else {
-            os_log(.fault, "Blossom mirror: failed to serialize mirror body for %{private}@", publicURL)
+            os_log(.error, "Blossom mirror: failed to serialize mirror body for %{private}@", publicURL)
             return
         }
 
@@ -702,10 +745,10 @@ enum BlossomClient {
             if (200..<300).contains(statusCode) {
                 os_log(.debug, "Blossom mirror to %{public}@ succeeded (HTTP %{public}@)", server, String(statusCode))
             } else {
-                os_log(.fault, "Blossom mirror to %{public}@ failed after legacy retry (HTTP %{public}@)", server, String(statusCode))
+                os_log(.error, "Blossom mirror to %{public}@ failed after legacy retry (HTTP %{public}@)", server, String(statusCode))
             }
         } catch {
-            os_log(.fault, "Blossom mirror to %{public}@ threw: %{public}@", server, error.localizedDescription)
+            os_log(.error, "Blossom mirror to %{public}@ threw: %{public}@", server, error.localizedDescription)
         }
     }
 

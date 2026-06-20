@@ -20,11 +20,52 @@ import os
 enum BlossomFallbackFetcher {
 
     #if DEBUG
-    nonisolated(unsafe) static var sessionOverride: URLSession?
-    static var session: URLSession { sessionOverride ?? .shared }
+    private static let sessionOverrideLock = NSLock()
+    private static var _sessionOverride: URLSession?
+    static var sessionOverride: URLSession? {
+        get {
+            sessionOverrideLock.lock()
+            defer { sessionOverrideLock.unlock() }
+            return _sessionOverride
+        }
+        set {
+            sessionOverrideLock.lock()
+            _sessionOverride = newValue
+            sessionOverrideLock.unlock()
+        }
+    }
+    static var session: URLSession {
+        sessionOverrideLock.lock()
+        let override = _sessionOverride
+        sessionOverrideLock.unlock()
+        return override ?? Self.noRedirectSession
+    }
     #else
-    static var session: URLSession { .shared }
+    static var session: URLSession { Self.noRedirectSession }
     #endif
+
+    /// Dedicated session that refuses HTTP redirects (BUD-03 privacy invariant).
+    /// A 301/302 from an author's server must NOT silently switch hosts to an
+    /// arbitrary attacker-controlled URL — the bytes are verified against SHA-256
+    /// anyway, but a redirect-aware fetch leaks the reader's IP + target hash
+    /// to whatever host the redirect points at.
+    nonisolated(unsafe) private static let noRedirectSession: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 15
+        let session = URLSession(configuration: config, delegate: RedirectBlocker.shared, delegateQueue: nil)
+        return session
+    }()
+
+    private final class RedirectBlocker: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+        static let shared = RedirectBlocker()
+        func urlSession(_ session: URLSession,
+                        task: URLSessionTask,
+                        willPerformHTTPRedirection response: HTTPURLResponse,
+                        newRequest request: URLRequest,
+                        completionHandler: @escaping (URLRequest?) -> Void) {
+            completionHandler(nil)
+        }
+    }
 
     /// Maximum concurrent fallback GETs per fetch call.
     /// Uses `BlossomClient.maxConcurrentOperations` for a consistent cap across
@@ -32,9 +73,8 @@ enum BlossomFallbackFetcher {
     private static let maxConcurrentFetches = BlossomClient.maxConcurrentOperations
 
     /// Prevents duplicate fetches from racing for the same (hash, author) pair.
-    /// Holds the cooldown cache under a lock so concurrent callers see consistent
-    /// state. Concurrency dedup is left to URLSession's URLCache — returning nil
-    /// here would cause all concurrent image cells to permanently show failure.
+    /// Holds the cooldown cache and in-flight registry under the same lock so
+    /// concurrent callers see consistent state.
     private static let cooldownLock = NSLock()
 
     /// Cooldown cache to prevent repeated fallback attempts for the same (hash + author).
@@ -45,13 +85,32 @@ enum BlossomFallbackFetcher {
     /// the same content-addressed image with different server lists get independent attempts.
     /// Recorded ONLY on failure so that a transient network error during the first attempt
     /// does not permanently suppress a retry that might succeed after connectivity recovers.
-    private static let cooldownCache: NSCache<NSString, NSDate> = {
-        let cache = NSCache<NSString, NSDate>()
-        cache.countLimit = 512
-        return cache
-    }()
+    ///
+    /// Stored in a plain locked dictionary instead of NSCache: NSCache may evict
+    /// entries under memory pressure without notifying us, which would let a
+    /// second caller retry a "failed" blob mid-cooldown and double the network
+    /// load on the original author's servers.
+    private static var cooldownCache: [String: Date] = [:]
+
+    /// In-flight fetches keyed by "<hash>|<authorPubkey>". When two callers ask
+    /// for the same (hash, author) at the same time, the second awaits the first's
+    /// `Data?` result instead of issuing a parallel network request. Avoids the
+    /// 2× bandwidth and 2× server load that NSCache-based dedup couldn't prevent.
+    /// Held under `cooldownLock` so registration, lookup, and completion are atomic.
+    private static var inFlight: [String: InFlightRegistry] = [:]
 
     private static let cooldownTTLSeconds: TimeInterval = 300  // 5 minutes
+    private static let cooldownMaxEntries = 512
+
+    #if DEBUG
+    /// Test-only: clear all cooldown and in-flight state so tests start clean.
+    static func resetCooldownForTesting() {
+        cooldownLock.lock()
+        cooldownCache.removeAll()
+        inFlight.removeAll()
+        cooldownLock.unlock()
+    }
+    #endif
 
     private enum FetchError: Error {
         /// Returned when the downloaded bytes do not match the expected SHA-256.
@@ -70,19 +129,23 @@ enum BlossomFallbackFetcher {
             return nil
         }
 
-        // Atomically check cooldown AND register in-flight under the same lock.
-        // Two concurrent callers for the same (hash, author) pair both proceed
-        // and run their own network fetch — URLSession's URLCache coalesces
-        // identical concurrent requests, so we don't pay a 2× bandwidth cost.
-        // Returning nil to the second caller (the original in-flight de-dup)
-        // is incorrect because RetryingAsyncImage treats nil as permanent
-        // failure: cells that arrive after the first cell started fallback
-        // would show failure placeholders forever, even though the first cell
-        // might successfully populate the decoded cache.
-        let cooldownKey = "\(expectedHash)|\(authorPubkey)" as NSString
+        // Privacy + correctness gate: only attempt fallback for authors we have an
+        // explicit kind-10063 list for. Without it, we can't know which servers
+        // to try — sending requests to default community servers exposes the
+        // reader's IP + target hash to hosts unrelated to the author, and may
+        // never find the blob. Prefetching kind-10063 for content authors is
+        // tracked separately (see `cached(for:)` callers for refresh paths).
+        guard BlossomServerList.hasStoredServers(for: authorPubkey) else {
+            return nil
+        }
+
+        let cooldownKey = "\(expectedHash)|\(authorPubkey)"
+
+        // Cooldown check + in-flight dedup under one lock so the two states are
+        // always consistent across concurrent callers.
         cooldownLock.lock()
         let inCooldown: Bool = {
-            guard let lastFailedAt = cooldownCache.object(forKey: cooldownKey) as? Date else { return false }
+            guard let lastFailedAt = cooldownCache[cooldownKey] else { return false }
             return Date().timeIntervalSince(lastFailedAt) < cooldownTTLSeconds
         }()
         if inCooldown {
@@ -90,12 +153,25 @@ enum BlossomFallbackFetcher {
             os_log(.debug, "BlossomFallbackFetcher: skipping fallback for %{private}@ (cooldown active)", expectedHash)
             return nil
         }
+        if let existing = inFlight[cooldownKey] {
+            // Second caller: park until the first finishes. Returning the
+            // first's Data? (including nil) keeps every concurrent caller
+            // informed without launching a parallel network request.
+            cooldownLock.unlock()
+            return await withCheckedContinuation { (continuation: CheckedContinuation<Data?, Never>) in
+                existing.addAwaiter(continuation)
+            }
+        }
+        // First caller: register ourselves as the in-flight owner. `awaiters`
+        // holds every concurrent caller that arrived after us; they'll be
+        // resumed with the same `Data?` result we produce.
+        let registry = InFlightRegistry()
+        inFlight[cooldownKey] = registry
         cooldownLock.unlock()
 
-        // Use cached list — no relay query. For the current user, these are populated
-        // by compose/upload flows. For arbitrary content authors (not yet prefetched),
-        // this returns the default primal.net server.
-        // TODO: Prefetch kind-10063 for content authors during feed load.
+        // Use cached list — no relay query. These are populated for users who
+        // have run compose/upload flows at least once (kind-10063 cached locally)
+        // or whose kind-10063 was prefetched by an out-of-band path.
         let servers = BlossomServerList.cached(for: authorPubkey)
         let ext = fileExtension(from: url)
 
@@ -129,6 +205,13 @@ enum BlossomFallbackFetcher {
             }
         }
 
+        // Propagate the result to any waiters that parked on this fetch before
+        // clearing the in-flight registry entry.
+        cooldownLock.lock()
+        let awaiters = inFlight.removeValue(forKey: cooldownKey)?.drainAwaiters() ?? []
+        cooldownLock.unlock()
+        registry.resumeAll(awaiters, with: result)
+
         if let data = result { return data }
 
         // All servers returned `.skip`. Record cooldown only if at least one
@@ -138,11 +221,46 @@ enum BlossomFallbackFetcher {
         // would just delay a useful retry.
         if !integrityTracker.allWereIntegrity() {
             cooldownLock.lock()
-            cooldownCache.setObject(NSDate(), forKey: cooldownKey)
+            pruneCooldownCacheLocked(now: Date())
+            cooldownCache[cooldownKey] = Date()
             cooldownLock.unlock()
         }
 
         return nil
+    }
+
+    /// Holds awaiters that arrived while a fetch was already in flight. The
+    /// first caller drains the awaiters via `drainAwaiters()` after the fetch
+    /// completes; each awaiter is then resumed via `resumeAll`.
+    private final class InFlightRegistry: @unchecked Sendable {
+        private let lock = NSLock()
+        private var awaiters: [CheckedContinuation<Data?, Never>] = []
+
+        func addAwaiter(_ continuation: CheckedContinuation<Data?, Never>) {
+            lock.lock(); awaiters.append(continuation); lock.unlock()
+        }
+        func drainAwaiters() -> [CheckedContinuation<Data?, Never>] {
+            lock.lock(); defer { lock.unlock() }
+            let copy = awaiters
+            awaiters.removeAll()
+            return copy
+        }
+        func resumeAll(_ awaiters: [CheckedContinuation<Data?, Never>], with value: Data?) {
+            for c in awaiters { c.resume(returning: value) }
+        }
+    }
+
+    /// Drop expired entries first; if still over capacity, drop the oldest by
+    /// insertion order (dict preserves insertion order in Swift). Caller must
+    /// hold `cooldownLock`.
+    private static func pruneCooldownCacheLocked(now: Date) {
+        cooldownCache = cooldownCache.filter { now.timeIntervalSince($0.value) < cooldownTTLSeconds }
+        if cooldownCache.count >= cooldownMaxEntries {
+            let overflow = cooldownCache.count - cooldownMaxEntries + 1
+            for key in cooldownCache.keys.prefix(overflow) {
+                cooldownCache.removeValue(forKey: key)
+            }
+        }
     }
 
     /// Sendable wrapper that tracks whether any fetch task reported an integrity
@@ -190,7 +308,7 @@ enum BlossomFallbackFetcher {
 
         let computedHash = BlossomClient.sha256Hex(data)
         guard computedHash == hash else {
-            os_log(.fault, "BlossomFallbackFetcher: SHA-256 mismatch. Expected %{private}@, got %{private}@", hash, computedHash)
+            os_log(.error, "BlossomFallbackFetcher: SHA-256 mismatch. Expected %{private}@, got %{private}@", hash, computedHash)
             throw FetchError.integrityMismatch
         }
 

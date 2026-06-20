@@ -404,7 +404,11 @@ enum ContentParser {
     }
 
     private static func isBlossomUrl(_ url: String) -> Bool {
-        guard let parsed = URL(string: url) else { return false }
+        guard let parsed = URL(string: url),
+              let scheme = parsed.scheme?.lowercased(),
+              scheme == "http" || scheme == "https" else {
+            return false
+        }
         let path = parsed.path
         let r = NSRange(location: 0, length: (path as NSString).length)
         return blossomPathRegex.firstMatch(in: path, range: r) != nil

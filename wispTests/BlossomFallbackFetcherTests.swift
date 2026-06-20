@@ -19,6 +19,11 @@ private func cleanupServerList(pubkey: String) {
 @Suite(.serialized)
 struct BlossomFallbackFetcherTests {
 
+    init() {
+        BlossomFallbackFetcher.resetCooldownForTesting()
+        MockURLProtocol.removeAllHandlers()
+    }
+
     private func sha(_ text: String) -> String {
         BlossomClient.sha256Hex(Data(text.utf8))
     }
@@ -114,25 +119,22 @@ struct BlossomFallbackFetcherTests {
         #expect(result == nil)
     }
 
-    @Test func fetchFallsBackToDefaultServerForUnknownAuthor() async {
-        let bodyText = "primal default"
-        let bodyData = Data(bodyText.utf8)
-        let hash = sha(bodyText)
-        let defaultServer = BlossomServerList.defaultServer
-        let fullURL = "\(defaultServer)/\(hash).png"
-
+    @Test func fetchReturnsNilForUnknownAuthorWithNoStoredServerList() async {
+        // Authors with no cached kind-10063 list must NOT be fetched against
+        // default community servers — that would leak the reader's IP and
+        // target hash to hosts unrelated to the author.
         MockURLProtocol.removeAllHandlers()
         BlossomFallbackFetcher.sessionOverride = makeMockSession()
         defer { BlossomFallbackFetcher.sessionOverride = nil }
-        registerMock(url: fullURL, statusCode: 200, body: bodyData)
 
         let authorPubkey = "never-seen-unknown-author-key"
         cleanupServerList(pubkey: authorPubkey)
         defer { cleanupServerList(pubkey: authorPubkey) }
 
+        let hash = sha("primal default")
         let blobURL = URL(string: "https://origin.example/\(hash).png")!
         let result = await BlossomFallbackFetcher.fetch(url: blobURL, authorPubkey: authorPubkey)
-        #expect(result == bodyData, "Must fall back to default server for unknown authors")
+        #expect(result == nil, "Must skip fallback for authors with no stored server list")
     }
 
     @Test func fetchReturnsNilForURLWithoutHash() async {
@@ -319,5 +321,44 @@ struct BlossomFallbackFetcherTests {
         let blobURL = URL(string: "https://origin.example/\(hash).png")!
         let result = await BlossomFallbackFetcher.fetch(url: blobURL, authorPubkey: authorPubkey)
         #expect(result == correctBodyData, "Integrity mismatch on first server must not suppress second server")
+    }
+
+    @Test func concurrentFetchesForSameKeyShareNetworkRequest() async {
+        let bodyText = "dedup me"
+        let bodyData = Data(bodyText.utf8)
+        let hash = sha(bodyText)
+        let server = "https://fallback-dedup.example"
+        let invocationLock = NSLock()
+        var invocationCount = 0
+
+        MockURLProtocol.removeAllHandlers()
+        BlossomFallbackFetcher.sessionOverride = makeMockSession()
+        defer { BlossomFallbackFetcher.sessionOverride = nil }
+        MockURLProtocol.setHandler(for: "\(server)/\(hash).png") { _ -> (Data, HTTPURLResponse) in
+            invocationLock.lock()
+            invocationCount += 1
+            invocationLock.unlock()
+            Thread.sleep(forTimeInterval: 0.15)
+            let resp = HTTPURLResponse(
+                url: URL(string: "\(server)/\(hash).png")!,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: nil
+            )!
+            return (bodyData, resp)
+        }
+
+        let authorPubkey = "author-fb-dedup"
+        BlossomServerList.save(servers: [server], for: authorPubkey)
+        defer { cleanupServerList(pubkey: authorPubkey) }
+
+        let blobURL = URL(string: "https://origin.example/\(hash).png")!
+        async let first: Data?  = BlossomFallbackFetcher.fetch(url: blobURL, authorPubkey: authorPubkey)
+        try? await Task.sleep(nanoseconds: 10_000_000) // 10ms — first caller is in-flight
+        async let second: Data? = BlossomFallbackFetcher.fetch(url: blobURL, authorPubkey: authorPubkey)
+        let (r1, r2) = await (first, second)
+        #expect(r1 == bodyData)
+        #expect(r2 == bodyData, "Second caller must receive the same data as the first")
+        #expect(invocationCount == 1, "Second caller must share the in-flight network request")
     }
 }
