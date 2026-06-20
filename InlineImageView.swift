@@ -39,12 +39,13 @@ struct InlineImageView: View {
                     AnimatedImageView(
                         url: URL(string: meta.url),
                         aspect: aspect,
+                        authorPubkey: authorPubkey,
                         placeholder: {
                             placeholder(systemName: nil, height: height)
                                 .overlay { ProgressView() }
                         },
                         failure: {
-                            placeholder(systemName: "photo", height: 200)
+                            placeholder(systemName: "photo", height: height)
                         }
                     )
                     .contentShape(Rectangle())
@@ -65,7 +66,7 @@ struct InlineImageView: View {
                                 .overlay { ProgressView() }
                         },
                         failure: {
-                            placeholder(systemName: "photo", height: 200)
+                            placeholder(systemName: "photo", height: height)
                                 .overlay {
                                     VStack(spacing: 4) {
                                         Image(systemName: "arrow.clockwise")
@@ -422,6 +423,7 @@ struct FullScreenImageView: View {
             AnimatedImageView(
                 url: URL(string: url),
                 aspect: nil,
+                authorPubkey: authorPubkey,
                 placeholder: { ProgressView().tint(.white) },
                 failure: {
                     Image(systemName: "photo")

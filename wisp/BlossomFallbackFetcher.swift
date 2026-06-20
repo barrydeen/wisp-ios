@@ -27,9 +27,15 @@ enum BlossomFallbackFetcher {
     #endif
 
     /// Maximum concurrent fallback GETs per fetch call.
-    /// Matches `BlossomClient.mirrorMaxConcurrent` — consistent cap across all Blossom
-    /// network operations to prevent connection/bandwidth bursts during feed scroll.
-    private static let maxConcurrentFetches = 3
+    /// Uses `BlossomClient.maxConcurrentOperations` for a consistent cap across
+    /// all Blossom network surfaces (uploads, mirrors, fallback fetches).
+    private static let maxConcurrentFetches = BlossomClient.maxConcurrentOperations
+
+    /// Prevents duplicate fetches from racing for the same (hash, author) pair.
+    /// Holds the cooldown cache under a lock so concurrent callers see consistent
+    /// state. Concurrency dedup is left to URLSession's URLCache — returning nil
+    /// here would cause all concurrent image cells to permanently show failure.
+    private static let cooldownLock = NSLock()
 
     /// Cooldown cache to prevent repeated fallback attempts for the same (hash + author).
     /// Key: "<hash>|<authorPubkey>", Value: timestamp of last *failed* attempt. TTL: 5 minutes.
@@ -47,6 +53,12 @@ enum BlossomFallbackFetcher {
 
     private static let cooldownTTLSeconds: TimeInterval = 300  // 5 minutes
 
+    private enum FetchError: Error {
+        /// Returned when the downloaded bytes do not match the expected SHA-256.
+        /// Distinct from Foundation's `cannotDecodeContentData` to avoid semantic confusion.
+        case integrityMismatch
+    }
+
     /// Attempts to fetch and verify a blob from the author's Blossom servers.
     /// Uses the cached kind-10063 list to avoid triggering relay queries per failure.
     /// - Parameters:
@@ -58,16 +70,27 @@ enum BlossomFallbackFetcher {
             return nil
         }
 
-        // Cooldown check — keyed by (hash, authorPubkey) so different authors get
-        // independent cooldowns for the same content-addressed blob.
+        // Atomically check cooldown AND register in-flight under the same lock.
+        // Two concurrent callers for the same (hash, author) pair both proceed
+        // and run their own network fetch — URLSession's URLCache coalesces
+        // identical concurrent requests, so we don't pay a 2× bandwidth cost.
+        // Returning nil to the second caller (the original in-flight de-dup)
+        // is incorrect because RetryingAsyncImage treats nil as permanent
+        // failure: cells that arrive after the first cell started fallback
+        // would show failure placeholders forever, even though the first cell
+        // might successfully populate the decoded cache.
         let cooldownKey = "\(expectedHash)|\(authorPubkey)" as NSString
-        if let lastFailedAt = cooldownCache.object(forKey: cooldownKey) {
-            let elapsed = Date().timeIntervalSince(lastFailedAt as Date)
-            if elapsed < cooldownTTLSeconds {
-                os_log(.debug, "BlossomFallbackFetcher: skipping fallback for %{private}@ (cooldown: %.0fs remaining)", expectedHash, cooldownTTLSeconds - elapsed)
-                return nil
-            }
+        cooldownLock.lock()
+        let inCooldown: Bool = {
+            guard let lastFailedAt = cooldownCache.object(forKey: cooldownKey) as? Date else { return false }
+            return Date().timeIntervalSince(lastFailedAt) < cooldownTTLSeconds
+        }()
+        if inCooldown {
+            cooldownLock.unlock()
+            os_log(.debug, "BlossomFallbackFetcher: skipping fallback for %{private}@ (cooldown active)", expectedHash)
+            return nil
         }
+        cooldownLock.unlock()
 
         // Use cached list — no relay query. For the current user, these are populated
         // by compose/upload flows. For arbitrary content authors (not yet prefetched),
@@ -76,48 +99,72 @@ enum BlossomFallbackFetcher {
         let servers = BlossomServerList.cached(for: authorPubkey)
         let ext = fileExtension(from: url)
 
-        // Cap concurrency to avoid bursting connections when many images fail at once.
-        let result: (data: Data?, integrityFailure: Bool) = await withTaskGroup(of: (Data?, Bool).self) { group in
-            var launched = 0
-            for server in servers {
-                guard launched < maxConcurrentFetches else { break }
-                guard let normalized = BlossomClient.normalizeServerURL(server) else { continue }
-                let path = ext.isEmpty ? "/\(expectedHash)" : "/\(expectedHash).\(ext)"
-                guard let fetchURL = URL(string: normalized + path) else { continue }
-
-                group.addTask {
-                    do {
-                        let data = try await fetchOncePublic(url: fetchURL, hash: expectedHash)
-                        return (data as Data?, false)
-                    } catch URLError.cannotDecodeContentData {
-                        // Hash mismatch: a different server may have the correct blob.
-                        return (nil as Data?, true)
-                    } catch {
-                        return (nil as Data?, false)
-                    }
-                }
-                launched += 1
-            }
-
-            var anyIntegrityFailure = false
-            for await taskResult in group {
-                if let data = taskResult.0 {
-                    group.cancelAll()
-                    return (data as Data?, false)
-                }
-                if taskResult.1 { anyIntegrityFailure = true }
-            }
-            return (nil as Data?, anyIntegrityFailure)
+        // Build fetch targets for all valid servers.
+        let targets: [URL] = servers.compactMap { server in
+            guard let normalized = BlossomClient.normalizeServerURL(server) else { return nil }
+            let path = ext.isEmpty ? "/\(expectedHash)" : "/\(expectedHash).\(ext)"
+            return URL(string: normalized + path)
         }
 
-        if result.data == nil && !result.integrityFailure {
-            // Record failure in the cooldown cache only for network-level failures
-            // (4xx/5xx/timeout), not for SHA-256 integrity mismatches. A hash mismatch
-            // means this server's copy is corrupt; another server may have it right.
+        // Fan-out all servers in parallel with a `maxConcurrentFetches` cap. First
+        // success cancels the remaining tasks, so first-success latency is bounded
+        // by `timeoutInterval` regardless of how many servers are configured.
+        // Integrity mismatches return `.skip` so other servers get a chance.
+        let integrityTracker = IntegrityTracker()
+        let result = await BlossomClient.chunkedFirstSuccess(
+            items: targets,
+            chunkSize: maxConcurrentFetches
+        ) { fetchURL -> BlossomClient.ChunkedOutcome<Data> in
+            do {
+                let data = try await fetchOncePublic(url: fetchURL, hash: expectedHash)
+                return .success(data)
+            } catch FetchError.integrityMismatch {
+                // Hash mismatch: a different server may have the correct blob.
+                integrityTracker.recordIntegrity()
+                return .skip
+            } catch {
+                // Network-level failure: 4xx/5xx, timeout, DNS, etc.
+                integrityTracker.recordFailure()
+                return .skip
+            }
+        }
+
+        if let data = result { return data }
+
+        // All servers returned `.skip`. Record cooldown only if at least one
+        // failure was a network-level failure (4xx/5xx/timeout). If every
+        // failure was an integrity mismatch, another fetch attempt on the
+        // same servers is likely to hit the same corrupt copy — cooldown
+        // would just delay a useful retry.
+        if !integrityTracker.allWereIntegrity() {
+            cooldownLock.lock()
             cooldownCache.setObject(NSDate(), forKey: cooldownKey)
+            cooldownLock.unlock()
         }
 
-        return result.data
+        return nil
+    }
+
+    /// Sendable wrapper that tracks whether any fetch task reported an integrity
+    /// mismatch (vs a network-level failure). Used to decide whether a
+    /// fully-failed fetch should record a cooldown entry.
+    private final class IntegrityTracker: @unchecked Sendable {
+        private let lock = NSLock()
+        private var count = 0
+        private var integrityCount = 0
+
+        func recordIntegrity() {
+            lock.lock(); integrityCount += 1; count += 1; lock.unlock()
+        }
+        func recordFailure() {
+            lock.lock(); count += 1; lock.unlock()
+        }
+        /// True if at least one failure was recorded AND every recorded
+        /// failure was an integrity mismatch. Used to gate the cooldown write.
+        func allWereIntegrity() -> Bool {
+            lock.lock(); defer { lock.unlock() }
+            return count > 0 && integrityCount == count
+        }
     }
 
     /// Unauthenticated public GET. Returns data only if 2xx AND SHA-256 matches.
@@ -127,6 +174,9 @@ enum BlossomFallbackFetcher {
         var req = URLRequest(url: url)
         req.httpMethod = "GET"
         req.timeoutInterval = 15
+        // Privacy invariant: fallback GETs must never carry an Authorization header.
+        // Strip defensively in release builds as well as asserting in debug.
+        req.setValue(nil, forHTTPHeaderField: "Authorization")
         assert(req.allHTTPHeaderFields?["Authorization"] == nil,
                "Privacy invariant: fallback GET must never carry an Authorization header")
 
@@ -141,7 +191,7 @@ enum BlossomFallbackFetcher {
         let computedHash = BlossomClient.sha256Hex(data)
         guard computedHash == hash else {
             os_log(.fault, "BlossomFallbackFetcher: SHA-256 mismatch. Expected %{private}@, got %{private}@", hash, computedHash)
-            throw URLError(.cannotDecodeContentData)
+            throw FetchError.integrityMismatch
         }
 
         return data

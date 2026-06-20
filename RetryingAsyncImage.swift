@@ -22,28 +22,6 @@ enum ImagePixelBudget {
     }
 }
 
-/// Decodes `data` straight to a thumbnail whose longest edge is at most
-/// `maxPixel` points-in-pixels, using ImageIO so the full-resolution bitmap is
-/// never retained — only the downsized result lives in memory. Returns nil if
-/// the source can't be read (caller falls back to a full `UIImage(data:)`).
-/// Free function so it can run inside a detached, nonisolated decode task.
-private func downsampledImage(from data: Data, maxPixel: CGFloat) -> UIImage? {
-    let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
-    guard let source = CGImageSourceCreateWithData(data as CFData, sourceOptions) else {
-        return nil
-    }
-    let options: [CFString: Any] = [
-        kCGImageSourceCreateThumbnailFromImageAlways: true,
-        kCGImageSourceCreateThumbnailWithTransform: true,
-        kCGImageSourceShouldCacheImmediately: true,
-        kCGImageSourceThumbnailMaxPixelSize: Int(maxPixel.rounded()),
-    ]
-    guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
-        return nil
-    }
-    return UIImage(cgImage: cgImage)
-}
-
 /// Drop-in replacement for `AsyncImage` that:
 ///   - reads from `DecodedImageCache` first so a cell scrolled back into view
 ///     renders the previously-decoded `UIImage` instantly with no loader flash;
@@ -194,12 +172,16 @@ struct RetryingAsyncImage<Content: View, Loading: View, Failure: View>: View {
         } else if attempt < maxAttempts {
             attempt += 1  // Triggers another `task` cycle via TaskKey change.
         } else {
-            if let authorPubkey, let fallbackData = await BlossomFallbackFetcher.fetch(url: url, authorPubkey: authorPubkey) {
-                if let image = AnimatedImageDecoder.decodeStatic(data: fallbackData, maxPixelSize: maxPixelSize) {
-                    DecodedImageCache.storeStatic(image, for: key)
-                    phase = .success(image)
-                    return
-                }
+            if let image = await BlossomFallbackImage.fetchDecodeAndCache(
+                url: url,
+                authorPubkey: authorPubkey,
+                maxPixelSize: maxPixelSize,
+                cacheKey: key,
+                decode: { data, max in AnimatedImageDecoder.decodeStatic(data: data, maxPixelSize: max) },
+                store: { decoded, k in DecodedImageCache.storeStatic(decoded, for: k) }
+            ) {
+                phase = .success(image)
+                return
             }
             phase = .failure
         }

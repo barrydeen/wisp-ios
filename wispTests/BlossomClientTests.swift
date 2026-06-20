@@ -9,7 +9,6 @@ import Foundation
 import Testing
 @testable import wisp
 
-@MainActor
 @Suite(.serialized)
 struct BlossomClientTests {
 
@@ -37,9 +36,19 @@ struct BlossomClientTests {
         #expect(BlossomClient.normalizeServerURL("http://blossom.example.com") == nil)
     }
 
-    @Test func normalizeServerURLHandlesQueryAndFragment() {
-        // Trailing slash stripped even with path components; scheme must still be https
+    @Test func normalizeServerURLStripsTrailingSlashFromOrigin() {
         #expect(BlossomClient.normalizeServerURL("https://blossom.example.com/") == "https://blossom.example.com")
+    }
+
+    @Test func normalizeServerURLPreservesPathButStripsQueryAndFragment() {
+        // Path is preserved (users with path-prefixed kind-10063 entries keep working).
+        // Query and fragment are stripped (not meaningful for Blossom endpoints).
+        #expect(BlossomClient.normalizeServerURL("https://blossom.example.com/path?x=1#frag") == "https://blossom.example.com/path")
+    }
+
+    @Test func normalizeServerURLPreservesUppercasePath() {
+        // Host is lowercased; the path case is preserved.
+        #expect(BlossomClient.normalizeServerURL("https://Blossom.Example.com/CAPS") == "https://blossom.example.com/CAPS")
     }
 
     // MARK: - areSameRegistrableDomain
@@ -76,15 +85,10 @@ struct BlossomClientTests {
     }
 
     @Test func sameRegistrableDomainForIPAddresses() {
-        // IP addresses are treated as hosts with multiple numeric labels.
-        // The last-two-label heuristic is acknowledged to have known limitations.
-        // Same IP always matches itself.
+        // IP addresses must match exactly; two different IPs are never considered
+        // the same domain, even when their last two octets happen to match.
         #expect(BlossomClient.areSameRegistrableDomain("127.0.0.1", "127.0.0.1"))
-        // Two different IPs that share the last 2 octets will match — this is the
-        // known limitation documented in areSameRegistrableDomain. It is acceptable
-        // because mirror targets are user-curated and independently hash-verified.
-        #expect(BlossomClient.areSameRegistrableDomain("127.0.0.1", "10.0.0.1"))  // Both end in "0.1"
-        // IPs that differ in last 2 octets do NOT match.
+        #expect(!BlossomClient.areSameRegistrableDomain("127.0.0.1", "10.0.0.1"))
         #expect(!BlossomClient.areSameRegistrableDomain("192.168.1.1", "192.168.2.3"))
     }
 
@@ -292,6 +296,22 @@ struct BlossomClientTests {
         #expect(result?.hasPrefix("Nostr ") == true)
     }
 
+    @Test func convertToLegacyBase64AuthAcceptsGetAuthEvent() {
+        // BUD-03: GET/HEAD requests use kind 24243. Legacy retry must accept it too.
+        let json = #"{"kind":24243,"id":"abc123","pubkey":"def456","content":"Blossom get"}"#
+        guard let jsonData = json.data(using: .utf8) else {
+            Issue.record("Failed to create test JSON data"); return
+        }
+        let result = BlossomClient.convertToLegacyBase64Auth("Nostr \(jsonData.base64EncodedString())")
+        #expect(result?.hasPrefix("Nostr ") == true)
+        // Re-encoded payload must NOT contain Base64URL markers.
+        if let result {
+            let payload = String(result.dropFirst(6))
+            #expect(!payload.contains("-"), "Legacy re-encode must use standard Base64, not Base64URL")
+            #expect(!payload.contains("_"), "Legacy re-encode must use standard Base64, not Base64URL")
+        }
+    }
+
     // MARK: - withLegacyFallback (via convertToLegacyBase64Auth + headWithLegacyFallback surface)
 
     @Test func convertToLegacyBase64AuthIsInverseOfBase64URLEncodedString() {
@@ -345,7 +365,8 @@ struct BlossomClientTests {
             guard let json = try? JSONSerialization.jsonObject(with: decoded) as? [String: Any] else {
                 Issue.record("Decoded payload is not valid JSON for action '\(action)'"); return
             }
-            #expect(json["kind"] as? Int == 24242, "kind must be 24242 for action '\(action)'")
+            let expectedKind = action == "get" ? 24243 : 24242
+            #expect(json["kind"] as? Int == expectedKind, "kind must be \(expectedKind) for action '\(action)'")
             #expect((json["content"] as? String)?.hasPrefix("Blossom \(action)") == true,
                     "content must start with 'Blossom \(action)'")
             guard let tags = json["tags"] as? [[String]] else {
@@ -355,6 +376,19 @@ struct BlossomClientTests {
             #expect(tags.contains { $0 == ["x", hash] }, "tags must contain [\"x\", hash]")
             #expect(tags.contains { $0.count == 2 && $0[0] == "expiration" && Int($0[1]) != nil },
                     "tags must contain [\"expiration\", <int>]")
+            // Signature must be a non-empty 128-character hex string (64-byte Schnorr sig).
+            if let sig = json["sig"] as? String {
+                #expect(sig.count == 128, "sig must be 64-byte hex")
+                #expect(sig.allSatisfy { $0.isHexDigit }, "sig must be hex")
+            } else {
+                Issue.record("sig missing from auth event for action '\(action)'")
+            }
+            if let id = json["id"] as? String {
+                #expect(id.count == 64, "id must be 32-byte hex")
+                #expect(id.allSatisfy { $0.isHexDigit }, "id must be hex")
+            } else {
+                Issue.record("id missing from auth event for action '\(action)'")
+            }
         }
     }
 
@@ -442,6 +476,8 @@ struct BlossomClientTests {
         } catch let error as BlossomError {
             if case .allServersFailed(let msg) = error {
                 #expect(msg == "No HTTPS servers available")
+            } else {
+                Issue.record("Expected allServersFailed, got \(error)")
             }
         } catch {
             Issue.record("Unexpected error: \(error)")
@@ -451,20 +487,21 @@ struct BlossomClientTests {
     // MARK: - withLegacyFallback retry dispatch
 
     @Test func legacyBase64RetryPathViaUpload() async {
-        // Exercises the withLegacyFallback retry mechanism through the upload path.
-        // Mock /media returns 401 (triggers legacy Base64 retry), then the retry
-        // also targets /media and gets 200. Verifies the retry mechanism dispatches.
+        MockURLProtocol.removeAllHandlers()
         let hash = BlossomClient.sha256Hex(Data("retry-test".utf8))
         let serverBase = "https://legacy-test.example"
         let mediaPath = "\(serverBase)/media"
         let headPath = "\(serverBase)/\(hash)"
 
+        let countersLock = NSLock()
         var headRequestCount = 0
         var mediaAuthHeaders: [String] = []
 
-        MockURLProtocol.handlers = [:]
-        MockURLProtocol.handlers[headPath] = { request -> (Data, HTTPURLResponse) in
+        
+        MockURLProtocol.setHandler(for: headPath) { request -> (Data, HTTPURLResponse) in
+            countersLock.lock()
             headRequestCount += 1
+            countersLock.unlock()
             let resp = HTTPURLResponse(
                 url: URL(string: headPath)!,
                 statusCode: 404,
@@ -474,10 +511,12 @@ struct BlossomClientTests {
             return (Data(), resp)
         }
 
-        MockURLProtocol.handlers[mediaPath] = { request -> (Data, HTTPURLResponse) in
+        MockURLProtocol.setHandler(for: mediaPath) { request -> (Data, HTTPURLResponse) in
             let auth = request.value(forHTTPHeaderField: "Authorization") ?? ""
+            countersLock.lock()
             mediaAuthHeaders.append(auth)
             let isFirstAttempt = mediaAuthHeaders.count == 1
+            countersLock.unlock()
             let statusCode = isFirstAttempt ? 401 : 200
             let resp = HTTPURLResponse(
                 url: URL(string: mediaPath)!,
@@ -498,7 +537,7 @@ struct BlossomClientTests {
         BlossomClient.sessionOverride = mockSession
         defer {
             BlossomClient.sessionOverride = nil
-            MockURLProtocol.handlers = [:]
+            
         }
 
         let privBytes = Data((1...32).map { UInt8($0) })
@@ -518,14 +557,262 @@ struct BlossomClientTests {
         )
 
         #expect(result != nil, "Upload should succeed after legacy Base64 retry")
-        #expect(headRequestCount == 1, "HEAD check should succeed on first try (BUD-11 auth)")
+        #expect(headRequestCount == 1, "HEAD check should run once")
         #expect(mediaAuthHeaders.count == 2, "Upload should make 2 media requests (initial BUD-11 + legacy retry)")
+        if mediaAuthHeaders.count >= 1 {
+            let firstPayload = mediaAuthHeaders[0].hasPrefix("Nostr ")
+                ? String(mediaAuthHeaders[0].dropFirst(6)) : ""
+            #expect(!firstPayload.contains("+"), "First attempt must use Base64URL, not standard Base64")
+            #expect(!firstPayload.contains("/"), "First attempt must use Base64URL, not standard Base64")
+            #expect(!firstPayload.contains("="), "Base64URL must omit padding")
+        }
         if mediaAuthHeaders.count >= 2 {
             let secondPayload = mediaAuthHeaders[1].hasPrefix("Nostr ")
                 ? String(mediaAuthHeaders[1].dropFirst(6)) : ""
-            // Standard Base64 never contains '-' or '_' (those are Base64URL chars)
             #expect(!secondPayload.contains("-"), "Legacy retry must use standard Base64, not Base64URL")
             #expect(!secondPayload.contains("_"), "Legacy retry must use standard Base64, not Base64URL")
         }
+    }
+
+    // MARK: - Upload success paths
+
+    @Test func uploadSucceedsViaMediaEndpoint() async {
+        let bodyText = "hello blossom"
+        let bytes = Data(bodyText.utf8)
+        let hash = BlossomClient.sha256Hex(bytes)
+        let server = "https://upload-a.example"
+
+        
+        MockURLProtocol.setHandler(for: "\(server)/\(hash)") { request -> (Data, HTTPURLResponse) in
+            let auth = request.value(forHTTPHeaderField: "Authorization") ?? ""
+            let resp = HTTPURLResponse(
+                url: URL(string: "\(server)/\(hash)")!,
+                statusCode: auth.isEmpty ? 401 : 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: nil
+            )!
+            return (Data(), resp)
+        }
+        MockURLProtocol.setHandler(for: "\(server)/media") { request -> (Data, HTTPURLResponse) in
+            let resp = HTTPURLResponse(
+                url: URL(string: "\(server)/media")!,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: nil
+            )!
+            let json = #"{"url":"\#(server)/\#(hash)","sha256":"\#(hash)","size":\#(bytes.count),"type":"text/plain"}"#
+            return (Data(json.utf8), resp)
+        }
+
+        BlossomClient.sessionOverride = URLSession(configuration: {
+            let c = URLSessionConfiguration.ephemeral
+            c.protocolClasses = [MockURLProtocol.self]
+            return c
+        }())
+        defer { BlossomClient.sessionOverride = nil;  }
+
+        let keypair = testKeypair(seed: 1)
+        do {
+            let result = try await BlossomClient.upload(bytes: bytes, mime: "text/plain", servers: [server], keypair: keypair)
+            #expect(result.url == "\(server)/\(hash)")
+            #expect(result.sha256Hex == hash)
+        } catch {
+            Issue.record("Upload threw: \(error)")
+        }
+    }
+
+    @Test func uploadSkipsPUTWhenHEADFindsBlob() async {
+        let bodyText = "already mirrored"
+        let bytes = Data(bodyText.utf8)
+        let hash = BlossomClient.sha256Hex(bytes)
+        let server = "https://upload-head.example"
+        var mediaRequestCount = 0
+
+        
+        MockURLProtocol.setHandler(for: "\(server)/\(hash)") { _ -> (Data, HTTPURLResponse) in
+            let resp = HTTPURLResponse(
+                url: URL(string: "\(server)/\(hash)")!,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: nil
+            )!
+            return (Data(), resp)
+        }
+        MockURLProtocol.setHandler(for: "\(server)/media") { _ -> (Data, HTTPURLResponse) in
+            mediaRequestCount += 1
+            let resp = HTTPURLResponse(
+                url: URL(string: "\(server)/media")!,
+                statusCode: 404,
+                httpVersion: "HTTP/1.1",
+                headerFields: nil
+            )!
+            return (Data(), resp)
+        }
+        MockURLProtocol.setHandler(for: "\(server)/upload") { _ -> (Data, HTTPURLResponse) in
+            mediaRequestCount += 1
+            let resp = HTTPURLResponse(
+                url: URL(string: "\(server)/upload")!,
+                statusCode: 500,
+                httpVersion: "HTTP/1.1",
+                headerFields: nil
+            )!
+            return (Data(), resp)
+        }
+
+        BlossomClient.sessionOverride = URLSession(configuration: {
+            let c = URLSessionConfiguration.ephemeral
+            c.protocolClasses = [MockURLProtocol.self]
+            return c
+        }())
+        defer { BlossomClient.sessionOverride = nil;  }
+
+        let keypair = testKeypair(seed: 2)
+        do {
+            let result = try await BlossomClient.upload(bytes: bytes, mime: "text/plain", servers: [server], keypair: keypair)
+            #expect(result.url == "\(server)/\(hash)")
+            #expect(mediaRequestCount == 0, "HEAD hit should skip /media and /upload")
+        } catch {
+            Issue.record("Upload threw: \(error)")
+        }
+    }
+
+    @Test func uploadFallsBackFromMedia404ToUpload() async {
+        let bodyText = "media missing"
+        let bytes = Data(bodyText.utf8)
+        let hash = BlossomClient.sha256Hex(bytes)
+        let server = "https://upload-fallback.example"
+
+        
+        MockURLProtocol.setHandler(for: "\(server)/\(hash)") { _ -> (Data, HTTPURLResponse) in
+            let resp = HTTPURLResponse(url: URL(string: "\(server)/\(hash)")!, statusCode: 404, httpVersion: "HTTP/1.1", headerFields: nil)!
+            return (Data(), resp)
+        }
+        MockURLProtocol.setHandler(for: "\(server)/media") { _ -> (Data, HTTPURLResponse) in
+            let resp = HTTPURLResponse(url: URL(string: "\(server)/media")!, statusCode: 404, httpVersion: "HTTP/1.1", headerFields: nil)!
+            return (Data(), resp)
+        }
+        MockURLProtocol.setHandler(for: "\(server)/upload") { _ -> (Data, HTTPURLResponse) in
+            let resp = HTTPURLResponse(url: URL(string: "\(server)/upload")!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!
+            let json = #"{"url":"\#(server)/\#(hash)","sha256":"\#(hash)","size":\#(bytes.count),"type":"text/plain"}"#
+            return (Data(json.utf8), resp)
+        }
+
+        BlossomClient.sessionOverride = URLSession(configuration: {
+            let c = URLSessionConfiguration.ephemeral
+            c.protocolClasses = [MockURLProtocol.self]
+            return c
+        }())
+        defer { BlossomClient.sessionOverride = nil;  }
+
+        let keypair = testKeypair(seed: 3)
+        do {
+            let result = try await BlossomClient.upload(bytes: bytes, mime: "text/plain", servers: [server], keypair: keypair)
+            #expect(result.url == "\(server)/\(hash)")
+        } catch {
+            Issue.record("Upload threw: \(error)")
+        }
+    }
+
+    @Test func uploadTriesNextServerWhenFirstFails() async {
+        let bodyText = "second server wins"
+        let bytes = Data(bodyText.utf8)
+        let hash = BlossomClient.sha256Hex(bytes)
+        let serverA = "https://upload-fail.example"
+        let serverB = "https://upload-win.example"
+
+        
+        MockURLProtocol.setHandler(for: "\(serverA)/\(hash)") { _ -> (Data, HTTPURLResponse) in
+            (Data(), HTTPURLResponse(url: URL(string: "\(serverA)/\(hash)")!, statusCode: 500, httpVersion: "HTTP/1.1", headerFields: nil)!)
+        }
+        MockURLProtocol.setHandler(for: "\(serverA)/media") { _ -> (Data, HTTPURLResponse) in
+            (Data(), HTTPURLResponse(url: URL(string: "\(serverA)/media")!, statusCode: 500, httpVersion: "HTTP/1.1", headerFields: nil)!)
+        }
+        MockURLProtocol.setHandler(for: "\(serverA)/upload") { _ -> (Data, HTTPURLResponse) in
+            (Data(), HTTPURLResponse(url: URL(string: "\(serverA)/upload")!, statusCode: 500, httpVersion: "HTTP/1.1", headerFields: nil)!)
+        }
+        MockURLProtocol.setHandler(for: "\(serverB)/\(hash)") { _ -> (Data, HTTPURLResponse) in
+            (Data(), HTTPURLResponse(url: URL(string: "\(serverB)/\(hash)")!, statusCode: 404, httpVersion: "HTTP/1.1", headerFields: nil)!)
+        }
+        MockURLProtocol.setHandler(for: "\(serverB)/media") { _ -> (Data, HTTPURLResponse) in
+            let resp = HTTPURLResponse(url: URL(string: "\(serverB)/media")!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!
+            let json = #"{"url":"\#(serverB)/\#(hash)","sha256":"\#(hash)","size":\#(bytes.count),"type":"text/plain"}"#
+            return (Data(json.utf8), resp)
+        }
+
+        BlossomClient.sessionOverride = URLSession(configuration: {
+            let c = URLSessionConfiguration.ephemeral
+            c.protocolClasses = [MockURLProtocol.self]
+            return c
+        }())
+        defer { BlossomClient.sessionOverride = nil;  }
+
+        let keypair = testKeypair(seed: 4)
+        do {
+            let result = try await BlossomClient.upload(bytes: bytes, mime: "text/plain", servers: [serverA, serverB], keypair: keypair)
+            #expect(result.url == "\(serverB)/\(hash)")
+        } catch {
+            Issue.record("Upload threw: \(error)")
+        }
+    }
+
+    @Test func uploadDispatchesMirrorToOtherServers() async {
+        let bodyText = "mirror me"
+        let bytes = Data(bodyText.utf8)
+        let hash = BlossomClient.sha256Hex(bytes)
+        let serverA = "https://upload-mirror-a.example"
+        let serverB = "https://upload-mirror-b.example"
+        let mirrorCountLock = NSLock()
+        var mirrorRequestCount = 0
+        let mirrorArrived = DispatchSemaphore(value: 0)
+
+        
+        MockURLProtocol.setHandler(for: "\(serverA)/\(hash)") { _ -> (Data, HTTPURLResponse) in
+            (Data(), HTTPURLResponse(url: URL(string: "\(serverA)/\(hash)")!, statusCode: 404, httpVersion: "HTTP/1.1", headerFields: nil)!)
+        }
+        MockURLProtocol.setHandler(for: "\(serverA)/media") { _ -> (Data, HTTPURLResponse) in
+            (Data(), HTTPURLResponse(url: URL(string: "\(serverA)/media")!, statusCode: 404, httpVersion: "HTTP/1.1", headerFields: nil)!)
+        }
+        MockURLProtocol.setHandler(for: "\(serverA)/upload") { _ -> (Data, HTTPURLResponse) in
+            let resp = HTTPURLResponse(url: URL(string: "\(serverA)/upload")!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!
+            let json = #"{"url":"\#(serverA)/\#(hash)","sha256":"\#(hash)","size":\#(bytes.count),"type":"text/plain"}"#
+            return (Data(json.utf8), resp)
+        }
+        MockURLProtocol.setHandler(for: "\(serverB)/mirror") { request -> (Data, HTTPURLResponse) in
+            mirrorCountLock.lock()
+            mirrorRequestCount += 1
+            mirrorCountLock.unlock()
+            mirrorArrived.signal()
+            let auth = request.value(forHTTPHeaderField: "Authorization") ?? ""
+            let status = auth.hasPrefix("Nostr ") ? 200 : 401
+            return (Data(), HTTPURLResponse(url: URL(string: "\(serverB)/mirror")!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: nil)!)
+        }
+
+        BlossomClient.sessionOverride = URLSession(configuration: {
+            let c = URLSessionConfiguration.ephemeral
+            c.protocolClasses = [MockURLProtocol.self]
+            return c
+        }())
+        defer { BlossomClient.sessionOverride = nil;  }
+
+        let keypair = testKeypair(seed: 5)
+        do {
+            _ = try await BlossomClient.upload(bytes: bytes, mime: "text/plain", servers: [serverA, serverB], keypair: keypair)
+            // Wait deterministically for the detached mirror task to invoke the handler,
+            // with a generous timeout so a hung task surfaces as a clear failure.
+            let waited = mirrorArrived.wait(timeout: .now() + .seconds(5)) == .success
+            #expect(waited, "Mirror PUT should be dispatched to serverB")
+            #expect(mirrorRequestCount == 1, "Exactly one mirror request should be made")
+        } catch {
+            Issue.record("Upload threw: \(error)")
+        }
+    }
+
+    private func testKeypair(seed: UInt8) -> Keypair {
+        let privBytes = Data((0..<32).map { UInt8((Int(seed) + Int($0)) % 256) })
+        let pubBytes = Secp256k1.publicKey(from: privBytes)!
+        return Keypair(
+            privkey: privBytes.map { String(format: "%02x", $0) }.joined(),
+            pubkey: pubBytes.map { String(format: "%02x", $0) }.joined()
+        )
     }
 }

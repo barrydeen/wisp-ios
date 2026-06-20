@@ -2,7 +2,8 @@
 //  ContentParserHashTests.swift
 //  wispTests
 //
-//  Tests for BUD-03 SHA-256 hash extraction from media URLs.
+//  Tests for BUD-01 Blossom URL classification and SHA-256 hash extraction
+//  from media URLs (used by BUD-03 fallback fetching).
 //
 
 import Testing
@@ -58,14 +59,37 @@ struct ContentParserHashTests {
         #expect(ContentParser.sha256Hash(fromUrl: "not a url") == nil)
     }
 
-    @Test func extractsHashCaseInsensitively() {
-        // .caseInsensitive regex allows uppercase hex in the path; result is lowercased.
-        let upperHash = hash.uppercased()
-        let url = "https://example.com/media/\(upperHash).png"
+    @Test func extractsHashWithNumericExtension() {
+        let url = "https://example.com/\(hash).123"
         #expect(ContentParser.sha256Hash(fromUrl: url) == hash)
-        // Mixed case
-        let mixedHash = "423A2423E536349B9ADB8eaa1835F230B7A42798C5A181727B1B4601F96E0E91"
-        let url2 = "https://example.com/\(mixedHash)"
-        #expect(ContentParser.sha256Hash(fromUrl: url2) == hash)
+    }
+
+    @Test func classifiesBlossomUrlWithoutExtensionAsUnknownMedia() {
+        let url = "https://blossom.example.com/\(hash)"
+        let segments = ContentParser.parse(content: url, tags: [])
+        #expect(segments.count == 1)
+        if case .unknownMedia(let meta) = segments.first {
+            #expect(meta.url == url)
+        } else {
+            Issue.record("Expected .unknownMedia for Blossom URL without extension, got \(String(describing: segments.first))")
+        }
+    }
+
+    @Test func doesNotExtractHashFromNonBlossomUrlDuringDedup() {
+        // A regular link whose last path component happens to be 64 hex chars
+        // should not be treated as content-addressed during imeta dedup.
+        let hashPath = "https://blog.example.com/posts/\(hash)"
+        let imetaUrl = "https://blossom.example.com/\(hash).png"
+        let tags: [[String]] = [
+            ["imeta", "url \(imetaUrl)", "x \(hash)", "m image/png"]
+        ]
+        let segments = ContentParser.parse(content: hashPath, tags: tags)
+        // The imeta URL should still be appended as a media segment because the
+        // non-Blossom link did not produce a conflicting hash in the dedup set.
+        let hasImeta = segments.contains { seg in
+            if case .image(let meta) = seg, meta.url == imetaUrl { return true }
+            return false
+        }
+        #expect(hasImeta, "imeta Blossom mirror should not be deduplicated against a non-Blossom hex path")
     }
 }

@@ -2,6 +2,41 @@ import Foundation
 import CryptoKit
 import os
 
+/// Async semaphore for throttling concurrent operations. Swift concurrency has no
+/// built-in semaphore, but we need one for fan-out parallelism (e.g., BUD-03
+/// fallback fetches across N servers capped at 3 in-flight). Implemented with
+/// `CheckedContinuation` so waiting tasks are parked rather than spinning
+/// via `Task.yield()`, which avoids wasting cooperative-thread-pool cycles
+/// when multiple media images fail simultaneously during scroll.
+actor AsyncSemaphore {
+    private var available: Int
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    init(value: Int) {
+        precondition(value > 0, "AsyncSemaphore value must be positive")
+        self.available = value
+    }
+
+    func acquire() async {
+        if available > 0 {
+            available -= 1
+            return
+        }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func release() {
+        if let waiter = waiters.first {
+            waiters.removeFirst()
+            waiter.resume()
+        } else {
+            available += 1
+        }
+    }
+}
+
 enum BlossomError: Error {
     case authFailed
     /// A 401 Unauthorized response was received. Used by `withLegacyFallback` to
@@ -20,25 +55,157 @@ struct BlossomUploadResult {
 
 enum BlossomClient {
     static let kindAuth = 24242
+    static let kindAuthGet = 24243
+
+    /// Maximum simultaneous Blossom network operations. Shared by `upload()` (mirrors),
+    /// `BlossomFallbackFetcher.fetch` (BUD-03 fallback GETs), and any future surface.
+    /// Value of 3 empirically balances throughput against typical Blossom server rate limits.
+    /// Changing this number must be done with care — bursts above 3 can trigger 429s on
+    /// shared infrastructure.
+    static let maxConcurrentOperations = 3
+
+    /// Fan-out helper that caps concurrent task execution at `chunkSize`. Unlike
+    /// sequential chunking (which waits for each chunk to fully drain before starting
+    /// the next), this helper launches ALL tasks but throttles via a semaphore so
+    /// the first success doesn't pay a multiplicative latency penalty proportional
+    /// to total item count.
+    ///
+    /// The first `.success` returned by `work` cancels the remaining tasks and
+    /// is propagated to the caller. `.skip` outcomes are ignored — useful for
+    /// cases like an integrity mismatch where the caller wants to keep trying
+    /// other servers. If all items produce `.skip`, this returns nil.
+    static func chunkedFirstSuccess<Item: Sendable, R: Sendable>(
+        items: [Item],
+        chunkSize: Int = maxConcurrentOperations,
+        work: @Sendable @escaping (Item) async -> ChunkedOutcome<R>
+    ) async -> R? {
+        guard !items.isEmpty else { return nil }
+        let semaphore = AsyncSemaphore(value: chunkSize)
+        return await withTaskGroup(of: ChunkedOutcome<R>.self) { group in
+            for item in items {
+                group.addTask {
+                    await semaphore.acquire()
+                    defer { Task { await semaphore.release() } }
+                    return await work(item)
+                }
+            }
+            for await outcome in group {
+                if case .success(let result) = outcome {
+                    group.cancelAll()
+                    return result
+                }
+                // .skip → keep trying the next item.
+            }
+            return nil
+        }
+    }
+
+    /// Outcome of a single task in `chunkedFirstSuccess`. `.success` short-circuits
+    /// the fan-out; `.skip` lets the next item try.
+    enum ChunkedOutcome<Success>: Sendable {
+        case success(Success)
+        case skip
+    }
+
+    /// Same as `chunkedFirstSuccess` but accumulates all non-nil results instead of
+    /// stopping at the first. Used by mirror/fan-out paths where every target gets
+    /// the operation regardless of earlier success.
+    static func chunkedFanOut<T: Sendable, U>(
+        items: [T],
+        chunkSize: Int = maxConcurrentOperations,
+        work: @Sendable @escaping (T) async -> U
+    ) async -> [U] {
+        guard !items.isEmpty else { return [] }
+        let semaphore = AsyncSemaphore(value: chunkSize)
+        return await withTaskGroup(of: U.self) { group in
+            for item in items {
+                group.addTask {
+                    await semaphore.acquire()
+                    defer { Task { await semaphore.release() } }
+                    return await work(item)
+                }
+            }
+            var results: [U] = []
+            for await result in group {
+                results.append(result)
+            }
+            return results
+        }
+    }
+
+    /// Prevents overlapping mirror dispatches for the same blob hash.
+    /// Rapid multi-image compose could otherwise spawn an unbounded number
+    /// of detached mirror tasks.
+    private static let activeMirrorsLock = NSLock()
+    private static var activeMirrors: Set<String> = []
+
     #if DEBUG
-    nonisolated(unsafe) static var sessionOverride: URLSession?
-    static var session: URLSession { sessionOverride ?? .shared }
+    private static let sessionOverrideLock = NSLock()
+    private static var _sessionOverride: URLSession?
+    static var sessionOverride: URLSession? {
+        get {
+            sessionOverrideLock.lock()
+            defer { sessionOverrideLock.unlock() }
+            return _sessionOverride
+        }
+        set {
+            sessionOverrideLock.lock()
+            _sessionOverride = newValue
+            sessionOverrideLock.unlock()
+        }
+    }
+    static var session: URLSession {
+        sessionOverrideLock.lock()
+        let override = _sessionOverride
+        sessionOverrideLock.unlock()
+        return override ?? .shared
+    }
     #else
     static var session: URLSession { .shared }
     #endif
 
-    /// Strips all trailing slashes and rejects non-HTTPS URLs.
-    /// Returns `nil` for any URL whose scheme is not `https` — auth headers must
-    /// never be sent over cleartext connections.
+    /// Normalizes a Blossom server URL string for use as a base origin. Enforces
+    /// HTTPS (auth headers must never travel over cleartext), lowercases the host,
+    /// preserves non-default ports, brackets IPv6 hosts, and **preserves the path**
+    /// so users with path-prefixed kind-10063 entries (e.g.
+    /// `https://blossom.example.com/custom/`) keep working across upgrades.
+    ///
+    /// Query and fragment are stripped — they're not meaningful for Blossom
+    /// endpoints and may contain tracking/session tokens. Trailing slashes on
+    /// the path are trimmed so the caller can safely append `/<hash>` etc.
+    ///
+    /// Returns `nil` for any URL whose scheme is not `https`, or whose host is
+    /// empty/unparseable.
     static func normalizeServerURL(_ server: String) -> String? {
-        var result = server
-        while result.hasSuffix("/") {
-            result = String(result.dropLast())
+        var trimmed = server
+        while trimmed.hasSuffix("/") {
+            trimmed = String(trimmed.dropLast())
         }
-        // Enforce HTTPS: a signed Nostr auth event transmitted over HTTP is
-        // interceptable and replayable by any on-path observer.
-        guard result.lowercased().hasPrefix("https://") else { return nil }
-        return result.lowercased()
+        guard let url = URL(string: trimmed),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "https",
+              let host = url.host,
+              !host.isEmpty else {
+            return nil
+        }
+        let normalizedHost = host.lowercased()
+        let hostString = normalizedHost.contains(":") ? "[\(normalizedHost)]" : normalizedHost
+        var result = "https://\(hostString)"
+        if let port = url.port {
+            result += ":\(port)"
+        }
+        if !url.path.isEmpty {
+            // Preserve the path; strip a trailing slash if any (already trimmed above,
+            // but defensive in case the URL string had internal slashes before query).
+            var path = url.path
+            while path.hasSuffix("/") {
+                path = String(path.dropLast())
+            }
+            if !path.isEmpty {
+                result += path
+            }
+        }
+        return result
     }
 
     /// Returns `true` if two hosts share the same registrable (base) domain.
@@ -58,6 +225,17 @@ enum BlossomClient {
     static func areSameRegistrableDomain(_ hostA: String, _ hostB: String) -> Bool {
         let a = hostA.lowercased().split(separator: ".").map(String.init)
         let b = hostB.lowercased().split(separator: ".").map(String.init)
+        if hostA.contains(":") || hostB.contains(":") {
+            return hostA.lowercased() == hostB.lowercased()
+        }
+        // IP addresses (all labels numeric) must match exactly; never treat two
+        // different IPs as the "same domain" just because they share the last
+        // two octets.
+        let aIsIP = a.allSatisfy { Int($0) != nil }
+        let bIsIP = b.allSatisfy { Int($0) != nil }
+        if aIsIP || bIsIP {
+            return a == b
+        }
         guard a.count >= 2, b.count >= 2 else { return false }
         return a.suffix(2) == b.suffix(2)
     }
@@ -79,6 +257,7 @@ enum BlossomClient {
         guard let resultURL = URL(string: serverReturnedURL),
               let resultHost = resultURL.host,
               !resultHost.isEmpty else {
+            os_log(.debug, "Blossom: server returned unparseable mirror URL, using fallback")
             return fallbackURL
         }
         let uploadHostLower = uploadHost.lowercased()
@@ -97,14 +276,25 @@ enum BlossomClient {
         return digest.map { String(format: "%02x", $0) }.joined()
     }
 
-    /// Build the `Authorization: Nostr <base64url>` header value for a Blossom request.
+/// Build the `Authorization: Nostr <base64url>` header value for a Blossom request.
     /// `action` should be one of "upload", "media", or "get" per BUD-11.
     /// `expirationOffset` is seconds from now; defaults to 5 minutes.
+    ///
+    /// `kind` defaults to `kindAuthGet` for the "get" action (BUD-03) and
+    /// `kindAuth` for everything else. Callers can override `kind` for legacy
+    /// retry paths (e.g. HEAD on pre-BUD-03 servers that reject kind 24243).
+    ///
+    /// `encoding` defaults to Base64URL (BUD-11). Legacy retry paths pass
+    /// `.standardBase64` to re-encode the same event for pre-BUD-11 servers
+    /// that don't recognise Base64URL.
+    ///
     /// Async because remote-signer accounts dispatch the auth-event sign over a relay.
     static func makeAuthHeader(
         keypair: Keypair,
         action: String,
         sha256Hex: String,
+        kind: Int? = nil,
+        encoding: AuthHeaderEncoding = .base64URL,
         expirationOffset: Int = 300
     ) async -> String? {
         let now = NostrClock.now()
@@ -113,17 +303,29 @@ enum BlossomClient {
             ["x", sha256Hex],
             ["expiration", String(now + expirationOffset)]
         ]
+        let resolvedKind = kind ?? (action == "get" ? kindAuthGet : kindAuth)
         guard let signed = try? await Signer.sign(
             keypair: keypair,
-            kind: kindAuth,
+            kind: resolvedKind,
             tags: tags,
             content: "Blossom \(action)",
             createdAt: now
         ) else { return nil }
         let json = signed.toJSON()
         guard let data = json.data(using: .utf8) else { return nil }
-        // BUD-11: Base64URL encoding without padding
-        return "Nostr \(data.base64URLEncodedString())"
+        switch encoding {
+        case .base64URL:
+            return "Nostr \(data.base64URLEncodedString())"
+        case .standardBase64:
+            return "Nostr \(data.base64EncodedString())"
+        }
+    }
+
+    /// Encoding for the auth header body. BUD-11 requires Base64URL; legacy
+    /// pre-BUD-11 servers expect standard Base64 with padding.
+    enum AuthHeaderEncoding: Sendable {
+        case base64URL
+        case standardBase64
     }
 
     /// Convert a BUD-11 (Base64URL) auth header back to standard Base64 encoding.
@@ -143,11 +345,13 @@ enum BlossomClient {
             standardBase64 += String(repeating: "=", count: 4 - remainder)
         }
         guard let decodedData = Data(base64Encoded: standardBase64) else { return nil }
-        // Validate decoded data is a Nostr auth event (kind 24242) before re-encoding.
+        // Validate decoded data is a valid Nostr auth event (kind 24242 for uploads
+        // or kind 24243 for GET/HEAD per BUD-03) before re-encoding, to prevent
+        // passing garbage data to legacy servers.
         // Note: `.fragmentsAllowed` is intentionally omitted — only JSON objects are valid here.
         if let json = try? JSONSerialization.jsonObject(with: decodedData) as? [String: Any],
            let kind = json["kind"] as? Int,
-           kind == 24242 {
+           kind == 24242 || kind == 24243 {
             return "Nostr \(decodedData.base64EncodedString())"
         }
         return nil
@@ -197,13 +401,14 @@ enum BlossomClient {
         guard !validServers.isEmpty else { throw BlossomError.allServersFailed("No HTTPS servers available") }
         let hash = sha256Hex(bytes)
 
-        // Generate all three auth headers concurrently — each may require a relay round-trip
+        // Generate upload auth headers concurrently — each may require a relay round-trip
         // for remote-signer accounts, so serializing them would triple the latency.
-        async let getAuthTask    = makeAuthHeader(keypair: keypair, action: "get",    sha256Hex: hash)
+        // GET/HEAD auth is generated inside `headWithLegacyFallback` because the
+        // legacy retry path needs to re-sign with kind 24242 and we want to keep
+        // signing off the hot parallel loop.
         async let mediaAuthTask  = makeAuthHeader(keypair: keypair, action: "media",  sha256Hex: hash)
         async let uploadAuthTask = makeAuthHeader(keypair: keypair, action: "upload", sha256Hex: hash)
-        guard let getAuth    = await getAuthTask,
-              let mediaAuth  = await mediaAuthTask,
+        guard let mediaAuth  = await mediaAuthTask,
               let uploadAuth = await uploadAuthTask else {
             throw BlossomError.authFailed
         }
@@ -214,8 +419,8 @@ enum BlossomClient {
             for normalized in validServers {
                 guard let headUrl = URL(string: normalized + "/" + hash) else { continue }
                 group.addTask {
-                    // HEAD retries with legacy encoding on 401 (non-BUD-11 servers).
-                    let exists = await headWithLegacyFallback(hash: hash, url: headUrl, bud11Auth: getAuth)
+                    // HEAD retries with kind-24242 re-sign on 401 (non-BUD-03 servers).
+                    let exists = await headWithLegacyFallback(hash: hash, url: headUrl, keypair: keypair)
                     return exists ? (normalized + "/" + hash) : nil
                 }
             }
@@ -283,15 +488,27 @@ enum BlossomClient {
                         // Mirrors are best-effort — the caller is not blocked and the
                         // detached task may be silently dropped if the app suspends.
                         // Each mirror server independently validates the blob hash.
-                        Task.detached(priority: .utility) {
-                            os_log(.debug, "Blossom: starting mirror for hash %{private}@ to %d server(s)", hash, validServers.count - 1)
-                            await mirrorBlob(
-                                hash: hash,
-                                publicURL: safePublicURL,
-                                servers: validServers,
-                                currentServer: normalized,
-                                keypair: keypair
-                            )
+                        activeMirrorsLock.lock()
+                        let shouldMirror = activeMirrors.insert(hash).inserted
+                        activeMirrorsLock.unlock()
+                        if shouldMirror {
+                            Task.detached(priority: .utility) {
+                                os_log(.debug, "Blossom: starting mirror for hash %{private}@ to %d server(s)", hash, validServers.count - 1)
+                                defer {
+                                    activeMirrorsLock.lock()
+                                    activeMirrors.remove(hash)
+                                    activeMirrorsLock.unlock()
+                                }
+                                await mirrorBlob(
+                                    hash: hash,
+                                    publicURL: safePublicURL,
+                                    servers: validServers,
+                                    currentServer: normalized,
+                                    keypair: keypair
+                                )
+                            }
+                        } else {
+                            os_log(.debug, "Blossom: mirror for hash %{private}@ already in progress, skipping duplicate dispatch", hash)
                         }
 
                         return BlossomUploadResult(url: safePublicURL, sha256Hex: hash, mime: mime, size: bytes.count)
@@ -307,9 +524,14 @@ enum BlossomClient {
                     } catch BlossomError.allServersFailed(let msg) where msg == "404" {
                         pathError = msg
                         continue  // /media not supported → try /upload.
-                    } catch {
+                    } catch let error as BlossomError {
                         pathError = "\(error)"
-                        break     // Unexpected error → stop this server.
+                        break     // Blossom error → stop this server.
+                    } catch {
+                        // Transport-level failures (URLError, timeouts, DNS, etc.) must
+                        // not abort the whole upload — record and try the next server.
+                        pathError = "\(error)"
+                        break
                     }
                 }
 
@@ -351,12 +573,67 @@ enum BlossomClient {
         return BlossomUploadResult(url: publicURL, sha256Hex: hash, mime: mime, size: bytes.count)
     }
 
-    /// HEAD check for blob existence. Wraps `headOnce` with a legacy-Base64 fallback
-    /// so pre-BUD-11 servers with existing blobs are not incorrectly reported as empty.
-    private static func headWithLegacyFallback(hash: String, url: URL, bud11Auth: String) async -> Bool {
-        return (try? await withLegacyFallback(bud11Auth: bud11Auth) { auth in
-            try await headOnce(hash: hash, url: url, auth: auth)
-        }) ?? false
+    /// HEAD check for blob existence. First tries with the kind-24243 BUD-03
+    /// auth event (Base64URL); on 401 (pre-BUD-03 server), retries with a
+    /// kind-24242 event encoded as standard Base64. The two-axis retry
+    /// handles both pre-BUD-03 servers (reject kind 24243) and pre-BUD-11
+    /// servers (reject Base64URL). Returns true on the first success.
+    private static func headWithLegacyFallback(hash: String, url: URL, keypair: Keypair) async -> Bool {
+        guard let bud11Auth = await makeAuthHeader(
+            keypair: keypair, action: "get", sha256Hex: hash
+        ) else { return false }
+
+        // First attempt: BUD-03 (kind 24243, Base64URL). On 404/500 we return
+        // false directly — no point retrying with a different kind on the
+        // same blob. Only 401 triggers the legacy kind re-sign.
+        do {
+            return try await headOnce(hash: hash, url: url, auth: bud11Auth)
+        } catch BlossomError.authRejected {
+            // Legacy fallback: re-sign with kind 24242 + standard Base64 for
+            // pre-BUD-03 / pre-BUD-11 servers. The old approach re-encoded the
+            // BUD-11 event with standard Base64 (kind 24243) which doesn't help
+            // — pre-BUD-03 servers reject the kind, not the encoding.
+        } catch {
+            return false
+        }
+
+        guard let legacyAuth = await makeAuthHeader(
+            keypair: keypair,
+            action: "get",
+            sha256Hex: hash,
+            kind: kindAuth,
+            encoding: .standardBase64
+        ) else { return false }
+
+        return (try? await headOnce(hash: hash, url: url, auth: legacyAuth)) ?? false
+    }
+
+    /// Variant of `makeAuthHeader` that lets the caller override the event kind.
+    /// Used for legacy retry paths where the original kind is not recognised by
+    /// the server (e.g., HEAD on pre-BUD-03 servers expect kind 24242).
+    static func makeAuthHeaderWithKind(
+        keypair: Keypair,
+        action: String,
+        sha256Hex: String,
+        kind: Int,
+        expirationOffset: Int = 300
+    ) async -> String? {
+        let now = NostrClock.now()
+        let tags: [[String]] = [
+            ["t", action],
+            ["x", sha256Hex],
+            ["expiration", String(now + expirationOffset)]
+        ]
+        guard let signed = try? await Signer.sign(
+            keypair: keypair,
+            kind: kind,
+            tags: tags,
+            content: "Blossom \(action)",
+            createdAt: now
+        ) else { return nil }
+        let json = signed.toJSON()
+        guard let data = json.data(using: .utf8) else { return nil }
+        return "Nostr \(data.base64URLEncodedString())"
     }
 
     private static func headOnce(hash: String, url: URL, auth: String) async throws -> Bool {
@@ -376,10 +653,6 @@ enum BlossomClient {
     }
 
     // MARK: - Mirroring (BUD-04)
-
-    /// Maximum simultaneous mirror PUTs. Caps network burst without serialising mirrors.
-    /// Value of 3 empirically balances throughput against typical Blossom server rate limits.
-    private static let mirrorMaxConcurrent = 3
 
     private static func mirrorBlob(
         hash: String,
@@ -405,17 +678,11 @@ enum BlossomClient {
             return (server: server, url: url)
         }
 
-        // Chunked concurrency cap: processes `mirrorMaxConcurrent` PUTs in parallel,
-        // waiting for each batch before starting the next.
-        for chunk in stride(from: 0, to: targets.count, by: mirrorMaxConcurrent) {
-            let slice = Array(targets[chunk..<min(chunk + mirrorMaxConcurrent, targets.count)])
-            await withTaskGroup(of: Void.self) { group in
-                for (server, url) in slice {
-                    group.addTask {
-                        await mirrorOnce(server: server, url: url, auth: auth, hash: hash, bodyData: bodyData)
-                    }
-                }
-            }
+        // Fan-out mirrors in parallel with a `maxConcurrentOperations` cap. Unlike
+        // sequential chunking, every target is launched immediately so first-success
+        // latency is independent of total mirror count.
+        await chunkedFanOut(items: targets, chunkSize: maxConcurrentOperations) { target in
+            await mirrorOnce(server: target.server, url: target.url, auth: auth, hash: hash, bodyData: bodyData)
         }
     }
 

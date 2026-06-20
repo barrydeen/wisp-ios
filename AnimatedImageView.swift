@@ -23,6 +23,10 @@ struct AnimatedImageView<Placeholder: View, Failure: View>: View {
     /// animated thumbnail crops like the static `.scaledToFill()` path
     /// instead of letterboxing inside the tile.
     var contentMode: ContentMode = .fit
+    /// Hex pubkey of the event author that owns this media. When set and the
+    /// primary URL fails, the view attempts to recover the bytes from the
+    /// author's kind-10063 Blossom servers via `BlossomFallbackFetcher`.
+    var authorPubkey: String? = nil
     @ViewBuilder let placeholder: () -> Placeholder
     @ViewBuilder let failure: () -> Failure
 
@@ -116,6 +120,15 @@ struct AnimatedImageView<Placeholder: View, Failure: View>: View {
         if Task.isCancelled { return }
         if let payload {
             phase = .success(payload)
+        } else if let payload = await BlossomFallbackImage.fetchDecodeAndCache(
+            url: url,
+            authorPubkey: authorPubkey,
+            maxPixelSize: CGFloat?(1024),
+            cacheKey: url.absoluteString,
+            decode: { data, max in AnimatedImageDecoder.decode(data: data, maxPixelSize: max) },
+            store: { decoded, key in DecodedImageCache.storeAnimated(decoded, for: key) }
+        ) {
+            phase = .success(payload)
         } else {
             phase = .failure
         }
@@ -126,6 +139,42 @@ struct AnimatedImagePayload: @unchecked Sendable {
     let frames: [UIImage]
     let totalDuration: TimeInterval
     let aspect: CGFloat
+}
+
+/// Shared Blossom fallback flow used by both `AnimatedImageView` and
+/// `RetryingAsyncImage`. Given a failed primary URL and the content author's
+/// pubkey, fetch the blob from the author's kind-10063 server list, decode it
+/// off the main actor, cache the result, and return it — so both image views
+/// have identical fallback semantics and only one place needs to be fixed when
+/// the flow changes.
+///
+/// `nonisolated` so the decode task can run genuinely off the main actor.
+nonisolated enum BlossomFallbackImage {
+
+    /// Fetch, decode, and cache an image of type `T` via the author's Blossom
+    /// fallback servers. Returns `nil` if the primary URL doesn't carry a hash,
+    /// the fallback fetch fails, or the decoded bytes don't survive the cap.
+    /// The decode closure receives the raw bytes and the (possibly nil) pixel
+    /// cap; the store closure receives the decoded payload and the cache key.
+    static func fetchDecodeAndCache<T: Sendable>(
+        url: URL,
+        authorPubkey: String?,
+        maxPixelSize: CGFloat?,
+        cacheKey: String,
+        decode: @escaping @Sendable (Data, CGFloat?) -> T?,
+        store: @escaping @Sendable (T, String) -> Void
+    ) async -> T? {
+        guard let authorPubkey else { return nil }
+        guard let data = await BlossomFallbackFetcher.fetch(url: url, authorPubkey: authorPubkey) else {
+            return nil
+        }
+        let decoded = await Task.detached(priority: .utility) {
+            decode(data, maxPixelSize)
+        }.value
+        guard let image = decoded else { return nil }
+        store(image, cacheKey)
+        return image
+    }
 }
 
 /// `nonisolated` so its pure-compute decode runs genuinely off the main actor

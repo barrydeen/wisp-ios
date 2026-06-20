@@ -70,7 +70,7 @@ enum ContentParser {
     /// Example match: `/users/123/abc123...def789.png` (extracts abc123...def789)
     /// Example non-match: `/abc123...def789/users/123` (hash is NOT at the end)
     private static let sha256HashRegex = try! NSRegularExpression(
-        pattern: #"/([0-9a-f]{64})(\.[a-zA-Z0-9]+)?/?$"#,
+        pattern: #"/([0-9a-f]{64})(?:\.[a-zA-Z0-9]+)?/?$"#,
         options: [.caseInsensitive]
     )
 
@@ -187,7 +187,8 @@ enum ContentParser {
             if let hashtag, !hashtag.isEmpty, token.hasPrefix("#") {
                 segments.append(.hashtag(hashtag))
             } else if let bareDomain, !bareDomain.isEmpty, !token.lowercased().hasPrefix("http") {
-                let url = "https://\(bareDomain)"
+                let cleaned = trimTrailingPunctuation(bareDomain)
+                let url = "https://\(cleaned)"
                 segments.append(classifyUrl(url, content: content, range: range, imetaMap: imetaMap))
             } else if token.lowercased().hasPrefix("nostr:") {
                 segments.append(decodeNostrToken(token))
@@ -246,14 +247,19 @@ enum ContentParser {
                 }
                 if let segUrl {
                     seenUrls.insert(segUrl)
-                    if let h = sha256Hash(fromUrl: segUrl) { seenHashes.insert(h) }
+                    // Only treat terminal 64-hex paths as content-addressed hashes when
+                    // the URL is a Blossom URL, avoiding false positives from blogs or
+                    // CDNs that happen to end a path in a 64-character hex token.
+                    if isBlossomUrl(segUrl), let h = sha256Hash(fromUrl: segUrl) {
+                        seenHashes.insert(h)
+                    }
                 }
             }
             let orderedUrls = imetaUrlOrder.isEmpty ? Array(imetaMap.keys) : imetaUrlOrder
             for url in orderedUrls {
                 guard let meta = imetaMap[url] else { continue }
                 if seenUrls.contains(url) { continue }
-                let metaHash = meta.sha256?.lowercased() ?? sha256Hash(fromUrl: url)
+                let metaHash: String? = meta.sha256?.lowercased() ?? sha256Hash(fromUrl: url)
                 if let metaHash, seenHashes.contains(metaHash) { continue }
                 let imetaClass = meta.mime.flatMap { classifyByMime($0) }
                 let ext = fileExtension(url)
@@ -359,8 +365,8 @@ enum ContentParser {
         if imageExtensions.contains(ext) { return .image(meta ?? MediaMeta(url: url)) }
         if videoExtensions.contains(ext) { return .video(meta ?? MediaMeta(url: url)) }
         if audioExtensions.contains(ext) { return .audio(meta ?? MediaMeta(url: url)) }
-        if isWebSocket { return .inlineLink(url) }
         if isBlossomUrl(url) { return .unknownMedia(meta ?? MediaMeta(url: url)) }
+        if isWebSocket { return .inlineLink(url) }
         if isStandaloneUrl(content: content, range: range) { return .link(url) }
         return .inlineLink(url)
     }

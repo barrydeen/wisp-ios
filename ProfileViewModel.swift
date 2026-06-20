@@ -410,7 +410,7 @@ final class ProfileViewModel {
         let merged = (rootNotes + extra).sorted { $0.createdAt > $1.createdAt }
         rootNotes = merged
         oldestNoteTs = merged.last?.createdAt
-        await persistKnownKinds(events)
+        await persistKnownKinds(extra)
     }
 
     func loadMoreReplies() async {
@@ -425,7 +425,7 @@ final class ProfileViewModel {
         let merged = (replies + extra).sorted { $0.createdAt > $1.createdAt }
         replies = merged
         oldestReplyTs = merged.last?.createdAt
-        await persistKnownKinds(events)
+        await persistKnownKinds(extra)
     }
 
     // MARK: - Sort modes
@@ -778,15 +778,18 @@ final class ProfileViewModel {
         let combined = (rootNotes + replies).sorted { $0.createdAt > $1.createdAt }
         for event in combined {
             // Repost? Use inner event for media extraction.
-            let target: NostrEvent
+            let target: NostrEvent?
             if event.kind == 6, !event.content.isEmpty,
                let data = event.content.data(using: .utf8),
-               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let inner = NostrEvent(json: json) {
-                target = inner
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                // If the inner event is malformed, skip this repost rather than
+                // attributing its media to the reposter's pubkey (which would send
+                // Blossom fallback to the wrong author's server list).
+                target = NostrEvent(json: json)
             } else {
                 target = event
             }
+            guard let target = target else { continue }
             for seg in ContentParser.parse(content: target.content, tags: target.tags) {
                 switch seg {
                 case .image(let m), .unknownMedia(let m):

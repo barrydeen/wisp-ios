@@ -32,4 +32,8 @@ model-wisp.json.bak
 temp/
 
 ## Kilo configuration
-.kilo/
+.kilo/agent-manager.json
+.kilo/node_modules/
+.kilo/package*.json
+.kilo/plans/
+.kilo/.gitignore
