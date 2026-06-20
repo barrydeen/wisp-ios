@@ -19,7 +19,12 @@ import os
 /// enable full BUD-03 multi-server fallback.
 enum BlossomFallbackFetcher {
 
-    nonisolated(unsafe) static var session: URLSession = .shared
+    #if DEBUG
+    nonisolated(unsafe) static var sessionOverride: URLSession?
+    static var session: URLSession { sessionOverride ?? .shared }
+    #else
+    static var session: URLSession { .shared }
+    #endif
 
     /// Maximum concurrent fallback GETs per fetch call.
     /// Matches `BlossomClient.mirrorMaxConcurrent` — consistent cap across all Blossom
@@ -72,36 +77,47 @@ enum BlossomFallbackFetcher {
         let ext = fileExtension(from: url)
 
         // Cap concurrency to avoid bursting connections when many images fail at once.
-        let result = await withTaskGroup(of: Data?.self) { group in
+        let result: (data: Data?, integrityFailure: Bool) = await withTaskGroup(of: (Data?, Bool).self) { group in
             var launched = 0
             for server in servers {
                 guard launched < maxConcurrentFetches else { break }
-                let normalized = BlossomClient.normalizeServerURL(server) ?? server
+                guard let normalized = BlossomClient.normalizeServerURL(server) else { continue }
                 let path = ext.isEmpty ? "/\(expectedHash)" : "/\(expectedHash).\(ext)"
                 guard let fetchURL = URL(string: normalized + path) else { continue }
 
                 group.addTask {
-                    return try? await fetchOncePublic(url: fetchURL, hash: expectedHash)
+                    do {
+                        let data = try await fetchOncePublic(url: fetchURL, hash: expectedHash)
+                        return (data as Data?, false)
+                    } catch URLError.cannotDecodeContentData {
+                        // Hash mismatch: a different server may have the correct blob.
+                        return (nil as Data?, true)
+                    } catch {
+                        return (nil as Data?, false)
+                    }
                 }
                 launched += 1
             }
 
+            var anyIntegrityFailure = false
             for await taskResult in group {
-                if let data = taskResult {
+                if let data = taskResult.0 {
                     group.cancelAll()
-                    return data as Data?
+                    return (data as Data?, false)
                 }
+                if taskResult.1 { anyIntegrityFailure = true }
             }
-            return nil as Data?
+            return (nil as Data?, anyIntegrityFailure)
         }
 
-        if result == nil {
-            // Record failure in the cooldown cache so we don't hammer author-controlled
-            // servers on every scroll event.
+        if result.data == nil && !result.integrityFailure {
+            // Record failure in the cooldown cache only for network-level failures
+            // (4xx/5xx/timeout), not for SHA-256 integrity mismatches. A hash mismatch
+            // means this server's copy is corrupt; another server may have it right.
             cooldownCache.setObject(NSDate(), forKey: cooldownKey)
         }
 
-        return result
+        return result.data
     }
 
     /// Unauthenticated public GET. Returns data only if 2xx AND SHA-256 matches.
@@ -111,6 +127,8 @@ enum BlossomFallbackFetcher {
         var req = URLRequest(url: url)
         req.httpMethod = "GET"
         req.timeoutInterval = 15
+        assert(req.allHTTPHeaderFields?["Authorization"] == nil,
+               "Privacy invariant: fallback GET must never carry an Authorization header")
 
         let (data, resp) = try await session.data(for: req)
         guard let http = resp as? HTTPURLResponse else {

@@ -115,6 +115,7 @@ struct ArticleView: View {
             if let cover = viewModel.coverImage, let coverUrl = URL(string: cover) {
                 RetryingAsyncImage(
                     url: coverUrl,
+                    authorPubkey: article.pubkey,
                     content: { image in
                         image
                             .resizable()
@@ -236,6 +237,7 @@ struct ArticleView: View {
                 if let imageUrl = URL(string: url) {
                     RetryingAsyncImage(
                         url: imageUrl,
+                        authorPubkey: article.pubkey,
                         content: { image in
                             image
                                 .resizable()

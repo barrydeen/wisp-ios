@@ -39,6 +39,10 @@ struct MediaGridView: View {
         /// imeta `image` field. When nil and `isVideo` is true, the tile falls
         /// back to a frame decoded by `VideoPosterCache`.
         let posterUrl: String?
+        /// Hex pubkey of the note author that owns this media. Forwarded to
+        /// `RetryingAsyncImage` so the Blossom fallback fetcher can recover
+        /// from the author's kind-10063 server list when the primary URL fails.
+        var authorPubkey: String? = nil
 
         var id: String { url }
 
@@ -258,6 +262,7 @@ private struct MediaTileImage: View {
                 RetryingAsyncImage(
                     url: URL(string: item.url),
                     maxPixelSize: ImagePixelBudget.feed,
+                    authorPubkey: item.authorPubkey,
                     content: { image in image.resizable().scaledToFill() },
                     loading: { placeholder },
                     failure: { placeholder }
@@ -279,6 +284,7 @@ private struct MediaTileImage: View {
         if let posterUrl = item.posterUrl, let url = URL(string: posterUrl) {
             RetryingAsyncImage(
                 url: url,
+                authorPubkey: item.authorPubkey,
                 content: { image in image.resizable().scaledToFill() },
                 loading: { placeholder },
                 failure: { GeneratedVideoPoster(videoUrl: item.url) { placeholder } }
@@ -491,6 +497,7 @@ struct FullScreenMediaPager: View {
             FullScreenImageView(
                 url: item.url,
                 mime: item.mime,
+                authorPubkey: item.authorPubkey,
                 onCarouselDrag: { translation, predictedEnd, ended in
                     handleCarouselDrag(translation, predictedEnd: predictedEnd, isEnded: ended)
                 }

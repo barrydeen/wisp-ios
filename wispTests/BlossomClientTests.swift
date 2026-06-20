@@ -9,6 +9,8 @@ import Foundation
 import Testing
 @testable import wisp
 
+@MainActor
+@Suite(.serialized)
 struct BlossomClientTests {
 
     // MARK: - normalizeServerURL
@@ -443,6 +445,87 @@ struct BlossomClientTests {
             }
         } catch {
             Issue.record("Unexpected error: \(error)")
+        }
+    }
+
+    // MARK: - withLegacyFallback retry dispatch
+
+    @Test func legacyBase64RetryPathViaUpload() async {
+        // Exercises the withLegacyFallback retry mechanism through the upload path.
+        // Mock /media returns 401 (triggers legacy Base64 retry), then the retry
+        // also targets /media and gets 200. Verifies the retry mechanism dispatches.
+        let hash = BlossomClient.sha256Hex(Data("retry-test".utf8))
+        let serverBase = "https://legacy-test.example"
+        let mediaPath = "\(serverBase)/media"
+        let headPath = "\(serverBase)/\(hash)"
+
+        var headRequestCount = 0
+        var mediaAuthHeaders: [String] = []
+
+        MockURLProtocol.handlers = [:]
+        MockURLProtocol.handlers[headPath] = { request -> (Data, HTTPURLResponse) in
+            headRequestCount += 1
+            let resp = HTTPURLResponse(
+                url: URL(string: headPath)!,
+                statusCode: 404,
+                httpVersion: "HTTP/1.1",
+                headerFields: nil
+            )!
+            return (Data(), resp)
+        }
+
+        MockURLProtocol.handlers[mediaPath] = { request -> (Data, HTTPURLResponse) in
+            let auth = request.value(forHTTPHeaderField: "Authorization") ?? ""
+            mediaAuthHeaders.append(auth)
+            let isFirstAttempt = mediaAuthHeaders.count == 1
+            let statusCode = isFirstAttempt ? 401 : 200
+            let resp = HTTPURLResponse(
+                url: URL(string: mediaPath)!,
+                statusCode: statusCode,
+                httpVersion: "HTTP/1.1",
+                headerFields: nil
+            )!
+            if statusCode == 200 {
+                let json = #"{"url":"https://cdn.example/\#(hash)","sha256":"\#(hash)","size":10,"type":"text/plain"}"#
+                return (Data(json.utf8), resp)
+            }
+            return (Data(), resp)
+        }
+
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        let mockSession = URLSession(configuration: config)
+        BlossomClient.sessionOverride = mockSession
+        defer {
+            BlossomClient.sessionOverride = nil
+            MockURLProtocol.handlers = [:]
+        }
+
+        let privBytes = Data((1...32).map { UInt8($0) })
+        guard let pubBytes = Secp256k1.publicKey(from: privBytes) else {
+            Issue.record("Pubkey derivation failed"); return
+        }
+        let keypair = Keypair(
+            privkey: privBytes.map { String(format: "%02x", $0) }.joined(),
+            pubkey: pubBytes.map { String(format: "%02x", $0) }.joined()
+        )
+
+        let result = try? await BlossomClient.upload(
+            bytes: Data("retry-test".utf8),
+            mime: "text/plain",
+            servers: [serverBase],
+            keypair: keypair
+        )
+
+        #expect(result != nil, "Upload should succeed after legacy Base64 retry")
+        #expect(headRequestCount == 1, "HEAD check should succeed on first try (BUD-11 auth)")
+        #expect(mediaAuthHeaders.count == 2, "Upload should make 2 media requests (initial BUD-11 + legacy retry)")
+        if mediaAuthHeaders.count >= 2 {
+            let secondPayload = mediaAuthHeaders[1].hasPrefix("Nostr ")
+                ? String(mediaAuthHeaders[1].dropFirst(6)) : ""
+            // Standard Base64 never contains '-' or '_' (those are Base64URL chars)
+            #expect(!secondPayload.contains("-"), "Legacy retry must use standard Base64, not Base64URL")
+            #expect(!secondPayload.contains("_"), "Legacy retry must use standard Base64, not Base64URL")
         }
     }
 }

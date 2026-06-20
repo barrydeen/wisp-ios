@@ -791,11 +791,11 @@ final class ProfileViewModel {
                 switch seg {
                 case .image(let m), .unknownMedia(let m):
                     if seen.insert(m.url).inserted {
-                        items.append(MediaItem(url: m.url, isVideo: false, sourceEventId: target.id))
+                        items.append(MediaItem(url: m.url, isVideo: false, sourceEventId: target.id, authorPubkey: target.pubkey))
                     }
                 case .video(let m):
                     if seen.insert(m.url).inserted {
-                        items.append(MediaItem(url: m.url, isVideo: true, sourceEventId: target.id))
+                        items.append(MediaItem(url: m.url, isVideo: true, sourceEventId: target.id, authorPubkey: target.pubkey))
                     }
                 default: break
                 }
@@ -960,6 +960,10 @@ struct MediaItem: Hashable {
     let url: String
     let isVideo: Bool
     let sourceEventId: String
+    /// Hex pubkey of the note author that owns this media.
+    /// Forwarded to `RetryingAsyncImage` so Blossom fallback can recover
+    /// from the author's kind-10063 server list when the primary URL fails.
+    var authorPubkey: String? = nil
 }
 
 struct SimpleGroup: Hashable {

@@ -283,6 +283,7 @@ private struct DraftRow: View {
                 ZStack(alignment: .bottomTrailing) {
                     RetryingAsyncImage(
                         url: URL(string: url),
+                        authorPubkey: authorPubkey,
                         content: { image in
                             image.resizable()
                                 .aspectRatio(contentMode: .fill)

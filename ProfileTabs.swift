@@ -397,6 +397,7 @@ private struct GalleryTile: View {
         ZStack(alignment: .center) {
             RetryingAsyncImage(
                 url: URL(string: firstUrl),
+                authorPubkey: event.pubkey,
                 content: { img in
                     img.resizable().scaledToFill()
                 },
@@ -475,6 +476,7 @@ private struct MediaTile: View {
         ZStack {
             RetryingAsyncImage(
                 url: URL(string: item.url),
+                authorPubkey: item.authorPubkey,
                 content: { img in
                     img.resizable().scaledToFill()
                 },

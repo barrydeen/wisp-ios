@@ -63,7 +63,8 @@ struct BlossomFallbackFetcherTests {
         let fullURL = "\(server)/\(hash).png"
 
         MockURLProtocol.handlers = [:]
-        BlossomFallbackFetcher.session = makeMockSession()
+        BlossomFallbackFetcher.sessionOverride = makeMockSession()
+        defer { BlossomFallbackFetcher.sessionOverride = nil; MockURLProtocol.handlers = [:] }
         registerMock(url: fullURL, statusCode: 200, body: bodyData)
 
         let authorPubkey = "author-fb-001"
@@ -82,7 +83,8 @@ struct BlossomFallbackFetcherTests {
         let fullURL = "\(server)/\(expectedHash).png"
 
         MockURLProtocol.handlers = [:]
-        BlossomFallbackFetcher.session = makeMockSession()
+        BlossomFallbackFetcher.sessionOverride = makeMockSession()
+        defer { BlossomFallbackFetcher.sessionOverride = nil; MockURLProtocol.handlers = [:] }
         registerMock(url: fullURL, statusCode: 200, body: wrongData)
 
         let authorPubkey = "author-fb-002"
@@ -102,7 +104,8 @@ struct BlossomFallbackFetcherTests {
         let fullURL = "\(server)/\(hash).png"
 
         MockURLProtocol.handlers = [:]
-        BlossomFallbackFetcher.session = makeMockSession()
+        BlossomFallbackFetcher.sessionOverride = makeMockSession()
+        defer { BlossomFallbackFetcher.sessionOverride = nil; MockURLProtocol.handlers = [:] }
         registerMock(url: fullURL, statusCode: 401, body: bodyData)
 
         let authorPubkey = "author-fb-003"
@@ -120,7 +123,8 @@ struct BlossomFallbackFetcherTests {
         let fullURL = "\(server)/\(hash).png"
 
         MockURLProtocol.handlers = [:]
-        BlossomFallbackFetcher.session = makeMockSession()
+        BlossomFallbackFetcher.sessionOverride = makeMockSession()
+        defer { BlossomFallbackFetcher.sessionOverride = nil; MockURLProtocol.handlers = [:] }
         registerMock(url: fullURL, statusCode: 500, body: Data("error".utf8))
 
         let authorPubkey = "author-fb-004"
@@ -140,7 +144,8 @@ struct BlossomFallbackFetcherTests {
         let fullURL = "\(defaultServer)/\(hash).png"
 
         MockURLProtocol.handlers = [:]
-        BlossomFallbackFetcher.session = makeMockSession()
+        BlossomFallbackFetcher.sessionOverride = makeMockSession()
+        defer { BlossomFallbackFetcher.sessionOverride = nil; MockURLProtocol.handlers = [:] }
         registerMock(url: fullURL, statusCode: 200, body: bodyData)
 
         let authorPubkey = "never-seen-unknown-author-key"
@@ -154,7 +159,8 @@ struct BlossomFallbackFetcherTests {
 
     @Test func fetchReturnsNilForURLWithoutHash() async {
         MockURLProtocol.handlers = [:]
-        BlossomFallbackFetcher.session = makeMockSession()
+        BlossomFallbackFetcher.sessionOverride = makeMockSession()
+        defer { BlossomFallbackFetcher.sessionOverride = nil; MockURLProtocol.handlers = [:] }
 
         let noHashURL = URL(string: "https://example.com/image.png")!
         let result = await BlossomFallbackFetcher.fetch(url: noHashURL, authorPubkey: "somepubkey")

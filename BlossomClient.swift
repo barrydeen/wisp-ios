@@ -20,7 +20,12 @@ struct BlossomUploadResult {
 
 enum BlossomClient {
     static let kindAuth = 24242
-    nonisolated(unsafe) static var session: URLSession = .shared
+    #if DEBUG
+    nonisolated(unsafe) static var sessionOverride: URLSession?
+    static var session: URLSession { sessionOverride ?? .shared }
+    #else
+    static var session: URLSession { .shared }
+    #endif
 
     /// Strips all trailing slashes and rejects non-HTTPS URLs.
     /// Returns `nil` for any URL whose scheme is not `https` — auth headers must
@@ -33,7 +38,7 @@ enum BlossomClient {
         // Enforce HTTPS: a signed Nostr auth event transmitted over HTTP is
         // interceptable and replayable by any on-path observer.
         guard result.lowercased().hasPrefix("https://") else { return nil }
-        return result
+        return result.lowercased()
     }
 
     /// Returns `true` if two hosts share the same registrable (base) domain.
