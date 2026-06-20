@@ -20,6 +20,7 @@ struct BlossomUploadResult {
 
 enum BlossomClient {
     static let kindAuth = 24242
+    nonisolated(unsafe) static var session: URLSession = .shared
 
     /// Strips all trailing slashes and rejects non-HTTPS URLs.
     /// Returns `nil` for any URL whose scheme is not `https` — auth headers must
@@ -326,7 +327,7 @@ enum BlossomClient {
         req.httpBody = bytes
         req.timeoutInterval = 120
 
-        let (data, resp) = try await URLSession.shared.data(for: req)
+        let (data, resp) = try await session.data(for: req)
         guard let http = resp as? HTTPURLResponse else { throw BlossomError.invalidResponse }
         if http.statusCode == 401 {
             throw BlossomError.authRejected
@@ -363,7 +364,7 @@ enum BlossomClient {
         // for the entire HEAD phase (~5 s total).
         req.timeoutInterval = 5
 
-        let (_, resp) = try await URLSession.shared.data(for: req)
+        let (_, resp) = try await session.data(for: req)
         guard let http = resp as? HTTPURLResponse else { return false }
         if http.statusCode == 401 { throw BlossomError.authRejected }
         return (200..<300).contains(http.statusCode)
@@ -448,7 +449,7 @@ enum BlossomClient {
         req.httpBody = bodyData
         req.timeoutInterval = 30
 
-        let (_, resp) = try await URLSession.shared.data(for: req)
+        let (_, resp) = try await session.data(for: req)
         guard let http = resp as? HTTPURLResponse else { return nil }
         if http.statusCode == 404 || http.statusCode == 405 { return nil }
         if http.statusCode == 401 { throw BlossomError.authRejected }

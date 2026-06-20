@@ -313,4 +313,136 @@ struct BlossomClientTests {
             #expect(recovered == original, "Round-trip failed for: \(json)")
         }
     }
+
+    // MARK: - makeAuthHeader tag structure (BUD-11)
+
+    @Test func makeAuthHeaderContainsCorrectTags() async {
+        // Generate a valid 32-byte privkey and derive the x-only pubkey
+        let privBytes = Data((1...32).map { UInt8($0) })
+        guard let pubBytes = Secp256k1.publicKey(from: privBytes) else {
+            Issue.record("Secp256k1 failed to derive pubkey from test privkey"); return
+        }
+        let keypair = Keypair(privkey: privBytes.map { String(format: "%02x", $0) }.joined(),
+                              pubkey: pubBytes.map { String(format: "%02x", $0) }.joined())
+        let hash = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+
+        for action in ["upload", "media", "get"] {
+            guard let header = await BlossomClient.makeAuthHeader(keypair: keypair, action: action, sha256Hex: hash) else {
+                Issue.record("makeAuthHeader returned nil for action '\(action)'"); return
+            }
+            #expect(header.hasPrefix("Nostr "), "Header must use 'Nostr ' prefix")
+            let payload = String(header.dropFirst(6))
+            let b64url = payload
+                .replacingOccurrences(of: "-", with: "+")
+                .replacingOccurrences(of: "_", with: "/")
+            let pad = 4 - (b64url.count % 4)
+            let padded = pad < 4 ? b64url + String(repeating: "=", count: pad) : b64url
+            guard let decoded = Data(base64Encoded: padded) else {
+                Issue.record("Failed to decode Base64URL payload for action '\(action)'"); return
+            }
+            guard let json = try? JSONSerialization.jsonObject(with: decoded) as? [String: Any] else {
+                Issue.record("Decoded payload is not valid JSON for action '\(action)'"); return
+            }
+            #expect(json["kind"] as? Int == 24242, "kind must be 24242 for action '\(action)'")
+            #expect((json["content"] as? String)?.hasPrefix("Blossom \(action)") == true,
+                    "content must start with 'Blossom \(action)'")
+            guard let tags = json["tags"] as? [[String]] else {
+                Issue.record("tags missing or not [[String]] for action '\(action)'"); return
+            }
+            #expect(tags.contains { $0 == ["t", action] }, "tags must contain [\"t\", \"\(action)\"]")
+            #expect(tags.contains { $0 == ["x", hash] }, "tags must contain [\"x\", hash]")
+            #expect(tags.contains { $0.count == 2 && $0[0] == "expiration" && Int($0[1]) != nil },
+                    "tags must contain [\"expiration\", <int>]")
+        }
+    }
+
+    @Test func makeAuthHeaderReturnsNilForInvalidPrivkey() async {
+        let keypair = Keypair(privkey: "", pubkey: "deadbeef")
+        let result = await BlossomClient.makeAuthHeader(keypair: keypair, action: "upload", sha256Hex: "abc")
+        #expect(result == nil, "Empty privkey must produce nil (no signing possible)")
+    }
+
+    @Test func makeAuthHeaderUsesBase64URLEncoding() async {
+        let privBytes = Data((1...32).map { UInt8($0 + 100) })
+        guard let pubBytes = Secp256k1.publicKey(from: privBytes) else {
+            Issue.record("Pubkey derivation failed"); return
+        }
+        let keypair = Keypair(privkey: privBytes.map { String(format: "%02x", $0) }.joined(),
+                              pubkey: pubBytes.map { String(format: "%02x", $0) }.joined())
+        guard let header = await BlossomClient.makeAuthHeader(keypair: keypair, action: "upload", sha256Hex: "abc") else {
+            Issue.record("makeAuthHeader returned nil"); return
+        }
+        let payload = String(header.dropFirst(6))
+        #expect(!payload.contains("+"), "Base64URL must not contain '+'")
+        #expect(!payload.contains("/"), "Base64URL must not contain '/'")
+        #expect(!payload.contains("="), "Base64URL must not contain '=' (padding)")
+    }
+
+    // MARK: - Upload error paths
+
+    @Test func uploadThrowsForEmptyServerList() async {
+        let privBytes = Data((1...32).map { UInt8($0) })
+        guard let pubBytes = Secp256k1.publicKey(from: privBytes) else {
+            Issue.record("Pubkey derivation failed"); return
+        }
+        let keypair = Keypair(privkey: privBytes.map { String(format: "%02x", $0) }.joined(),
+                              pubkey: pubBytes.map { String(format: "%02x", $0) }.joined())
+
+        do {
+            _ = try await BlossomClient.upload(bytes: Data("test".utf8), mime: "text/plain", servers: [], keypair: keypair)
+            Issue.record("Expected allServersFailed for empty server list")
+        } catch let error as BlossomError {
+            if case .allServersFailed(let msg) = error {
+                #expect(msg == "No HTTPS servers available")
+            } else {
+                Issue.record("Expected allServersFailed, got \(error)")
+            }
+        } catch {
+            Issue.record("Unexpected error type: \(error)")
+        }
+    }
+
+    @Test func uploadThrowsWhenAllServersAreHTTP() async {
+        let privBytes = Data((1...32).map { UInt8($0) })
+        guard let pubBytes = Secp256k1.publicKey(from: privBytes) else {
+            Issue.record("Pubkey derivation failed"); return
+        }
+        let keypair = Keypair(privkey: privBytes.map { String(format: "%02x", $0) }.joined(),
+                              pubkey: pubBytes.map { String(format: "%02x", $0) }.joined())
+        let servers = ["http://evil.com", "http://attacker.local"]
+
+        do {
+            _ = try await BlossomClient.upload(bytes: Data("test".utf8), mime: "text/plain", servers: servers, keypair: keypair)
+            Issue.record("Expected allServersFailed for HTTP-only servers")
+        } catch let error as BlossomError {
+            if case .allServersFailed(let msg) = error {
+                #expect(msg == "No HTTPS servers available", "Must reject all HTTP servers")
+            } else {
+                Issue.record("Expected allServersFailed, got \(error)")
+            }
+        } catch {
+            Issue.record("Unexpected error type: \(error)")
+        }
+    }
+
+    @Test func uploadRejectsMixedHTTPAndEmptyServers() async {
+        let privBytes = Data((1...32).map { UInt8($0) })
+        guard let pubBytes = Secp256k1.publicKey(from: privBytes) else {
+            Issue.record("Pubkey derivation failed"); return
+        }
+        let keypair = Keypair(privkey: privBytes.map { String(format: "%02x", $0) }.joined(),
+                              pubkey: pubBytes.map { String(format: "%02x", $0) }.joined())
+        let servers = ["http://evil.com", "", "not-a-url"]
+
+        do {
+            _ = try await BlossomClient.upload(bytes: Data("test".utf8), mime: "text/plain", servers: servers, keypair: keypair)
+            Issue.record("Expected allServersFailed for mixed invalid servers")
+        } catch let error as BlossomError {
+            if case .allServersFailed(let msg) = error {
+                #expect(msg == "No HTTPS servers available")
+            }
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+    }
 }

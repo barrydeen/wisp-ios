@@ -57,4 +57,15 @@ struct ContentParserHashTests {
     @Test func returnsNilForInvalidURL() {
         #expect(ContentParser.sha256Hash(fromUrl: "not a url") == nil)
     }
+
+    @Test func extractsHashCaseInsensitively() {
+        // .caseInsensitive regex allows uppercase hex in the path; result is lowercased.
+        let upperHash = hash.uppercased()
+        let url = "https://example.com/media/\(upperHash).png"
+        #expect(ContentParser.sha256Hash(fromUrl: url) == hash)
+        // Mixed case
+        let mixedHash = "423A2423E536349B9ADB8eaa1835F230B7A42798C5A181727B1B4601F96E0E91"
+        let url2 = "https://example.com/\(mixedHash)"
+        #expect(ContentParser.sha256Hash(fromUrl: url2) == hash)
+    }
 }

@@ -19,6 +19,8 @@ import os
 /// enable full BUD-03 multi-server fallback.
 enum BlossomFallbackFetcher {
 
+    nonisolated(unsafe) static var session: URLSession = .shared
+
     /// Maximum concurrent fallback GETs per fetch call.
     /// Matches `BlossomClient.mirrorMaxConcurrent` — consistent cap across all Blossom
     /// network operations to prevent connection/bandwidth bursts during feed scroll.
@@ -110,7 +112,7 @@ enum BlossomFallbackFetcher {
         req.httpMethod = "GET"
         req.timeoutInterval = 15
 
-        let (data, resp) = try await URLSession.shared.data(for: req)
+        let (data, resp) = try await session.data(for: req)
         guard let http = resp as? HTTPURLResponse else {
             throw URLError(.cannotParseResponse)
         }
