@@ -8,6 +8,10 @@
 	</array>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Wisp saves images and videos from posts to your Photos library.</string>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>lightning</string>
+	</array>
 	<key>GIDClientID</key>
 	<string>410412439051-tj9a37iln81vlsmqtun5nfmo1k8h4qme.apps.googleusercontent.com</string>
 	<key>CFBundleURLTypes</key>
