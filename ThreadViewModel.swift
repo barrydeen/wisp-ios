@@ -1220,10 +1220,10 @@ final class ThreadViewModel {
 
     /// DFS preorder walk from the focal through every known descendant, over the
     /// pre-built (oldest-first per parent) adjacency map from `rebuildSlices` so
-    /// the tree isn't regrouped a second time. Blocked rows and hidden-spam
-    /// authors drop with their entire subtree — same rule we apply to the direct
-    /// list — so a muted branch doesn't leave orphaned grandchildren stranded at
-    /// depth 0.
+    /// the tree isn't regrouped a second time. Blocked rows render a placeholder
+    /// and the walk continues into their children (same as WoT-hidden), so the
+    /// user's own replies nested under a blocked note are never silently dropped.
+    /// Spam-hidden authors drop with their subtree.
     private func buildNestedReplies(childrenByParent: [String: [NostrEvent]]) -> [NestedReplyRow] {
         var result: [NestedReplyRow] = []
         var visited: Set<String> = [focalEventId]
@@ -1232,10 +1232,18 @@ final class ThreadViewModel {
             guard let kids = childrenByParent[parentId] else { return }
             for kid in kids {
                 guard visited.insert(kid.id).inserted else { continue }
-                if blockedEventIds.contains(kid.id) { continue }
+                if blockedEventIds.contains(kid.id) {
+                    // Render the blocked placeholder and continue the walk so
+                    // the user's own replies nested under a blocked note remain
+                    // visible. Matches the WoT-hidden behavior below and the
+                    // direct-reply list (which also keeps blocked rows).
+                    result.append(NestedReplyRow(row: makeRow(kid), depth: depth))
+                    walk(parentId: kid.id, depth: depth + 1)
+                    continue
+                }
                 // WoT-hidden replies drop with their subtree, same rule as
-                // blocked/spam branches — UNLESS a visible (qualified / own)
-                // reply hangs below: then the hidden node renders the neutral
+                // spam branches — UNLESS a visible (qualified / own) reply
+                // hangs below: then the hidden node renders the neutral
                 // placeholder and the walk continues, so a stranger replying
                 // mid-chain can't sever the user's own conversation.
                 if wotHiddenEventIds.contains(kid.id) {
