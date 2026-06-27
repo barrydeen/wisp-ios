@@ -577,7 +577,6 @@ private struct ArticleInlineText: View {
             codeBackground: UIColor(Color.wispSurfaceVariant),
             emojiVersion: emojiCache.version
         )
-        .fixedSize(horizontal: false, vertical: true)
     }
 }
 
@@ -592,21 +591,49 @@ private struct ArticleInlineTextRepresentable: UIViewRepresentable {
     let emojiVersion: Int
 
     func makeUIView(context: Context) -> UITextView {
-        let tv = UITextView()
+        // Explicit TextKit 1 stack (NSLayoutManager-backed container). iOS 16+
+        // would otherwise default a `UITextView(textContainer: nil)` to TextKit
+        // 2, whose `sizeThatFits` lays out the whole document synchronously and
+        // is pathologically slow on long article bodies. `widthTracksTextView`
+        // lets the container wrap to the width SwiftUI proposes. Same approach
+        // as `ContentSizingTextView` in RichInlineTextView.
+        let storage = NSTextStorage()
+        let layout = NSLayoutManager()
+        storage.addLayoutManager(layout)
+        let container = NSTextContainer(size: CGSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
+        container.widthTracksTextView = true
+        container.lineFragmentPadding = 0
+        layout.addTextContainer(container)
+
+        let tv = UITextView(frame: .zero, textContainer: container)
         tv.backgroundColor = .clear
         tv.isEditable = false
         // Selectable so `.link` runs respond to taps; editing stays off.
         tv.isSelectable = true
         tv.isScrollEnabled = false
         tv.textContainerInset = .zero
-        tv.textContainer.lineFragmentPadding = 0
         tv.dataDetectorTypes = []
         // Keep the attributed string's own link styling (wispPrimary +
         // underline) instead of the tint-colored UIKit default.
         tv.linkTextAttributes = [:]
-        tv.setContentCompressionResistancePriority(.required, for: .vertical)
-        tv.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         return tv
+    }
+
+    /// Owns sizing via SwiftUI's proposed width instead of `intrinsicContentSize`
+    /// — the latter measures an unconstrained container as one infinite line,
+    /// which truncated every block to a single line. Mirrors
+    /// `RichInlineTextView.sizeThatFits`.
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize? {
+        let proposedWidth = proposal.width
+        let resolvedWidth: CGFloat
+        if let w = proposedWidth, w.isFinite, w > 0 {
+            resolvedWidth = w
+        } else {
+            resolvedWidth = max(1, UIScreen.main.bounds.width - 32)
+        }
+        uiView.textContainer.size = CGSize(width: resolvedWidth, height: CGFloat.greatestFiniteMagnitude)
+        let size = uiView.sizeThatFits(CGSize(width: resolvedWidth, height: CGFloat.greatestFiniteMagnitude))
+        return CGSize(width: resolvedWidth, height: ceil(size.height))
     }
 
     func updateUIView(_ uiView: UITextView, context: Context) {

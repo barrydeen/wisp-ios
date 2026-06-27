@@ -454,6 +454,54 @@ struct PostCardView: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 14)
                 .padding(.bottom, 12)
+            } else if displayEvent.kind == 30023 {
+                // Long-form article: render the rich preview card (hero,
+                // title, summary) that taps through to the full reader,
+                // instead of dumping the raw markdown body. The author row
+                // (above) and action bar / details panel (below) come from
+                // PostCardView's shared chrome — mirrors Android's
+                // FeedArticleItem.
+                VStack(alignment: .leading, spacing: 8) {
+                    ArticleFeedPreview(event: displayEvent)
+
+                    let effectiveZappers = repoBox.counts.zappers.isEmpty ? (engagement?.zappers ?? []) : repoBox.counts.zappers
+                    if let topZapper = effectiveZappers.max(by: { $0.sats < $1.sats }) {
+                        TopZapperPill(
+                            zapper: topZapper,
+                            profile: profiles[topZapper.pubkey] ?? ProfileRepository.shared.get(topZapper.pubkey)
+                        ) {
+                            onProfileTap?(topZapper.pubkey)
+                        }
+                    }
+
+                    if !activeUserIsWatchOnly { actionBar }
+
+                    if expanded {
+                        NoteDetailsPanel(
+                            zappers: repoBox.counts.zappers.isEmpty ? (engagement?.zappers ?? []) : repoBox.counts.zappers,
+                            reactors: repoBox.counts.reactors.isEmpty ? (engagement?.reactors ?? []) : repoBox.counts.reactors,
+                            reposters: repoBox.counts.reposters.isEmpty ? (engagement?.reposters ?? []) : repoBox.counts.reposters,
+                            quoters: repoBox.counts.quoters.isEmpty ? (engagement?.quoters ?? []) : repoBox.counts.quoters,
+                            relays: combinedRelays(for: displayEvent.id),
+                            tags: displayEvent.tags,
+                            createdAt: displayEvent.createdAt,
+                            pollEvent: nil,
+                            profiles: profiles,
+                            onProfileTap: onProfileTap,
+                            onNoteTap: onNoteTap
+                        )
+                        .task(id: displayEvent.id) {
+                            engagementRepo.fetchQuoters(
+                                eventId: displayEvent.id,
+                                authorPubkey: displayEvent.pubkey
+                            )
+                        }
+                        .transition(.opacity)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 14)
+                .padding(.bottom, 12)
             } else {
             VStack(alignment: .leading, spacing: 8) {
                 if !displayEvent.content.isEmpty || !displayEvent.tags.isEmpty {
@@ -653,6 +701,11 @@ struct PostCardView: View {
                 // Deferred: markVisible can seed an @Observable tally box this
                 // card reads — avoid mutating observed state during the update.
                 Task { @MainActor in PollTallyRepository.shared.markVisible(pollEvent: displayed) }
+            }
+            if displayed.kind == 30023 {
+                // Seed the article cache from the in-hand event so tapping the
+                // preview opens the full reader without a relay round-trip.
+                ArticleCache.shared.store(displayed)
             }
         }
         // Tag-only NIP-18 repost: `content` is empty so the inline JSON path
