@@ -460,48 +460,9 @@ struct PostCardView: View {
                 // instead of dumping the raw markdown body. The author row
                 // (above) and action bar / details panel (below) come from
                 // PostCardView's shared chrome — mirrors Android's
-                // FeedArticleItem.
-                VStack(alignment: .leading, spacing: 8) {
-                    ArticleFeedPreview(event: displayEvent)
-
-                    let effectiveZappers = repoBox.counts.zappers.isEmpty ? (engagement?.zappers ?? []) : repoBox.counts.zappers
-                    if let topZapper = effectiveZappers.max(by: { $0.sats < $1.sats }) {
-                        TopZapperPill(
-                            zapper: topZapper,
-                            profile: profiles[topZapper.pubkey] ?? ProfileRepository.shared.get(topZapper.pubkey)
-                        ) {
-                            onProfileTap?(topZapper.pubkey)
-                        }
-                    }
-
-                    if !activeUserIsWatchOnly { actionBar }
-
-                    if expanded {
-                        NoteDetailsPanel(
-                            zappers: repoBox.counts.zappers.isEmpty ? (engagement?.zappers ?? []) : repoBox.counts.zappers,
-                            reactors: repoBox.counts.reactors.isEmpty ? (engagement?.reactors ?? []) : repoBox.counts.reactors,
-                            reposters: repoBox.counts.reposters.isEmpty ? (engagement?.reposters ?? []) : repoBox.counts.reposters,
-                            quoters: repoBox.counts.quoters.isEmpty ? (engagement?.quoters ?? []) : repoBox.counts.quoters,
-                            relays: combinedRelays(for: displayEvent.id),
-                            tags: displayEvent.tags,
-                            createdAt: displayEvent.createdAt,
-                            pollEvent: nil,
-                            profiles: profiles,
-                            onProfileTap: onProfileTap,
-                            onNoteTap: onNoteTap
-                        )
-                        .task(id: displayEvent.id) {
-                            engagementRepo.fetchQuoters(
-                                eventId: displayEvent.id,
-                                authorPubkey: displayEvent.pubkey
-                            )
-                        }
-                        .transition(.opacity)
-                    }
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, 14)
-                .padding(.bottom, 12)
+                // FeedArticleItem. Extracted to a helper so the main `body`
+                // builder stays under the Swift type-checker's complexity cap.
+                articleBody(displayEvent)
             } else {
             VStack(alignment: .leading, spacing: 8) {
                 if !displayEvent.content.isEmpty || !displayEvent.tags.isEmpty {
@@ -1024,6 +985,56 @@ struct PostCardView: View {
 
     private func avatar(picture: String?) -> some View {
         CachedAvatarView(url: picture, size: 40)
+    }
+
+    // MARK: - Article body
+
+    /// Long-form (kind-30023) content region: the rich preview card plus the
+    /// shared top-zapper pill, action bar, and details panel. Split out of the
+    /// main `body` builder to keep that expression under the type-checker cap.
+    @ViewBuilder
+    private func articleBody(_ displayEvent: NostrEvent) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ArticleFeedPreview(event: displayEvent)
+
+            let effectiveZappers = repoBox.counts.zappers.isEmpty ? (engagement?.zappers ?? []) : repoBox.counts.zappers
+            if let topZapper = effectiveZappers.max(by: { $0.sats < $1.sats }) {
+                TopZapperPill(
+                    zapper: topZapper,
+                    profile: profiles[topZapper.pubkey] ?? ProfileRepository.shared.get(topZapper.pubkey)
+                ) {
+                    onProfileTap?(topZapper.pubkey)
+                }
+            }
+
+            if !activeUserIsWatchOnly { actionBar }
+
+            if expanded {
+                NoteDetailsPanel(
+                    zappers: repoBox.counts.zappers.isEmpty ? (engagement?.zappers ?? []) : repoBox.counts.zappers,
+                    reactors: repoBox.counts.reactors.isEmpty ? (engagement?.reactors ?? []) : repoBox.counts.reactors,
+                    reposters: repoBox.counts.reposters.isEmpty ? (engagement?.reposters ?? []) : repoBox.counts.reposters,
+                    quoters: repoBox.counts.quoters.isEmpty ? (engagement?.quoters ?? []) : repoBox.counts.quoters,
+                    relays: combinedRelays(for: displayEvent.id),
+                    tags: displayEvent.tags,
+                    createdAt: displayEvent.createdAt,
+                    pollEvent: nil,
+                    profiles: profiles,
+                    onProfileTap: onProfileTap,
+                    onNoteTap: onNoteTap
+                )
+                .task(id: displayEvent.id) {
+                    engagementRepo.fetchQuoters(
+                        eventId: displayEvent.id,
+                        authorPubkey: displayEvent.pubkey
+                    )
+                }
+                .transition(.opacity)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 14)
+        .padding(.bottom, 12)
     }
 
     // MARK: - Action Bar

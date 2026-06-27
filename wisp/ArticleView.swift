@@ -228,7 +228,10 @@ struct ArticleView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 6)
 
-        case .image(let url, let alt):
+        case .image(let url, _):
+            // The markdown alt text (`![alt](url)`) is intentionally not shown
+            // as a caption — in practice it's a generic placeholder like
+            // "image", not a real caption. Revisit if true captions are added.
             VStack(alignment: .leading, spacing: 0) {
                 if let imageUrl = URL(string: url) {
                     RetryingAsyncImage(
@@ -255,12 +258,6 @@ struct ArticleView: View {
                                 )
                         }
                     )
-                }
-                if let alt, !alt.isEmpty, alt != url {
-                    Text(alt)
-                        .font(AppFont.bodySmall)
-                        .foregroundStyle(Color.wispOnSurfaceVariant)
-                        .padding(.top, 4)
                 }
             }
             .padding(.horizontal, 16)
