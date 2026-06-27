@@ -191,7 +191,7 @@ struct SidebarDrawerView: View {
 
     private var headerSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top) {
+            HStack(alignment: .center) {
                 Button(action: handleAvatarTap) {
                     CachedAvatarView(url: profile?.picture, size: 64, alwaysLoad: true)
                 }
@@ -222,7 +222,7 @@ struct SidebarDrawerView: View {
                             .padding(.horizontal, 10)
                             .padding(.vertical, 4)
                             .background(Color.wispSurfaceVariant, in: Capsule())
-                        Image(systemName: accountsExpanded ? "chevron.up" : "chevron.down")
+                        Image(systemName: accountsExpanded ? "chevron.down" : "chevron.right")
                             .font(.system(size: 10, weight: .semibold))
                             .foregroundStyle(Color.secondary)
                     }
@@ -277,14 +277,6 @@ struct SidebarDrawerView: View {
                         lineLimit: 1
                     )
 
-                    Button {
-                        accountsExpanded.toggle()
-                    } label: {
-                        Image(systemName: accountsExpanded ? "chevron.up" : "chevron.down")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
                 }
 
                 Text(subtitleText)
