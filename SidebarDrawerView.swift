@@ -197,6 +197,39 @@ struct SidebarDrawerView: View {
                 }
                 .buttonStyle(.plain)
 
+            // Account indicator: + circle (solo) or + N pill+chevron (multiple)
+            let otherCount = accounts.count - 1
+            if otherCount <= 0 {
+                Button(action: onAddAccount) {
+                    ZStack {
+                        Circle()
+                            .fill(Color.wispSurfaceVariant)
+                            .frame(width: 26, height: 26)
+                        Image(systemName: "plus")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Color.secondary)
+                    }
+                }
+                .buttonStyle(.plain)
+            } else {
+                Button {
+                    withAnimation { accountsExpanded.toggle() }
+                } label: {
+                    HStack(spacing: 2) {
+                        Text("+ \(otherCount)")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(Color.secondary)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 4)
+                            .background(Color.wispSurfaceVariant, in: Capsule())
+                        Image(systemName: accountsExpanded ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(Color.secondary)
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+
                 Spacer()
 
                 HStack(spacing: 4) {
