@@ -222,13 +222,15 @@ struct ThreadView: View {
                 ForEach(viewModel.hiddenSpamReplies) { row in
                     VStack(alignment: .leading, spacing: 6) {
                         replyRow(row)
-                        Button("Mark not spam") {
-                            viewModel.revealHiddenSpamAuthor(row.event.pubkey)
+                        if !row.isBlocked {
+                            Button("Mark not spam") {
+                                viewModel.revealHiddenSpamAuthor(row.event.pubkey)
+                            }
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(Color.wispPrimary)
+                            .padding(.leading, 16)
+                            .padding(.bottom, 4)
                         }
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(Color.wispPrimary)
-                        .padding(.leading, 16)
-                        .padding(.bottom, 4)
                     }
                     Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
                 }
