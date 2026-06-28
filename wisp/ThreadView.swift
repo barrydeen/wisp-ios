@@ -81,6 +81,8 @@ struct ThreadView: View {
                                 nestedReplyRow(row).id(row.id)
                             case .wotGroup(let count, let depth, _):
                                 nestedWotGroupRow(count: count, depth: depth)
+                            case .blockedGroup(let count, let depth, _):
+                                nestedBlockedGroupRow(count: count, depth: depth)
                             }
                         }
 
@@ -379,6 +381,31 @@ struct ThreadView: View {
         }
     }
 
+    @ViewBuilder
+    private func nestedBlockedGroupRow(count: Int, depth: Int) -> some View {
+        ZStack(alignment: .leading) {
+            ReplyConnectorShape(cornerRadius: 8, showVertical: depth > 0)
+                .stroke(
+                    Color.wispSurfaceVariant.opacity(0.5),
+                    style: StrokeStyle(lineWidth: 1, lineCap: .butt, lineJoin: .round)
+                )
+                .padding(.leading, depth > 0 ? indentationWidth(for: depth) - 8 : indentationWidth(for: depth))
+            HStack(spacing: 8) {
+                Image(systemName: "nosign")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.tertiary)
+                Text(count == 1 ? "Post from blocked user" : "\(count) posts from blocked users")
+                    .font(.subheadline)
+                    .foregroundStyle(.tertiary)
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.leading, indentationWidth(for: depth))
+        }
+    }
+
     /// Per-level indent. Smaller step + cap of 5 keeps deep chains readable
     /// on phones without compressing the post body.
     private func indentationWidth(for depth: Int) -> CGFloat {
@@ -388,10 +415,12 @@ struct ThreadView: View {
     private enum NestedReplyDisplayItem: Identifiable {
         case single(NestedReplyRow)
         case wotGroup(count: Int, depth: Int, id: String)
+        case blockedGroup(count: Int, depth: Int, id: String)
         var id: String {
             switch self {
             case .single(let r): return r.id
             case .wotGroup(_, _, let gid): return "wot-\(gid)"
+            case .blockedGroup(_, _, let gid): return "blocked-\(gid)"
             }
         }
     }
@@ -402,12 +431,29 @@ struct ThreadView: View {
         var i = 0
         while i < items.count {
             let item = items[i]
-            if item.row.isWotHidden {
+            // Blocked is checked before WoT to match `replyRow`'s precedence
+            // (a row flagged both renders the blocked placeholder). Each run
+            // collapses only consecutive same-depth rows of the same kind, so
+            // a blocked note that has a visible reply nested beneath it isn't
+            // grouped away — the deeper child interrupts the run and the
+            // blocked parent renders on its own.
+            if item.row.isBlocked {
                 let groupDepth = item.depth
                 let groupId = item.id
                 var count = 1
                 var j = i + 1
-                while j < items.count && items[j].row.isWotHidden && items[j].depth == groupDepth {
+                while j < items.count && items[j].row.isBlocked && items[j].depth == groupDepth {
+                    count += 1
+                    j += 1
+                }
+                result.append(.blockedGroup(count: count, depth: groupDepth, id: groupId))
+                i = j
+            } else if item.row.isWotHidden {
+                let groupDepth = item.depth
+                let groupId = item.id
+                var count = 1
+                var j = i + 1
+                while j < items.count && items[j].row.isWotHidden && !items[j].row.isBlocked && items[j].depth == groupDepth {
                     count += 1
                     j += 1
                 }
