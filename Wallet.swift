@@ -46,6 +46,14 @@ struct WalletTransaction: Identifiable, Codable {
         case incoming
         case outgoing
     }
+
+    /// On-chain hook. Spark / NWC transactions surfaced today are all
+    /// Lightning, so this is hardwired `false`. The transaction detail drawer
+    /// branches on it — once an on-chain signal is wired into the wallet
+    /// backends, flipping this lights up the "On-chain" type label, the
+    /// "Transaction ID" relabel, and the mempool.space link with no further
+    /// UI work. On-chain payments arrive in a follow-up PR.
+    var isOnchain: Bool { false }
 }
 
 /// On-disk cache of last-known wallet state per pubkey. Lets the wallet tab
