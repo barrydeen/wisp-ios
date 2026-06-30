@@ -183,19 +183,8 @@ private struct TransactionDetailPanel: View {
                 }
                 .buttonStyle(.plain)
             }
-            // On-chain hook: lights up automatically once
-            // `WalletTransaction.isOnchain` reports a real value. Inert today.
-            if tx.isOnchain, let url = URL(string: "https://mempool.space/tx/\(tx.paymentHash)") {
-                Link(destination: url) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "arrow.up.right.square")
-                            .font(.system(size: 13, weight: .medium))
-                        Text("View on mempool.space")
-                            .font(.caption.weight(.medium))
-                    }
-                    .foregroundStyle(Color.wispZapColor)
-                }
-            }
+            // mempool.space link — follow-up PR once Spark surfaces a real
+            // Bitcoin txid (separate from the internal UUID in paymentHash).
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
