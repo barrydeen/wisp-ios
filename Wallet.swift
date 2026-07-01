@@ -46,6 +46,14 @@ struct WalletTransaction: Identifiable, Codable {
         case incoming
         case outgoing
     }
+
+    /// True when the transaction is on-chain rather than Lightning.
+    /// Spark surfaces on-chain transactions with a UUID-formatted ID
+    /// (e.g. `019f158d-5be2-7f03-814c-5e5fdf312c8e`) while Lightning
+    /// payment hashes are always 64-char hex with no hyphens. NWC
+    /// transactions are always Lightning. This heuristic covers both
+    /// backends without requiring an explicit flag from either.
+    var isOnchain: Bool { paymentHash.contains("-") }
 }
 
 /// On-disk cache of last-known wallet state per pubkey. Lets the wallet tab
