@@ -570,115 +570,132 @@ struct MainView: View {
     }
 
 
+    /// The Home tab's navigation stack. Rendered ALWAYS (see `mainShell`),
+    /// merely hidden when another tab is active, so its feed `ScrollView` is
+    /// never torn down on a tab switch. SwiftUI preserves the scroll position of
+    /// views it doesn't destroy, so the user returns to exactly where they were
+    /// — with zero scroll tracking and nothing added to the scroll hot path.
+    private var homeTab: some View {
+        NavigationStack(path: $feedPath) {
+            ZStack(alignment: .bottomTrailing) {
+                feedContent
+                if !drawerOpen && !isWatchOnly {
+                    ComposeFAB { showCompose = true }
+                        .padding(.trailing, 18)
+                        .padding(.bottom, 32 + (audioPlayer.currentTrack != nil ? MiniAudioPlayerView.collapsedHeight : 0))
+                        .opacity(feedFabOpacity)
+                        .animation(.easeInOut(duration: 0.2), value: feedFabOpacity)
+                        .animation(.smooth(duration: 0.22), value: audioPlayer.currentTrack != nil)
+                }
+            }
+            // Frosted unified top header — same `.regularMaterial` look as
+            // ProfileView. Inside the NavigationStack so it auto-disappears
+            // when the user pushes a destination, and content scrolls under
+            // it instead of starting below an opaque bar.
+            .safeAreaInset(edge: .top, spacing: 0) {
+                topBar.background(
+                    LinearGradient(
+                        colors: [
+                            Color.wispBackground.opacity(0.92),
+                            Color.wispBackground.opacity(0.65)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+            }
+            .navigationDestination(for: ProfileRoute.self) { route in
+                ProfileView(
+                    pubkey: route.pubkey,
+                    activeUserPubkey: keypair.pubkey,
+                    onProfileTap: { pk in feedPath.append(ProfileRoute(pubkey: pk)) },
+                    onNoteTap: { eid in feedPath.append(ThreadRoute(eventId: eid, authorPubkey: route.pubkey)) },
+                    onHashtagTap: { tag in feedPath.append(HashtagFeedRoute(tag: tag)) },
+                    path: $feedPath
+                )
+            }
+            .navigationDestination(for: ThreadRoute.self) { route in
+                ThreadView(
+                    seedEventId: route.eventId,
+                    authorHint: route.authorPubkey,
+                    keypair: keypair,
+                    path: $feedPath,
+                    chain: $feedThreadChain,
+                    scrollToId: route.scrollToId
+                )
+            }
+            .navigationDestination(for: LiveStreamRoute.self) { route in
+                LiveStreamView(route: route, keypair: keypair)
+                    .environment(walletStore)
+            }
+            .navigationDestination(for: ArticleRoute.self) { route in
+                ArticleView(route: route, keypair: keypair, path: $feedPath)
+            }
+            .navigationDestination(for: HashtagFeedRoute.self) { route in
+                hashtagFeedView(for: route)
+            }
+            .navigationDestination(for: PeopleListFeedRoute.self) { route in
+                PeopleListFeedView(
+                    keypair: keypair,
+                    dTag: route.dTag,
+                    onProfileTap: { pubkey in
+                        feedPath.append(ProfileRoute(pubkey: pubkey))
+                    },
+                    onNoteTap: { eventId in
+                        feedPath.append(ThreadRoute(eventId: eventId, authorPubkey: ""))
+                    },
+                    onHashtagTap: { tag in
+                        feedPath.append(HashtagFeedRoute(tag: tag))
+                    }
+                )
+            }
+            .navigationDestination(for: NoteListFeedRoute.self) { route in
+                NoteListFeedView(
+                    keypair: keypair,
+                    dTag: route.dTag,
+                    onProfileTap: { pubkey in
+                        feedPath.append(ProfileRoute(pubkey: pubkey))
+                    },
+                    onNoteTap: { eventId in
+                        feedPath.append(ThreadRoute(eventId: eventId, authorPubkey: ""))
+                    },
+                    onHashtagTap: { tag in
+                        feedPath.append(HashtagFeedRoute(tag: tag))
+                    }
+                )
+            }
+            .navigationDestination(for: TrendingFeedRoute.self) { _ in
+                TrendingFeedView(
+                    keypair: keypair,
+                    onProfileTap: { pubkey in
+                        feedPath.append(ProfileRoute(pubkey: pubkey))
+                    },
+                    onNoteTap: { eventId in
+                        feedPath.append(ThreadRoute(eventId: eventId, authorPubkey: ""))
+                    },
+                    onHashtagTap: { tag in
+                        feedPath.append(HashtagFeedRoute(tag: tag))
+                    }
+                )
+            }
+            .toolbar(.hidden, for: .navigationBar)
+        }
+    }
+
     private var mainShell: some View {
         VStack(spacing: 0) {
             ZStack {
+                // Home is kept mounted (hidden) rather than switched away, so
+                // its feed ScrollView survives tab changes and SwiftUI restores
+                // the scroll position for free. See `homeTab`.
+                homeTab
+                    .opacity(selectedTab == .home ? 1 : 0)
+                    .allowsHitTesting(selectedTab == .home)
+                    .accessibilityHidden(selectedTab != .home)
+
                 switch selectedTab {
                 case .home:
-                    NavigationStack(path: $feedPath) {
-                        ZStack(alignment: .bottomTrailing) {
-                            feedContent
-                            if !drawerOpen && !isWatchOnly {
-                                ComposeFAB { showCompose = true }
-                                    .padding(.trailing, 18)
-                                    .padding(.bottom, 32 + (audioPlayer.currentTrack != nil ? MiniAudioPlayerView.collapsedHeight : 0))
-                                    .opacity(feedFabOpacity)
-                                    .animation(.easeInOut(duration: 0.2), value: feedFabOpacity)
-                                    .animation(.smooth(duration: 0.22), value: audioPlayer.currentTrack != nil)
-                            }
-                        }
-                            // Frosted unified top header — same `.regularMaterial` look as
-                            // ProfileView. Inside the NavigationStack so it auto-disappears
-                            // when the user pushes a destination, and content scrolls under
-                            // it instead of starting below an opaque bar.
-                            .safeAreaInset(edge: .top, spacing: 0) {
-                                topBar.background(
-                                    LinearGradient(
-                                        colors: [
-                                            Color.wispBackground.opacity(0.92),
-                                            Color.wispBackground.opacity(0.65)
-                                        ],
-                                        startPoint: .top,
-                                        endPoint: .bottom
-                                    )
-                                )
-                            }
-                            .navigationDestination(for: ProfileRoute.self) { route in
-                                ProfileView(
-                                    pubkey: route.pubkey,
-                                    activeUserPubkey: keypair.pubkey,
-                                    onProfileTap: { pk in feedPath.append(ProfileRoute(pubkey: pk)) },
-                                    onNoteTap: { eid in feedPath.append(ThreadRoute(eventId: eid, authorPubkey: route.pubkey)) },
-                                    onHashtagTap: { tag in feedPath.append(HashtagFeedRoute(tag: tag)) },
-                                    path: $feedPath
-                                )
-                            }
-                            .navigationDestination(for: ThreadRoute.self) { route in
-                                ThreadView(
-                                    seedEventId: route.eventId,
-                                    authorHint: route.authorPubkey,
-                                    keypair: keypair,
-                                    path: $feedPath,
-                                    chain: $feedThreadChain,
-                                    scrollToId: route.scrollToId
-                                )
-                            }
-                            .navigationDestination(for: LiveStreamRoute.self) { route in
-                                LiveStreamView(route: route, keypair: keypair)
-                                    .environment(walletStore)
-                            }
-                            .navigationDestination(for: ArticleRoute.self) { route in
-                                ArticleView(route: route, keypair: keypair, path: $feedPath)
-                            }
-                            .navigationDestination(for: HashtagFeedRoute.self) { route in
-                                hashtagFeedView(for: route)
-                            }
-                            .navigationDestination(for: PeopleListFeedRoute.self) { route in
-                                PeopleListFeedView(
-                                    keypair: keypair,
-                                    dTag: route.dTag,
-                                    onProfileTap: { pubkey in
-                                        feedPath.append(ProfileRoute(pubkey: pubkey))
-                                    },
-                                    onNoteTap: { eventId in
-                                        feedPath.append(ThreadRoute(eventId: eventId, authorPubkey: ""))
-                                    },
-                                    onHashtagTap: { tag in
-                                        feedPath.append(HashtagFeedRoute(tag: tag))
-                                    }
-                                )
-                            }
-                            .navigationDestination(for: NoteListFeedRoute.self) { route in
-                                NoteListFeedView(
-                                    keypair: keypair,
-                                    dTag: route.dTag,
-                                    onProfileTap: { pubkey in
-                                        feedPath.append(ProfileRoute(pubkey: pubkey))
-                                    },
-                                    onNoteTap: { eventId in
-                                        feedPath.append(ThreadRoute(eventId: eventId, authorPubkey: ""))
-                                    },
-                                    onHashtagTap: { tag in
-                                        feedPath.append(HashtagFeedRoute(tag: tag))
-                                    }
-                                )
-                            }
-                            .navigationDestination(for: TrendingFeedRoute.self) { _ in
-                                TrendingFeedView(
-                                    keypair: keypair,
-                                    onProfileTap: { pubkey in
-                                        feedPath.append(ProfileRoute(pubkey: pubkey))
-                                    },
-                                    onNoteTap: { eventId in
-                                        feedPath.append(ThreadRoute(eventId: eventId, authorPubkey: ""))
-                                    },
-                                    onHashtagTap: { tag in
-                                        feedPath.append(HashtagFeedRoute(tag: tag))
-                                    }
-                                )
-                            }
-                            .toolbar(.hidden, for: .navigationBar)
-                    }
+                    EmptyView()
                 case .messages:
                     MessagesView(viewModel: messagesVM, groupListVM: groupListVM)
                 case .search:
