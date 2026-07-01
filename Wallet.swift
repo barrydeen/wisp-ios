@@ -41,19 +41,25 @@ struct WalletTransaction: Identifiable, Codable {
     let createdAt: Int64
     let settledAt: Int64?
     let counterpartyPubkey: String?
+    /// True when the payment has not yet settled (on-chain confirmations pending or
+    /// Lightning HTLC in flight). Derived from the SDK's `PaymentStatus.pending`.
+    var pending: Bool = false
+    /// Real Bitcoin txid for on-chain deposits/withdrawals. Set from
+    /// `PaymentDetails.deposit(txId:)` / `.withdraw(txId:)` in listTransactions.
+    var bitcoinTxId: String?
+
+    /// Spark surfaces on-chain transactions with a UUID-formatted ID (contains hyphens)
+    /// while Lightning payment hashes are always 64-char hex. Also true when a
+    /// real Bitcoin txid was extracted from the payment details.
+    var isOnchain: Bool {
+        if bitcoinTxId != nil { return true }
+        return paymentHash.contains("-")
+    }
 
     enum TransactionType: String, Codable {
         case incoming
         case outgoing
     }
-
-    /// True when the transaction is on-chain rather than Lightning.
-    /// Spark surfaces on-chain transactions with a UUID-formatted ID
-    /// (e.g. `019f158d-5be2-7f03-814c-5e5fdf312c8e`) while Lightning
-    /// payment hashes are always 64-char hex with no hyphens. NWC
-    /// transactions are always Lightning. This heuristic covers both
-    /// backends without requiring an explicit flag from either.
-    var isOnchain: Bool { paymentHash.contains("-") }
 }
 
 /// On-disk cache of last-known wallet state per pubkey. Lets the wallet tab

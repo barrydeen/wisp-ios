@@ -418,16 +418,29 @@ final class SparkWallet: Wallet {
             let txs: [WalletTransaction] = response.payments.map { payment in
                 let amountSats = Int64(payment.amount.description) ?? 0
                 let feeSats = Int64(payment.fees.description) ?? 0
-                let lightning = payment.details.flatMap { details -> (invoice: String, description: String?)? in
-                    if case .lightning(let description, let invoice, _, _, _, _, _) = details {
-                        return (invoice, description)
+                var paymentHash = payment.id
+                var description: String? = nil
+                var bitcoinTxId: String? = nil
+
+                if let details = payment.details {
+                    switch details {
+                    case .lightning(let desc, let invoice, _, _, _, _, _):
+                        if let decoded = Bolt11.decode(invoice) {
+                            paymentHash = decoded.paymentHash ?? payment.id
+                            description = desc ?? decoded.description
+                        } else {
+                            description = desc
+                        }
+                    case .deposit(let txId):
+                        bitcoinTxId = txId
+                    case .withdraw(let txId):
+                        bitcoinTxId = txId
+                    default:
+                        break
                     }
-                    return nil
                 }
-                let decoded = lightning.flatMap { Bolt11.decode($0.invoice) }
-                let paymentHash = decoded?.paymentHash ?? payment.id
-                let description = lightning?.description ?? decoded?.description
-                return WalletTransaction(
+
+                var tx = WalletTransaction(
                     type: payment.paymentType == .send ? .outgoing : .incoming,
                     description: description,
                     paymentHash: paymentHash,
@@ -437,6 +450,9 @@ final class SparkWallet: Wallet {
                     settledAt: Int64(payment.timestamp),
                     counterpartyPubkey: nil
                 )
+                tx.pending = payment.status == .pending
+                tx.bitcoinTxId = bitcoinTxId
+                return tx
             }
             return .success(txs)
         } catch {
