@@ -121,6 +121,7 @@
 		4CAA770200000000000000B1 /* ArticleRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CAA770100000000000000B1 /* ArticleRoute.swift */; };
 		4CAA770400000000000000B2 /* ArticleCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CAA770300000000000000B2 /* ArticleCache.swift */; };
 		4CAA770600000000000000B3 /* ArticleCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CAA770500000000000000B3 /* ArticleCardView.swift */; };
+		4CFF0B0100000000000000B1 /* ArticleFeedPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF0B0000000000000000B1 /* ArticleFeedPreview.swift */; };
 		4CAA770800000000000000B4 /* MarkdownBlocks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CAA770700000000000000B4 /* MarkdownBlocks.swift */; };
 		4CAA770A00000000000000B5 /* ArticleViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CAA770900000000000000B5 /* ArticleViewModel.swift */; };
 		4CFF010F00000000000000A8 /* InlineVideoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF010E00000000000000A8 /* InlineVideoView.swift */; };
@@ -435,6 +436,7 @@
 		4CAA770100000000000000B1 /* ArticleRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArticleRoute.swift; sourceTree = "<group>"; };
 		4CAA770300000000000000B2 /* ArticleCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArticleCache.swift; sourceTree = "<group>"; };
 		4CAA770500000000000000B3 /* ArticleCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArticleCardView.swift; sourceTree = "<group>"; };
+		4CFF0B0000000000000000B1 /* ArticleFeedPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArticleFeedPreview.swift; sourceTree = "<group>"; };
 		4CAA770700000000000000B4 /* MarkdownBlocks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownBlocks.swift; sourceTree = "<group>"; };
 		4CAA770900000000000000B5 /* ArticleViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArticleViewModel.swift; sourceTree = "<group>"; };
 		4CFF010E00000000000000A8 /* InlineVideoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InlineVideoView.swift; sourceTree = "<group>"; };
@@ -726,6 +728,7 @@
 				4CAA770100000000000000B1 /* ArticleRoute.swift */,
 				4CAA770300000000000000B2 /* ArticleCache.swift */,
 				4CAA770500000000000000B3 /* ArticleCardView.swift */,
+				4CFF0B0000000000000000B1 /* ArticleFeedPreview.swift */,
 				4CAA770700000000000000B4 /* MarkdownBlocks.swift */,
 				4CAA770900000000000000B5 /* ArticleViewModel.swift */,
 				4CFF010E00000000000000A8 /* InlineVideoView.swift */,
@@ -1184,6 +1187,7 @@
 				4CAA770200000000000000B1 /* ArticleRoute.swift in Sources */,
 				4CAA770400000000000000B2 /* ArticleCache.swift in Sources */,
 				4CAA770600000000000000B3 /* ArticleCardView.swift in Sources */,
+				4CFF0B0100000000000000B1 /* ArticleFeedPreview.swift in Sources */,
 				4CAA770800000000000000B4 /* MarkdownBlocks.swift in Sources */,
 				4CAA770A00000000000000B5 /* ArticleViewModel.swift in Sources */,
 				4CFF010F00000000000000A8 /* InlineVideoView.swift in Sources */,
