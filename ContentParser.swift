@@ -68,7 +68,7 @@ enum ContentParser {
             + #"|(?<!\w)(npub1[a-z0-9]{58})(?!\w|\.[a-zA-Z])"#
             + #"|(?:https?|wss?):\/\/\S+"#
             + #"|(?<!\w)((?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+(?:\#(tlds))(?:\/\S*)?)(?!\w)"#
-            + #"|(?<!\w)#([a-zA-Z0-9_][a-zA-Z0-9_-]*)"#
+            + #"|(?<!\w)#([\p{L}0-9_][\p{L}0-9_-]*)"#
             + #"|(?<!\w)((?:note1|nevent1|nprofile1|naddr1)[a-z0-9]{10,})(?!\w)"#
         return try! NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
     }()
