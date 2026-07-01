@@ -162,6 +162,8 @@ final class SparkWallet: Wallet {
             // has caught up. Until then, the dashboard renders the cached balance from
             // UserDefaults so the user isn't staring at a spinner.
             Task { await self.refreshBalance() }
+            // Claim any on-chain deposits that became claimable while the app was closed.
+            Task { await self.claimPendingDeposits() }
         } catch {
             emit("Connection failed: \(error.localizedDescription)")
             isConnected = false
@@ -199,6 +201,8 @@ final class SparkWallet: Wallet {
             emit("Payment failed")
         case .paymentPending:
             emit("Payment pending")
+        case .unclaimedDeposits(let deposits):
+            Task { await self.claimDeposits(deposits) }
         default:
             break
         }
@@ -215,6 +219,48 @@ final class SparkWallet: Wallet {
             balanceContinuation.yield(msats)
         } catch {
             emit("Balance refresh failed: \(error.localizedDescription)")
+        }
+    }
+
+    // MARK: - On-chain deposit claiming
+
+    /// On-chain deposits sit unclaimed (and show as pending in history) until
+    /// explicitly claimed once they have enough confirmations. The SDK emits
+    /// `.unclaimedDeposits` when deposits become claimable; claim them
+    /// automatically so they settle without user action.
+    private func claimDeposits(_ deposits: [DepositInfo]) async {
+        guard let sdk else { return }
+        var claimedAny = false
+        for deposit in deposits {
+            do {
+                _ = try await sdk.claimDeposit(
+                    request: ClaimDepositRequest(
+                        txid: deposit.txid,
+                        vout: deposit.vout,
+                        maxFee: .networkRecommended(leewaySatPerVbyte: 5)
+                    )
+                )
+                claimedAny = true
+                emit("Claimed on-chain deposit")
+            } catch {
+                emit("Failed to claim deposit: \(error.localizedDescription)")
+            }
+        }
+        if claimedAny {
+            await refreshBalance()
+        }
+    }
+
+    /// Claim any deposits that became claimable while the app was closed.
+    private func claimPendingDeposits() async {
+        guard let sdk else { return }
+        do {
+            let response = try await sdk.listUnclaimedDeposits(request: ListUnclaimedDepositsRequest())
+            if !response.deposits.isEmpty {
+                await claimDeposits(response.deposits)
+            }
+        } catch {
+            // Best-effort — the SDK will retry via `.unclaimedDeposits` events.
         }
     }
 
@@ -440,6 +486,7 @@ final class SparkWallet: Wallet {
                     }
                 }
 
+                let isOnchain = bitcoinTxId != nil
                 var tx = WalletTransaction(
                     type: payment.paymentType == .send ? .outgoing : .incoming,
                     description: description,
@@ -450,7 +497,12 @@ final class SparkWallet: Wallet {
                     settledAt: Int64(payment.timestamp),
                     counterpartyPubkey: nil
                 )
-                tx.pending = payment.status == .pending
+                // On-chain payments made outside this app instance (another wallet on
+                // the same seed) aren't tracked by this SDK session, so PaymentStatus
+                // can stay stuck at .pending long after the underlying transaction is
+                // confirmed. Wisp doesn't initiate on-chain send/receive itself, so
+                // don't trust that flag for on-chain rows.
+                tx.pending = !isOnchain && payment.status == .pending
                 tx.bitcoinTxId = bitcoinTxId
                 return tx
             }
