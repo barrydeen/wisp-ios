@@ -169,7 +169,8 @@ final class AppSettings {
     }
     /// Optional default message included on an instant zap / payment. Empty
     /// string means "no message" — the zap fires with `content: ""` exactly
-    /// as the composer's blank state would produce. Persisted + synced.
+    /// as the composer's blank state would produce. Persisted per account
+    /// (device-local; NIP-78 cross-device sync deferred — see #70).
     var quickZapMessage: String {
         didSet {
             let pk = NostrKey.load()?.pubkey
