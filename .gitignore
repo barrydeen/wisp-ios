@@ -30,3 +30,10 @@ local.xcconfig
 model-wisp.json.bak
 ## Local notes
 temp/
+
+## Kilo configuration
+.kilo/agent-manager.json
+.kilo/node_modules/
+.kilo/package*.json
+.kilo/plans/
+.kilo/.gitignore

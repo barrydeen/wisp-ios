@@ -123,6 +123,9 @@ final class InlineVideoPiP: NSObject, AVPictureInPictureControllerDelegate {
 
 struct InlineVideoView: View {
     let meta: MediaMeta
+    /// Hex pubkey of the note author that owns this media. Forwarded to image
+    /// surfaces (poster / fullscreen) for Blossom fallback when needed.
+    var authorPubkey: String? = nil
     /// When true the AVPlayer's render surface ignores hit tests so swipes
     /// pass through to a parent gesture, and the inline tap-to-fullscreen +
     /// corner expand affordances are dropped. Used inside
@@ -363,14 +366,16 @@ struct InlineVideoView: View {
                         // tagged on the imeta — same intent as the still-image
                         // placeholder.
                         if let posterUrl = meta.posterUrl, let url = URL(string: posterUrl) {
-                            AsyncImage(url: url) { phase in
-                                switch phase {
-                                case .success(let image):
+                            RetryingAsyncImage(
+                                url: url,
+                                maxPixelSize: ImagePixelBudget.feed,
+                                authorPubkey: authorPubkey,
+                                content: { image in
                                     image.resizable().scaledToFill()
-                                default:
-                                    blurhashOrGeneratedPoster
-                                }
-                            }
+                                },
+                                loading: { blurhashOrGeneratedPoster },
+                                failure: { blurhashOrGeneratedPoster }
+                            )
                         } else {
                             blurhashOrGeneratedPoster
                         }

@@ -2,6 +2,10 @@ import SwiftUI
 
 struct InlineImageView: View {
     let meta: MediaMeta
+    /// Hex pubkey of the note author that owns this media. When set and the primary
+    /// URL fails all retries, `BlossomFallbackFetcher` is invoked with this pubkey
+    /// to attempt recovery from the author's kind-10063 server list.
+    var authorPubkey: String? = nil
     /// When set, the inline tap fires this closure instead of presenting
     /// the single-image `FullScreenImageView`. Used by `RichContentView` to
     /// route inline image taps through `FullScreenMediaPager` so the user
@@ -35,12 +39,13 @@ struct InlineImageView: View {
                     AnimatedImageView(
                         url: URL(string: meta.url),
                         aspect: aspect,
+                        authorPubkey: authorPubkey,
                         placeholder: {
                             placeholder(systemName: nil, height: height)
                                 .overlay { ProgressView() }
                         },
                         failure: {
-                            placeholder(systemName: "photo", height: 200)
+                            placeholder(systemName: "photo", height: height)
                         }
                     )
                     .contentShape(Rectangle())
@@ -49,6 +54,7 @@ struct InlineImageView: View {
                     RetryingAsyncImage(
                         url: URL(string: meta.url),
                         maxPixelSize: ImagePixelBudget.feed,
+                        authorPubkey: authorPubkey,
                         content: { image in
                             image.resizable()
                                 .aspectRatio(contentMode: .fit)
@@ -60,7 +66,7 @@ struct InlineImageView: View {
                                 .overlay { ProgressView() }
                         },
                         failure: {
-                            placeholder(systemName: "photo", height: 200)
+                            placeholder(systemName: "photo", height: height)
                                 .overlay {
                                     VStack(spacing: 4) {
                                         Image(systemName: "arrow.clockwise")
@@ -93,7 +99,7 @@ struct InlineImageView: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: Self.cornerRadius))
         .fullScreenCover(isPresented: $showFullScreen) {
-            FullScreenImageView(url: meta.url, mime: meta.mime)
+            FullScreenImageView(url: meta.url, mime: meta.mime, authorPubkey: authorPubkey)
         }
         .alert("Photos Access Required", isPresented: $showPhotosAlert) {
             Button("Open Settings") {
@@ -178,6 +184,7 @@ struct InlineImageView: View {
 struct FullScreenImageView: View {
     let url: String
     let mime: String?
+    var authorPubkey: String? = nil
     /// Forwarded centroid translation when the image is unzoomed and embedded
     /// in `FullScreenMediaPager`. Fires on every recogniser update and once on
     /// end; `isEnded` distinguishes the two so the carousel can commit on
@@ -223,10 +230,12 @@ struct FullScreenImageView: View {
     init(
         url: String,
         mime: String? = nil,
+        authorPubkey: String? = nil,
         onCarouselDrag: ((CGSize, CGSize, Bool) -> Void)? = nil
     ) {
         self.url = url
         self.mime = mime
+        self.authorPubkey = authorPubkey
         self.onCarouselDrag = onCarouselDrag
     }
 
@@ -420,6 +429,7 @@ struct FullScreenImageView: View {
             AnimatedImageView(
                 url: URL(string: url),
                 aspect: nil,
+                authorPubkey: authorPubkey,
                 placeholder: { ProgressView().tint(.white) },
                 failure: {
                     Image(systemName: "photo")
@@ -431,6 +441,7 @@ struct FullScreenImageView: View {
             RetryingAsyncImage(
                 url: URL(string: url),
                 maxPixelSize: loadFullRes ? nil : ImagePixelBudget.fullscreen,
+                authorPubkey: authorPubkey,
                 content: { image in
                     image.resizable().scaledToFit()
                 },

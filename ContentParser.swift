@@ -12,7 +12,8 @@ struct MediaMeta: Hashable {
     let posterUrl: String?
     /// SHA-256 digest of the file (NIP-92 imeta `x`, falling back to `ox`). Used
     /// to dedupe the same content-addressed file when it's served from more than
-    /// one host (e.g. a Blossom mirror in `content` vs the host in the imeta tag).
+    /// one host (e.g. a Blossom mirror in `content` vs the host in the imeta tag),
+    /// and by `BlossomFallbackFetcher` to verify retrieved bytes.
     let sha256: String?
 
     init(url: String, mime: String? = nil, dimension: String? = nil, blurhash: String? = nil, posterUrl: String? = nil, sha256: String? = nil) {
@@ -54,13 +55,25 @@ enum ContentParser {
     private static let videoMimePrefixes: Set<String> = ["video/mp4", "video/quicktime", "video/webm", "application/vnd.apple.mpegurl", "application/x-mpegurl"]
     private static let audioMimePrefixes: Set<String> = ["audio/mpeg", "audio/wav", "audio/ogg", "audio/mp4", "audio/flac", "audio/aac", "audio/x-wav"]
 
+    // MARK: - Blossom Path Regexes (BUD-01)
+
+    // These two regexes serve complementary purposes for BUD-01 (Blossom URLs):
+
+    /// Strict validator: matches ONLY when the entire path IS a SHA-256 hash.
+    /// Used by `isBlossomUrl()` to classify a URL as a Blossom URL.
+    /// Example match: `/abc123...def789.png` (entire path is hash)
+    /// Example non-match: `/users/123/abc123...def789.png` (path has other components)
     private static let blossomPathRegex = try! NSRegularExpression(
-        pattern: #"^/[0-9a-f]{64}$"#,
+        pattern: #"^/[0-9a-f]{64}(\.[a-zA-Z0-9]+)?$"#,
         options: [.caseInsensitive]
     )
 
-    private static let sha256Regex = try! NSRegularExpression(
-        pattern: #"^[0-9a-f]{64}$"#,
+    /// Extractor: finds the SHA-256 hash at the END of a path, regardless of prefix.
+    /// Used by `sha256Hash()` to extract the hash from URLs that may contain it.
+    /// Example match: `/users/123/abc123...def789.png` (extracts abc123...def789)
+    /// Example non-match: `/abc123...def789/users/123` (hash is NOT at the end)
+    private static let sha256HashRegex = try! NSRegularExpression(
+        pattern: #"/([0-9a-f]{64})(?:\.[a-zA-Z0-9]+)?/?$"#,
         options: [.caseInsensitive]
     )
 
@@ -129,16 +142,19 @@ enum ContentParser {
 
     // MARK: - Public parse entry
 
+    /// Parse event content into renderable segments.
+    /// - Parameters:
+    ///   - linksAreInline: Surfaces that render `.link` segments as inline text
+    ///     (bio, quoted notes, drafts, group chat — anything passing
+    ///     `showLinkPreviews: false` to `RichContentView`) need pass 4 to treat
+    ///     `.link` like other inline neighbors. Otherwise a lone `"\n"` text
+    ///     between two `.link`s gets zeroed out and the folded inline links
+    ///     collide into one line.
     static func parse(
         content: String,
         tags: [[String]],
         emojiMap: [String: String] = [:],
         trimBlankLines: Bool = true,
-        // Surfaces that render `.link` segments as inline text (bio, quoted
-        // notes, drafts, group chat — anything passing `showLinkPreviews:
-        // false` to RichContentView) need pass 4 to treat `.link` like other
-        // inline neighbors. Otherwise a lone `"\n"` text between two `.link`s
-        // gets zeroed out and the folded inline links collide into one line.
         linksAreInline: Bool = false
     ) -> [ContentSegment] {
         let imetaMap = parseImetaTags(tags)
@@ -210,7 +226,8 @@ enum ContentParser {
             if let hashtag, !hashtag.isEmpty, token.hasPrefix("#") {
                 segments.append(.hashtag(hashtag))
             } else if let bareDomain, !bareDomain.isEmpty, !token.lowercased().hasPrefix("http") {
-                let url = "https://\(bareDomain)"
+                let cleaned = trimTrailingPunctuation(bareDomain)
+                let url = "https://\(cleaned)"
                 segments.append(classifyUrl(url, content: content, range: range, imetaMap: imetaMap))
             } else if token.lowercased().hasPrefix("nostr:") {
                 segments.append(decodeNostrToken(token))
@@ -269,14 +286,19 @@ enum ContentParser {
                 }
                 if let segUrl {
                     seenUrls.insert(segUrl)
-                    if let h = sha256Hash(fromUrl: segUrl) { seenHashes.insert(h) }
+                    // Only treat terminal 64-hex paths as content-addressed hashes when
+                    // the URL is a Blossom URL, avoiding false positives from blogs or
+                    // CDNs that happen to end a path in a 64-character hex token.
+                    if isBlossomUrl(segUrl), let h = sha256Hash(fromUrl: segUrl) {
+                        seenHashes.insert(h)
+                    }
                 }
             }
             let orderedUrls = imetaUrlOrder.isEmpty ? Array(imetaMap.keys) : imetaUrlOrder
             for url in orderedUrls {
                 guard let meta = imetaMap[url] else { continue }
                 if seenUrls.contains(url) { continue }
-                let metaHash = meta.sha256?.lowercased() ?? sha256Hash(fromUrl: url)
+                let metaHash: String? = meta.sha256?.lowercased() ?? sha256Hash(fromUrl: url)
                 if let metaHash, seenHashes.contains(metaHash) { continue }
                 let imetaClass = meta.mime.flatMap { classifyByMime($0) }
                 let ext = fileExtension(url)
@@ -390,8 +412,8 @@ enum ContentParser {
         if imageExtensions.contains(ext) { return .image(meta ?? MediaMeta(url: url)) }
         if videoExtensions.contains(ext) { return .video(meta ?? MediaMeta(url: url)) }
         if audioExtensions.contains(ext) { return .audio(meta ?? MediaMeta(url: url)) }
-        if isWebSocket { return .inlineLink(url) }
         if isBlossomUrl(url) { return .unknownMedia(meta ?? MediaMeta(url: url)) }
+        if isWebSocket { return .inlineLink(url) }
         if isStandaloneUrl(content: content, range: range) { return .link(url) }
         return .inlineLink(url)
     }
@@ -412,21 +434,28 @@ enum ContentParser {
         return ""
     }
 
-    /// Extracts a content-addressed SHA-256 digest from a media URL when the
-    /// final path component is a 64-char hex string (optionally with a file
-    /// extension), as used by Blossom and most Nostr media hosts. Returns the
-    /// lowercased hash, or nil if the filename isn't a digest.
-    private static func sha256Hash(fromUrl url: String) -> String? {
+    /// Extracts the content-addressed SHA-256 digest from a media URL.
+    /// Anchors the match to the end of the path component to avoid false
+    /// positives from query parameters, tracking tokens, or mid-path segments.
+    ///
+    /// This is internal (not private) because it's used by `BlossomFallbackFetcher`
+    /// to validate the hash when retrieving images from author servers.
+    static func sha256Hash(fromUrl url: String) -> String? {
         guard let parsed = URL(string: url) else { return nil }
-        let last = parsed.lastPathComponent
-        let base = last.split(separator: ".").first.map(String.init) ?? last
-        let r = NSRange(location: 0, length: (base as NSString).length)
-        guard sha256Regex.firstMatch(in: base, range: r) != nil else { return nil }
-        return base.lowercased()
+        let path = parsed.path
+        let nsPath = path as NSString
+        guard let match = sha256HashRegex.firstMatch(in: path, range: NSRange(location: 0, length: nsPath.length)) else { return nil }
+        let hashRange = match.range(at: 1)
+        guard hashRange.location != NSNotFound else { return nil }
+        return nsPath.substring(with: hashRange).lowercased()
     }
 
     private static func isBlossomUrl(_ url: String) -> Bool {
-        guard let parsed = URL(string: url) else { return false }
+        guard let parsed = URL(string: url),
+              let scheme = parsed.scheme?.lowercased(),
+              scheme == "http" || scheme == "https" else {
+            return false
+        }
         let path = parsed.path
         let r = NSRange(location: 0, length: (path as NSString).length)
         return blossomPathRegex.firstMatch(in: path, range: r) != nil

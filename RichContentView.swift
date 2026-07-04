@@ -381,9 +381,17 @@ struct RichContentView: View {
     private func mediaItem(from segment: ContentSegment) -> MediaGridView.MediaItem? {
         switch segment {
         case .image(let meta), .unknownMedia(let meta):
-            return MediaGridView.MediaItem(url: meta.url, mime: meta.mime, dimension: meta.dimension, isVideo: false, posterUrl: meta.posterUrl)
+            return MediaGridView.MediaItem(
+                url: meta.url, mime: meta.mime, dimension: meta.dimension,
+                isVideo: false, posterUrl: meta.posterUrl, blurhash: meta.blurhash,
+                authorPubkey: authorPubkey, sha256: meta.sha256
+            )
         case .video(let meta):
-            return MediaGridView.MediaItem(url: meta.url, mime: meta.mime, dimension: meta.dimension, isVideo: true, posterUrl: meta.posterUrl)
+            return MediaGridView.MediaItem(
+                url: meta.url, mime: meta.mime, dimension: meta.dimension,
+                isVideo: true, posterUrl: meta.posterUrl, blurhash: meta.blurhash,
+                authorPubkey: authorPubkey, sha256: meta.sha256
+            )
         default:
             return nil
         }
@@ -393,11 +401,11 @@ struct RichContentView: View {
     private func renderBlock(_ seg: ContentSegment, allMediaItems: [MediaGridView.MediaItem]) -> some View {
         switch seg {
         case .image(let meta), .unknownMedia(let meta):
-            InlineImageView(meta: meta, onTap: {
+            InlineImageView(meta: meta, authorPubkey: authorPubkey, onTap: {
                 openPager(for: meta.url, in: allMediaItems)
             })
         case .video(let meta):
-            InlineVideoView(meta: meta)
+            InlineVideoView(meta: meta, authorPubkey: authorPubkey)
         case .audio(let meta):
             InlineAudioView(
                 meta: meta,

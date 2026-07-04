@@ -22,28 +22,6 @@ enum ImagePixelBudget {
     }
 }
 
-/// Decodes `data` straight to a thumbnail whose longest edge is at most
-/// `maxPixel` points-in-pixels, using ImageIO so the full-resolution bitmap is
-/// never retained — only the downsized result lives in memory. Returns nil if
-/// the source can't be read (caller falls back to a full `UIImage(data:)`).
-/// Free function so it can run inside a detached, nonisolated decode task.
-private func downsampledImage(from data: Data, maxPixel: CGFloat) -> UIImage? {
-    let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
-    guard let source = CGImageSourceCreateWithData(data as CFData, sourceOptions) else {
-        return nil
-    }
-    let options: [CFString: Any] = [
-        kCGImageSourceCreateThumbnailFromImageAlways: true,
-        kCGImageSourceCreateThumbnailWithTransform: true,
-        kCGImageSourceShouldCacheImmediately: true,
-        kCGImageSourceThumbnailMaxPixelSize: Int(maxPixel.rounded()),
-    ]
-    guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
-        return nil
-    }
-    return UIImage(cgImage: cgImage)
-}
-
 /// Drop-in replacement for `AsyncImage` that:
 ///   - reads from `DecodedImageCache` first so a cell scrolled back into view
 ///     renders the previously-decoded `UIImage` instantly with no loader flash;
@@ -66,6 +44,10 @@ struct RetryingAsyncImage<Content: View, Loading: View, Failure: View>: View {
     /// decode and a larger fullscreen decode of the same URL coexist instead of
     /// clobbering each other.
     let maxPixelSize: CGFloat?
+    /// Hex pubkey of the event author that owns a piece of media. When set and
+    /// the primary URL and all retries fail, `BlossomFallbackFetcher` is called
+    /// with this pubkey to attempt recovery from the author's kind-10063 servers.
+    let authorPubkey: String?
     @ViewBuilder let content: (Image) -> Content
     @ViewBuilder let loading: () -> Loading
     @ViewBuilder let failure: () -> Failure
@@ -84,6 +66,7 @@ struct RetryingAsyncImage<Content: View, Loading: View, Failure: View>: View {
         url: URL?,
         maxAttempts: Int = 3,
         maxPixelSize: CGFloat? = nil,
+        authorPubkey: String? = nil,
         @ViewBuilder content: @escaping (Image) -> Content,
         @ViewBuilder loading: @escaping () -> Loading,
         @ViewBuilder failure: @escaping () -> Failure
@@ -91,6 +74,7 @@ struct RetryingAsyncImage<Content: View, Loading: View, Failure: View>: View {
         self.url = url
         self.maxAttempts = maxAttempts
         self.maxPixelSize = maxPixelSize
+        self.authorPubkey = authorPubkey
         self.content = content
         self.loading = loading
         self.failure = failure
@@ -188,6 +172,17 @@ struct RetryingAsyncImage<Content: View, Loading: View, Failure: View>: View {
         } else if attempt < maxAttempts {
             attempt += 1  // Triggers another `task` cycle via TaskKey change.
         } else {
+            if let image = await BlossomFallbackImage.fetchDecodeAndCache(
+                url: url,
+                authorPubkey: authorPubkey,
+                maxPixelSize: maxPixelSize,
+                cacheKey: key,
+                decode: { data, max in AnimatedImageDecoder.decodeStatic(data: data, maxPixelSize: max) },
+                store: { decoded, k in DecodedImageCache.storeStatic(decoded, for: k) }
+            ) {
+                phase = .success(image)
+                return
+            }
             phase = .failure
         }
     }

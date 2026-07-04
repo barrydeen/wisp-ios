@@ -221,6 +221,7 @@ struct MusicTrackCardView: View {
             if let image, let url = URL(string: image) {
                 RetryingAsyncImage(
                     url: url,
+                    authorPubkey: author,
                     content: { img in
                         img.resizable().scaledToFill()
                     },

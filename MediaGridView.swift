@@ -39,6 +39,17 @@ struct MediaGridView: View {
         /// imeta `image` field. When nil and `isVideo` is true, the tile falls
         /// back to a frame decoded by `VideoPosterCache`.
         let posterUrl: String?
+        /// NIP-92 imeta `blurhash` — low-bandwidth placeholder rendered while
+        /// the poster URL or first video frame is loading.
+        let blurhash: String?
+        /// Hex pubkey of the note author that owns this media. Forwarded to
+        /// `RetryingAsyncImage` so the Blossom fallback fetcher can recover
+        /// from the author's kind-10063 server list when the primary URL fails.
+        var authorPubkey: String? = nil
+        /// SHA-256 content hash from NIP-92 imeta `x` tag. Forwarded through
+        /// to the fullscreen pager so the poster can be reconstructed with the
+        /// correct fallback target.
+        var sha256: String? = nil
 
         var id: String { url }
 
@@ -82,6 +93,10 @@ struct MediaGridView: View {
     /// Nested-container layout: ask `GeometryReader` for the actual
     /// available width and constrain the gallery to it. No edge bleed —
     /// the parent owns its own padding so we shouldn't paint over it.
+    /// `fixedSize(vertical: true)` lets the content size itself from
+    /// the computed tile height instead of greedily filling the parent,
+    /// avoiding a layout-feedback cycle between `onPreferenceChange`
+    /// and `.frame(height:)`.
     @ViewBuilder
     private var nestedBody: some View {
         GeometryReader { geo in
@@ -108,13 +123,9 @@ struct MediaGridView: View {
                 }
             }
             .frame(width: galleryWidth, height: tileHeight, alignment: .leading)
-            // ScrollView's `.frame(width:)` constrains layout size but
-            // doesn't clip — without this, the trailing tile's peek paints
-            // past the gallery rect and bleeds through the host card's
-            // right padding.
             .clipped()
         }
-        .frame(height: tileHeightForNested)
+        .fixedSize(horizontal: false, vertical: true)
         .fullScreenCover(item: Binding(
             get: { openIndex.map { GallerySelection(index: $0) } },
             set: { openIndex = $0?.index }
@@ -124,17 +135,6 @@ struct MediaGridView: View {
         .onAppear {
             if currentItemId == nil { currentItemId = items.first?.id }
         }
-    }
-
-    /// Approximate tile height for the nested case. Used as the
-    /// `GeometryReader`'s explicit height so the parent VStack reserves
-    /// the right vertical space — `GeometryReader` itself is greedy.
-    private var tileHeightForNested: CGFloat {
-        // Same formula as feedBody, but anchored to a typical nested
-        // container width (screen width minus the parent card's 16pt
-        // padding minus the QuotedNoteView's 12pt inner padding × 2).
-        let approxWidth = max(1, UIScreen.main.bounds.width - 56)
-        return approxWidth * tileWidthFraction / tileAspect
     }
 
     @ViewBuilder
@@ -251,6 +251,7 @@ private struct MediaTileImage: View {
                     url: URL(string: item.url),
                     aspect: item.aspect,
                     contentMode: .fill,
+                    authorPubkey: item.authorPubkey,
                     placeholder: { placeholder },
                     failure: { placeholder }
                 )
@@ -258,6 +259,7 @@ private struct MediaTileImage: View {
                 RetryingAsyncImage(
                     url: URL(string: item.url),
                     maxPixelSize: ImagePixelBudget.feed,
+                    authorPubkey: item.authorPubkey,
                     content: { image in image.resizable().scaledToFill() },
                     loading: { placeholder },
                     failure: { placeholder }
@@ -279,6 +281,7 @@ private struct MediaTileImage: View {
         if let posterUrl = item.posterUrl, let url = URL(string: posterUrl) {
             RetryingAsyncImage(
                 url: url,
+                authorPubkey: item.authorPubkey,
                 content: { image in image.resizable().scaledToFill() },
                 loading: { placeholder },
                 failure: { GeneratedVideoPoster(videoUrl: item.url) { placeholder } }
@@ -555,8 +558,11 @@ struct FullScreenMediaPager: View {
             InlineVideoView(meta: MediaMeta(
                 url: item.url,
                 mime: item.mime,
-                dimension: item.dimension
-            ), passthroughHitTests: true)
+                dimension: item.dimension,
+                blurhash: item.blurhash,
+                posterUrl: item.posterUrl,
+                sha256: item.sha256
+            ), authorPubkey: item.authorPubkey, passthroughHitTests: true)
             .padding(.horizontal, 4)
             .contentShape(Rectangle())
             .gesture(
@@ -583,6 +589,7 @@ struct FullScreenMediaPager: View {
             FullScreenImageView(
                 url: item.url,
                 mime: item.mime,
+                authorPubkey: item.authorPubkey,
                 onCarouselDrag: { translation, predictedEnd, ended in
                     handleCarouselDrag(translation, predictedEnd: predictedEnd, isEnded: ended)
                 }

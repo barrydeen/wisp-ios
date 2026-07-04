@@ -236,6 +236,7 @@ struct ArticleCardView: View {
             .overlay(
                 RetryingAsyncImage(
                     url: url,
+                    authorPubkey: event.pubkey,
                     content: { image in
                         image
                             .resizable()
