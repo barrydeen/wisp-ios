@@ -287,22 +287,28 @@ struct FullScreenImageView: View {
                         .allowsHitTesting(false)
                 }
 
-                VStack {
-                    HStack {
-                        Spacer()
-                        Button {
-                            Task { await saveImageFromFullScreen() }
-                        } label: {
-                            Image(systemName: "square.and.arrow.down")
-                                .font(.system(size: 16, weight: .medium))
-                                .foregroundStyle(.white)
-                                .padding(10)
-                                .background(Color.black.opacity(0.55), in: Circle())
+                // Standalone viewer (profile banner / avatar, single inline
+                // image) carries its own save button. When embedded in
+                // `FullScreenMediaPager` the toolbar lives on the pager itself
+                // so it stays put while pages swipe beneath it.
+                if isStandalone {
+                    VStack {
+                        HStack {
+                            Spacer()
+                            Button {
+                                Task { await saveImageFromFullScreen() }
+                            } label: {
+                                Image(systemName: "square.and.arrow.down")
+                                    .font(.system(size: 16, weight: .medium))
+                                    .foregroundStyle(.white)
+                                    .padding(10)
+                                    .background(Color.black.opacity(0.55), in: Circle())
+                            }
+                            .padding(.top, 16)
+                            .padding(.trailing, 16)
                         }
-                        .padding(.top, 16)
-                        .padding(.trailing, 16)
+                        Spacer()
                     }
-                    Spacer()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
