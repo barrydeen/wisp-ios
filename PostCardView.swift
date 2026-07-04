@@ -462,8 +462,13 @@ struct PostCardView: View {
                     // Char-count path is independent of measured height: a
                     // 600+ char body wraps to ~12 lines (well under the
                     // 66%-screen cap), so the height check alone would let
-                    // it escape truncation entirely.
+                    // it escape truncation entirely. Measure the *text*
+                    // length (excluding inline media URLs) — a short caption
+                    // with several image URLs can exceed the raw threshold
+                    // without being a long text post. The raw-count guard
+                    // keeps the parse off the hot path for short posts.
                     let charLong = displayEvent.content.count > Self.longPostCharThreshold
+                        && ContentParser.textualLength(content: displayEvent.content, tags: displayEvent.tags) > Self.longPostCharThreshold
                     let isLong = pixelLong || charLong
                     let collapsedHeight = pixelLong ? cap : Self.longPostTextCollapsedHeight
                     let collapsed = isLong && !contentExpanded

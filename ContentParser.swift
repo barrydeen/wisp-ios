@@ -143,6 +143,27 @@ enum ContentParser {
         )
     }
 
+    /// Character count of the parts of `content` that actually render as
+    /// flowing text — `.text`, inline `.hashtag`, and inline `.inlineLink`
+    /// runs. Media URLs (`.image`/`.video`/`.audio`/`.unknownMedia`),
+    /// standalone link-preview URLs (`.link`), embedded quote cards, and
+    /// lightning-invoice cards are excluded because they render as blocks,
+    /// not wrapped text.
+    ///
+    /// The feed's "long post" heuristic uses this instead of raw
+    /// `content.count` so a short caption followed by several inline media
+    /// URLs isn't mistaken for a long text body and needlessly truncated.
+    static func textualLength(content: String, tags: [[String]]) -> Int {
+        parse(content: content, tags: tags).reduce(0) { sum, seg in
+            switch seg {
+            case .text(let s):       return sum + s.trimmingCharacters(in: .whitespacesAndNewlines).count
+            case .inlineLink(let s): return sum + s.count
+            case .hashtag(let s):    return sum + s.count + 1   // include the leading '#'
+            default:                 return sum
+            }
+        }
+    }
+
     static func parse(
         content: String,
         emojiMap: [String: String] = [:],
