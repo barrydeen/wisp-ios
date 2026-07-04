@@ -39,6 +39,9 @@ enum ContentSegment: Hashable {
     case customEmoji(shortcode: String, url: String)
     case hashtag(String)
     case lightningInvoice(invoice: String, amountSats: Int64?, description: String?)
+    /// A lightning address (`user@domain.tld`) found inline in text — rendered
+    /// as a tappable "Zap" pill that opens an LNURL-pay flow.
+    case lightningAddress(String)
 }
 
 enum ContentParser {
@@ -79,6 +82,15 @@ enum ContentParser {
     )
 
     private static let emojiShortcodeRegex = try! NSRegularExpression(pattern: #":([a-zA-Z0-9_-]+):"#)
+
+    /// Lightning / email address shape (`user@domain.tld`). Deliberately broad;
+    /// each match is validated with `LnurlResolver.isLightningAddress` before it
+    /// becomes a `.lightningAddress` segment. The `(?<![\w@.])` / `(?![\w@])`
+    /// boundaries stop it from matching inside URLs or larger tokens.
+    private static let lightningAddressRegex = try! NSRegularExpression(
+        pattern: #"(?<![\w@.])([a-z0-9][a-z0-9._%+-]*@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,})(?![\w@])"#,
+        options: [.caseInsensitive]
+    )
 
     // MARK: - imeta tags (NIP-92)
 
@@ -269,6 +281,14 @@ enum ContentParser {
         segments = segments.flatMap { seg -> [ContentSegment] in
             if case .text(let text) = seg {
                 return splitTextForInvoices(text)
+            }
+            return [seg]
+        }
+
+        // Pass 3.5: detect lightning addresses (user@domain.tld) in text segments
+        segments = segments.flatMap { seg -> [ContentSegment] in
+            if case .text(let text) = seg {
+                return splitTextForLightningAddresses(text)
             }
             return [seg]
         }
@@ -477,6 +497,37 @@ enum ContentParser {
                 result.append(.text(ns.substring(with: NSRange(location: lastEnd, length: r.location - lastEnd))))
             }
             result.append(.lightningInvoice(invoice: invoice, amountSats: decoded.amountSats, description: decoded.description))
+            lastEnd = r.location + r.length
+        }
+        if !anyFound { return [.text(text)] }
+        if lastEnd < ns.length {
+            result.append(.text(ns.substring(from: lastEnd)))
+        }
+        return result
+    }
+
+    /// Splits a text run on lightning addresses (`user@domain.tld`), emitting a
+    /// `.lightningAddress` segment for each. Each candidate is validated with
+    /// `LnurlResolver.isLightningAddress` so obviously-malformed tokens stay as
+    /// text; genuine emails still match the shape, but the pay sheet resolves
+    /// the LNURL on open and surfaces an error if it isn't payable.
+    private static func splitTextForLightningAddresses(_ text: String) -> [ContentSegment] {
+        let ns = text as NSString
+        let matches = lightningAddressRegex.matches(in: text, range: NSRange(location: 0, length: ns.length))
+        if matches.isEmpty { return [.text(text)] }
+
+        var result: [ContentSegment] = []
+        var lastEnd = 0
+        var anyFound = false
+        for match in matches {
+            let raw = ns.substring(with: match.range)
+            guard LnurlResolver.isLightningAddress(raw) else { continue }
+            anyFound = true
+            let r = match.range
+            if r.location > lastEnd {
+                result.append(.text(ns.substring(with: NSRange(location: lastEnd, length: r.location - lastEnd))))
+            }
+            result.append(.lightningAddress(raw))
             lastEnd = r.location + r.length
         }
         if !anyFound { return [.text(text)] }
