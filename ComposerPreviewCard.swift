@@ -3,6 +3,7 @@ import SwiftUI
 struct ComposerPreviewCard: View {
     let content: String
     let tags: [[String]]
+    var pollOptions: [String]? = nil
     let userProfile: ProfileData?
 
     var body: some View {
@@ -45,6 +46,10 @@ struct ComposerPreviewCard: View {
                 nested: true,
                 isPreview: true
             )
+
+            if let options = pollOptions, !options.isEmpty {
+                pollPreview(options: options)
+            }
         }
         .padding(12)
         .background(Color.wispSurfaceVariant.opacity(0.4),
@@ -54,5 +59,23 @@ struct ComposerPreviewCard: View {
                 .strokeBorder(Color.wispSurfaceVariant, lineWidth: 1)
         )
         .padding(.horizontal, 12)
+    }
+
+    @ViewBuilder
+    private func pollPreview(options: [String]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(options.indices, id: \.self) { idx in
+                HStack(spacing: 8) {
+                    Circle()
+                        .strokeBorder(Color.wispPrimary, lineWidth: 1.5)
+                        .frame(width: 16, height: 16)
+                    Text(options[idx])
+                        .font(.subheadline)
+                        .foregroundStyle(.primary)
+                }
+            }
+        }
+        .padding(.vertical, 4)
+        .padding(.horizontal, 2)
     }
 }
