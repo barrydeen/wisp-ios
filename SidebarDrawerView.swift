@@ -182,6 +182,7 @@ struct SidebarDrawerView: View {
                 displayName: displayName,
                 avatarUrl: profile?.picture,
                 lud16: profile?.lud16,
+                clinkOffer: profile?.clinkOffer,
                 onOpenProfile: onOpenProfileByPubkey
             )
         }

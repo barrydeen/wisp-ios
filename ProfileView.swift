@@ -106,6 +106,7 @@ struct ProfileView: View {
                 displayName: viewModel.profile?.displayString ?? shortKey(pubkey),
                 avatarUrl: viewModel.profile?.picture,
                 lud16: viewModel.profile?.lud16,
+                clinkOffer: viewModel.profile?.clinkOffer,
                 onOpenProfile: onProfileTap
             )
         }
@@ -345,6 +346,13 @@ private struct ProfileHeaderView: View {
     /// Own profile: shows the receive QR for the user's own lightning
     /// address (you can't zap yourself).
     @State private var showLightningReceive = false
+    @State private var showOfferSheet = false
+
+    /// Decoded CLINK offer advertised on the profile, when present and valid.
+    private var clinkOffer: NofferData? {
+        guard let raw = viewModel.profile?.clinkOffer, Noffer.isNofferString(raw) else { return nil }
+        return try? Noffer.decode(raw)
+    }
     /// Whether the bio is currently shown in full or capped to the
     /// collapsed height. Long bios start collapsed so the lightning
     /// address, follow stats, and tab bar stay above the fold; the
@@ -502,6 +510,11 @@ private struct ProfileHeaderView: View {
                     avatarUrl: viewModel.profile?.picture,
                     allowOpenInWallet: false
                 )
+            }
+        }
+        .sheet(isPresented: $showOfferSheet) {
+            if let offer = clinkOffer {
+                NofferPaySheet(noffer: offer, recipientProfile: viewModel.profile, store: walletStore)
             }
         }
     }
@@ -701,6 +714,16 @@ private struct ProfileHeaderView: View {
                 accessibilityLabel: "Zap",
                 action: { showZapSheet = true }
             )
+            if clinkOffer != nil {
+                iconButton(
+                    systemName: "tag.fill",
+                    active: false,
+                    activeTint: Color.wispZapColor,
+                    disabled: false,
+                    accessibilityLabel: "Pay offer",
+                    action: { showOfferSheet = true }
+                )
+            }
             iconButton(
                 systemName: following ? "person.fill.checkmark" : "person.badge.plus",
                 active: following,

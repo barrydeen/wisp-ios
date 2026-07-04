@@ -25,6 +25,7 @@ final class ProfileEditViewModel {
     var banner: String = ""
     var nip05: String = ""
     var lud16: String = ""
+    var clinkOffer: String = ""
 
     // Pending media uploads
     var pictureItem: PhotosPickerItem?
@@ -94,6 +95,7 @@ final class ProfileEditViewModel {
         banner = p.banner ?? ""
         nip05 = p.nip05 ?? ""
         lud16 = p.lud16 ?? ""
+        clinkOffer = p.clinkOffer ?? ""
     }
 
     // MARK: - Image pickers
@@ -165,6 +167,7 @@ final class ProfileEditViewModel {
         applyField(&merged, key: "banner", value: banner)
         applyField(&merged, key: "nip05", value: nip05)
         applyField(&merged, key: "lud16", value: lud16)
+        applyField(&merged, key: "clink_offer", value: Noffer.stripNostrPrefix(clinkOffer))
 
         guard let contentData = try? JSONSerialization.data(withJSONObject: merged, options: [.sortedKeys]),
               let content = String(data: contentData, encoding: .utf8) else {

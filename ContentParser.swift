@@ -43,6 +43,8 @@ enum ContentSegment: Hashable {
     /// A lightning address (`user@domain.tld`) found inline in text — rendered
     /// as a tappable "Zap" pill that opens an LNURL-pay flow.
     case lightningAddress(String)
+    /// CLINK payment offer (`noffer1…`) — rendered as a "Pay offer" card.
+    case clinkOffer(NofferData)
 }
 
 enum ContentParser {
@@ -108,6 +110,11 @@ enum ContentParser {
     /// boundaries stop it from matching inside URLs or larger tokens.
     private static let lightningAddressRegex = try! NSRegularExpression(
         pattern: #"(?<![\w@.])([a-z0-9][a-z0-9._%+-]*@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,})(?![\w@])"#,
+        options: [.caseInsensitive]
+    )
+
+    private static let nofferRegex = try! NSRegularExpression(
+        pattern: #"(?:nostr:)?noffer1[023456789acdefghjklmnpqrstuvwxyz]{20,}"#,
         options: [.caseInsensitive]
     )
 
@@ -342,7 +349,15 @@ enum ContentParser {
             return [seg]
         }
 
-        // Pass 4: trim blank lines preceding block segments
+        // Pass 4: detect CLINK offers (noffer1…) in text segments
+        segments = segments.flatMap { seg -> [ContentSegment] in
+            if case .text(let text) = seg {
+                return splitTextForNoffers(text)
+            }
+            return [seg]
+        }
+
+        // Pass 5: trim blank lines preceding block segments
         if trimBlankLines, segments.count > 1 {
             for i in 0..<(segments.count - 1) {
                 let next = segments[i + 1]
@@ -584,6 +599,32 @@ enum ContentParser {
                 result.append(.text(ns.substring(with: NSRange(location: lastEnd, length: r.location - lastEnd))))
             }
             result.append(.lightningAddress(raw))
+            lastEnd = r.location + r.length
+        }
+        if !anyFound { return [.text(text)] }
+        if lastEnd < ns.length {
+            result.append(.text(ns.substring(from: lastEnd)))
+        }
+        return result
+    }
+
+    private static func splitTextForNoffers(_ text: String) -> [ContentSegment] {
+        let ns = text as NSString
+        let matches = nofferRegex.matches(in: text, range: NSRange(location: 0, length: ns.length))
+        if matches.isEmpty { return [.text(text)] }
+
+        var result: [ContentSegment] = []
+        var lastEnd = 0
+        var anyFound = false
+        for match in matches {
+            let raw = ns.substring(with: match.range)
+            guard let decoded = try? Noffer.decode(raw) else { continue }
+            anyFound = true
+            let r = match.range
+            if r.location > lastEnd {
+                result.append(.text(ns.substring(with: NSRange(location: lastEnd, length: r.location - lastEnd))))
+            }
+            result.append(.clinkOffer(decoded))
             lastEnd = r.location + r.length
         }
         if !anyFound { return [.text(text)] }

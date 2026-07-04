@@ -145,7 +145,8 @@ final class ProfileRepository {
             "banner": profile.banner,
             "about": profile.about,
             "nip05": profile.nip05,
-            "lud16": profile.lud16
+            "lud16": profile.lud16,
+            "clink_offer": profile.clinkOffer
         ].compactMapValues { $0 }
         UserDefaults.standard.set(dict, forKey: "profile_\(pubkey)")
         UserDefaults.standard.set(timestamp, forKey: "profile_ts_\(pubkey)")

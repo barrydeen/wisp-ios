@@ -643,9 +643,18 @@ struct SendInvoiceSheet: View {
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var galleryError: String?
     @State private var detectTask: Task<Void, Never>?
+    @State private var nofferToPay: NofferData?
 
     private var decoded: Bolt11.DecodedInvoice? { Bolt11.decode(invoice) }
     private var trimmedInvoice: String { invoice.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    /// A pasted/scanned CLINK offer, decoded if the input is `noffer1…`. When
+    /// set, the sheet swaps the bolt11/LNURL flow for a "Pay offer" entry that
+    /// opens `NofferPaySheet`.
+    private var detectedNoffer: NofferData? {
+        guard Noffer.isNofferString(trimmedInvoice) else { return nil }
+        return try? Noffer.decode(trimmedInvoice)
+    }
 
     private var amountSats: Int64? {
         guard let v = Int64(amountText.filter { $0.isNumber }), v > 0 else { return nil }
@@ -700,6 +709,9 @@ struct SendInvoiceSheet: View {
             )
             .ignoresSafeArea()
         }
+        .sheet(item: $nofferToPay) { noffer in
+            NofferPaySheet(noffer: noffer, store: store)
+        }
         .task {
             if let initial = initialInvoice, invoice.isEmpty {
                 invoice = initial
@@ -715,7 +727,7 @@ struct SendInvoiceSheet: View {
                     // TextEditor with placeholder overlay
                     ZStack(alignment: .topLeading) {
                         if invoice.isEmpty {
-                            Text("Lightning address or invoice")
+                            Text("Lightning address, invoice, or CLINK offer")
                                 .font(.system(.footnote, design: .monospaced))
                                 .foregroundStyle(.tertiary)
                                 .padding(.horizontal, 18)
@@ -787,6 +799,28 @@ struct SendInvoiceSheet: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
+                if let noffer = detectedNoffer {
+                    Button {
+                        nofferToPay = noffer
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: "tag.fill")
+                                .foregroundStyle(.white)
+                            Text("Pay CLINK offer")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.white)
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.white.opacity(0.85))
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 14)
+                        .frame(maxWidth: .infinity)
+                        .background(Color.wispZapColor, in: RoundedRectangle(cornerRadius: 14))
+                    }
+                    .buttonStyle(.plain)
+                } else {
                 // Amount field — shown for lightning addresses and LNURL
                 if needsAmountField {
                     VStack(alignment: .leading, spacing: 6) {
@@ -902,6 +936,7 @@ struct SendInvoiceSheet: View {
                 }
                 .disabled(!canProceed || inFlight)
                 .buttonStyle(.plain)
+                }
             }
             .padding(.horizontal, 20)
             .padding(.top, 12)

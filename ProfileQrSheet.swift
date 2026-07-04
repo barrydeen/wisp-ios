@@ -1,13 +1,16 @@
 import SwiftUI
 
-/// Bottom sheet showing a Nostr identity QR (bech32 npub) and, when the profile has a
-/// lud16, a Lightning address QR. Mirrors Android's `ProfileQrSheet` — single pane when
-/// no Lightning address is set, two-tab segmented control otherwise.
+/// Bottom sheet showing a Nostr identity QR (bech32 npub) and, when the profile has them,
+/// a Lightning pane carrying a Lightning-address QR and/or a CLINK offer (`noffer1…`) QR.
+/// Mirrors Android's `ProfileQrSheet` — single pane when only the npub is available, a
+/// Nostr/Lightning segmented control otherwise. Within the Lightning pane, a profile that
+/// advertises both an address and an offer gets a secondary Address/Offer toggle.
 struct ProfileQrSheet: View {
     let pubkey: String
     let displayName: String
     let avatarUrl: String?
     let lud16: String?
+    let clinkOffer: String?
     /// When provided, a scan button appears in the header; scanning another
     /// user's Nostr QR (npub / nprofile / `nostr:` URI) dismisses the sheet and
     /// hands the decoded pubkey here so the host can route to that profile.
@@ -15,10 +18,22 @@ struct ProfileQrSheet: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var tab: Tab = .nostr
+    @State private var payKind: PayKind = .address
     @State private var showScanner = false
     @State private var scanError: String?
 
     private enum Tab: Hashable { case nostr, lightning }
+
+    /// The two payment artifacts that can live under the Lightning pane.
+    private enum PayKind: Hashable {
+        case address, offer
+        var label: String {
+            switch self {
+            case .address: return "Address"
+            case .offer: return "Offer"
+            }
+        }
+    }
 
     private var npub: String? {
         guard let bytes = Hex.decode(pubkey) else { return nil }
@@ -30,10 +45,32 @@ struct ProfileQrSheet: View {
         return !lud16.isEmpty
     }
 
+    private var hasOffer: Bool {
+        Noffer.isNofferString(clinkOffer)
+    }
+
+    /// True when the Lightning pane has anything to show.
+    private var hasPayment: Bool { hasLightning || hasOffer }
+
+    /// Payment artifacts available, address first.
+    private var payKinds: [PayKind] {
+        var kinds: [PayKind] = []
+        if hasLightning { kinds.append(.address) }
+        if hasOffer { kinds.append(.offer) }
+        return kinds
+    }
+
+    /// The selected pay kind, clamped to what the profile actually advertises so
+    /// the default `.address` never renders an empty pane for an offer-only profile.
+    private var effectivePayKind: PayKind {
+        payKinds.contains(payKind) ? payKind : (payKinds.first ?? .address)
+    }
+
     private var subtitle: String {
         switch tab {
         case .nostr: return "Scan to follow on Nostr"
-        case .lightning: return "Scan to send money"
+        case .lightning:
+            return "Scan to send money"
         }
     }
 
@@ -43,7 +80,7 @@ struct ProfileQrSheet: View {
                 .padding(.top, 24)
                 .padding(.horizontal, 20)
 
-            if hasLightning || onOpenProfile != nil {
+            if hasPayment || onOpenProfile != nil {
                 tabBar
                     .padding(.horizontal, 20)
                     .padding(.top, 16)
@@ -174,6 +211,29 @@ struct ProfileQrSheet: View {
         .accessibilityLabel("Scan a Nostr QR code")
     }
 
+    /// Single contextual button shown under the QR when the profile advertises both
+    /// a Lightning address and an offer — taps flip to whichever one isn't showing.
+    private var payKindSwitchButton: some View {
+        let other: PayKind = effectivePayKind == .address ? .offer : .address
+        let title = other == .offer ? "Switch to CLINK Offer" : "Switch to Lightning address"
+        return Button {
+            withAnimation(.easeInOut(duration: 0.2)) { payKind = other }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.left.arrow.right")
+                    .font(.caption.weight(.semibold))
+                Text(title)
+                    .font(.subheadline.weight(.medium))
+            }
+            .foregroundStyle(Color.wispPrimary)
+            .padding(.vertical, 10)
+            .padding(.horizontal, 16)
+            .background(Color.wispSurfaceVariant.opacity(0.4), in: Capsule())
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
     // MARK: - Panes
 
     private var nostrPane: some View {
@@ -193,9 +253,23 @@ struct ProfileQrSheet: View {
 
     private var lightningPane: some View {
         VStack(spacing: 16) {
-            if let lud16, !lud16.isEmpty {
-                qrWithCenterAvatar(payload: lud16)
-                copyableRow(label: "Lightning address", value: lud16, tint: Color.wispZapColor)
+            switch effectivePayKind {
+            case .address:
+                if let lud16, !lud16.isEmpty {
+                    qrWithCenterAvatar(payload: lud16)
+                    copyableRow(label: "Lightning address", value: lud16, tint: Color.wispZapColor)
+                }
+            case .offer:
+                if let clinkOffer, !clinkOffer.isEmpty {
+                    qrWithCenterAvatar(payload: clinkOffer)
+                    copyableRow(label: "CLINK offer", value: clinkOffer, tint: Color.wispZapColor)
+                }
+            }
+            // Only when the profile has both artifacts; a single artifact needs
+            // no switch.
+            if payKinds.count > 1 {
+                payKindSwitchButton
+                    .padding(.top, 4)
             }
         }
         .padding(.top, 24)

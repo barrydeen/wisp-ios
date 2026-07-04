@@ -454,6 +454,8 @@ struct RichContentView: View {
             LightningInvoiceView(invoice: invoice, amountSats: amount, summary: summary, isPreview: isPreview)
         case .lightningAddress(let address):
             LightningAddressButton(address: address)
+        case .clinkOffer(let noffer):
+            NofferButton(noffer: noffer, recipientProfile: profiles[noffer.pubkey])
         default:
             EmptyView()
         }
