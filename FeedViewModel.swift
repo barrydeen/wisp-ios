@@ -1064,6 +1064,28 @@ final class FeedViewModel {
             userProfile = updated
             profiles[pubkey] = updated
         }
+
+        // Reconcile the local follow set with the freshest kind-3 on relays.
+        // `FollowsCache` is otherwise only written at onboarding and on in-app
+        // follow/unfollow, so a follow list changed in another client (e.g.
+        // trimmed via an external tool) never lands locally — and the next
+        // in-app edit republishes the stale set, undoing the change.
+        // `reconcile` adopts the relay copy only when its `created_at` is
+        // newer than the set we already hold, so it can't clobber a fresher
+        // local edit.
+        let contactResults = await RelayPool.query(
+            relays: Self.indexerRelays,
+            filter: NostrFilter(kinds: [3], authors: [pubkey], limit: 1),
+            waitForAllRelays: true
+        )
+        if let bestContacts = contactResults.filter({ $0.kind == 3 }).max(by: { $0.createdAt < $1.createdAt }) {
+            let followPubkeys = bestContacts.tags.compactMap { tag -> String? in
+                tag.count >= 2 && tag[0] == "p" ? tag[1] : nil
+            }
+            if FollowsCache.shared.reconcile(pubkey: pubkey, follows: followPubkeys, createdAt: bestContacts.createdAt) {
+                reloadFollowsCache()
+            }
+        }
     }
 
     /// Number of (score-sorted) relays the live follows feed connects to. With
