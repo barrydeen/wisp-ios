@@ -10,6 +10,9 @@ struct PollSection: View {
 
     @State private var tallyRepo = PollTallyRepository.shared
     @State private var pendingMultiSelections: Set<String> = []
+    @State private var optionsExpanded = false
+
+    private static let collapsedOptionCount = 4
 
     private var isZapPoll: Bool { pollEvent.kind == Nip69.kindZapPoll }
 
@@ -54,9 +57,11 @@ struct PollSection: View {
         let hasVoted = !tally.userVotes.isEmpty
         let isAuthor = pollEvent.pubkey == NostrKey.load()?.pubkey
         let showResults = hasVoted || ended || isAuthor
+        let isLong = options.count > Self.collapsedOptionCount
+        let visibleOptions = optionsExpanded ? options : Array(options.prefix(Self.collapsedOptionCount))
 
         return VStack(alignment: .leading, spacing: 8) {
-            ForEach(options, id: \.id) { option in
+            ForEach(visibleOptions, id: \.id) { option in
                 if showResults {
                     PollResultRow(
                         label: option.label,
@@ -84,6 +89,23 @@ struct PollSection: View {
                         }
                     }
                 }
+            }
+
+            if isLong {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { optionsExpanded.toggle() }
+                } label: {
+                    Text(optionsExpanded ? "Show fewer" : "\(options.count - Self.collapsedOptionCount) more options")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.wispPrimary)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 7)
+                        .background(Color.wispSurfaceVariant.opacity(0.6), in: Capsule())
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.top, 4)
             }
 
             if !showResults, pollType == .multiplechoice {
@@ -136,9 +158,11 @@ struct PollSection: View {
         let showResults = hasVoted || closed || isAuthor
         let minSats = Nip69.parseValueMinimum(pollEvent)
         let maxSats = Nip69.parseValueMaximum(pollEvent)
+        let isLong = options.count > Self.collapsedOptionCount
+        let visibleOptions = optionsExpanded ? options : Array(options.prefix(Self.collapsedOptionCount))
 
         return VStack(alignment: .leading, spacing: 8) {
-            ForEach(options, id: \.index) { option in
+            ForEach(visibleOptions, id: \.index) { option in
                 if showResults {
                     ZapPollResultRow(
                         label: option.label,
@@ -157,6 +181,23 @@ struct PollSection: View {
                         onZapVote(option.index)
                     }
                 }
+            }
+
+            if isLong {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { optionsExpanded.toggle() }
+                } label: {
+                    Text(optionsExpanded ? "Show fewer" : "\(options.count - Self.collapsedOptionCount) more options")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.wispPrimary)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 7)
+                        .background(Color.wispSurfaceVariant.opacity(0.6), in: Capsule())
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.top, 4)
             }
 
             if minSats != nil || maxSats != nil {
