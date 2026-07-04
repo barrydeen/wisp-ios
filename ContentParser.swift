@@ -70,7 +70,11 @@ enum ContentParser {
         let pattern = #"nostr:(?:note1|nevent1|npub1|nprofile1|naddr1)[a-z0-9]+"#
             + #"|(?<!\w)(npub1[a-z0-9]{58})(?!\w|\.[a-zA-Z])"#
             + #"|(?:https?|wss?):\/\/\S+"#
-            + #"|(?<!\w)((?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+(?:\#(tlds))(?:\/\S*)?)(?!\w)"#
+            // Lookbehind excludes `@` and `.` in addition to word chars so the
+            // domain half of a lightning / email address (`user@getalby.com`)
+            // or a deeper subdomain segment isn't matched as a standalone URL
+            // and rendered as a link-preview card.
+            + #"|(?<![\w@.])((?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+(?:\#(tlds))(?:\/\S*)?)(?!\w)"#
             + #"|(?<!\w)#([a-zA-Z0-9_][a-zA-Z0-9_-]*)"#
             + #"|(?<!\w)((?:note1|nevent1|nprofile1|naddr1)[a-z0-9]{10,})(?!\w)"#
         return try! NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
