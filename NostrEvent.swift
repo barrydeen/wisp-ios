@@ -20,8 +20,21 @@ nonisolated struct NostrEvent {
         self.sig = sig
     }
 
+    /// True when the event carries an `e` tag that denotes a threading
+    /// position (reply / root), i.e. it's part of a conversation. NIP-18
+    /// quote `mention` markers are excluded — a quote post carries an
+    /// `["e", id, "", "mention"]` tag but is still a standalone top-level
+    /// note, not a reply. Mirrors `Nip10.eTagsExcludingMentions`.
+    var hasThreadingETag: Bool {
+        tags.contains { tag in
+            guard tag.first == "e" else { return false }
+            if tag.count >= 4, tag[3] == "mention" { return false }
+            return true
+        }
+    }
+
     var isRootNote: Bool {
-        kind == 1 && !tags.contains { $0.first == "e" }
+        kind == 1 && !hasThreadingETag
     }
 
     init?(json: [String: Any]) {

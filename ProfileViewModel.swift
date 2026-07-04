@@ -854,12 +854,15 @@ final class ProfileViewModel {
     private func isRootOrRepost(_ event: NostrEvent) -> Bool {
         guard event.pubkey == pubkey else { return false }
         if event.kind == 6 || [20, 21, 22, 30023].contains(event.kind) { return true }
-        return event.kind == 1 && !event.tags.contains { $0.first == "e" }
+        // A quote post carries an `e … mention` tag but is a top-level note,
+        // so it belongs in the Notes tab, not Replies. `hasThreadingETag`
+        // ignores mention markers.
+        return event.kind == 1 && !event.hasThreadingETag
     }
 
     private func isReply(_ event: NostrEvent) -> Bool {
         guard event.pubkey == pubkey, event.kind == 1 else { return false }
-        return event.tags.contains { $0.first == "e" }
+        return event.hasThreadingETag
     }
 
     private func persistKnownKinds(_ events: [NostrEvent]) async {
