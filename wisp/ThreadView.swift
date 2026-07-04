@@ -11,6 +11,7 @@ struct ThreadView: View {
     /// environment (injected at `MainView`'s root).
     @State private var showReplyCompose: Bool = false
     @State private var suppressNextDisappearChainRemoval: Bool = false
+    @State private var didScrollToFocal: Bool = false
     @Environment(\.dismiss) private var dismiss
 
     /// The active tab's NavigationStack path. Mutated directly by smart-pop so a
@@ -84,6 +85,19 @@ struct ThreadView: View {
                             }
                         }
 
+                        // Optimistic pending reply — shown at the bottom of
+                        // the replies list (where the new reply will land
+                        // once relays accept it) so the user gets immediate
+                        // visual confirmation. Gated to the kind-1 reply case
+                        // referencing this thread's focal so we don't surface
+                        // a pending reply that belongs to a different thread.
+                        if let pending = PendingPostStore.shared.pending,
+                           pending.event.kind == 1,
+                           PendingPostStore.shared.pendingIsReply,
+                           pendingTargetsCurrentThread(pending: pending) {
+                            PendingPostRow(pending: pending)
+                        }
+
                         if !viewModel.hiddenSpamReplies.isEmpty {
                             hiddenSpamSection
                         }
@@ -96,6 +110,8 @@ struct ThreadView: View {
                     }
                 }
                 .refreshable { await viewModel.refresh() }
+                .onChange(of: viewModel.focal?.id) { _, _ in scrollToFocalIfNeeded(proxy: proxy) }
+                .onChange(of: viewModel.ancestors.count) { _, _ in scrollToFocalIfNeeded(proxy: proxy) }
                 .onChange(of: viewModel.scrollTargetId) { _, targetId in
                     guard let targetId else { return }
                     withAnimation(.easeInOut(duration: 0.3)) {
@@ -613,6 +629,41 @@ struct ThreadView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// True when the pending event's `e` tags reference the focal post or
+    /// one of its ancestors — i.e. it really is a reply to *this* thread.
+    /// Without this gate, opening any thread while a pending reply exists
+    /// (e.g. one composed from a different thread) would render the row in
+    /// the wrong context.
+    private func pendingTargetsCurrentThread(pending: PendingPostStore.PendingPost) -> Bool {
+        var thisThreadIds: Set<String> = []
+        if let focalId = viewModel.focal?.id { thisThreadIds.insert(focalId) }
+        thisThreadIds.insert(viewModel.rootId)
+        for ancestor in viewModel.ancestors { thisThreadIds.insert(ancestor.id) }
+        for tag in pending.event.tags where tag.first == "e" && tag.count >= 2 {
+            if thisThreadIds.contains(tag[1]) { return true }
+        }
+        return false
+    }
+
+    private func scrollToFocalIfNeeded(proxy: ScrollViewProxy) {
+        guard !didScrollToFocal else { return }
+        guard let focalId = viewModel.focal?.id else { return }
+        // No ancestors yet AND the focal is the root → nothing to scroll past, mark done.
+        if viewModel.ancestors.isEmpty && viewModel.rootId == focalId {
+            didScrollToFocal = true
+            return
+        }
+        // Otherwise wait for at least one ancestor to render before scrolling, so the
+        // focal lands at the top instead of in the middle of an empty view.
+        guard !viewModel.ancestors.isEmpty else { return }
+        didScrollToFocal = true
+        DispatchQueue.main.async {
+            withAnimation(.easeInOut(duration: 0.25)) {
+                proxy.scrollTo(focalId, anchor: .top)
+            }
+        }
     }
 
     private var composer: some View {
