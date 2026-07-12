@@ -48,7 +48,7 @@ struct AccountSwitcherSheet: View {
                         accountRow(acctPubkey, index: index)
                     }
                 }
-                .animation(nil, value: accounts)
+                .transaction { $0.animation = nil }
             }
             .frame(maxHeight: .infinity)
 
@@ -144,7 +144,18 @@ struct AccountSwitcherSheet: View {
         guard let index = accounts.firstIndex(of: pubkey) else { return }
         let target = index + offset
         guard target >= 0, target < accounts.count else { return }
-        accounts.swapAt(index, target)
+        // The row list's `.transaction { $0.animation = nil }` alone wasn't
+        // enough — an ambient animation transaction inherited from an
+        // ancestor (e.g. the sheet's own presentation transaction) could
+        // still slip through and make the swapped rows' arrows slide.
+        // `disablesAnimations` is the hard override: it forces this exact
+        // state change through with no animation regardless of what's active
+        // up the view tree.
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            accounts.swapAt(index, target)
+        }
     }
 
     private var addAccountRow: some View {
