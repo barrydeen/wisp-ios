@@ -22,6 +22,17 @@ struct MediaGridView: View {
     /// negative trailing padding) overshoots the nested container by
     /// the parent's own padding (~28pt) and bleeds past the screen edge.
     var nested: Bool = false
+    /// Total horizontal inset (both sides combined, in points) between the
+    /// screen edge and this gallery's nested container. Only used to seed
+    /// `tileHeightForNested` — the `.frame(height:)` that reserves scrollable
+    /// space for this view *before* its own `GeometryReader` has measured the
+    /// real width (see that property's doc for why the guess is needed at
+    /// all). Defaults to `QuotedNoteView`'s chrome (16pt card padding + 12pt
+    /// quoted-note padding, doubled); callers with different chrome — e.g.
+    /// `ComposerPreviewCard`'s 12pt outer + 12pt inner padding — must pass
+    /// their own total or the reserved height undershoots the real content
+    /// height, silently truncating the scrollable region around this view.
+    var nestedHorizontalInset: CGFloat = 56
     /// When set, tile taps fire this closure instead of presenting the
     /// pager themselves. Used by `RichContentView` so a single post-wide
     /// `FullScreenMediaPager` shows every image and video in the post,
@@ -130,10 +141,9 @@ struct MediaGridView: View {
     /// `GeometryReader`'s explicit height so the parent VStack reserves
     /// the right vertical space — `GeometryReader` itself is greedy.
     private var tileHeightForNested: CGFloat {
-        // Same formula as feedBody, but anchored to a typical nested
-        // container width (screen width minus the parent card's 16pt
-        // padding minus the QuotedNoteView's 12pt inner padding × 2).
-        let approxWidth = max(1, UIScreen.main.bounds.width - 56)
+        // Same formula as feedBody, but anchored to the caller-supplied
+        // nested container width (see `nestedHorizontalInset`'s doc).
+        let approxWidth = max(1, UIScreen.main.bounds.width - nestedHorizontalInset)
         return approxWidth * tileWidthFraction / tileAspect
     }
 

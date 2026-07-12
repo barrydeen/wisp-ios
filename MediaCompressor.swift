@@ -105,10 +105,14 @@ enum MediaCompressor {
         format.scale = 1
         format.opaque = !hasAlpha(image)
         // Preserve wide-gamut colours (Display P3 from iPhone cameras) through the
-        // resize. Default `.standard` flattens to sRGB, which strips the saturation
+        // resize. `.standard` flattens to sRGB, which strips the saturation
         // visible on color-managed viewers and produces washed-out uploads.
         // `UIImage.jpegData` then embeds the matching ICC profile in the output.
-        format.preferredRange = .extended
+        // `.automatic` still gets P3 — `.extended` forces the EDR headroom used
+        // for true HDR content, and redrawing a Smart HDR/gain-map source photo
+        // (the common case for bright outdoor shots) into that headroom bakes a
+        // dark horizontal band into the output where the tone-mapping seams.
+        format.preferredRange = .automatic
         let renderer = UIGraphicsImageRenderer(size: target, format: format)
         return renderer.image { _ in
             image.draw(in: CGRect(origin: .zero, size: target))
