@@ -439,6 +439,9 @@ final class WalletStore {
         if LnurlResolver.isLightningAddress(trimmed) {
             return .lightningAddressNeedsResolve(trimmed, info: nil)
         }
+        if trimmed.hasPrefix("lnurl1") {
+            return .lightningAddressNeedsResolve(trimmed, info: nil)
+        }
         return .unknown
     }
 

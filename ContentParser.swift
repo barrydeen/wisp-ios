@@ -42,6 +42,7 @@ enum ContentSegment: Hashable {
     /// A lightning address (`user@domain.tld`) found inline in text — rendered
     /// as a tappable "Zap" pill that opens an LNURL-pay flow.
     case lightningAddress(String)
+    case lnurlPayable(encoded: String)
 }
 
 enum ContentParser {
@@ -82,6 +83,11 @@ enum ContentParser {
 
     private static let bolt11Regex = try! NSRegularExpression(
         pattern: #"(lightning:)?(lnbc|lntb|lnbcrt)[0-9a-z]{50,}"#,
+        options: [.caseInsensitive]
+    )
+
+    private static let lnurlRegex = try! NSRegularExpression(
+        pattern: #"(?<!\w)(lnurl1[a-z0-9]{30,})(?!\w)"#,
         options: [.caseInsensitive]
     )
 
@@ -297,7 +303,15 @@ enum ContentParser {
             return [seg]
         }
 
-        // Pass 4: trim blank lines preceding block segments
+        // Pass 4: detect bech32-encoded LNURLs in text segments
+        segments = segments.flatMap { seg -> [ContentSegment] in
+            if case .text(let text) = seg {
+                return splitTextForLnurls(text)
+            }
+            return [seg]
+        }
+
+        // Pass 5: trim blank lines preceding block segments
         if trimBlankLines, segments.count > 1 {
             for i in 0..<(segments.count - 1) {
                 let next = segments[i + 1]
@@ -532,6 +546,33 @@ enum ContentParser {
                 result.append(.text(ns.substring(with: NSRange(location: lastEnd, length: r.location - lastEnd))))
             }
             result.append(.lightningAddress(raw))
+            lastEnd = r.location + r.length
+        }
+        if !anyFound { return [.text(text)] }
+        if lastEnd < ns.length {
+            result.append(.text(ns.substring(from: lastEnd)))
+        }
+        return result
+    }
+
+    private static func splitTextForLnurls(_ text: String) -> [ContentSegment] {
+        let ns = text as NSString
+        let matches = lnurlRegex.matches(in: text, range: NSRange(location: 0, length: ns.length))
+        if matches.isEmpty { return [.text(text)] }
+
+        var result: [ContentSegment] = []
+        var lastEnd = 0
+        var anyFound = false
+        for match in matches {
+            let raw = ns.substring(with: match.range)
+            let encoded = raw.lowercased()
+            guard let (hrp, _) = Bech32.decode(encoded), hrp == "lnurl" else { continue }
+            anyFound = true
+            let r = match.range
+            if r.location > lastEnd {
+                result.append(.text(ns.substring(with: NSRange(location: lastEnd, length: r.location - lastEnd))))
+            }
+            result.append(.lnurlPayable(encoded: encoded))
             lastEnd = r.location + r.length
         }
         if !anyFound { return [.text(text)] }

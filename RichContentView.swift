@@ -446,6 +446,8 @@ struct RichContentView: View {
             LightningInvoiceView(invoice: invoice, amountSats: amount, summary: summary, isPreview: isPreview)
         case .lightningAddress(let address):
             LightningAddressButton(address: address)
+        case .lnurlPayable(let encoded):
+            LnurlPayableView(encoded: encoded)
         default:
             EmptyView()
         }
