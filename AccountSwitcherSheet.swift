@@ -14,6 +14,15 @@ struct AccountSwitcherSheet: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var accounts: [String] = []
+    /// Local mirror of `ProfileRepository`'s cache for the listed accounts.
+    /// `ProfileRepository` isn't observable, so a row for an account whose
+    /// kind-0 hasn't been fetched yet (e.g. a freshly imported key that has
+    /// never appeared as an author/mention in this session's feed) would
+    /// otherwise show its npub fallback forever — nothing would ever tell
+    /// SwiftUI to re-render once the profile arrived. Seeding this from the
+    /// cache in `onAppear` and then refreshing it from `.task`'s `ensure(_:)`
+    /// call closes that gap.
+    @State private var profiles: [String: ProfileData] = [:]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -53,12 +62,19 @@ struct AccountSwitcherSheet: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         .presentationDetents([.medium])
         .presentationDragIndicator(.visible)
-        .onAppear { accounts = initialAccounts }
+        .onAppear {
+            accounts = initialAccounts
+            profiles = ProfileRepository.shared.getAll(initialAccounts)
+        }
+        .task {
+            let fetched = await ProfileRepository.shared.ensure(initialAccounts)
+            profiles.merge(fetched) { _, new in new }
+        }
     }
 
     private func accountRow(_ acctPubkey: String, index: Int) -> some View {
         let isActive = acctPubkey == activePubkey
-        let acctProfile = isActive ? activeProfile : ProfileRepository.shared.get(acctPubkey)
+        let acctProfile = isActive ? activeProfile : profiles[acctPubkey]
 
         return Button {
             // `switchAccount` (not `loadAccount`) so the keychain's `active`
