@@ -418,12 +418,19 @@ struct RichContentView: View {
                 fallbackLink(url)
             }
         case .nostrNote(let eventId, let relayHints):
+            // Forward this view's own inset rather than QuotedNoteView's
+            // narrower feed-tuned default (56) — an inline `nostr:nevent…`
+            // quote embedded in a wider host (e.g. NotificationRowView's
+            // caption indent) otherwise undersizes its own gallery's
+            // reserved height, producing a visual overlap with whatever
+            // renders below it.
             QuotedNoteView(
                 eventId: eventId,
                 relayHints: relayHints,
                 profiles: profiles,
                 onProfileTap: onProfileTap,
                 onNoteTap: onNoteTap,
+                nestedHorizontalInset: nestedHorizontalInset,
                 onHashtagTap: onHashtagTap
             )
         case .nostrAddressable(let dTag, let relays, let author, let kind):
