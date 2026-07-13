@@ -88,3 +88,10 @@ struct ZapSheetRequest {
     var forcePrivate: Bool = false
     var onSuccess: ((Int64) -> Void)? = nil
 }
+
+/// Wraps a Share Extension hand-off's item providers so `MainView` can drive
+/// a `.sheet(item:)` off it. See `PendingShareStore` / `wispApp.onOpenURL`.
+struct PendingShareItem: Identifiable {
+    let id = UUID()
+    let providers: [NSItemProvider]
+}

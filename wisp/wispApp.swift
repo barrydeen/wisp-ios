@@ -53,6 +53,13 @@ struct wispApp: App {
                 .environment(audioPlayer)
                 .preferredColorScheme(settings.preferredColorScheme)
                 .onOpenURL { url in
+                    if url.scheme == "wisp", url.host == "share" {
+                        let files = PendingShareStore.consumePendingFiles()
+                        let providers = files.compactMap { NSItemProvider(contentsOf: $0) }
+                        guard !providers.isEmpty else { return }
+                        NotificationCenter.default.post(name: .pendingShareReceived, object: providers)
+                        return
+                    }
                     // Required for Google Sign-In's OAuth redirect to make
                     // its way back into the SDK after the in-app browser
                     // returns from accounts.google.com.
