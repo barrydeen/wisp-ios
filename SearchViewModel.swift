@@ -373,12 +373,12 @@ final class SearchViewModel {
     private func handlePeopleResults(_ events: [NostrEvent]) {
         var seen = Set<String>()
         var results: [ProfileData] = []
-        let blocked = SafetyFilter.shared.snapshot.blockedPubkeys
+        // Blocked users still surface here (unlike note search) — it's the
+        // only way to find someone again to unblock them, since their notes
+        // and profile no longer appear anywhere else. Kind-0 is WoT-exempt
+        // by design (profiles stay resolvable), so people search keeps
+        // working with the WoT filter on.
         for event in events where event.kind == 0 {
-            // Blocked users never surface as people results. Kind-0 is
-            // WoT-exempt by design (profiles stay resolvable), so people
-            // search keeps working with the WoT filter on.
-            if blocked.contains(event.pubkey) { continue }
             guard seen.insert(canonicalPubkey(event.pubkey)).inserted else { continue }
             if let profile = profileRepo.updateFromEvent(event) {
                 results.append(profile)
