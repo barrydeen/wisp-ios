@@ -36,6 +36,26 @@ enum PendingShareStore {
         }
     }
 
+    /// Marker extension for a staged plain-text/URL share, as opposed to a
+    /// staged media file — lets `consumePendingFiles`'s caller tell the two
+    /// apart without a second directory or notification payload.
+    static let textFileExtension = "sharetext"
+
+    /// Writes shared text (or a shared URL's absolute string) into the App
+    /// Group container as a `.sharetext` file, using the same staging
+    /// directory as `stage(fileAt:)`.
+    @discardableResult
+    static func stageText(_ text: String) -> Bool {
+        guard let dir = containerDirectory else { return false }
+        let dest = dir.appendingPathComponent(UUID().uuidString + ".\(textFileExtension)")
+        do {
+            try text.write(to: dest, atomically: true, encoding: .utf8)
+            return true
+        } catch {
+            return false
+        }
+    }
+
     /// Copies every staged file into the app's own tmp directory and clears
     /// the App Group container, so a later share can't re-deliver stale
     /// files. Done synchronously and eagerly (rather than deleting lazily

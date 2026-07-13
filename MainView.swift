@@ -490,11 +490,15 @@ struct MainView: View {
             ComposeView(keypair: keypair, draft: draft)
         }
         .sheet(item: $pendingShare) { share in
-            ComposeView(keypair: keypair, pendingAttachmentProviders: share.providers)
+            if let text = share.text {
+                ComposeView(keypair: keypair, initialText: text)
+            } else {
+                ComposeView(keypair: keypair, pendingAttachmentProviders: share.providers)
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .pendingShareReceived)) { note in
-            guard let providers = note.object as? [NSItemProvider] else { return }
-            pendingShare = PendingShareItem(providers: providers)
+            guard let item = note.object as? PendingShareItem else { return }
+            pendingShare = item
         }
         .onChange(of: draftToast.pendingDraft?.dTag) { _, dTag in
             // ComposeView's autosave-on-dismiss writes the draft here from

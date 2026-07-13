@@ -55,9 +55,18 @@ struct wispApp: App {
                 .onOpenURL { url in
                     if url.scheme == "wisp", url.host == "share" {
                         let files = PendingShareStore.consumePendingFiles()
+                        guard !files.isEmpty else { return }
+                        // A text/link share stages one `.sharetext` file
+                        // instead of media — see `ShareViewController`.
+                        if let textFile = files.first(where: { $0.pathExtension == PendingShareStore.textFileExtension }),
+                           let text = try? String(contentsOf: textFile, encoding: .utf8),
+                           !text.isEmpty {
+                            NotificationCenter.default.post(name: .pendingShareReceived, object: PendingShareItem(text: text))
+                            return
+                        }
                         let providers = files.compactMap { NSItemProvider(contentsOf: $0) }
                         guard !providers.isEmpty else { return }
-                        NotificationCenter.default.post(name: .pendingShareReceived, object: providers)
+                        NotificationCenter.default.post(name: .pendingShareReceived, object: PendingShareItem(providers: providers))
                         return
                     }
                     // Required for Google Sign-In's OAuth redirect to make

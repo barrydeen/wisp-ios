@@ -1,10 +1,11 @@
 import UIKit
 import UniformTypeIdentifiers
 
-/// Share Extension entry point. Stages every shared image/video into the
-/// App Group container via `PendingShareStore`, then hands off to the main
-/// app with `wisp://share` — no compose UI lives here; the main app opens
-/// straight into `ComposeView` with the media already attached (see
+/// Share Extension entry point. Stages every shared image/video (or, absent
+/// any media, a shared URL/plain text) into the App Group container via
+/// `PendingShareStore`, then hands off to the main app with `wisp://share`
+/// — no compose UI lives here; the main app opens straight into
+/// `ComposeView` with the content already attached / pre-filled (see
 /// `wispApp.onOpenURL`, `MainView.pendingShare`).
 final class ShareViewController: UIViewController {
     private let statusLabel = UILabel()
@@ -58,6 +59,24 @@ final class ShareViewController: UIViewController {
             }
         }
 
+        // No media matched — this is a text/link share (e.g. Safari's "Share
+        // Page", or selected text from Notes). Only one piece of text makes
+        // it into the composer, so stop at the first provider that resolves.
+        if !stagedAny {
+            for provider in providers {
+                if provider.hasItemConformingToTypeIdentifier(UTType.url.identifier),
+                   let url = await loadURL(provider), PendingShareStore.stageText(url.absoluteString) {
+                    stagedAny = true
+                    break
+                }
+                if provider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier),
+                   let text = await loadText(provider), PendingShareStore.stageText(text) {
+                    stagedAny = true
+                    break
+                }
+            }
+        }
+
         guard stagedAny else {
             statusLabel.text = "Wisp doesn't support this content."
             spinner.stopAnimating()
@@ -83,6 +102,22 @@ final class ShareViewController: UIViewController {
                     return
                 }
                 continuation.resume(returning: PendingShareStore.stage(fileAt: url, preferredExtension: preferredExtension))
+            }
+        }
+    }
+
+    private func loadURL(_ provider: NSItemProvider) async -> URL? {
+        await withCheckedContinuation { continuation in
+            provider.loadItem(forTypeIdentifier: UTType.url.identifier, options: nil) { item, _ in
+                continuation.resume(returning: item as? URL)
+            }
+        }
+    }
+
+    private func loadText(_ provider: NSItemProvider) async -> String? {
+        await withCheckedContinuation { continuation in
+            provider.loadItem(forTypeIdentifier: UTType.plainText.identifier, options: nil) { item, _ in
+                continuation.resume(returning: item as? String)
             }
         }
     }
