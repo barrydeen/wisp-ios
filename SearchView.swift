@@ -7,6 +7,7 @@ struct SearchView: View {
 
     @FocusState private var queryFocused: Bool
     @State private var showAddRelaySheet = false
+    @State private var mutes = MuteRepository.shared
 
     var body: some View {
         VStack(spacing: 0) {
@@ -455,6 +456,9 @@ struct SearchView: View {
                             if let nip05 = profile.nip05, !nip05.isEmpty {
                                 Nip05Badge(nip05: nip05, pubkey: profile.pubkey)
                             }
+                            if mutes.isBlocked(profile.pubkey) {
+                                blockedBadge
+                            }
                             Spacer(minLength: 0)
                         }
                         let isCollision = (nameCounts[profile.displayString.lowercased()] ?? 0) > 1
@@ -483,6 +487,23 @@ struct SearchView: View {
     }
 
     // MARK: - Helpers
+
+    /// Shown next to a blocked user's name in results — search is the only
+    /// place their profile is still discoverable, so it's worth flagging
+    /// before the user taps in (their profile page shows the full unblock
+    /// banner in place of notes).
+    private var blockedBadge: some View {
+        HStack(spacing: 3) {
+            Image(systemName: "nosign")
+                .font(.system(size: 9, weight: .semibold))
+            Text("Blocked")
+                .font(.caption2.weight(.medium))
+        }
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(Color.wispSurfaceVariant.opacity(0.7), in: Capsule())
+    }
 
     private var currentResultsEmpty: Bool {
         viewModel.mode == .notes ? viewModel.notes.isEmpty : viewModel.people.isEmpty
