@@ -29,7 +29,7 @@ struct SidebarDrawerView: View {
     @Environment(AppSettings.self) private var settings
 
     @State private var settingsExpanded = false
-    @State private var accountsExpanded = false
+    @State private var showAccountSwitcher = false
     @State private var showLogoutConfirm = false
     @State private var showQRSheet = false
     @State private var showStatusEditor = false
@@ -112,11 +112,6 @@ struct SidebarDrawerView: View {
                             .padding(.horizontal, 16)
                             .padding(.bottom, 12)
 
-                        if accountsExpanded {
-                            accountPickerSection
-                                .transition(.opacity)
-                        }
-
                         Divider().overlay(Color.wispSurfaceVariant.opacity(0.5))
                             .padding(.bottom, 8)
 
@@ -185,6 +180,15 @@ struct SidebarDrawerView: View {
                 onOpenProfile: onOpenProfileByPubkey
             )
         }
+        .sheet(isPresented: $showAccountSwitcher) {
+            AccountSwitcherSheet(
+                initialAccounts: accounts,
+                activePubkey: pubkey,
+                activeProfile: profile,
+                onSwitchAccount: onSwitchAccount,
+                onAddAccount: onAddAccount
+            )
+        }
     }
 
     // MARK: - Header
@@ -197,38 +201,29 @@ struct SidebarDrawerView: View {
                 }
                 .buttonStyle(.plain)
 
-            // Account indicator: + circle (solo) or + N pill+chevron (multiple)
+            // Icon-only affordance that opens the account switcher sheet. Same
+            // action (switch or add an account) regardless of how many
+            // accounts are signed in; shows a "+N" badge counting the other
+            // accounts when more than one is signed in.
             let otherCount = accounts.count - 1
-            if otherCount <= 0 {
-                Button(action: onAddAccount) {
-                    ZStack {
-                        Circle()
-                            .fill(Color.wispSurfaceVariant)
-                            .frame(width: 26, height: 26)
-                        Image(systemName: "plus")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(Color.secondary)
-                    }
-                }
-                .buttonStyle(.plain)
-            } else {
-                Button {
-                    withAnimation { accountsExpanded.toggle() }
-                } label: {
-                    HStack(spacing: 2) {
-                        Text("+ \(otherCount)")
+            Button {
+                showAccountSwitcher = true
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "person.2")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Color.secondary)
+                    if otherCount > 0 {
+                        Text("+\(otherCount)")
                             .font(.system(size: 11, weight: .bold))
                             .foregroundStyle(Color.secondary)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 4)
-                            .background(Color.wispSurfaceVariant, in: Capsule())
-                        Image(systemName: accountsExpanded ? "chevron.down" : "chevron.right")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(Color.secondary)
                     }
                 }
-                .buttonStyle(.plain)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(Color.wispSurfaceVariant, in: Capsule())
             }
+            .buttonStyle(.plain)
 
                 Spacer()
 
@@ -317,70 +312,6 @@ struct SidebarDrawerView: View {
                 avatarTapCount = 0
             }
         }
-    }
-
-    // MARK: - Account picker
-
-    private var accountPickerSection: some View {
-        VStack(spacing: 0) {
-            ForEach(accounts, id: \.self) { acctPubkey in
-                Button {
-                    accountsExpanded = false
-                    // `switchAccount` (not `loadAccount`) so the keychain's
-                    // `active` slot and `cachedActive` are updated before
-                    // the loading splash reads `NostrKey.load()` to pick
-                    // the avatar — otherwise the splash renders the
-                    // previous account's avatar through the entire transition.
-                    if acctPubkey != pubkey, let kp = NostrKey.switchAccount(pubkey: acctPubkey) {
-                        onSwitchAccount(kp)
-                    }
-                } label: {
-                    let acctProfile = ProfileRepository.shared.get(acctPubkey)
-                    HStack(spacing: 12) {
-                        CachedAvatarView(url: acctProfile?.picture, size: 32)
-                        Text(acctProfile?.displayString ?? Nip19.shortNpub(hex: acctPubkey))
-                            .font(.system(size: 14))
-                            .foregroundStyle(.primary)
-                        Spacer()
-                        if NostrKey.isWatchOnly(pubkey: acctPubkey) {
-                            Image(systemName: "eye")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(.secondary)
-                        }
-                        if acctPubkey == pubkey {
-                            Image(systemName: "checkmark")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(Color.wispPrimary)
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
-
-            Button {
-                accountsExpanded = false
-                onAddAccount()
-            } label: {
-                HStack(spacing: 12) {
-                    Image(systemName: "plus.circle")
-                        .font(.system(size: 20))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 32, height: 32)
-                    Text("Add Account")
-                        .font(.system(size: 14))
-                        .foregroundStyle(.primary)
-                    Spacer()
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.bottom, 8)
     }
 
     // MARK: - Primary items

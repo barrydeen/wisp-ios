@@ -38,6 +38,7 @@
 		4CABCD010000000000F30005 /* PrivateReactionPublisher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30005 /* PrivateReactionPublisher.swift */; };
 		4CABCD010000000000F30006 /* Dip03.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30006 /* Dip03.swift */; };
 		4CABCD010000000000F30050 /* WispTopHeader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30050 /* WispTopHeader.swift */; };
+		4CABCD010000000000F30051 /* AccountSwitcherSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30051 /* AccountSwitcherSheet.swift */; };
 		4CABCD030000000000F30010 /* DmGiftWrapIngestor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD020000000000F30010 /* DmGiftWrapIngestor.swift */; };
 		4CABCD030000000000F30040 /* CldrEmojiKeywords.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD020000000000F30040 /* CldrEmojiKeywords.swift */; };
 		4CABCD040000000000F30041 /* cldr-emoji-keywords-en.json in Resources */ = {isa = PBXBuildFile; fileRef = 4CABCD020000000000F30041 /* cldr-emoji-keywords-en.json */; };
@@ -379,6 +380,7 @@
 		4CABCD000000000000F30005 /* PrivateReactionPublisher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateReactionPublisher.swift; sourceTree = "<group>"; };
 		4CABCD000000000000F30006 /* Dip03.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Dip03.swift; sourceTree = "<group>"; };
 		4CABCD000000000000F30050 /* WispTopHeader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WispTopHeader.swift; sourceTree = "<group>"; };
+		4CABCD000000000000F30051 /* AccountSwitcherSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountSwitcherSheet.swift; sourceTree = "<group>"; };
 		4CABCD020000000000F30010 /* DmGiftWrapIngestor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DmGiftWrapIngestor.swift; sourceTree = "<group>"; };
 		4CABCD020000000000F30040 /* CldrEmojiKeywords.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CldrEmojiKeywords.swift; sourceTree = "<group>"; };
 		4CABCD020000000000F30041 /* cldr-emoji-keywords-en.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "cldr-emoji-keywords-en.json"; sourceTree = "<group>"; };
@@ -985,6 +987,7 @@
 				4CABCD0000000000000F2004 /* DeletionSender.swift */,
 				07C633F5326A411B9E8DF5A8 /* MediaSaveService.swift */,
 				4CABCD0000000000000F2005 /* ProfileQrSheet.swift */,
+				4CABCD000000000000F30051 /* AccountSwitcherSheet.swift */,
 				4CABCD0000000000000F2006 /* KeysSettingsView.swift */,
 				4CABCD0000000000000F2007 /* MediaGridView.swift */,
 				4CABCD0000000000000F2008 /* build.xcconfig */,
@@ -1513,6 +1516,7 @@
 				4CABCD010000000000F30006 /* Dip03.swift in Sources */,
 				4CABCD010000000000050000 /* BackChevronButton.swift in Sources */,
 				4CABCD010000000000F30050 /* WispTopHeader.swift in Sources */,
+				4CABCD010000000000F30051 /* AccountSwitcherSheet.swift in Sources */,
 				4CABCD010000000000F2010 /* NewPostsPill.swift in Sources */,
 				4CABCE0100000000000F4607 /* Signer.swift in Sources */,
 				9399A5358082EE4084A6797A /* PendingShareStore.swift in Sources */,
