@@ -51,6 +51,12 @@ struct RichContentView: View {
     /// Used by the composer preview so e.g. a lightning invoice card's Pay
     /// button is disabled — the note hasn't been posted yet.
     var isPreview: Bool = false
+    /// Forwarded to `MediaGridView.nestedHorizontalInset` — see that
+    /// property's doc. Only meaningful when `nested` is true; callers whose
+    /// chrome differs from `QuotedNoteView`'s default (e.g. `ComposerPreviewCard`)
+    /// must override this or the gallery's reserved height undershoots its
+    /// real height and truncates the host's scrollable region.
+    var nestedHorizontalInset: CGFloat = 56
     /// When true, each inline-text run publishes its rendered height up the
     /// `RichTextContentHeightKey` preference so the host card can base its
     /// "Show more" decision on text length alone. Off by default so nested
@@ -332,6 +338,7 @@ struct RichContentView: View {
             MediaGridView(
                 items: runItems,
                 nested: nested,
+                nestedHorizontalInset: nestedHorizontalInset,
                 onTileTap: { localIdx in
                     // The carousel's index is local to this run — translate
                     // to the post-wide index before opening the pager.
@@ -411,12 +418,19 @@ struct RichContentView: View {
                 fallbackLink(url)
             }
         case .nostrNote(let eventId, let relayHints):
+            // Forward this view's own inset rather than QuotedNoteView's
+            // narrower feed-tuned default (56) — an inline `nostr:nevent…`
+            // quote embedded in a wider host (e.g. NotificationRowView's
+            // caption indent) otherwise undersizes its own gallery's
+            // reserved height, producing a visual overlap with whatever
+            // renders below it.
             QuotedNoteView(
                 eventId: eventId,
                 relayHints: relayHints,
                 profiles: profiles,
                 onProfileTap: onProfileTap,
                 onNoteTap: onNoteTap,
+                nestedHorizontalInset: nestedHorizontalInset,
                 onHashtagTap: onHashtagTap
             )
         case .nostrAddressable(let dTag, let relays, let author, let kind):
