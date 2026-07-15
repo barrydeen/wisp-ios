@@ -69,6 +69,11 @@ struct MainView: View {
     /// the draft-saved toast tap). Separate from `showCompose` so SwiftUI
     /// mounts a fresh `ComposeView` keyed off the draft's dTag.
     @State private var reopenDraft: Nip37.Draft?
+    /// Set when the Share Extension hands off media via `wisp://share` (see
+    /// `PendingShareStore` / `wispApp.onOpenURL`). Drives its own
+    /// `.sheet(item:)`, separate from `showCompose`, so SwiftUI mounts a
+    /// fresh `ComposeView` carrying the hand-off's attachments.
+    @State private var pendingShare: PendingShareItem?
     /// Bumped from `popToRoot(.home)` so the feed `ScrollViewReader` can scroll
     /// to the top anchor. Tap-on-active-tab clears the nav stack first; on a
     /// subsequent tap (when the stack is already empty) it animates to the top.
@@ -483,6 +488,17 @@ struct MainView: View {
         }
         .sheet(item: $reopenDraft) { draft in
             ComposeView(keypair: keypair, draft: draft)
+        }
+        .sheet(item: $pendingShare) { share in
+            if let text = share.text {
+                ComposeView(keypair: keypair, initialText: text)
+            } else {
+                ComposeView(keypair: keypair, pendingAttachmentProviders: share.providers)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .pendingShareReceived)) { note in
+            guard let item = note.object as? PendingShareItem else { return }
+            pendingShare = item
         }
         .onChange(of: draftToast.pendingDraft?.dTag) { _, dTag in
             // ComposeView's autosave-on-dismiss writes the draft here from
