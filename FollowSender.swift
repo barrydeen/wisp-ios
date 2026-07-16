@@ -60,8 +60,10 @@ final class FollowSender {
         guard !relays.isEmpty else { throw SendError.noRelays }
 
         // Save the new set locally up front so the UI reflects the change
-        // immediately even if the relay round-trip takes a moment.
-        FollowsCache.shared.update(pubkey: keypair.pubkey, follows: Array(follows))
+        // immediately even if the relay round-trip takes a moment. Stamp it
+        // with the published event's `created_at` so a later relay reconcile
+        // recognizes this edit as the freshest and doesn't undo it.
+        FollowsCache.shared.update(pubkey: keypair.pubkey, follows: Array(follows), createdAt: event.createdAt)
         await EventStore.shared.persist([event])
 
         let succeeded = await RelayPool.publish(event: event, to: relays, timeout: 8)

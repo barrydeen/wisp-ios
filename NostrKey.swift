@@ -109,6 +109,7 @@ enum NostrKey {
             "onboarding_done_\(pubkey)",
             "watch_only_\(pubkey)",
             "follow_pubkeys_\(pubkey)",
+            "follow_pubkeys_ts_\(pubkey)",
             "relay_scoreboard_v1_\(pubkey)",
             "latest_feed_ts_\(pubkey)",
             // Safety: mute lists, blocked users, muted threads, mute event timestamp
