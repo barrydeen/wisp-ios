@@ -410,7 +410,9 @@ enum EmojiData {
         "💯": ["100", "hundred"],
         "🆗": ["ok"],
         "🆕": ["new"],
-        "⭕": ["circle", "o", "ring"]
+        "⭕": ["circle", "o", "ring"],
+        // Common colloquial nickname CLDR doesn't list under this emoji
+        "🤌": ["italian", "italian hand", "italian hands"]
     ]
 
     /// Reverse index used by `searchEmojis`. Built once on first access so
