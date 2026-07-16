@@ -683,6 +683,31 @@ struct SendInvoiceSheet: View {
     }
 
     var body: some View {
+        inputView
+        .background(Color.wispBackground.ignoresSafeArea())
+        .navigationTitle("Send")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) { Button("Close", action: dismiss) }
+        }
+        .fullScreenCover(isPresented: $showScanner) {
+            QRCodeScannerView(
+                onScanned: { code in
+                    invoice = normalizeInvoice(code)
+                    showScanner = false
+                },
+                onCancel: { showScanner = false }
+            )
+            .ignoresSafeArea()
+        }
+        .task {
+            if let initial = initialInvoice, invoice.isEmpty {
+                invoice = initial
+            }
+        }
+    }
+
+    private var inputView: some View {
         ScrollView {
             VStack(spacing: 20) {
                 // Input card
@@ -882,30 +907,6 @@ struct SendInvoiceSheet: View {
             .padding(.top, 12)
             .padding(.bottom, 32)
         }
-        .background(Color.wispBackground.ignoresSafeArea())
-        .navigationTitle("Send")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) { Button("Close", action: dismiss) }
-        }
-        .fullScreenCover(isPresented: $showScanner) {
-            QRCodeScannerView(
-                onScanned: { code in
-                    invoice = normalizeInvoice(code)
-                    showScanner = false
-                },
-                onCancel: { showScanner = false }
-            )
-            .ignoresSafeArea()
-        }
-        .task {
-            // Pre-fill from `initialInvoice` exactly once on appear. Assigning
-            // to `invoice` triggers the existing `.onChange` -> `scheduleDetect`
-            // pipeline, so the user lands on a sheet that's already validated.
-            if let initial = initialInvoice, invoice.isEmpty {
-                invoice = initial
-            }
-        }
     }
 
     private func scheduleDetect() {
@@ -991,7 +992,7 @@ struct ReceiveInvoiceSheet: View {
     @State private var status: String?
     @State private var inFlight = false
     @State private var copied = false
-    @State private var tab: ReceiveTab = .invoice
+    @State private var showAddressQR = false
     @State private var showCompose = false
     @State private var expiryPreset: ExpiryPreset = .oneHour
     @State private var customExpiryMinutes: String = ""
@@ -1010,28 +1011,14 @@ struct ReceiveInvoiceSheet: View {
         }
     }
 
-    enum ReceiveTab { case invoice, address }
-
-    private var hasLightningAddress: Bool { store.lightningAddress != nil }
-
     var body: some View {
+        ScrollViewReader { proxy in
         ScrollView {
             VStack(spacing: 20) {
-                // Tab picker — only shown when lightning address is available
-                if hasLightningAddress {
-                    Picker("Receive via", selection: $tab) {
-                        Text("Invoice").tag(ReceiveTab.invoice)
-                        Text("Lightning Address").tag(ReceiveTab.address)
-                    }
-                    .pickerStyle(.segmented)
-                }
-
-                if tab == .address, let addr = store.lightningAddress {
-                    addressDisplay(addr)
-                } else if let inv = invoice {
+                if let inv = invoice {
                     invoiceDisplay(inv)
                 } else {
-                    invoiceForm
+                    lightningForm(proxy: proxy)
                 }
             }
             .padding(.horizontal, 20)
@@ -1051,52 +1038,93 @@ struct ReceiveInvoiceSheet: View {
                 }
             }
         }
+        } // ScrollViewReader
     }
 
-    // MARK: Lightning address display
+    // MARK: Lightning form — invoice builder + inline lightning address
 
-    private func addressDisplay(_ address: String) -> some View {
+    private func lightningForm(proxy: ScrollViewProxy) -> some View {
         VStack(spacing: 20) {
-            VStack(spacing: 10) {
-                QRCodeImage(payload: address, sideLength: 260)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                Text(address)
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-            }
-            .padding(20)
-            .frame(maxWidth: .infinity)
-            .background(Color.wispSurfaceVariant.opacity(0.35), in: RoundedRectangle(cornerRadius: 16))
+            invoiceForm
 
-            HStack(spacing: 0) {
-                Button {
-                    UIPasteboard.general.string = address
-                    withAnimation { copied = true }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                        withAnimation { copied = false }
+            // "or receive via Lightning Address" inline section
+            if let addr = store.lightningAddress {
+                VStack(spacing: 12) {
+                    HStack(spacing: 8) {
+                        Rectangle()
+                            .frame(height: 1)
+                            .foregroundStyle(Color.wispSurfaceVariant.opacity(0.5))
+                        Text("or receive via Lightning Address")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize()
+                        Rectangle()
+                            .frame(height: 1)
+                            .foregroundStyle(Color.wispSurfaceVariant.opacity(0.5))
                     }
-                } label: {
-                    Label(copied ? "Copied ✓" : "Copy address", systemImage: copied ? "checkmark" : "doc.on.doc")
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(Color.wispZapColor)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                }
-                .buttonStyle(.plain)
-                .animation(.easeInOut(duration: 0.15), value: copied)
 
-                Divider().frame(height: 24)
+                    VStack(spacing: 0) {
+                        HStack(spacing: 12) {
+                            Image(systemName: "bolt.fill")
+                                .font(.subheadline)
+                                .foregroundStyle(Color.wispZapColor)
+                            Text(addr)
+                                .font(.subheadline.weight(.medium))
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Spacer()
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.2)) { showAddressQR.toggle() }
+                                if !showAddressQR {
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                                        withAnimation { proxy.scrollTo("addressQR", anchor: .bottom) }
+                                    }
+                                }
+                            } label: {
+                                Image(systemName: "qrcode")
+                                    .font(.subheadline)
+                                    .foregroundStyle(showAddressQR ? Color.wispZapColor : .secondary)
+                                    .frame(width: 36, height: 36)
+                            }
+                            .buttonStyle(.plain)
 
-                ShareLink(item: address) {
-                    Label("Share", systemImage: "square.and.arrow.up")
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(Color.wispZapColor)
-                        .frame(maxWidth: .infinity)
+                            Button {
+                                UIPasteboard.general.string = addr
+                                withAnimation { copied = true }
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                                    withAnimation { copied = false }
+                                }
+                            } label: {
+                                Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                                    .font(.subheadline)
+                                    .foregroundStyle(Color.wispZapColor)
+                                    .frame(width: 36, height: 36)
+                            }
+                            .buttonStyle(.plain)
+                            .animation(.easeInOut(duration: 0.15), value: copied)
+                        }
+                        .padding(.horizontal, 16)
                         .padding(.vertical, 12)
+
+                        if showAddressQR {
+                            Divider().opacity(0.2)
+                            VStack(spacing: 8) {
+                                QRCodeImage(payload: addr, sideLength: 220)
+                                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                                Text(addr)
+                                    .font(.system(.caption2, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                                    .multilineTextAlignment(.center)
+                            }
+                            .padding(16)
+                            .frame(maxWidth: .infinity)
+                            .id("addressQR")
+                        }
+                    }
+                    .background(Color.wispSurfaceVariant.opacity(0.35), in: RoundedRectangle(cornerRadius: 14))
                 }
             }
-            .background(Color.wispSurfaceVariant.opacity(0.4), in: RoundedRectangle(cornerRadius: 14))
         }
     }
 
