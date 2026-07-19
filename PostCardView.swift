@@ -315,7 +315,17 @@ struct PostCardView: View {
             // avatar/name/timestamp would be redundant with the banner and
             // sit above the loading/missing placeholder.
             if !isUnresolvedRepost {
-            HStack(alignment: .top, spacing: 12) {
+            // Precomputed once so the header's vertical alignment and the
+            // nip05 row itself never disagree: with no second line (every
+            // reply, or any author with no nip05 set), centering the name
+            // against the avatar reads right; `.top` only makes sense once
+            // there's a second line to sit above.
+            let nip05Text: String? = {
+                guard !ancestorCompact, Nip10.replyTarget(of: displayEvent) == nil,
+                      let nip05 = displayProfile?.nip05, !nip05.isEmpty else { return nil }
+                return nip05
+            }()
+            HStack(alignment: nip05Text == nil ? .center : .top, spacing: 12) {
                 if ancestorCompact {
                     CachedAvatarView(url: displayProfile?.picture, size: 24)
                         .quickFollowOnLongPress(pubkey: displayEvent.pubkey)
@@ -391,9 +401,8 @@ struct PostCardView: View {
                     // Hidden on any reply, independent of showReplyContext —
                     // the "Replying to X" row right above already names the
                     // author, so a second identity badge is redundant.
-                    if !ancestorCompact, Nip10.replyTarget(of: displayEvent) == nil,
-                       let nip05 = displayProfile?.nip05, !nip05.isEmpty {
-                        Nip05Badge(nip05: nip05, pubkey: displayEvent.pubkey)
+                    if let nip05Text {
+                        Nip05Badge(nip05: nip05Text, pubkey: displayEvent.pubkey)
                     }
                 }
             }
