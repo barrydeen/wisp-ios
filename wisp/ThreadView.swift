@@ -441,7 +441,7 @@ struct ThreadView: View {
         ThreadReplyFolder.fold(
             items: viewModel.nestedReplies,
             expandedBranchIds: expandedBranchIds,
-            exemptTargetId: viewModel.highlightId
+            exemptTargetId: viewModel.foldExemptTargetId ?? viewModel.highlightId
         )
     }
 
