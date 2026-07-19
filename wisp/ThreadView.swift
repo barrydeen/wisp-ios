@@ -11,6 +11,12 @@ struct ThreadView: View {
     /// environment (injected at `MainView`'s root).
     @State private var showReplyCompose: Bool = false
     @State private var suppressNextDisappearChainRemoval: Bool = false
+    /// Anchors whose depth-capped subtree the user expanded inline.
+    @State private var expandedBranchIds: Set<String> = []
+    /// Reply row ids currently on-screen (via onAppear/onDisappear), used to
+    /// pick the sticky reply bar's target — the topmost visible reply,
+    /// falling back to the thread's default parent.
+    @State private var visibleRowIds: Set<String> = []
     @Environment(\.dismiss) private var dismiss
 
     /// The active tab's NavigationStack path. Mutated directly by smart-pop so a
@@ -77,10 +83,15 @@ struct ThreadView: View {
                         // to see grandchildren.
                         ForEach(groupedNestedReplies) { item in
                             switch item {
-                            case .single(let row):
-                                nestedReplyRow(row).id(row.id)
+                            case .single(let row, let midAir):
+                                nestedReplyRow(row, midAir: midAir)
+                                    .id(row.id)
+                                    .onAppear { visibleRowIds.insert(row.id) }
+                                    .onDisappear { visibleRowIds.remove(row.id) }
                             case .wotGroup(let count, let depth, _):
                                 nestedWotGroupRow(count: count, depth: depth)
+                            case .collapsedReplies(let anchor, let depth, let hiddenCount):
+                                collapsedRepliesRow(anchorId: anchor.id, depth: depth, hiddenCount: hiddenCount)
                             }
                         }
 
@@ -160,9 +171,10 @@ struct ThreadView: View {
             Button("OK") { viewModel.errorMessage = nil }
         } message: { msg in Text(msg) }
         .sheet(isPresented: $showReplyCompose) {
-            // Reply to the note the user opened the thread on, not the re-rooted
-            // focal (which is now the conversation root).
-            if let parent = viewModel.composerDefaultParent ?? viewModel.focal?.event {
+            // Targets whichever reply is topmost in the viewport, falling
+            // back to the note the user opened the thread on (not the
+            // re-rooted focal, which is now the conversation root).
+            if let parent = focusedReplyTarget {
                 ComposeView(
                     keypair: viewModel.keypair,
                     mode: .reply(parent: parent, root: viewModel.rootEvent)
@@ -219,7 +231,9 @@ struct ThreadView: View {
             if showHiddenSpam {
                 ForEach(viewModel.hiddenSpamReplies) { row in
                     VStack(alignment: .leading, spacing: 6) {
-                        replyRow(row)
+                        // Always a direct reply to the focal — hiddenSpamReplies
+                        // comes from the focal's own direct-reply bucket.
+                        replyRow(row, replyingTo: viewModel.focal?.event)
                         Button("Mark not spam") {
                             viewModel.revealHiddenSpamAuthor(row.event.pubkey)
                         }
@@ -324,25 +338,33 @@ struct ThreadView: View {
         .background(Color.wispSurfaceVariant.opacity(0.25))
     }
 
-    /// Wrap a reply row with depth-based leading indentation. The connector
-    /// shape draws both the gutter vertical AND the bottom divider as one
-    /// continuous stroke so their line weights match exactly, with a rounded
-    /// inside fillet at the bottom-left where they meet. Top-left stays a
-    /// sharp continuation of the vertical above.
+    /// The full connector for a row at `depth`: rail + rounded corner +
+    /// bottom divider, drawn as one continuous stroke so the line weights
+    /// match. When `dashedTop` is true the top of the rail is dashed —
+    /// signalling it continues upward to a parent that isn't the row
+    /// directly above (the first reply of a branch, or a reply revealed by
+    /// expanding a folded subtree) rather than starting in mid-air.
     @ViewBuilder
-    private func nestedReplyRow(_ item: NestedReplyRow) -> some View {
-        ZStack(alignment: .leading) {
-            ReplyConnectorShape(
-                cornerRadius: 8,
-                showVertical: item.depth > 0
-            )
-            .stroke(
-                Color.wispSurfaceVariant.opacity(0.5),
-                style: StrokeStyle(lineWidth: 1, lineCap: .butt, lineJoin: .round)
-            )
-            .padding(.leading, item.depth > 0 ? indentationWidth(for: item.depth) - 8 : indentationWidth(for: item.depth))
+    private func connector(depth: Int, dashedTop: Bool) -> some View {
+        let showVertical = depth > 0
+        let lineColor = Color.wispSurfaceVariant.opacity(0.5)
+        ZStack(alignment: .topLeading) {
+            ReplyConnectorShape(cornerRadius: 8, showVertical: showVertical, dashedTop: dashedTop && showVertical)
+                .stroke(lineColor, style: StrokeStyle(lineWidth: 1, lineCap: .butt, lineJoin: .round))
+            if dashedTop && showVertical {
+                ReplyConnectorDashCap(cornerRadius: 8)
+                    .stroke(lineColor, style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+            }
+        }
+        .padding(.leading, showVertical ? indentationWidth(for: depth) - 8 : indentationWidth(for: depth))
+    }
 
-            replyRow(item.row)
+    /// Wrap a reply row with depth-based leading indentation.
+    @ViewBuilder
+    private func nestedReplyRow(_ item: NestedReplyRow, midAir: Bool) -> some View {
+        ZStack(alignment: .leading) {
+            connector(depth: item.depth, dashedTop: midAir)
+            replyRow(item.row, replyingTo: directParentEvents[item.row.id])
                 .padding(.leading, indentationWidth(for: item.depth))
         }
         // Brief highlight of the note the user came from (or an in-place tap
@@ -357,12 +379,7 @@ struct ThreadView: View {
     @ViewBuilder
     private func nestedWotGroupRow(count: Int, depth: Int) -> some View {
         ZStack(alignment: .leading) {
-            ReplyConnectorShape(cornerRadius: 8, showVertical: depth > 0)
-                .stroke(
-                    Color.wispSurfaceVariant.opacity(0.5),
-                    style: StrokeStyle(lineWidth: 1, lineCap: .butt, lineJoin: .round)
-                )
-                .padding(.leading, depth > 0 ? indentationWidth(for: depth) - 8 : indentationWidth(for: depth))
+            connector(depth: depth, dashedTop: false)
             HStack(spacing: 8) {
                 Image(systemName: "eye.slash")
                     .font(.system(size: 13))
@@ -379,50 +396,71 @@ struct ThreadView: View {
         }
     }
 
-    /// Per-level indent. Smaller step + cap of 5 keeps deep chains readable
-    /// on phones without compressing the post body.
-    private func indentationWidth(for depth: Int) -> CGFloat {
-        CGFloat(min(depth, 5)) * 12
-    }
-
-    private enum NestedReplyDisplayItem: Identifiable {
-        case single(NestedReplyRow)
-        case wotGroup(count: Int, depth: Int, id: String)
-        var id: String {
-            switch self {
-            case .single(let r): return r.id
-            case .wotGroup(_, _, let gid): return "wot-\(gid)"
-            }
-        }
-    }
-
-    private var groupedNestedReplies: [NestedReplyDisplayItem] {
-        var result: [NestedReplyDisplayItem] = []
-        let items = viewModel.nestedReplies
-        var i = 0
-        while i < items.count {
-            let item = items[i]
-            if item.row.isWotHidden {
-                let groupDepth = item.depth
-                let groupId = item.id
-                var count = 1
-                var j = i + 1
-                while j < items.count && items[j].row.isWotHidden && items[j].depth == groupDepth {
-                    count += 1
-                    j += 1
+    /// Folded-subtree affordance: "Show N more replies" (closes
+    /// wisp-ios#402). Tapping expands the subtree in place: everything
+    /// above keeps its position, the revealed replies animate in below.
+    @ViewBuilder
+    private func collapsedRepliesRow(anchorId: String, depth: Int, hiddenCount: Int) -> some View {
+        ZStack(alignment: .leading) {
+            connector(depth: depth, dashedTop: true)
+            Button {
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    _ = expandedBranchIds.insert(anchorId)
                 }
-                result.append(.wotGroup(count: count, depth: groupDepth, id: groupId))
-                i = j
-            } else {
-                result.append(.single(item))
-                i += 1
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 12, weight: .semibold))
+                    Text(hiddenCount == 1 ? "Show 1 more reply" : "Show \(hiddenCount) more replies")
+                        .font(.subheadline.weight(.medium))
+                    Spacer()
+                }
+                .foregroundStyle(Color.wispPrimary)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.leading, indentationWidth(for: depth))
             }
+            .buttonStyle(.plain)
         }
-        return result
+    }
+
+    /// Per-level indent, clamped to `depthCap` — replies deeper than the
+    /// fold cap only ever appear via an inline expand, and all render at the
+    /// same indent so the guide rail never runs out of horizontal space.
+    private func indentationWidth(for depth: Int) -> CGFloat {
+        CGFloat(min(depth, ThreadReplyFolder.depthCap)) * 12
+    }
+
+    private typealias NestedReplyDisplayItem = ThreadReplyFolder.DisplayItem
+
+    /// Depth-cap fold of the full reply tree — see `ThreadReplyFolder` for
+    /// the algorithm (kept standalone and pure so it has real unit test
+    /// coverage instead of living inline in this View).
+    private var groupedNestedReplies: [NestedReplyDisplayItem] {
+        ThreadReplyFolder.fold(
+            items: viewModel.nestedReplies,
+            expandedBranchIds: expandedBranchIds,
+            exemptTargetId: viewModel.highlightId
+        )
+    }
+
+    /// Direct-parent event for every rendered reply, keyed by reply id —
+    /// see `ThreadReplyFolder.directParentEvents`. Drives the "Replying to
+    /// X" label on each reply row.
+    private var directParentEvents: [String: NostrEvent] {
+        ThreadReplyFolder.directParentEvents(in: viewModel.nestedReplies, focal: viewModel.focal?.event)
+    }
+
+    private func replyToLabel(target: NostrEvent) -> String {
+        let name = viewModel.profiles[target.pubkey]?.displayString
+            ?? ProfileRepository.shared.get(target.pubkey)?.displayString
+            ?? Nip19.shortNpub(hex: target.pubkey)
+        return "Replying to \(name)"
     }
 
     @ViewBuilder
-    private func replyRow(_ row: ThreadRow) -> some View {
+    private func replyRow(_ row: ThreadRow, replyingTo: NostrEvent?) -> some View {
         if row.isBlocked {
             blockedPlaceholder
         } else if row.isWotHidden {
@@ -445,7 +483,7 @@ struct ThreadView: View {
                 profile: viewModel.profiles[row.event.pubkey],
                 profiles: viewModel.profiles,
                 engagement: engagement(for: row.event.id),
-                showReplyContext: false,
+                replyToLabelOverride: replyingTo.map(replyToLabel),
                 isPrivate: row.isPrivate,
                 onProfileTap: { pk in push(ProfileRoute(pubkey: pk)) },
                 // Tap on an embedded quoted note pushes that note as
@@ -615,6 +653,20 @@ struct ThreadView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    /// The sticky reply bar's target: the topmost currently-visible reply
+    /// (via `visibleRowIds`, in rendered order), falling back to the
+    /// thread's default parent when no reply row is on screen yet (e.g.
+    /// scrolled to the very top) — the bar follows what you're scrolled to
+    /// instead of always targeting the root.
+    private var focusedReplyTarget: NostrEvent? {
+        for item in groupedNestedReplies {
+            if case .single(let row, _) = item, visibleRowIds.contains(row.id) {
+                return row.row.event
+            }
+        }
+        return viewModel.composerDefaultParent ?? viewModel.focal?.event
+    }
+
     private var composer: some View {
         VStack(spacing: 0) {
             Divider().overlay(Color.wispSurfaceVariant.opacity(0.5))
@@ -633,7 +685,7 @@ struct ThreadView: View {
                 .background(Color.wispSurfaceVariant.opacity(0.5), in: RoundedRectangle(cornerRadius: 18))
             }
             .buttonStyle(.plain)
-            .disabled(viewModel.composerDefaultParent == nil)
+            .disabled(focusedReplyTarget == nil)
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
         }
@@ -646,17 +698,26 @@ struct ThreadView: View {
 /// (the vertical continues from the previous row); bottom-left is
 /// a rounded inside fillet where the vertical meets the horizontal.
 /// At the root depth, only the horizontal divider is drawn.
+///
+/// When `dashedTop` is true the top `dashLength` points of the vertical are
+/// carved out of this shape — `ReplyConnectorDashCap` draws that segment
+/// separately, dashed, so the rail's very top reads as discontinuous.
 private struct ReplyConnectorShape: Shape {
     var cornerRadius: CGFloat = 8
     var showVertical: Bool = true
+    var dashedTop: Bool = false
+    var dashLength: CGFloat = 14
 
     func path(in rect: CGRect) -> Path {
         var path = Path()
         if showVertical {
-            // Continuous vertical down the gutter, full row height. Adjacent
-            // rows' verticals butt together for a seamless chain.
-            path.move(to: CGPoint(x: 1, y: 0))
-            path.addLine(to: CGPoint(x: 1, y: rect.height - cornerRadius))
+            let railBottom = rect.height - cornerRadius
+            let topY = dashedTop ? min(dashLength, max(0, railBottom)) : 0
+            // Continuous vertical down the gutter. Adjacent rows' verticals
+            // butt together for a seamless chain (unless dashedTop carved
+            // out the top segment above).
+            path.move(to: CGPoint(x: 1, y: topY))
+            path.addLine(to: CGPoint(x: 1, y: railBottom))
             // Rounded inside fillet from vertical → horizontal.
             path.addQuadCurve(
                 to: CGPoint(x: 1 + cornerRadius, y: rect.height),
@@ -670,6 +731,22 @@ private struct ReplyConnectorShape: Shape {
             path.move(to: CGPoint(x: 0, y: rect.height))
             path.addLine(to: CGPoint(x: rect.width, y: rect.height))
         }
+        return path
+    }
+}
+
+/// The dashed top segment carved out of `ReplyConnectorShape` when
+/// `dashedTop` is true — see that type's doc comment.
+private struct ReplyConnectorDashCap: Shape {
+    var cornerRadius: CGFloat = 8
+    var dashLength: CGFloat = 14
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let railBottom = rect.height - cornerRadius
+        let bottomY = min(dashLength, max(0, railBottom))
+        path.move(to: CGPoint(x: 1, y: 0))
+        path.addLine(to: CGPoint(x: 1, y: bottomY))
         return path
     }
 }
