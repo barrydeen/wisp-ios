@@ -24,10 +24,16 @@ struct PostCardView: View {
     /// count so the bubble matches the visible REPLIES list — without it
     /// the engagement repo / network total would still show blocked authors.
     var forcedReplyCount: Int? = nil
-    /// When false, the "Replying to @user" row is suppressed even if the event
-    /// is a reply. Used for stacked nested replies in ThreadView where the
-    /// visual indentation already communicates the reply relationship.
+    /// When false, the "Replying to @user" row is suppressed even if the
+    /// event is a reply.
     var showReplyContext: Bool = true
+    /// Overrides the "Replying to @user" row's text with a single name —
+    /// the author of the ONE event this reply directly targets — instead
+    /// of the default multi-participant list. Set by ThreadView's threaded
+    /// reply rows: the connector rail already shows nesting structure, but
+    /// not identity, and depth-cap folding means a reply's visual position
+    /// doesn't always trace cleanly back to its parent.
+    var replyToLabelOverride: String? = nil
     /// When true, the card renders a lock chip in the header and hides
     /// repost / quote actions (they would re-publish the rumor id as a public
     /// kind-6 or kind-1 with `q` tag, breaking the encryption invariant).
@@ -302,14 +308,14 @@ struct PostCardView: View {
                 replyingToRow(for: displayEvent)
             }
 
-            // Header row — avatar + name + nip05 + badges/time. Indented to
-            // align with the avatar. In ancestor-compact mode the inner profile
-            // links are dropped so the outer ThreadRoute link owns every tap.
-            // Skipped entirely for unresolved tag-only reposts: the reposter
-            // avatar/name/timestamp would be redundant with the banner and
-            // sit above the loading/missing placeholder.
+            // Header row — avatar + name + nip05 badge + badges/time. Indented
+            // to align with the avatar. In ancestor-compact mode the inner
+            // profile links are dropped so the outer ThreadRoute link owns
+            // every tap. Skipped entirely for unresolved tag-only reposts: the
+            // reposter avatar/name/timestamp would be redundant with the
+            // banner and sit above the loading/missing placeholder.
             if !isUnresolvedRepost {
-            HStack(alignment: .top, spacing: 12) {
+            HStack(alignment: .center, spacing: 12) {
                 if ancestorCompact {
                     CachedAvatarView(url: displayProfile?.picture, size: 24)
                         .quickFollowOnLongPress(pubkey: displayEvent.pubkey)
@@ -321,8 +327,12 @@ struct PostCardView: View {
                     .quickFollowOnLongPress(pubkey: displayEvent.pubkey)
                 }
 
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    // Centered as a pair rather than pinned to firstTextBaseline —
+                    // the badge is an icon, not a text glyph, so baseline-aligning
+                    // it against the name (as the outer row does for its other,
+                    // text-based children) makes it hang low.
+                    HStack(spacing: 4) {
                         Group {
                             if ancestorCompact {
                                 EmojiText(
@@ -348,42 +358,45 @@ struct PostCardView: View {
                             }
                         }
 
-                        if isPrivate {
-                            HStack(spacing: 3) {
-                                Image(systemName: "lock.fill")
-                                    .font(.caption2)
-                                Text("Private")
-                                    .font(.caption2.weight(.semibold))
-                            }
-                            .foregroundStyle(Color.wispPrimary)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(
-                                Capsule().fill(Color.wispPrimary.opacity(0.12))
-                            )
-                            .accessibilityLabel("Private reply")
-                        }
-
-                        Spacer(minLength: 0)
-
-                        let powBits = Nip13.verifyDifficulty(displayEvent)
-                        if powBits >= 16 {
-                            PowBadge(bits: powBits)
-                        }
-
-                        Text(useAbsoluteTimestamp
-                             ? absoluteTimestamp(displayEvent.createdAt)
-                             : relativeTime(from: displayEvent.createdAt))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-
-                        if !ancestorCompact {
-                            overflowMenu
+                        // Icon only — the handle itself is reserved for the
+                        // profile screen so timeline/thread rows don't carry
+                        // the extra clutter of a second line.
+                        if !ancestorCompact, let nip05 = displayProfile?.nip05, !nip05.isEmpty {
+                            Nip05Badge(nip05: nip05, pubkey: displayEvent.pubkey, showHandle: false)
                         }
                     }
 
-                    if !ancestorCompact, let nip05 = displayProfile?.nip05, !nip05.isEmpty {
-                        Nip05Badge(nip05: nip05, pubkey: displayEvent.pubkey)
+                    if isPrivate {
+                        HStack(spacing: 3) {
+                            Image(systemName: "lock.fill")
+                                .font(.caption2)
+                            Text("Private")
+                                .font(.caption2.weight(.semibold))
+                        }
+                        .foregroundStyle(Color.wispPrimary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(
+                            Capsule().fill(Color.wispPrimary.opacity(0.12))
+                        )
+                        .accessibilityLabel("Private reply")
+                    }
+
+                    Spacer(minLength: 0)
+
+                    let powBits = Nip13.verifyDifficulty(displayEvent)
+                    if powBits >= 16 {
+                        PowBadge(bits: powBits)
+                    }
+
+                    Text(useAbsoluteTimestamp
+                         ? absoluteTimestamp(displayEvent.createdAt)
+                         : relativeTime(from: displayEvent.createdAt))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    if !ancestorCompact {
+                        overflowMenu
                     }
                 }
             }
@@ -875,7 +888,7 @@ struct PostCardView: View {
     private func replyingToRow(for displayEvent: NostrEvent) -> some View {
         if !ancestorCompact,
            Nip10.replyTarget(of: displayEvent) != nil,
-           let label = replyingToLabel(for: displayEvent) {
+           let label = replyToLabelOverride ?? replyingToLabel(for: displayEvent) {
             HStack(spacing: 4) {
                 Image(systemName: "arrowshape.turn.up.left.fill")
                     .font(.caption2)
@@ -2820,6 +2833,7 @@ extension PostCardView: Equatable {
             && lhs.useAbsoluteTimestamp == rhs.useAbsoluteTimestamp
             && lhs.forcedReplyCount == rhs.forcedReplyCount
             && lhs.showReplyContext == rhs.showReplyContext
+            && lhs.replyToLabelOverride == rhs.replyToLabelOverride
             && lhs.isPrivate == rhs.isPrivate
     }
 }

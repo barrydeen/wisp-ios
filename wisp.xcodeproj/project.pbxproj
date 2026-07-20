@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		347CAC4DB369991D001F8634 /* ThreadReplyFolder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A78518B540AA47061D0E80AC /* ThreadReplyFolder.swift */; };
 		45467D3FFEBD641375975CF7 /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = C21B5D026207FD4CF0931588 /* ShareViewController.swift */; };
 		4CAA00010002000000A1BA01 /* AudioTrack.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CAA00020002000000A1BA01 /* AudioTrack.swift */; };
 		4CAA00030002000000A1BA01 /* AudioPlayerStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CAA00040002000000A1BA01 /* AudioPlayerStore.swift */; };
@@ -642,6 +643,7 @@
 		741E8309A7019FA697D18D53 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 		80A6403E9108C21F17DDE95D /* ShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		9DADF962DB484ADC87FF23E5 /* ShareExtension.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = ShareExtension.entitlements; sourceTree = "<group>"; };
+		A78518B540AA47061D0E80AC /* ThreadReplyFolder.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ThreadReplyFolder.swift; sourceTree = "<group>"; };
 		A85D99D72ADD7AFCEFF789A6 /* PendingShareStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PendingShareStore.swift; sourceTree = "<group>"; };
 		B0NWCBACKUP00000000000002 /* NwcBackup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NwcBackup.swift; sourceTree = "<group>"; };
 		C21B5D026207FD4CF0931588 /* ShareViewController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ShareViewController.swift; sourceTree = "<group>"; };
@@ -1019,6 +1021,7 @@
 				1F4DD3B138DB6F0CBF8B3653 /* Frameworks */,
 				98E664502F89AB4B1A0D93CD /* ShareExtension */,
 				A85D99D72ADD7AFCEFF789A6 /* PendingShareStore.swift */,
+				A78518B540AA47061D0E80AC /* ThreadReplyFolder.swift */,
 			);
 			sourceTree = "<group>";
 		};
@@ -1520,6 +1523,7 @@
 				4CABCD010000000000F2010 /* NewPostsPill.swift in Sources */,
 				4CABCE0100000000000F4607 /* Signer.swift in Sources */,
 				9399A5358082EE4084A6797A /* PendingShareStore.swift in Sources */,
+				347CAC4DB369991D001F8634 /* ThreadReplyFolder.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

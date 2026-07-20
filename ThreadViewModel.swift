@@ -65,6 +65,14 @@ final class ThreadViewModel {
     /// published reply. Observable so ThreadView's `onChange` fires; deliberately
     /// never read by PostCardView so its `==` re-render gate stays untouched.
     var highlightId: String?
+    /// Persistent fold exemption for the note this screen was opened to show —
+    /// the seed/route target (a notification or feed deep-link) or the user's
+    /// own freshly published reply. `ThreadReplyFolder` keeps the path to this
+    /// id unfolded for the life of the screen. Deliberately separate from
+    /// `highlightId`: keying the exemption to the flash meant the branch folded
+    /// back over the target ~1.5s after arrival, hiding the note the user came
+    /// for behind "Show N more replies".
+    var foldExemptTargetId: String?
     /// Holds the scroll target from the route until `rebuildSlices` confirms the
     /// event is in the rendered list.
     @ObservationIgnored private var pendingScrollToId: String?
@@ -287,6 +295,7 @@ final class ThreadViewModel {
             ingestReply(event)
             scrollTargetId = event.id
             highlightId = event.id
+            foldExemptTargetId = event.id
         }
     }
 
@@ -1231,6 +1240,7 @@ final class ThreadViewModel {
            nestedReplies.contains(where: { $0.id == pending }) {
             scrollTargetId = pending
             highlightId = pending
+            foldExemptTargetId = pending
             pendingScrollToId = nil
         }
     }
