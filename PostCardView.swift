@@ -308,24 +308,14 @@ struct PostCardView: View {
                 replyingToRow(for: displayEvent)
             }
 
-            // Header row — avatar + name + nip05 + badges/time. Indented to
-            // align with the avatar. In ancestor-compact mode the inner profile
-            // links are dropped so the outer ThreadRoute link owns every tap.
-            // Skipped entirely for unresolved tag-only reposts: the reposter
-            // avatar/name/timestamp would be redundant with the banner and
-            // sit above the loading/missing placeholder.
+            // Header row — avatar + name + nip05 badge + badges/time. Indented
+            // to align with the avatar. In ancestor-compact mode the inner
+            // profile links are dropped so the outer ThreadRoute link owns
+            // every tap. Skipped entirely for unresolved tag-only reposts: the
+            // reposter avatar/name/timestamp would be redundant with the
+            // banner and sit above the loading/missing placeholder.
             if !isUnresolvedRepost {
-            // Precomputed once so the header's vertical alignment and the
-            // nip05 row itself never disagree: with no second line (every
-            // reply, or any author with no nip05 set), centering the name
-            // against the avatar reads right; `.top` only makes sense once
-            // there's a second line to sit above.
-            let nip05Text: String? = {
-                guard !ancestorCompact, Nip10.replyTarget(of: displayEvent) == nil,
-                      let nip05 = displayProfile?.nip05, !nip05.isEmpty else { return nil }
-                return nip05
-            }()
-            HStack(alignment: nip05Text == nil ? .center : .top, spacing: 12) {
+            HStack(alignment: .center, spacing: 12) {
                 if ancestorCompact {
                     CachedAvatarView(url: displayProfile?.picture, size: 24)
                         .quickFollowOnLongPress(pubkey: displayEvent.pubkey)
@@ -337,8 +327,12 @@ struct PostCardView: View {
                     .quickFollowOnLongPress(pubkey: displayEvent.pubkey)
                 }
 
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    // Centered as a pair rather than pinned to firstTextBaseline —
+                    // the badge is an icon, not a text glyph, so baseline-aligning
+                    // it against the name (as the outer row does for its other,
+                    // text-based children) makes it hang low.
+                    HStack(spacing: 4) {
                         Group {
                             if ancestorCompact {
                                 EmojiText(
@@ -364,45 +358,45 @@ struct PostCardView: View {
                             }
                         }
 
-                        if isPrivate {
-                            HStack(spacing: 3) {
-                                Image(systemName: "lock.fill")
-                                    .font(.caption2)
-                                Text("Private")
-                                    .font(.caption2.weight(.semibold))
-                            }
-                            .foregroundStyle(Color.wispPrimary)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(
-                                Capsule().fill(Color.wispPrimary.opacity(0.12))
-                            )
-                            .accessibilityLabel("Private reply")
-                        }
-
-                        Spacer(minLength: 0)
-
-                        let powBits = Nip13.verifyDifficulty(displayEvent)
-                        if powBits >= 16 {
-                            PowBadge(bits: powBits)
-                        }
-
-                        Text(useAbsoluteTimestamp
-                             ? absoluteTimestamp(displayEvent.createdAt)
-                             : relativeTime(from: displayEvent.createdAt))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-
-                        if !ancestorCompact {
-                            overflowMenu
+                        // Icon only — the handle itself is reserved for the
+                        // profile screen so timeline/thread rows don't carry
+                        // the extra clutter of a second line.
+                        if !ancestorCompact, let nip05 = displayProfile?.nip05, !nip05.isEmpty {
+                            Nip05Badge(nip05: nip05, pubkey: displayEvent.pubkey, showHandle: false)
                         }
                     }
 
-                    // Hidden on any reply, independent of showReplyContext —
-                    // the "Replying to X" row right above already names the
-                    // author, so a second identity badge is redundant.
-                    if let nip05Text {
-                        Nip05Badge(nip05: nip05Text, pubkey: displayEvent.pubkey)
+                    if isPrivate {
+                        HStack(spacing: 3) {
+                            Image(systemName: "lock.fill")
+                                .font(.caption2)
+                            Text("Private")
+                                .font(.caption2.weight(.semibold))
+                        }
+                        .foregroundStyle(Color.wispPrimary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(
+                            Capsule().fill(Color.wispPrimary.opacity(0.12))
+                        )
+                        .accessibilityLabel("Private reply")
+                    }
+
+                    Spacer(minLength: 0)
+
+                    let powBits = Nip13.verifyDifficulty(displayEvent)
+                    if powBits >= 16 {
+                        PowBadge(bits: powBits)
+                    }
+
+                    Text(useAbsoluteTimestamp
+                         ? absoluteTimestamp(displayEvent.createdAt)
+                         : relativeTime(from: displayEvent.createdAt))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    if !ancestorCompact {
+                        overflowMenu
                     }
                 }
             }
