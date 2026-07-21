@@ -90,10 +90,15 @@ enum DmGiftWrapIngestor {
             : nil
 
         let msg = DmMessage(
+            // The composite id keeps the UNCLAMPED rumor timestamp — it must match the
+            // sender-side reconcile id (DmConversationViewModel.deliver) or the self-echo
+            // dedup breaks. Only the sort/display field below is clamped.
             id: "\(event.id):\(rumor.createdAt)",
             senderPubkey: rumor.pubkey,
             content: rumor.content,
-            createdAt: rumor.createdAt,
+            // Clamp so a sender with a fast clock can't pin their message below
+            // every subsequent (correctly-stamped) reply.
+            createdAt: NostrClock.clampIncoming(rumor.createdAt),
             giftWrapId: event.id,
             rumorId: rumor.id,
             replyToId: replyTo,

@@ -8,7 +8,8 @@ actor EventStore {
 
     // 1068, 1018, 6969 are NIP-88 polls / poll responses and NIP-69 zap polls.
     // 10030 / 30030 are NIP-30 user emoji list / emoji set (custom emoji packs).
-    private static let persistedKinds: Set<Int> = [0, 1, 6, 7, 9735, 10002, 10012, 10030, 20, 21, 22, 30000, 30002, 30003, 30030, 1068, 1018, 6969]
+    // 30023 is NIP-23 long-form articles.
+    private static let persistedKinds: Set<Int> = [0, 1, 6, 7, 9735, 10002, 10012, 10030, 20, 21, 22, 30000, 30002, 30003, 30023, 30030, 1068, 1018, 6969]
 
     /// Kinds retained on disk *even for a blocked author* so the block-list
     /// settings UI, name/avatar resolution, and installed emoji packs keep
@@ -196,6 +197,90 @@ actor EventStore {
             }
         }
         return out
+    }
+
+    /// Returns cached poll votes (kind-1018 responses) and zap receipts
+    /// (kind-9735) whose tags point at any of `pollIds`. Used to disk-seed
+    /// `PollTallyRepository` so a previously-seen poll renders its full tally
+    /// instantly on cold start — and so the user's own prior vote is detected
+    /// before the live subscription returns (driving the "already voted →
+    /// results, no re-vote" gate). Mirrors `loadEngagement`'s substring
+    /// pre-filter + Swift tag-walk. Target rule matches the live ingest path:
+    /// kind-1018 → first `e` tag; kind-9735 → last non-`mention` `e` tag.
+    func loadPollVotes(forPollIds pollIds: Set<String>) -> [NostrEvent] {
+        guard let box = ensureBox(), !pollIds.isEmpty else { return [] }
+        var out: [NostrEvent] = []
+        var seenIds = Set<String>()
+        for target in pollIds {
+            do {
+                let query = try box.query {
+                    (EventEntity.kind == Nip88.kindPollResponse || EventEntity.kind == 9735)
+                    && EventEntity.tags.contains(target)
+                }.build()
+                let candidates = try query.find(offset: 0, limit: 5000)
+                for entity in candidates {
+                    guard let event = entity.toNostrEvent(), !seenIds.contains(event.id) else { continue }
+                    let matches: Bool
+                    if event.kind == Nip88.kindPollResponse {
+                        matches = Nip88.getPollEventId(event).map { pollIds.contains($0) } ?? false
+                    } else {
+                        let eTargets = event.tags.compactMap { tag -> String? in
+                            guard tag.count >= 2, tag[0] == "e" else { return nil }
+                            if tag.count >= 4, tag[3] == "mention" { return nil }
+                            return tag[1]
+                        }
+                        matches = eTargets.last.map { pollIds.contains($0) } ?? false
+                    }
+                    if matches {
+                        seenIds.insert(event.id)
+                        out.append(event)
+                    }
+                }
+            } catch {
+                continue
+            }
+        }
+        return out
+    }
+
+    /// Per-target reply counts from disk: how many cached kind:1 events reply to
+    /// each of `targetIds`. Count-only (no `NostrEvent` materialization) because
+    /// the feed card renders just a reply *number* — this lets the feed seed a
+    /// last-known reply count on a cold open without the cost of walking the
+    /// whole reply table into objects. Attribution mirrors the engagement-ingest
+    /// rule: a reply belongs to its last non-`mention` `e`-target. A NIP-18 quote
+    /// (`q`-tag pointing at a tracked note) is a quote, not a reply, so it's
+    /// excluded — same as `EngagementRepository.ingest`.
+    func loadReplyCounts(forTargetIds targetIds: Set<String>) -> [String: Int] {
+        guard let box = ensureBox(), !targetIds.isEmpty else { return [:] }
+        var counts: [String: Int] = [:]
+        var seenIds = Set<String>()
+        for target in targetIds {
+            do {
+                let query = try box.query {
+                    EventEntity.kind == 1 && EventEntity.tags.contains(target)
+                }.build()
+                let candidates = try query.find(offset: 0, limit: 5000)
+                for entity in candidates {
+                    guard let event = entity.toNostrEvent(), seenIds.insert(event.id).inserted else { continue }
+                    // A quote targeting a tracked note is not a reply.
+                    let isQuote = event.tags.contains { $0.count >= 2 && $0[0] == "q" && targetIds.contains($0[1]) }
+                    if isQuote { continue }
+                    let eTargets = event.tags.compactMap { tag -> String? in
+                        guard tag.count >= 2, tag[0] == "e" else { return nil }
+                        if tag.count >= 4, tag[3] == "mention" { return nil }
+                        return tag[1]
+                    }
+                    guard let primary = eTargets.last,
+                          primary != event.id,
+                          targetIds.contains(primary) else { continue }
+                    counts[primary, default: 0] += 1
+                }
+            } catch {
+                continue
+            }
+        }
+        return counts
     }
 
     /// Returns cached kind:1 events that are part of the thread anchored at `rootId`:
@@ -421,6 +506,30 @@ actor EventStore {
             }
         } catch {
             return []
+        }
+    }
+
+    /// Load the newest persisted version of an addressable (NIP-33) event by
+    /// its `(kind, author, d-tag)` coordinate. The `d` tag lives inside the
+    /// opaque JSON `tags` column, so candidates are narrowed by kind + pubkey
+    /// in the query and the d-tag match happens in Swift — mirrors
+    /// `loadEmojiPacksByAddress`. Replaceable events can have several versions
+    /// on disk (each has a distinct event id), so the max `createdAt` wins.
+    func loadAddressable(kind: Int, author: String, dTag: String) -> NostrEvent? {
+        guard let box = ensureBox() else { return nil }
+        do {
+            let query = try box.query {
+                EventEntity.kind == kind && EventEntity.pubkey == author
+            }.build()
+            let candidates = try query.find(offset: 0, limit: 500)
+            return candidates
+                .compactMap { $0.toNostrEvent() }
+                .filter { event in
+                    event.tags.first(where: { $0.count >= 2 && $0[0] == "d" })?[1] == dTag
+                }
+                .max(by: { $0.createdAt < $1.createdAt })
+        } catch {
+            return nil
         }
     }
 

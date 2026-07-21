@@ -11,9 +11,17 @@ struct SafetySettingsView: View {
     @State private var selectedTab: Tab = .filters
 
     @State private var newWord: String = ""
+    @State private var userFilterQuery: String = ""
     @State private var wotState: WotDiscoveryState = .idle
     @State private var wotSummary: (qualifiedCount: Int, computedAt: Int) = (0, 0)
     @State private var wotStateTask: Task<Void, Never>?
+    /// True while a graph compute that was force-started by flipping the WoT
+    /// toggle ON is in flight. Drives the revert-on-failure contract: only a
+    /// gate-compute failure flips the toggle back off — a failed *manual*
+    /// recompute (button) must not disable a filter that already has a
+    /// previously-computed network behind it.
+    @State private var pendingEnableCompute = false
+    @State private var wotGateError: String?
 
     enum Tab: String, CaseIterable, Identifiable {
         case filters = "Filters"
@@ -59,9 +67,27 @@ struct SafetySettingsView: View {
             wotStateTask = Task {
                 for await state in ExtendedNetworkRepository.shared.stateStream {
                     await MainActor.run { self.wotState = state }
-                    if case .complete = state {
+                    switch state {
+                    case .complete:
                         let s = await ExtendedNetworkRepository.shared.summary()
-                        await MainActor.run { self.wotSummary = s }
+                        await MainActor.run {
+                            self.wotSummary = s
+                            self.pendingEnableCompute = false
+                        }
+                    case .failed(let reason):
+                        // Error display only — the gate task in
+                        // `handleWotToggle` owns the actual toggle revert (it
+                        // survives view dismissal; this stream task does not).
+                        // The `pendingEnableCompute` guard keeps a failed
+                        // *manual* recompute from showing "couldn't enable"
+                        // copy for a filter that's already running on a
+                        // previously-computed network.
+                        await MainActor.run {
+                            guard self.pendingEnableCompute else { return }
+                            self.wotGateError = reason
+                        }
+                    case .idle, .fetchingFollowLists, .buildingGraph:
+                        break
                     }
                 }
             }
@@ -82,11 +108,43 @@ struct SafetySettingsView: View {
                     .foregroundStyle(theme.palette.onSurfaceVariant)
                     .padding(.bottom, 4)
 
-                Toggle("Web of Trust", isOn: $prefs.wotFilterEnabled)
+                // Intercepting binding rather than `$prefs.wotFilterEnabled`:
+                // enabling WoT must force a social-graph compute when none
+                // exists — the filter is fail-closed, so an enabled-but-empty
+                // network hides everything until the graph lands, and a failed
+                // compute has to revert the flip (see the stateStream observer).
+                Toggle("Hellthread filter", isOn: $prefs.hellthreadFilterEnabled)
                     .toggleStyle(SwitchToggleStyle(tint: theme.primary))
-                Text("Drops events from authors outside your extended network (your follows + their follows, threshold 10). Profiles, follow lists, and DMs are exempt.")
+                Text("Hides notes and notifications that tag more than the threshold number of distinct accounts.")
                     .font(.system(size: 12))
                     .foregroundStyle(theme.palette.onSurfaceVariant)
+                if prefs.hellthreadFilterEnabled {
+                    Stepper(value: $prefs.hellthreadThreshold, in: 25...100, step: 5) {
+                        HStack(spacing: 4) {
+                            Text("Threshold:")
+                                .font(.system(size: 14))
+                            Text("\(prefs.hellthreadThreshold) mentions")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(theme.primary)
+                        }
+                    }
+                    .padding(.bottom, 4)
+                }
+
+                Toggle("Web of Trust", isOn: Binding(
+                    get: { prefs.wotFilterEnabled },
+                    set: { handleWotToggle(on: $0) }
+                ))
+                .toggleStyle(SwitchToggleStyle(tint: theme.primary))
+                .disabled(wotIsRunning)
+                Text("Drops events from authors outside your extended network (your follows + their follows, threshold 10). Profiles, follow lists, and DMs are exempt. Enabling computes your network first; content stays hidden until it completes.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(theme.palette.onSurfaceVariant)
+                if let wotGateError {
+                    Label("Couldn't enable Web of Trust: \(wotGateError)", systemImage: "exclamationmark.triangle.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.orange)
+                }
             }
 
             section(title: "Network") {
@@ -112,6 +170,44 @@ struct SafetySettingsView: View {
         switch wotState {
         case .fetchingFollowLists, .buildingGraph: return true
         case .idle, .complete, .failed: return false
+        }
+    }
+
+    /// Toggle state machine: OFF → (flip ON: filter live fail-closed + force a
+    /// graph compute when none exists) → COMPLETE stays ON | FAILED reverts to
+    /// OFF with the reason shown. Flipping OFF is unconditional.
+    private func handleWotToggle(on: Bool) {
+        wotGateError = nil
+        // Persist + snapshot rebuild fire via the property's didSet; with no
+        // computed network the very next snapshot drops all non-exempt events
+        // (fail-closed) — nothing graphic can slip through while the compute
+        // below runs.
+        prefs.wotFilterEnabled = on
+        guard on else { return }
+        Task {
+            let summary = await ExtendedNetworkRepository.shared.summary()
+            if summary.computedAt == 0 || summary.qualifiedCount == 0 {
+                // Never computed (or empty cache): this is the gate-compute —
+                // arm the revert contract before starting.
+                pendingEnableCompute = true
+                await ExtendedNetworkRepository.shared.recompute()
+                // The revert lives HERE, not in the stateStream observer: this
+                // unstructured Task survives the view, so navigating away
+                // mid-compute can't orphan the contract and leave the filter
+                // fail-closed (hiding everything) with no network behind it.
+                // `recompute()` returns only after finishing or failing; an
+                // empty set afterwards means the gate-compute failed.
+                let after = await ExtendedNetworkRepository.shared.summary()
+                if after.computedAt == 0 || after.qualifiedCount == 0 {
+                    SafetyPreferences.shared.wotFilterEnabled = false
+                }
+                pendingEnableCompute = false
+            } else if await ExtendedNetworkRepository.shared.isStale() {
+                // A usable network exists; refresh it in the background. No
+                // revert arm — a failed refresh keeps filtering on the cached
+                // set, same as the launch-time freshen in MainView.
+                await ExtendedNetworkRepository.shared.recompute()
+            }
         }
     }
 
@@ -209,17 +305,61 @@ struct SafetySettingsView: View {
 
     private var usersTab: some View {
         VStack(alignment: .leading, spacing: 16) {
+            if !mutes.blockedPubkeys.isEmpty {
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(theme.palette.onSurfaceVariant)
+                    TextField("Filter blocked users", text: $userFilterQuery)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    if !userFilterQuery.isEmpty {
+                        Button {
+                            userFilterQuery = ""
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(theme.palette.onSurfaceVariant)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(10)
+                .background(theme.palette.surfaceVariant)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+
             section(title: "Blocked users") {
                 if mutes.blockedPubkeys.isEmpty {
                     Text("No blocked users")
                         .font(.system(size: 14))
                         .foregroundStyle(theme.palette.onSurfaceVariant)
+                } else if filteredBlockedPubkeys.isEmpty {
+                    Text("No matches")
+                        .font(.system(size: 14))
+                        .foregroundStyle(theme.palette.onSurfaceVariant)
                 } else {
-                    ForEach(Array(mutes.blockedPubkeys).sorted(), id: \.self) { pk in
+                    ForEach(filteredBlockedPubkeys, id: \.self) { pk in
                         blockedRow(pk)
                     }
                 }
             }
+        }
+    }
+
+    /// Blocked pubkeys matching `userFilterQuery` against display name or
+    /// npub (case-insensitive substring), sorted by display name so a long
+    /// list — mostly bare npubs from relay-only blocks — stays scannable.
+    private var filteredBlockedPubkeys: [String] {
+        let all = Array(mutes.blockedPubkeys)
+        let query = userFilterQuery.trimmingCharacters(in: .whitespaces).lowercased()
+        let matching = query.isEmpty ? all : all.filter { pk in
+            let profile = ProfileRepository.shared.get(pk)
+            if let name = profile?.displayString, name.lowercased().contains(query) { return true }
+            return truncated(pk).lowercased().contains(query)
+        }
+        return matching.sorted { lhs, rhs in
+            let lName = ProfileRepository.shared.get(lhs)?.displayString ?? truncated(lhs)
+            let rName = ProfileRepository.shared.get(rhs)?.displayString ?? truncated(rhs)
+            return lName.localizedCaseInsensitiveCompare(rName) == .orderedAscending
         }
     }
 

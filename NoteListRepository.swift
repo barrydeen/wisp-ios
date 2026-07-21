@@ -61,7 +61,7 @@ final class NoteListRepository {
         guard !trimmed.isEmpty else { return nil }
 
         let dTag = uniqueDTag(forName: trimmed)
-        let now = Int(Date().timeIntervalSince1970)
+        let now = NostrClock.now()
         var publicNotes: [String] = []
         if let id = initialNoteId?.lowercased(), Nip51UserLists.isHexId(id) {
             publicNotes.append(id)
@@ -87,7 +87,7 @@ final class NoteListRepository {
         guard !trimmed.isEmpty else { return }
         var list = lists[idx]
         list.name = trimmed
-        list.createdAt = Int(Date().timeIntervalSince1970)
+        list.createdAt = NostrClock.now()
         lists[idx] = list
         listUpdatedAt[dTag] = list.createdAt
         save(pubkey: keypair.pubkey)
@@ -114,7 +114,7 @@ final class NoteListRepository {
         } else {
             list.publicNotes.append(normalized)
         }
-        list.createdAt = Int(Date().timeIntervalSince1970)
+        list.createdAt = NostrClock.now()
         lists[idx] = list
         listUpdatedAt[dTag] = list.createdAt
         save(pubkey: keypair.pubkey)
@@ -129,7 +129,7 @@ final class NoteListRepository {
         list.publicNotes.removeAll { $0 == normalized }
         list.privateNotes.removeAll { $0 == normalized }
         guard list.publicNotes.count + list.privateNotes.count != before else { return }
-        list.createdAt = Int(Date().timeIntervalSince1970)
+        list.createdAt = NostrClock.now()
         lists[idx] = list
         listUpdatedAt[dTag] = list.createdAt
         save(pubkey: keypair.pubkey)
@@ -152,7 +152,7 @@ final class NoteListRepository {
         } else {
             return
         }
-        list.createdAt = Int(Date().timeIntervalSince1970)
+        list.createdAt = NostrClock.now()
         lists[idx] = list
         listUpdatedAt[dTag] = list.createdAt
         save(pubkey: keypair.pubkey)
@@ -228,7 +228,7 @@ final class NoteListRepository {
 
     private func publishDeletion(dTag: String, keypair: Keypair) {
         let tags: [[String]] = [["d", dTag]]
-        let createdAt = Int(Date().timeIntervalSince1970)
+        let createdAt = NostrClock.now()
         let relays = topWriteRelays(pubkey: keypair.pubkey)
         Task { @MainActor in
             guard let event = try? await Signer.sign(

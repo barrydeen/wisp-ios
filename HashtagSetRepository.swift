@@ -64,7 +64,7 @@ final class HashtagSetRepository {
 
         let dTag = uniqueDTag(forName: trimmed)
         let normalized = dedupePreservingOrder(initialHashtags.compactMap(Nip51Hashtags.normalize))
-        let now = Int(Date().timeIntervalSince1970)
+        let now = NostrClock.now()
 
         let set = HashtagSet(
             pubkey: keypair.pubkey,
@@ -86,7 +86,7 @@ final class HashtagSetRepository {
         guard !trimmed.isEmpty else { return }
         var set = hashtagSets[idx]
         set.name = trimmed
-        set.createdAt = Int(Date().timeIntervalSince1970)
+        set.createdAt = NostrClock.now()
         hashtagSets[idx] = set
         hashtagSetUpdatedAt[dTag] = set.createdAt
         save(pubkey: keypair.pubkey)
@@ -107,7 +107,7 @@ final class HashtagSetRepository {
         var set = hashtagSets[idx]
         guard !set.hashtags.contains(n) else { return }
         set.hashtags.append(n)
-        set.createdAt = Int(Date().timeIntervalSince1970)
+        set.createdAt = NostrClock.now()
         hashtagSets[idx] = set
         hashtagSetUpdatedAt[dTag] = set.createdAt
         save(pubkey: keypair.pubkey)
@@ -120,7 +120,7 @@ final class HashtagSetRepository {
         var set = hashtagSets[idx]
         guard let i = set.hashtags.firstIndex(of: n) else { return }
         set.hashtags.remove(at: i)
-        set.createdAt = Int(Date().timeIntervalSince1970)
+        set.createdAt = NostrClock.now()
         hashtagSets[idx] = set
         hashtagSetUpdatedAt[dTag] = set.createdAt
         save(pubkey: keypair.pubkey)
@@ -187,7 +187,7 @@ final class HashtagSetRepository {
     /// The d-tag is preserved so the replacement targets the right address.
     private func publishHashtagSetDeletion(dTag: String, keypair: Keypair) {
         let tags: [[String]] = [["d", dTag]]
-        let createdAt = Int(Date().timeIntervalSince1970)
+        let createdAt = NostrClock.now()
         let relays = topWriteRelays(pubkey: keypair.pubkey)
         Task { @MainActor in
             guard let event = try? await Signer.sign(

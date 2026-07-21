@@ -35,21 +35,35 @@ struct ComposeView: View {
     /// (which ignores `State(initialValue:)` when state already exists for this view identity).
     private let initialDraft: Nip37.Draft?
 
+    /// Media handed off from the Share Extension (see `PendingShareStore` /
+    /// `wispApp.onOpenURL`), loaded the same way as a `PhotosPicker`
+    /// selection once the view appears.
+    private let pendingAttachmentProviders: [NSItemProvider]
+
     private let previewAnchorID = "composer-preview-card"
 
     init(keypair: Keypair, mode: ComposeMode = .new) {
         self.initialDraft = nil
+        self.pendingAttachmentProviders = []
         _viewModel = State(initialValue: ComposeViewModel(keypair: keypair, mode: mode))
     }
 
     init(keypair: Keypair, draft: Nip37.Draft) {
         self.initialDraft = draft
+        self.pendingAttachmentProviders = []
         _viewModel = State(initialValue: ComposeViewModel(keypair: keypair, mode: .new))
     }
 
     init(keypair: Keypair, initialText: String) {
         self.initialDraft = nil
+        self.pendingAttachmentProviders = []
         _viewModel = State(initialValue: ComposeViewModel(keypair: keypair, initialText: initialText))
+    }
+
+    init(keypair: Keypair, pendingAttachmentProviders: [NSItemProvider]) {
+        self.initialDraft = nil
+        self.pendingAttachmentProviders = pendingAttachmentProviders
+        _viewModel = State(initialValue: ComposeViewModel(keypair: keypair, mode: .new))
     }
 
     var body: some View {
@@ -226,6 +240,9 @@ struct ComposeView: View {
             // Drafts / reply prefills land before the view observes
             // `content`, so warm their links once on open too.
             viewModel.prefetchSocialPreviews()
+            if !pendingAttachmentProviders.isEmpty {
+                await viewModel.addMediaProviders(pendingAttachmentProviders)
+            }
         }
         .interactiveDismissDisabled(
             viewModel.isPublishing
@@ -710,10 +727,28 @@ struct ComposeView: View {
     private func attachmentThumb(_ attachment: ComposeAttachment, size: CGFloat) -> some View {
         ZStack(alignment: .topTrailing) {
             ZStack {
-                if let bytes = attachment.localBytes, let img = UIImage(data: bytes) {
+                if let bytes = attachment.localBytes,
+                   AnimatedImageHint.isLikelyAnimated(url: "", mime: attachment.mime),
+                   let payload = AnimatedImageDecoder.decode(data: bytes, maxPixelSize: size * UIScreen.main.scale) {
+                    // Animated GIF / animated WebP / APNG — render with the
+                    // per-frame decoder so the thumbnail plays before publish.
+                    // The simple `UIImage(data:)` path freezes on frame 0.
+                    AnimatedImageRenderer(payload: payload, contentMode: .scaleAspectFill)
+                } else if let bytes = attachment.localBytes, let img = UIImage(data: bytes) {
                     Image(uiImage: img)
                         .resizable()
                         .scaledToFill()
+                } else if let url = attachment.url,
+                          AnimatedImageHint.isLikelyAnimated(url: url, mime: attachment.mime) {
+                    // Post-upload: bytes have been cleared but the attachment
+                    // is animated. Fetch + animate from the Blossom URL.
+                    AnimatedImageView(
+                        url: URL(string: url),
+                        aspect: nil,
+                        contentMode: .fill,
+                        placeholder: { Color.wispSurfaceVariant },
+                        failure: { Color.wispSurfaceVariant }
+                    )
                 } else if let url = attachment.url {
                     AsyncImage(url: URL(string: url)) { phase in
                         switch phase {
@@ -862,11 +897,10 @@ struct ComposeView: View {
                 } label: {
                     Image(systemName: "doc.on.clipboard")
                         .font(.system(size: 22))
-                        .foregroundStyle(UIPasteboard.general.hasImages ? Color.wispPrimary : .secondary)
+                        .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Paste image from clipboard")
-                .disabled(!UIPasteboard.general.hasImages)
             }
 
             if !viewModel.pollEnabled {
@@ -1109,10 +1143,33 @@ struct ComposeView: View {
     /// which uploads each one to Blossom and appends as an attachment.
     /// `.onPasteCommand` is unavailable on iOS, so this routes through a
     /// visible button that reads `UIPasteboard.general` on tap.
+    ///
+    /// Detection has to handle a few quirks:
+    /// - `canLoadObject(ofClass: UIImage.self)` misses Photos.app's custom UTI
+    ///   pasteboard items. `hasItemConformingToTypeIdentifier("public.image")`
+    ///   is the authoritative check — it includes every UTI that conforms to
+    ///   `public.image` (PNG, JPEG, GIF, HEIC, WebP, TIFF, RAW, …).
+    /// - When the clipboard has zero matching providers but `UIPasteboard`'s
+    ///   high-level `image` accessor returns something (some sources only
+    ///   write through the legacy API), fall back to that and re-wrap it as
+    ///   a provider so the existing upload pipeline runs unchanged.
+    /// - On nothing-to-paste, surface a toast so the user knows the tap
+    ///   registered. Otherwise a silent button feels broken.
     private func pasteImageFromClipboard() {
-        let providers = UIPasteboard.general.itemProviders.filter { $0.canLoadObject(ofClass: UIImage.self) }
-        guard !providers.isEmpty else { return }
-        Task { await viewModel.addPastedImages(providers) }
+        let pasteboard = UIPasteboard.general
+        let providers = pasteboard.itemProviders.filter {
+            $0.hasItemConformingToTypeIdentifier(UTType.image.identifier)
+        }
+        if !providers.isEmpty {
+            Task { await viewModel.addPastedImages(providers) }
+            return
+        }
+        if let image = pasteboard.image, let png = image.pngData() {
+            let provider = NSItemProvider(item: png as NSData, typeIdentifier: UTType.png.identifier)
+            Task { await viewModel.addPastedImages([provider]) }
+            return
+        }
+        QuickFollowToast.shared.show("No image on clipboard")
     }
 
     private var previewTags: [[String]] {

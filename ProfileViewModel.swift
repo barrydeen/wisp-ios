@@ -95,6 +95,8 @@ final class ProfileViewModel {
 
     @ObservationIgnored private let profileRepo = ProfileRepository.shared
     @ObservationIgnored private let eventStore = EventStore.shared
+    @ObservationIgnored private var safetyObserver: NSObjectProtocol?
+    @ObservationIgnored private var followsObserver: NSObjectProtocol?
 
     private static let indexerRelays = RelayDefaults.indexers
 
@@ -105,6 +107,37 @@ final class ProfileViewModel {
             self.profile = cached
             self.profiles[pubkey] = cached
         }
+        // Re-filter on safety-snapshot installs (WoT toggle / recompute) so an
+        // open profile's already-loaded notes vanish the moment the filter
+        // tightens — same contract as the feed and thread observers. The
+        // ingest paths all gate on `shouldDrop(.feed)`, so this only has to
+        // scrub what was loaded under looser rules.
+        followsObserver = NotificationCenter.default.addObserver(
+            forName: .followsDidChange, object: nil, queue: .main
+        ) { [weak self] _ in
+            guard let self else { return }
+            youFollow = FollowsCache.shared.followsSet(for: activeUserPubkey).contains(pubkey)
+        }
+        safetyObserver = NotificationCenter.default.addObserver(
+            forName: .safetyFilterChanged, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                guard SafetyFilter.shared.snapshot.wotEnabled else { return }
+                let drop: (NostrEvent) -> Bool = {
+                    SafetyFilter.shared.shouldDrop(event: $0, context: .feed)
+                }
+                rootNotes.removeAll(where: drop)
+                replies.removeAll(where: drop)
+                sortedNotes.removeAll(where: drop)
+                sortedReplies.removeAll(where: drop)
+            }
+        }
+    }
+
+    deinit {
+        if let followsObserver { NotificationCenter.default.removeObserver(followsObserver) }
+        if let safetyObserver { NotificationCenter.default.removeObserver(safetyObserver) }
     }
 
     // MARK: - Lifecycle
@@ -211,6 +244,15 @@ final class ProfileViewModel {
         followingCount = pubkeys.count
         // Their contact list p-tags the active user → they follow us.
         followsYou = pubkeys.contains(activeUserPubkey)
+
+        // When this IS our own profile, push the freshest relay copy into the
+        // local follow cache so a list edited in another client replaces our
+        // frozen snapshot before the next in-app follow/unfollow rebuilds off
+        // it. Gated on `created_at`, so a stale relay copy can't undo a newer
+        // local edit.
+        if pubkey == activeUserPubkey {
+            FollowsCache.shared.reconcile(pubkey: pubkey, follows: pubkeys, createdAt: best.createdAt)
+        }
     }
 
     private func loadTargetWriteRelays() async {
@@ -821,12 +863,15 @@ final class ProfileViewModel {
     private func isRootOrRepost(_ event: NostrEvent) -> Bool {
         guard event.pubkey == pubkey else { return false }
         if event.kind == 6 || [20, 21, 22, 30023].contains(event.kind) { return true }
-        return event.kind == 1 && !event.tags.contains { $0.first == "e" }
+        // A quote post carries an `e … mention` tag but is a top-level note,
+        // so it belongs in the Notes tab, not Replies. `hasThreadingETag`
+        // ignores mention markers.
+        return event.kind == 1 && !event.hasThreadingETag
     }
 
     private func isReply(_ event: NostrEvent) -> Bool {
         guard event.pubkey == pubkey, event.kind == 1 else { return false }
-        return event.tags.contains { $0.first == "e" }
+        return event.hasThreadingETag
     }
 
     private func persistKnownKinds(_ events: [NostrEvent]) async {

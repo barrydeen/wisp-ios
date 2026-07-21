@@ -48,7 +48,7 @@ enum PrivateReactionPublisher {
 
         // 2. Build rumor with stable tag order. `k=1` distinguishes from DM
         //    reactions (`k=14`). Custom emoji adds NIP-30 tag.
-        let rumorCreatedAt = Int(Date().timeIntervalSince1970)
+        let rumorCreatedAt = NostrClock.now()
         var tags: [[String]] = []
         tags.append(["e", target.id, "", target.pubkey])
         tags.append(["p", target.pubkey])

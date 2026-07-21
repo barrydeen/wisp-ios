@@ -410,7 +410,7 @@ final class SignUpViewModel {
 
     private func signRelayListEvent() -> NostrEvent? {
         guard let privkey = Hex.decode(keypair.privkey) else { return nil }
-        let now = Int(Date().timeIntervalSince1970)
+        let now = NostrClock.now()
         let tags = Nip51Lists.buildGeneralRelayTags(discoveredRelays)
         return try? NostrEvent.sign(
             privkey32: privkey,
@@ -437,7 +437,7 @@ final class SignUpViewModel {
         guard !json.isEmpty,
               let body = try? JSONSerialization.data(withJSONObject: json),
               let bodyStr = String(data: body, encoding: .utf8) else { return nil }
-        let now = Int(Date().timeIntervalSince1970)
+        let now = NostrClock.now()
         return try? NostrEvent.sign(
             privkey32: privkey,
             pubkey: keypair.pubkey,
@@ -558,7 +558,10 @@ final class SignUpViewModel {
         var follows = selectedFollows
         follows.insert(keypair.pubkey)
 
-        FollowsCache.shared.update(pubkey: keypair.pubkey, follows: Array(follows))
+        // Stamp the cache with the same `created_at` the kind-3 below is signed
+        // with, so a later relay reconcile treats this as the freshest set.
+        let now = NostrClock.now()
+        FollowsCache.shared.update(pubkey: keypair.pubkey, follows: Array(follows), createdAt: now)
 
         let writeRelays = discoveredRelays.filter(\.write).map(\.url)
 
@@ -571,7 +574,6 @@ final class SignUpViewModel {
         startOutboxBuilder(follows: Array(follows), ownWriteRelays: writeRelays)
 
         let targets = (writeRelays + Self.indexerRelays).uniquedPreservingOrder()
-        let now = Int(Date().timeIntervalSince1970)
         let tags: [[String]] = follows.map { ["p", $0] }
         guard let event = try? NostrEvent.sign(
             privkey32: privkey,
@@ -772,7 +774,7 @@ final class SignUpViewModel {
 
         let writeRelays = discoveredRelays.filter(\.write).map(\.url)
         let targets = writeRelays.isEmpty ? Self.indexerRelays : writeRelays
-        let now = Int(Date().timeIntervalSince1970)
+        let now = NostrClock.now()
         guard let event = try? NostrEvent.sign(
             privkey32: privkey,
             pubkey: keypair.pubkey,

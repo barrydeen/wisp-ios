@@ -83,7 +83,7 @@ nonisolated enum Nip47 {
             privkey32: connection.clientSecret,
             pubkey: Hex.encode(connection.clientPubkey),
             kind: requestKind,
-            createdAt: Int(Date().timeIntervalSince1970),
+            createdAt: NostrClock.now(),
             tags: tags,
             content: encrypted
         )

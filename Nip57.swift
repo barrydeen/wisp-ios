@@ -87,7 +87,7 @@ nonisolated enum Nip57 {
             throw ZapBuildError.privateRequiresLocalKey
         }
 
-        let createdAt = Int(Date().timeIntervalSince1970)
+        let createdAt = NostrClock.now()
 
         // DIP-03 private path: build inner 9733 (signed by real sender),
         // encrypt to recipient, pack into anon tag, sign outer with derived

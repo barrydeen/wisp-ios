@@ -84,6 +84,7 @@ final class HashtagFeedViewModel {
     }
 
     func refresh() async {
+        EngagementRepository.shared.requestFullResync()
         await load()
     }
 

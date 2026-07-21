@@ -28,7 +28,7 @@ enum PollVoteSender {
         var tags = Nip88.buildResponseTags(pollEventId: pollEvent.id, selectedOptionIds: optionIds)
         if let clientTag = NostrEvent.clientTagIfEnabled() { tags.append(clientTag) }
 
-        let now = Int(Date().timeIntervalSince1970)
+        let now = NostrClock.now()
         guard let privkeyBytes = Hex.decode(keypair.privkey) else { return .failure(.signingFailed) }
 
         let signed: NostrEvent

@@ -22,6 +22,17 @@ struct MediaGridView: View {
     /// negative trailing padding) overshoots the nested container by
     /// the parent's own padding (~28pt) and bleeds past the screen edge.
     var nested: Bool = false
+    /// Total horizontal inset (both sides combined, in points) between the
+    /// screen edge and this gallery's nested container. Only used to seed
+    /// `tileHeightForNested` — the `.frame(height:)` that reserves scrollable
+    /// space for this view *before* its own `GeometryReader` has measured the
+    /// real width (see that property's doc for why the guess is needed at
+    /// all). Defaults to `QuotedNoteView`'s chrome (16pt card padding + 12pt
+    /// quoted-note padding, doubled); callers with different chrome — e.g.
+    /// `ComposerPreviewCard`'s 12pt outer + 12pt inner padding — must pass
+    /// their own total or the reserved height undershoots the real content
+    /// height, silently truncating the scrollable region around this view.
+    var nestedHorizontalInset: CGFloat = 56
     /// When set, tile taps fire this closure instead of presenting the
     /// pager themselves. Used by `RichContentView` so a single post-wide
     /// `FullScreenMediaPager` shows every image and video in the post,
@@ -130,10 +141,9 @@ struct MediaGridView: View {
     /// `GeometryReader`'s explicit height so the parent VStack reserves
     /// the right vertical space — `GeometryReader` itself is greedy.
     private var tileHeightForNested: CGFloat {
-        // Same formula as feedBody, but anchored to a typical nested
-        // container width (screen width minus the parent card's 16pt
-        // padding minus the QuotedNoteView's 12pt inner padding × 2).
-        let approxWidth = max(1, UIScreen.main.bounds.width - 56)
+        // Same formula as feedBody, but anchored to the caller-supplied
+        // nested container width (see `nestedHorizontalInset`'s doc).
+        let approxWidth = max(1, UIScreen.main.bounds.width - nestedHorizontalInset)
         return approxWidth * tileWidthFraction / tileAspect
     }
 
@@ -257,6 +267,7 @@ private struct MediaTileImage: View {
             } else {
                 RetryingAsyncImage(
                     url: URL(string: item.url),
+                    maxPixelSize: ImagePixelBudget.feed,
                     content: { image in image.resizable().scaledToFill() },
                     loading: { placeholder },
                     failure: { placeholder }
@@ -271,15 +282,17 @@ private struct MediaTileImage: View {
         // Prefer the imeta-supplied poster URL — instant and free of any video
         // bandwidth. Fall back to a frame decoded from the video itself so
         // dim-less / poster-less posts still get something visible.
+        // RetryingAsyncImage (not bare AsyncImage) so the poster goes through
+        // DecodedImageCache + the shared in-flight dedup at the same #px1024
+        // key the lookahead prefetcher warms — a prefetched poster renders
+        // with no spinner, and a recycled tile doesn't re-fetch.
         if let posterUrl = item.posterUrl, let url = URL(string: posterUrl) {
-            AsyncImage(url: url) { phase in
-                switch phase {
-                case .success(let image):
-                    image.resizable().scaledToFill()
-                default:
-                    GeneratedVideoPoster(videoUrl: item.url) { placeholder }
-                }
-            }
+            RetryingAsyncImage(
+                url: url,
+                content: { image in image.resizable().scaledToFill() },
+                loading: { placeholder },
+                failure: { GeneratedVideoPoster(videoUrl: item.url) { placeholder } }
+            )
         } else {
             GeneratedVideoPoster(videoUrl: item.url) { placeholder }
         }
@@ -349,8 +362,22 @@ struct FullScreenMediaPager: View {
 
                 HStack(spacing: 0) {
                     ForEach(Array(items.enumerated()), id: \.offset) { i, item in
-                        pageContent(for: item)
-                            .frame(width: geo.size.width, height: geo.size.height)
+                        // Only the current page and its immediate neighbours
+                        // build real image/video content; every other slot
+                        // stays an empty placeholder of the same size so the
+                        // `-index * width` paging math is unchanged. Without
+                        // this window, opening the pager on a note with dozens
+                        // of images instantiates every full-resolution decode
+                        // at once and jetsam-kills the app (the "client
+                        // killer" stress-test note).
+                        Group {
+                            if abs(i - index) <= 1 {
+                                pageContent(for: item)
+                            } else {
+                                Color.clear
+                            }
+                        }
+                        .frame(width: geo.size.width, height: geo.size.height)
                     }
                 }
                 .frame(width: geo.size.width, height: geo.size.height, alignment: .leading)
@@ -362,19 +389,20 @@ struct FullScreenMediaPager: View {
                 .onChange(of: geo.size.width) { _, new in pageWidth = new }
 
                 if items.count > 1 {
-                    HStack(spacing: 6) {
-                        ForEach(0..<items.count, id: \.self) { i in
-                            Circle()
-                                .fill(Color.white.opacity(i == index ? 0.9 : 0.35))
-                                .frame(width: 6, height: 6)
-                        }
-                    }
-                    .padding(.vertical, 6)
-                    .padding(.horizontal, 10)
-                    .background(Color.black.opacity(0.4), in: Capsule())
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                    .padding(.bottom, 24)
-                    .allowsHitTesting(false)
+                    // A numeric `N / M` badge, matching the in-feed gallery's
+                    // `indexBadge`. A per-item dot row overflowed the viewport
+                    // once a post carried more than ~25 images; numbers stay a
+                    // fixed-width capsule at any count and read consistently
+                    // with the feed.
+                    Text("\(index + 1) / \(items.count)")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.9))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(Color.black.opacity(0.4), in: Capsule())
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                        .padding(.bottom, 24)
+                        .allowsHitTesting(false)
                 }
             }
         }

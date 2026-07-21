@@ -200,7 +200,7 @@ final class PostPublisher {
     /// failure here doesn't surface as a post error since the actual note has
     /// already published successfully.
     private static func clearNip37Draft(dTag: String, keypair: Keypair, relays: [String]) async {
-        let now = Int(Date().timeIntervalSince1970)
+        let now = NostrClock.now()
         let innerJSON = Nip37.serializeInner(
             pubkeyHex: keypair.pubkey,
             innerKind: 1,

@@ -10,8 +10,13 @@ struct ThreadView: View {
     /// instead route through the app-level `ComposePresenter` in the
     /// environment (injected at `MainView`'s root).
     @State private var showReplyCompose: Bool = false
-    @State private var didScrollToFocal: Bool = false
     @State private var suppressNextDisappearChainRemoval: Bool = false
+    /// Anchors whose depth-capped subtree the user expanded inline.
+    @State private var expandedBranchIds: Set<String> = []
+    /// Reply row ids currently on-screen (via onAppear/onDisappear), used to
+    /// pick the sticky reply bar's target — the topmost visible reply,
+    /// falling back to the thread's default parent.
+    @State private var visibleRowIds: Set<String> = []
     @Environment(\.dismiss) private var dismiss
 
     /// The active tab's NavigationStack path. Mutated directly by smart-pop so a
@@ -38,8 +43,6 @@ struct ThreadView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
-            Divider().overlay(Color.wispSurfaceVariant.opacity(0.5))
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 0) {
@@ -66,7 +69,11 @@ struct ThreadView: View {
                         if let focal = viewModel.focal {
                             focalRow(focal)
                                 .id(focal.id)
-                        } else if viewModel.isLoading {
+                        } else if viewModel.isLoading && viewModel.nestedReplies.isEmpty {
+                            // On a cold deep-link the focal (now the conversation
+                            // root) may not be cached yet; don't float a spinner
+                            // above an already-populated tree — the tapped note
+                            // already renders (and highlights) as a row below.
                             loadingHeader
                         }
 
@@ -74,9 +81,18 @@ struct ThreadView: View {
                         // inline with depth-based indentation. Tap still pushes
                         // a focused sub-thread, but it's no longer the only way
                         // to see grandchildren.
-                        ForEach(viewModel.nestedReplies) { item in
-                            nestedReplyRow(item)
-                                .id(item.row.id)
+                        ForEach(groupedNestedReplies) { item in
+                            switch item {
+                            case .single(let row, let midAir):
+                                nestedReplyRow(row, midAir: midAir)
+                                    .id(row.id)
+                                    .onAppear { visibleRowIds.insert(row.id) }
+                                    .onDisappear { visibleRowIds.remove(row.id) }
+                            case .wotGroup(let count, let depth, _):
+                                nestedWotGroupRow(count: count, depth: depth)
+                            case .collapsedReplies(let anchor, let depth, let hiddenCount):
+                                collapsedRepliesRow(anchorId: anchor.id, depth: depth, hiddenCount: hiddenCount)
+                            }
                         }
 
                         // Optimistic pending reply — shown at the bottom of
@@ -104,14 +120,22 @@ struct ThreadView: View {
                     }
                 }
                 .refreshable { await viewModel.refresh() }
-                .onChange(of: viewModel.focal?.id) { _, _ in scrollToFocalIfNeeded(proxy: proxy) }
-                .onChange(of: viewModel.ancestors.count) { _, _ in scrollToFocalIfNeeded(proxy: proxy) }
                 .onChange(of: viewModel.scrollTargetId) { _, targetId in
                     guard let targetId else { return }
                     withAnimation(.easeInOut(duration: 0.3)) {
                         proxy.scrollTo(targetId, anchor: .center)
                     }
                     viewModel.scrollTargetId = nil
+                }
+                .onChange(of: viewModel.highlightId) { _, newId in
+                    guard let newId else { return }
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(1500))
+                        // Same-id guard: don't let an old timer clear a newer flash.
+                        if viewModel.highlightId == newId {
+                            withAnimation(.easeOut(duration: 0.4)) { viewModel.highlightId = nil }
+                        }
+                    }
                 }
                 // Stable thread layout while sheets presented from a
                 // PostCardView row raise the keyboard — see
@@ -125,6 +149,7 @@ struct ThreadView: View {
             }
         }
         .background(Color.wispBackground)
+        .wispTopHeader { header }
         .toolbar(.hidden, for: .navigationBar)
         .swipeBackFromLeftEdge {
             popCurrentThread()
@@ -159,10 +184,13 @@ struct ThreadView: View {
             Button("OK") { viewModel.errorMessage = nil }
         } message: { msg in Text(msg) }
         .sheet(isPresented: $showReplyCompose) {
-            if let focalEvent = viewModel.focal?.event {
+            // Targets whichever reply is topmost in the viewport, falling
+            // back to the note the user opened the thread on (not the
+            // re-rooted focal, which is now the conversation root).
+            if let parent = focusedReplyTarget {
                 ComposeView(
                     keypair: viewModel.keypair,
-                    mode: .reply(parent: focalEvent, root: viewModel.rootEvent)
+                    mode: .reply(parent: parent, root: viewModel.rootEvent)
                 )
             }
         }
@@ -216,7 +244,9 @@ struct ThreadView: View {
             if showHiddenSpam {
                 ForEach(viewModel.hiddenSpamReplies) { row in
                     VStack(alignment: .leading, spacing: 6) {
-                        replyRow(row)
+                        // Always a direct reply to the focal — hiddenSpamReplies
+                        // comes from the focal's own direct-reply bucket.
+                        replyRow(row, replyingTo: viewModel.focal?.event)
                         Button("Mark not spam") {
                             viewModel.revealHiddenSpamAuthor(row.event.pubkey)
                         }
@@ -252,6 +282,8 @@ struct ThreadView: View {
     private func ancestorRow(_ row: ThreadRow) -> some View {
         if row.isBlocked {
             blockedPlaceholder
+        } else if row.isWotHidden {
+            wotHiddenPlaceholder
         } else {
             // See `replyRow` for the rationale on `.onTapGesture` vs a
             // wrapping `Button` — same nested-button hit-test issue on
@@ -278,8 +310,12 @@ struct ThreadView: View {
             // profile actually changed — same as the feed.
             .equatable()
             .contentShape(Rectangle())
+            // Ancestors are empty after re-root (focal == root), so this is
+            // effectively unreachable; kept consistent with reply rows —
+            // scroll in place rather than push.
             .onTapGesture {
-                navigateToThread(eventId: row.event.id, authorPubkey: row.event.pubkey)
+                viewModel.scrollTargetId = row.event.id
+                viewModel.highlightId = row.event.id
             }
         }
     }
@@ -290,6 +326,8 @@ struct ThreadView: View {
             Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
             if row.isBlocked {
                 blockedPlaceholder
+            } else if row.isWotHidden {
+                wotHiddenPlaceholder
             } else {
                 PostCardView(
                     event: row.event,
@@ -313,39 +351,136 @@ struct ThreadView: View {
         .background(Color.wispSurfaceVariant.opacity(0.25))
     }
 
-    /// Wrap a reply row with depth-based leading indentation. The connector
-    /// shape draws both the gutter vertical AND the bottom divider as one
-    /// continuous stroke so their line weights match exactly, with a rounded
-    /// inside fillet at the bottom-left where they meet. Top-left stays a
-    /// sharp continuation of the vertical above.
+    /// The full connector for a row at `depth`: rail + rounded corner +
+    /// bottom divider, drawn as one continuous stroke so the line weights
+    /// match. When `dashedTop` is true the top of the rail is dashed —
+    /// signalling it continues upward to a parent that isn't the row
+    /// directly above (the first reply of a branch, or a reply revealed by
+    /// expanding a folded subtree) rather than starting in mid-air.
     @ViewBuilder
-    private func nestedReplyRow(_ item: NestedReplyRow) -> some View {
-        ZStack(alignment: .leading) {
-            ReplyConnectorShape(
-                cornerRadius: 8,
-                showVertical: item.depth > 0
-            )
-            .stroke(
-                Color.wispSurfaceVariant.opacity(0.5),
-                style: StrokeStyle(lineWidth: 1, lineCap: .butt, lineJoin: .round)
-            )
-            .padding(.leading, item.depth > 0 ? indentationWidth(for: item.depth) - 8 : indentationWidth(for: item.depth))
+    private func connector(depth: Int, dashedTop: Bool) -> some View {
+        let showVertical = depth > 0
+        let lineColor = Color.wispSurfaceVariant.opacity(0.5)
+        ZStack(alignment: .topLeading) {
+            ReplyConnectorShape(cornerRadius: 8, showVertical: showVertical, dashedTop: dashedTop && showVertical)
+                .stroke(lineColor, style: StrokeStyle(lineWidth: 1, lineCap: .butt, lineJoin: .round))
+            if dashedTop && showVertical {
+                ReplyConnectorDashCap(cornerRadius: 8)
+                    .stroke(lineColor, style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+            }
+        }
+        .padding(.leading, showVertical ? indentationWidth(for: depth) - 8 : indentationWidth(for: depth))
+    }
 
-            replyRow(item.row)
+    /// Wrap a reply row with depth-based leading indentation.
+    @ViewBuilder
+    private func nestedReplyRow(_ item: NestedReplyRow, midAir: Bool) -> some View {
+        ZStack(alignment: .leading) {
+            connector(depth: item.depth, dashedTop: midAir)
+            replyRow(item.row, replyingTo: directParentEvents[item.row.id])
                 .padding(.leading, indentationWidth(for: item.depth))
+        }
+        // Brief highlight of the note the user came from (or an in-place tap
+        // target). Applied on the row CONTAINER — outside the `.equatable()`
+        // PostCardView — so PostCardView's `==` re-render gate is untouched.
+        // The animation value MUST be the per-row Bool, not the optional, or
+        // every visible row would animate on any highlight change.
+        .background(viewModel.highlightId == item.row.id ? Color.wispPrimary.opacity(0.14) : Color.clear)
+        .animation(.easeInOut(duration: 0.3), value: viewModel.highlightId == item.row.id)
+    }
+
+    @ViewBuilder
+    private func nestedWotGroupRow(count: Int, depth: Int) -> some View {
+        ZStack(alignment: .leading) {
+            connector(depth: depth, dashedTop: false)
+            HStack(spacing: 8) {
+                Image(systemName: "eye.slash")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.tertiary)
+                Text(count == 1 ? "Post hidden by WoT filter" : "\(count) posts hidden by WoT filter")
+                    .font(.subheadline)
+                    .foregroundStyle(.tertiary)
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.leading, indentationWidth(for: depth))
         }
     }
 
-    /// Per-level indent. Smaller step + cap of 5 keeps deep chains readable
-    /// on phones without compressing the post body.
+    /// Folded-subtree affordance: "Show N more replies" (closes
+    /// wisp-ios#402). Tapping expands the subtree in place: everything
+    /// above keeps its position, the revealed replies animate in below.
+    @ViewBuilder
+    private func collapsedRepliesRow(anchorId: String, depth: Int, hiddenCount: Int) -> some View {
+        ZStack(alignment: .leading) {
+            connector(depth: depth, dashedTop: true)
+            Button {
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    _ = expandedBranchIds.insert(anchorId)
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 12, weight: .semibold))
+                    Text(hiddenCount == 1 ? "Show 1 more reply" : "Show \(hiddenCount) more replies")
+                        .font(.subheadline.weight(.medium))
+                    Spacer()
+                }
+                .foregroundStyle(Color.wispPrimary)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.leading, indentationWidth(for: depth))
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    /// Per-level indent, clamped to `depthCap` — replies deeper than the
+    /// fold cap only ever appear via an inline expand, and all render at the
+    /// same indent so the guide rail never runs out of horizontal space.
     private func indentationWidth(for depth: Int) -> CGFloat {
-        CGFloat(min(depth, 5)) * 12
+        CGFloat(min(depth, ThreadReplyFolder.depthCap)) * 12
+    }
+
+    private typealias NestedReplyDisplayItem = ThreadReplyFolder.DisplayItem
+
+    /// Depth-cap fold of the full reply tree — see `ThreadReplyFolder` for
+    /// the algorithm (kept standalone and pure so it has real unit test
+    /// coverage instead of living inline in this View).
+    private var groupedNestedReplies: [NestedReplyDisplayItem] {
+        ThreadReplyFolder.fold(
+            items: viewModel.nestedReplies,
+            expandedBranchIds: expandedBranchIds,
+            exemptTargetId: viewModel.foldExemptTargetId ?? viewModel.highlightId
+        )
+    }
+
+    /// Direct-parent event for every rendered reply, keyed by reply id —
+    /// see `ThreadReplyFolder.directParentEvents`. Drives the "Replying to
+    /// X" label on each reply row.
+    private var directParentEvents: [String: NostrEvent] {
+        ThreadReplyFolder.directParentEvents(in: viewModel.nestedReplies, focal: viewModel.focal?.event)
+    }
+
+    private func replyToLabel(target: NostrEvent) -> String {
+        let name = viewModel.profiles[target.pubkey]?.displayString
+            ?? ProfileRepository.shared.get(target.pubkey)?.displayString
+            ?? Nip19.shortNpub(hex: target.pubkey)
+        return "Replying to \(name)"
     }
 
     @ViewBuilder
-    private func replyRow(_ row: ThreadRow) -> some View {
+    private func replyRow(_ row: ThreadRow, replyingTo: NostrEvent?) -> some View {
         if row.isBlocked {
             blockedPlaceholder
+        } else if row.isWotHidden {
+            // Replies normally drop outright before reaching a row; this only
+            // renders if a WoT-hidden id slips into a slice (belt-and-
+            // suspenders — never show the content either way).
+            wotHiddenPlaceholder
         } else {
             // The whole card is the tap target — tapping pushes a new
             // ThreadView with this reply as its focal. Use
@@ -361,7 +496,7 @@ struct ThreadView: View {
                 profile: viewModel.profiles[row.event.pubkey],
                 profiles: viewModel.profiles,
                 engagement: engagement(for: row.event.id),
-                showReplyContext: false,
+                replyToLabelOverride: replyingTo.map(replyToLabel),
                 isPrivate: row.isPrivate,
                 onProfileTap: { pk in push(ProfileRoute(pubkey: pk)) },
                 // Tap on an embedded quoted note pushes that note as
@@ -375,15 +510,22 @@ struct ThreadView: View {
             )
             .equatable()
             .contentShape(Rectangle())
+            // Tap a reply row to scroll to it in place + flash it — the whole
+            // conversation is already on screen, so we never push a sub-thread.
+            // (Embedded quoted-note taps above still push: different conversation.)
             .onTapGesture {
-                navigateToThread(eventId: row.event.id, authorPubkey: row.event.pubkey)
+                viewModel.scrollTargetId = row.event.id
+                viewModel.highlightId = row.event.id
             }
         }
     }
 
-    /// Smart-nav: if the tapped event is already on the back stack, pop back
-    /// to it (skipping every level above) instead of pushing a duplicate
-    /// ThreadView. Tapping the current focal is a no-op. Otherwise push.
+    /// Smart-nav for opening a DIFFERENT conversation (an embedded quoted note).
+    /// Reply/ancestor ROW taps no longer call this — they scroll in place — so
+    /// this is now reached only from quoted-note `onNoteTap` closures.
+    /// If the tapped event is already on the back stack, pop back to it (skipping
+    /// every level above) instead of pushing a duplicate ThreadView. Tapping the
+    /// current focal is a no-op. Otherwise push.
     private func navigateToThread(eventId: String, authorPubkey: String) {
         if eventId == viewModel.seedEventId { return }
         if let idx = chain.firstIndex(of: eventId), idx < chain.count - 1 {
@@ -460,6 +602,26 @@ struct ThreadView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    /// Structural stand-in for a root/focal/ancestor the Web-of-Trust filter
+    /// hides. Deliberately renders NOTHING from the event — no content, no
+    /// author, no media, and no reveal affordance — the filter gates
+    /// potentially graphic content, so the placeholder only preserves the
+    /// thread's shape.
+    private var wotHiddenPlaceholder: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "eye.slash")
+                .font(.system(size: 13))
+                .foregroundStyle(.tertiary)
+            Text("Hidden by Web of Trust filter")
+                .font(.subheadline)
+                .foregroundStyle(.tertiary)
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     private var searchingAncestorRow: some View {
         HStack(spacing: 10) {
             ProgressView()
@@ -504,13 +666,6 @@ struct ThreadView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// Scroll the focal post to the top once both it and its ancestors have resolved.
-    /// Fires once per ThreadView lifetime so the user can scroll up freely afterward.
-    /// True when the pending event's `e` tags reference the focal post or
-    /// one of its ancestors — i.e. it really is a reply to *this* thread.
-    /// Without this gate, opening any thread while a pending reply exists
-    /// (e.g. one composed from a different thread) would render the row in
-    /// the wrong context.
     private func pendingTargetsCurrentThread(pending: PendingPostStore.PendingPost) -> Bool {
         var thisThreadIds: Set<String> = []
         if let focalId = viewModel.focal?.id { thisThreadIds.insert(focalId) }
@@ -522,23 +677,18 @@ struct ThreadView: View {
         return false
     }
 
-    private func scrollToFocalIfNeeded(proxy: ScrollViewProxy) {
-        guard !didScrollToFocal else { return }
-        guard let focalId = viewModel.focal?.id else { return }
-        // No ancestors yet AND the focal is the root → nothing to scroll past, mark done.
-        if viewModel.ancestors.isEmpty && viewModel.rootId == focalId {
-            didScrollToFocal = true
-            return
-        }
-        // Otherwise wait for at least one ancestor to render before scrolling, so the
-        // focal lands at the top instead of in the middle of an empty view.
-        guard !viewModel.ancestors.isEmpty else { return }
-        didScrollToFocal = true
-        DispatchQueue.main.async {
-            withAnimation(.easeInOut(duration: 0.25)) {
-                proxy.scrollTo(focalId, anchor: .top)
+    /// The sticky reply bar's target: the topmost currently-visible reply
+    /// (via `visibleRowIds`, in rendered order), falling back to the
+    /// thread's default parent when no reply row is on screen yet (e.g.
+    /// scrolled to the very top) — the bar follows what you're scrolled to
+    /// instead of always targeting the root.
+    private var focusedReplyTarget: NostrEvent? {
+        for item in groupedNestedReplies {
+            if case .single(let row, _) = item, visibleRowIds.contains(row.id) {
+                return row.row.event
             }
         }
+        return viewModel.composerDefaultParent ?? viewModel.focal?.event
     }
 
     private var composer: some View {
@@ -559,7 +709,7 @@ struct ThreadView: View {
                 .background(Color.wispSurfaceVariant.opacity(0.5), in: RoundedRectangle(cornerRadius: 18))
             }
             .buttonStyle(.plain)
-            .disabled(viewModel.focal == nil)
+            .disabled(focusedReplyTarget == nil)
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
         }
@@ -572,17 +722,26 @@ struct ThreadView: View {
 /// (the vertical continues from the previous row); bottom-left is
 /// a rounded inside fillet where the vertical meets the horizontal.
 /// At the root depth, only the horizontal divider is drawn.
+///
+/// When `dashedTop` is true the top `dashLength` points of the vertical are
+/// carved out of this shape — `ReplyConnectorDashCap` draws that segment
+/// separately, dashed, so the rail's very top reads as discontinuous.
 private struct ReplyConnectorShape: Shape {
     var cornerRadius: CGFloat = 8
     var showVertical: Bool = true
+    var dashedTop: Bool = false
+    var dashLength: CGFloat = 14
 
     func path(in rect: CGRect) -> Path {
         var path = Path()
         if showVertical {
-            // Continuous vertical down the gutter, full row height. Adjacent
-            // rows' verticals butt together for a seamless chain.
-            path.move(to: CGPoint(x: 1, y: 0))
-            path.addLine(to: CGPoint(x: 1, y: rect.height - cornerRadius))
+            let railBottom = rect.height - cornerRadius
+            let topY = dashedTop ? min(dashLength, max(0, railBottom)) : 0
+            // Continuous vertical down the gutter. Adjacent rows' verticals
+            // butt together for a seamless chain (unless dashedTop carved
+            // out the top segment above).
+            path.move(to: CGPoint(x: 1, y: topY))
+            path.addLine(to: CGPoint(x: 1, y: railBottom))
             // Rounded inside fillet from vertical → horizontal.
             path.addQuadCurve(
                 to: CGPoint(x: 1 + cornerRadius, y: rect.height),
@@ -596,6 +755,22 @@ private struct ReplyConnectorShape: Shape {
             path.move(to: CGPoint(x: 0, y: rect.height))
             path.addLine(to: CGPoint(x: rect.width, y: rect.height))
         }
+        return path
+    }
+}
+
+/// The dashed top segment carved out of `ReplyConnectorShape` when
+/// `dashedTop` is true — see that type's doc comment.
+private struct ReplyConnectorDashCap: Shape {
+    var cornerRadius: CGFloat = 8
+    var dashLength: CGFloat = 14
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let railBottom = rect.height - cornerRadius
+        let bottomY = min(dashLength, max(0, railBottom))
+        path.move(to: CGPoint(x: 1, y: 0))
+        path.addLine(to: CGPoint(x: 1, y: bottomY))
         return path
     }
 }

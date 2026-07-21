@@ -107,7 +107,8 @@ final class GroupRepository {
         // Dedup by event id.
         guard seenMessageIds.insert(message.id).inserted else { return }
         room.messages.append(message)
-        room.messages.sort { $0.createdAt < $1.createdAt }
+        // Tie-break equal timestamps by id so clamped messages keep a stable order.
+        room.messages.sort { ($0.createdAt, $0.id) < ($1.createdAt, $1.id) }
         if message.createdAt > room.lastMessageAt {
             room.lastMessageAt = message.createdAt
         }

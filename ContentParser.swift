@@ -10,13 +10,18 @@ struct MediaMeta: Hashable {
     /// frame preview before the user taps to play, without having to pre-decode
     /// the video itself.
     let posterUrl: String?
+    /// SHA-256 digest of the file (NIP-92 imeta `x`, falling back to `ox`). Used
+    /// to dedupe the same content-addressed file when it's served from more than
+    /// one host (e.g. a Blossom mirror in `content` vs the host in the imeta tag).
+    let sha256: String?
 
-    init(url: String, mime: String? = nil, dimension: String? = nil, blurhash: String? = nil, posterUrl: String? = nil) {
+    init(url: String, mime: String? = nil, dimension: String? = nil, blurhash: String? = nil, posterUrl: String? = nil, sha256: String? = nil) {
         self.url = url
         self.mime = mime
         self.dimension = dimension
         self.blurhash = blurhash
         self.posterUrl = posterUrl
+        self.sha256 = sha256
     }
 }
 
@@ -34,6 +39,9 @@ enum ContentSegment: Hashable {
     case customEmoji(shortcode: String, url: String)
     case hashtag(String)
     case lightningInvoice(invoice: String, amountSats: Int64?, description: String?)
+    /// A lightning address (`user@domain.tld`) found inline in text — rendered
+    /// as a tappable "Zap" pill that opens an LNURL-pay flow.
+    case lightningAddress(String)
 }
 
 enum ContentParser {
@@ -51,13 +59,22 @@ enum ContentParser {
         options: [.caseInsensitive]
     )
 
+    private static let sha256Regex = try! NSRegularExpression(
+        pattern: #"^[0-9a-f]{64}$"#,
+        options: [.caseInsensitive]
+    )
+
     // Mirrors Android's combined regex with the same TLD whitelist + hashtag, npub, nostr-uri, bare bech32 patterns.
     private static let combinedRegex: NSRegularExpression = {
         let tlds = "com|net|org|io|dev|app|pro|ai|co|me|info|xyz|cc|tv|to|gg|sh|im|is|it|rs|ly|site|online|store|tech|cloud|social|world|earth|space|lol|wtf|family|life|art|design|blog|news|live|video|media|chat|games|money|finance|agency|studio|build|run|codes|systems|network|zone|pub|blue|limo|fyi|wiki|page|link|click|exchange|markets|fun|club|today"
         let pattern = #"nostr:(?:note1|nevent1|npub1|nprofile1|naddr1)[a-z0-9]+"#
             + #"|(?<!\w)(npub1[a-z0-9]{58})(?!\w|\.[a-zA-Z])"#
             + #"|(?:https?|wss?):\/\/\S+"#
-            + #"|(?<!\w)((?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+(?:\#(tlds))(?:\/\S*)?)(?!\w)"#
+            // Lookbehind excludes `@` and `.` in addition to word chars so the
+            // domain half of a lightning / email address (`user@getalby.com`)
+            // or a deeper subdomain segment isn't matched as a standalone URL
+            // and rendered as a link-preview card.
+            + #"|(?<![\w@.])((?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+(?:\#(tlds))(?:\/\S*)?)(?!\w)"#
             + #"|(?<!\w)#([a-zA-Z0-9_][a-zA-Z0-9_-]*)"#
             + #"|(?<!\w)((?:note1|nevent1|nprofile1|naddr1)[a-z0-9]{10,})(?!\w)"#
         return try! NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
@@ -70,6 +87,15 @@ enum ContentParser {
 
     private static let emojiShortcodeRegex = try! NSRegularExpression(pattern: #":([a-zA-Z0-9_-]+):"#)
 
+    /// Lightning / email address shape (`user@domain.tld`). Deliberately broad;
+    /// each match is validated with `LnurlResolver.isLightningAddress` before it
+    /// becomes a `.lightningAddress` segment. The `(?<![\w@.])` / `(?![\w@])`
+    /// boundaries stop it from matching inside URLs or larger tokens.
+    private static let lightningAddressRegex = try! NSRegularExpression(
+        pattern: #"(?<![\w@.])([a-z0-9][a-z0-9._%+-]*@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,})(?![\w@])"#,
+        options: [.caseInsensitive]
+    )
+
     // MARK: - imeta tags (NIP-92)
 
     static func parseImetaTags(_ tags: [[String]]) -> [String: MediaMeta] {
@@ -81,15 +107,19 @@ enum ContentParser {
             var dim: String?
             var blur: String?
             var image: String?
+            var x: String?
+            var ox: String?
             for entry in tag.dropFirst() {
                 if entry.hasPrefix("url ") { url = String(entry.dropFirst(4)) }
                 else if entry.hasPrefix("m ") { mime = String(entry.dropFirst(2)) }
                 else if entry.hasPrefix("dim ") { dim = String(entry.dropFirst(4)) }
                 else if entry.hasPrefix("blurhash ") { blur = String(entry.dropFirst(9)) }
                 else if entry.hasPrefix("image ") { image = String(entry.dropFirst(6)) }
+                else if entry.hasPrefix("ox ") { ox = String(entry.dropFirst(3)) }
+                else if entry.hasPrefix("x ") { x = String(entry.dropFirst(2)) }
             }
             if let url {
-                map[url] = MediaMeta(url: url, mime: mime, dimension: dim, blurhash: blur, posterUrl: image)
+                map[url] = MediaMeta(url: url, mime: mime, dimension: dim, blurhash: blur, posterUrl: image, sha256: x ?? ox)
             }
         }
         return map
@@ -127,6 +157,27 @@ enum ContentParser {
             trimBlankLines: trimBlankLines,
             linksAreInline: linksAreInline
         )
+    }
+
+    /// Character count of the parts of `content` that actually render as
+    /// flowing text — `.text`, inline `.hashtag`, and inline `.inlineLink`
+    /// runs. Media URLs (`.image`/`.video`/`.audio`/`.unknownMedia`),
+    /// standalone link-preview URLs (`.link`), embedded quote cards, and
+    /// lightning-invoice cards are excluded because they render as blocks,
+    /// not wrapped text.
+    ///
+    /// The feed's "long post" heuristic uses this instead of raw
+    /// `content.count` so a short caption followed by several inline media
+    /// URLs isn't mistaken for a long text body and needlessly truncated.
+    static func textualLength(content: String, tags: [[String]]) -> Int {
+        parse(content: content, tags: tags).reduce(0) { sum, seg in
+            switch seg {
+            case .text(let s):       return sum + s.trimmingCharacters(in: .whitespacesAndNewlines).count
+            case .inlineLink(let s): return sum + s.count
+            case .hashtag(let s):    return sum + s.count + 1   // include the leading '#'
+            default:                 return sum
+            }
+        }
     }
 
     static func parse(
@@ -182,20 +233,49 @@ enum ContentParser {
         // The regex pass above misses those URLs, so append them here as
         // explicit media segments in imeta tag order (so the publisher's
         // intended first image stays first).
-        if !imetaMap.isEmpty {
+        //
+        // The append pass only runs when `content` rendered no media of its
+        // own. Per NIP-92 an imeta tag describes a URL that appears in
+        // `content`; when a note already shows media, an unmatched imeta URL
+        // is the same file on another host (e.g. the publishing client's
+        // Blossom mirror), not an extra attachment — and it often carries no
+        // `x`/`ox` digest that could prove the match (a nostr.build URL in
+        // content vs a digest-named mirror URL in imeta has no common token),
+        // so appending it would render the image twice.
+        let contentHasMedia = segments.contains { seg in
+            switch seg {
+            case .image, .video, .audio, .unknownMedia: return true
+            default: return false
+            }
+        }
+        if !imetaMap.isEmpty && !contentHasMedia {
             var seenUrls = Set<String>()
+            // Content-addressed dedup: two imeta tags are often mirrors of the
+            // same file on different hosts, keyed by its SHA-256. A plain
+            // URL-string compare misses that and renders the image twice, so we
+            // also track the digest — from the imeta `x`/`ox` field or the
+            // 64-hex filename embedded in a media URL — and skip any imeta
+            // entry whose file we've already appended.
+            var seenHashes = Set<String>()
             for seg in segments {
+                let segUrl: String?
                 switch seg {
-                case .image(let m), .video(let m), .audio(let m), .unknownMedia(let m):
-                    seenUrls.insert(m.url)
                 case .link(let url), .inlineLink(let url):
-                    seenUrls.insert(url)
-                default: break
+                    segUrl = url
+                default:
+                    segUrl = nil
+                }
+                if let segUrl {
+                    seenUrls.insert(segUrl)
+                    if let h = sha256Hash(fromUrl: segUrl) { seenHashes.insert(h) }
                 }
             }
             let orderedUrls = imetaUrlOrder.isEmpty ? Array(imetaMap.keys) : imetaUrlOrder
-            for url in orderedUrls where !seenUrls.contains(url) {
+            for url in orderedUrls {
                 guard let meta = imetaMap[url] else { continue }
+                if seenUrls.contains(url) { continue }
+                let metaHash = meta.sha256?.lowercased() ?? sha256Hash(fromUrl: url)
+                if let metaHash, seenHashes.contains(metaHash) { continue }
                 let imetaClass = meta.mime.flatMap { classifyByMime($0) }
                 let ext = fileExtension(url)
                 if imetaClass == "image" { segments.append(.image(meta)) }
@@ -205,6 +285,10 @@ enum ContentParser {
                 else if videoExtensions.contains(ext) { segments.append(.video(meta)) }
                 else if audioExtensions.contains(ext) { segments.append(.audio(meta)) }
                 else { segments.append(.unknownMedia(meta)) }
+                // Record what we just appended so a second imeta tag pointing at
+                // the same file (another mirror) doesn't add yet another copy.
+                seenUrls.insert(url)
+                if let metaHash { seenHashes.insert(metaHash) }
             }
         }
 
@@ -222,6 +306,14 @@ enum ContentParser {
         segments = segments.flatMap { seg -> [ContentSegment] in
             if case .text(let text) = seg {
                 return splitTextForInvoices(text)
+            }
+            return [seg]
+        }
+
+        // Pass 3.5: detect lightning addresses (user@domain.tld) in text segments
+        segments = segments.flatMap { seg -> [ContentSegment] in
+            if case .text(let text) = seg {
+                return splitTextForLightningAddresses(text)
             }
             return [seg]
         }
@@ -316,6 +408,19 @@ enum ContentParser {
             return String(withoutQuery[withoutQuery.index(after: dot)...]).lowercased()
         }
         return ""
+    }
+
+    /// Extracts a content-addressed SHA-256 digest from a media URL when the
+    /// final path component is a 64-char hex string (optionally with a file
+    /// extension), as used by Blossom and most Nostr media hosts. Returns the
+    /// lowercased hash, or nil if the filename isn't a digest.
+    private static func sha256Hash(fromUrl url: String) -> String? {
+        guard let parsed = URL(string: url) else { return nil }
+        let last = parsed.lastPathComponent
+        let base = last.split(separator: ".").first.map(String.init) ?? last
+        let r = NSRange(location: 0, length: (base as NSString).length)
+        guard sha256Regex.firstMatch(in: base, range: r) != nil else { return nil }
+        return base.lowercased()
     }
 
     private static func isBlossomUrl(_ url: String) -> Bool {
@@ -417,6 +522,37 @@ enum ContentParser {
                 result.append(.text(ns.substring(with: NSRange(location: lastEnd, length: r.location - lastEnd))))
             }
             result.append(.lightningInvoice(invoice: invoice, amountSats: decoded.amountSats, description: decoded.description))
+            lastEnd = r.location + r.length
+        }
+        if !anyFound { return [.text(text)] }
+        if lastEnd < ns.length {
+            result.append(.text(ns.substring(from: lastEnd)))
+        }
+        return result
+    }
+
+    /// Splits a text run on lightning addresses (`user@domain.tld`), emitting a
+    /// `.lightningAddress` segment for each. Each candidate is validated with
+    /// `LnurlResolver.isLightningAddress` so obviously-malformed tokens stay as
+    /// text; genuine emails still match the shape, but the pay sheet resolves
+    /// the LNURL on open and surfaces an error if it isn't payable.
+    private static func splitTextForLightningAddresses(_ text: String) -> [ContentSegment] {
+        let ns = text as NSString
+        let matches = lightningAddressRegex.matches(in: text, range: NSRange(location: 0, length: ns.length))
+        if matches.isEmpty { return [.text(text)] }
+
+        var result: [ContentSegment] = []
+        var lastEnd = 0
+        var anyFound = false
+        for match in matches {
+            let raw = ns.substring(with: match.range)
+            guard LnurlResolver.isLightningAddress(raw) else { continue }
+            anyFound = true
+            let r = match.range
+            if r.location > lastEnd {
+                result.append(.text(ns.substring(with: NSRange(location: lastEnd, length: r.location - lastEnd))))
+            }
+            result.append(.lightningAddress(raw))
             lastEnd = r.location + r.length
         }
         if !anyFound { return [.text(text)] }
