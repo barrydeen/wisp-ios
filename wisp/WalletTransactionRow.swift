@@ -7,6 +7,12 @@ struct WalletTransactionRow: View {
     /// Wallet-screen balance display mode. `.fiat` renders amounts in the
     /// user's fiat currency; `.hidden` masks every number in the row.
     let displayMode: WalletBalanceDisplayMode
+    /// When true (the full history list), the row taps to expand a detail
+    /// drawer. The dashboard recent preview leaves this off so its rows stay
+    /// compact and non-interactive.
+    var expandable: Bool = false
+
+    @State private var expanded = false
 
     var body: some View {
         let isIncoming = tx.type == .incoming
@@ -35,61 +41,172 @@ struct WalletTransactionRow: View {
             ? CurrencyFormatter.walletFiat(sats: feeSats)
             : nil
 
-        HStack(alignment: .center, spacing: 12) {
-            ZStack {
-                if let profile {
-                    CachedAvatarView(url: profile.picture, size: 40)
-                } else {
-                    Circle()
-                        .fill((isIncoming ? Color.wispRepostColor : Color.red).opacity(0.18))
-                        .frame(width: 40, height: 40)
-                    Image(systemName: isIncoming ? "arrow.down" : "arrow.up")
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(amountColor)
+        VStack(spacing: 0) {
+            HStack(alignment: .center, spacing: 12) {
+                ZStack {
+                    if let profile {
+                        CachedAvatarView(url: profile.picture, size: 40)
+                    } else {
+                        Circle()
+                            .fill((isIncoming ? Color.wispRepostColor : Color.red).opacity(0.18))
+                            .frame(width: 40, height: 40)
+                        Image(systemName: isIncoming ? "arrow.down" : "arrow.up")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(amountColor)
+                    }
                 }
-            }
-            VStack(alignment: .leading, spacing: 2) {
-                Text(profile?.displayString ?? (tx.description?.isEmpty == false ? tx.description! : (isIncoming ? "Received" : "Sent")))
-                    .font(.subheadline.weight(profile != nil ? .semibold : .regular))
-                    .lineLimit(1)
-                Text(relativeTime(from: Int(tx.settledAt ?? tx.createdAt)))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 8)
-            VStack(alignment: .trailing, spacing: 2) {
-                if hidden {
-                    Text("\(sign)•••")
-                        .font(.subheadline.weight(.semibold).monospacedDigit())
-                        .foregroundStyle(amountColor)
-                } else if let fiatAmount {
-                    Text("\(sign)\(fiatAmount)")
-                        .font(.subheadline.weight(.semibold).monospacedDigit())
-                        .foregroundStyle(amountColor)
-                } else {
-                    HStack(alignment: .firstTextBaseline, spacing: 3) {
-                        Text("\(sign)\(CurrencyFormatter.formatNumber(sats))")
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(profile?.displayString ?? (tx.description?.isEmpty == false ? tx.description! : (isIncoming ? "Received" : "Sent")))
+                        .font(.subheadline.weight(profile != nil ? .semibold : .regular))
+                        .lineLimit(1)
+                    Text(relativeTime(from: Int(tx.settledAt ?? tx.createdAt)))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 8)
+                VStack(alignment: .trailing, spacing: 2) {
+                    if hidden {
+                        Text("\(sign)•••")
                             .font(.subheadline.weight(.semibold).monospacedDigit())
                             .foregroundStyle(amountColor)
-                        Text("sats")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
+                    } else if let fiatAmount {
+                        Text("\(sign)\(fiatAmount)")
+                            .font(.subheadline.weight(.semibold).monospacedDigit())
+                            .foregroundStyle(amountColor)
+                    } else {
+                        HStack(alignment: .firstTextBaseline, spacing: 3) {
+                            Text("\(sign)\(CurrencyFormatter.formatNumber(sats))")
+                                .font(.subheadline.weight(.semibold).monospacedDigit())
+                                .foregroundStyle(amountColor)
+                            Text("sats")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    if !hidden, !isIncoming, feeSats > 0 {
+                        if let fiatFee {
+                            Text("Fee: \(fiatFee)")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text("Fee: \(CurrencyFormatter.formatNumber(feeSats)) sats")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
-                if !hidden, !isIncoming, feeSats > 0 {
-                    if let fiatFee {
-                        Text("Fee: \(fiatFee)")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        Text("Fee: \(CurrencyFormatter.formatNumber(feeSats)) sats")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
+                if expandable {
+                    Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 16)
                 }
             }
+            .padding(.vertical, 10)
+            .padding(.horizontal, 4)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                guard expandable else { return }
+                withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
+            }
+
+            if expandable, expanded {
+                TransactionDetailPanel(tx: tx)
+                    .padding(.bottom, 10)
+            }
         }
-        .padding(.vertical, 10)
+    }
+}
+
+/// Expanded detail drawer for a transaction in the full history list. Shows
+/// status, type, amount, fee, date, note, and the payment hash / transaction
+/// ID with a copy button. On-chain transactions also surface a
+/// mempool.space link (see `WalletTransaction.isOnchain` — currently inert
+/// until on-chain payments land).
+private struct TransactionDetailPanel: View {
+    let tx: WalletTransaction
+    @State private var hashCopied = false
+
+    private var idLabel: String { tx.isOnchain ? "Transaction ID" : "Payment hash" }
+
+    private var fullDate: String {
+        let secs = tx.settledAt ?? tx.createdAt
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMM d, yyyy · h:mm a"
+        return formatter.string(from: Date(timeIntervalSince1970: TimeInterval(secs)))
+    }
+
+    /// Mirror of the Android note filter — drop blank values, the literal
+    /// string "null", and JSON blobs (zap-request payloads start with `{`).
+    private var note: String? {
+        guard let d = tx.description?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !d.isEmpty, d != "null", !d.hasPrefix("{") else { return nil }
+        return d
+    }
+
+    var body: some View {
+        let sats = abs(tx.amountMsats) / 1000
+        let feeSats = tx.feeMsats / 1000
+
+        VStack(alignment: .leading, spacing: 10) {
+            TxDetailRow(label: "Status", value: tx.settledAt != nil ? "Completed" : "Pending")
+            TxDetailRow(label: "Type", value: tx.isOnchain ? "On-chain" : "Lightning")
+            TxDetailRow(label: "Amount", value: "\(CurrencyFormatter.formatNumber(sats)) sats")
+            if feeSats > 0 {
+                TxDetailRow(label: "Network fee", value: "\(CurrencyFormatter.formatNumber(feeSats)) sats")
+            }
+            TxDetailRow(label: "Date", value: fullDate)
+            if let note {
+                TxDetailRow(label: "Note", value: note)
+            }
+            HStack(alignment: .top, spacing: 12) {
+                Text(idLabel)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 100, alignment: .leading)
+                Text(tx.paymentHash)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Button {
+                    UIPasteboard.general.string = tx.paymentHash
+                    withAnimation(.easeInOut(duration: 0.15)) { hashCopied = true }
+                    Task {
+                        try? await Task.sleep(for: .seconds(1.4))
+                        withAnimation(.easeInOut(duration: 0.2)) { hashCopied = false }
+                    }
+                } label: {
+                    Image(systemName: hashCopied ? "checkmark" : "doc.on.doc")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(hashCopied ? Color.green : Color.wispZapColor)
+                        .frame(width: 20)
+                }
+                .buttonStyle(.plain)
+            }
+            // mempool.space link — follow-up PR once Spark surfaces a real
+            // Bitcoin txid (separate from the internal UUID in paymentHash).
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.wispSurfaceVariant.opacity(0.4), in: RoundedRectangle(cornerRadius: 12))
         .padding(.horizontal, 4)
+    }
+}
+
+private struct TxDetailRow: View {
+    let label: String
+    let value: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 100, alignment: .leading)
+            Text(value)
+                .font(.caption)
+                .foregroundStyle(.primary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 }

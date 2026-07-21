@@ -109,11 +109,16 @@ struct LoginView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color.wispBackground)
             .ignoresSafeArea(.keyboard, edges: .bottom)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                        .foregroundStyle(.secondary)
+            .overlay(alignment: .bottom) {
+                Button(action: { dismiss() }) {
+                    Text("Cancel")
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 28)
+                        .padding(.vertical, 12)
+                        .background(.white.opacity(0.15), in: Capsule())
                 }
+                .padding(.bottom, 120)
             }
             .fullScreenCover(isPresented: $showQRScanner) {
                 QRCodeScannerView(

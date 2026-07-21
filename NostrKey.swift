@@ -119,6 +119,7 @@ enum NostrKey {
             "onboarding_done_\(pubkey)",
             "watch_only_\(pubkey)",
             "follow_pubkeys_\(pubkey)",
+            "follow_pubkeys_ts_\(pubkey)",
             "relay_scoreboard_v1_\(pubkey)",
             "latest_feed_ts_\(pubkey)",
             // Safety: mute lists, blocked users, muted threads, mute event timestamp
@@ -201,6 +202,18 @@ enum NostrKey {
         if !list.contains(pubkey) {
             list.append(pubkey)
         }
+        UserDefaults.standard.set(list, forKey: "wisp_accounts")
+    }
+
+    /// Move an account one position earlier (offset -1) or later (offset +1)
+    /// in the persisted account list. No-op if already at that end.
+    static func moveAccount(pubkey: String, offset: Int) {
+        var list = accounts()
+        guard let index = list.firstIndex(of: pubkey) else { return }
+        let target = index + offset
+        guard target >= 0, target < list.count else { return }
+        list.remove(at: index)
+        list.insert(pubkey, at: target)
         UserDefaults.standard.set(list, forKey: "wisp_accounts")
     }
 }

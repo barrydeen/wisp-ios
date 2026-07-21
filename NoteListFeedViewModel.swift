@@ -62,6 +62,7 @@ final class NoteListFeedViewModel {
     }
 
     func refresh() async {
+        EngagementRepository.shared.requestFullResync()
         await load()
     }
 

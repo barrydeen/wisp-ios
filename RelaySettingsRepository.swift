@@ -387,7 +387,7 @@ final class RelaySettingsRepository {
 
     private func publishGeneral(keypair: Keypair) {
         guard let privkey = Hex.decode(keypair.privkey) else { return }
-        let now = Int(Date().timeIntervalSince1970)
+        let now = NostrClock.now()
         generalUpdatedAt = max(generalUpdatedAt + 1, now)
         let tags = Nip51Lists.buildGeneralRelayTags(generalRelays)
         publish(kind: Nip51Lists.kindRelayList, tags: tags,
@@ -397,7 +397,7 @@ final class RelaySettingsRepository {
 
     private func publishDm(keypair: Keypair) {
         guard let privkey = Hex.decode(keypair.privkey) else { return }
-        let now = Int(Date().timeIntervalSince1970)
+        let now = NostrClock.now()
         dmUpdatedAt = max(dmUpdatedAt + 1, now)
         let tags = Nip51Lists.buildRelaySetListTags(dmRelays)
         // Also send the announcement to the DM relays themselves, so peers querying any of
@@ -410,7 +410,7 @@ final class RelaySettingsRepository {
 
     private func publishSearch(keypair: Keypair) {
         guard let privkey = Hex.decode(keypair.privkey) else { return }
-        let now = Int(Date().timeIntervalSince1970)
+        let now = NostrClock.now()
         searchUpdatedAt = max(searchUpdatedAt + 1, now)
         let tags = Nip51Lists.buildRelaySetListTags(searchRelays)
         publish(kind: Nip51Lists.kindSearchRelays, tags: tags,
@@ -420,7 +420,7 @@ final class RelaySettingsRepository {
 
     private func publishBlocked(keypair: Keypair) {
         guard let privkey = Hex.decode(keypair.privkey) else { return }
-        let now = Int(Date().timeIntervalSince1970)
+        let now = NostrClock.now()
         blockedUpdatedAt = max(blockedUpdatedAt + 1, now)
         let tags = Nip51Lists.buildRelaySetListTags(blockedRelays)
         publish(kind: Nip51Lists.kindBlockedRelays, tags: tags,

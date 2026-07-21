@@ -98,7 +98,7 @@ final class DraftsViewModel {
         guard let privkey = Hex.decode(keypair.privkey),
               let convKey = ensureConversationKey() else { return }
 
-        let now = Int(Date().timeIntervalSince1970)
+        let now = NostrClock.now()
         let relays = topWriteRelays()
 
         // (a) NIP-09 addressable deletion.
@@ -170,7 +170,7 @@ final class DraftsViewModel {
     func deleteScheduledPost(eventId: String) async {
         scheduledPosts.removeAll { $0.id == eventId }
         guard let privkey = Hex.decode(keypair.privkey) else { return }
-        let now = Int(Date().timeIntervalSince1970)
+        let now = NostrClock.now()
         let tags = Nip09.deletionTagsForEvent(id: eventId, kind: 1)
         guard let event = try? NostrEvent.sign(
             privkey32: privkey, pubkey: keypair.pubkey,

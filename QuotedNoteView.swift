@@ -134,10 +134,19 @@ struct QuotedNoteView: View {
     let profiles: [String: ProfileData]
     var onProfileTap: ((String) -> Void)? = nil
     var onNoteTap: ((String) -> Void)? = nil
+    /// Forwarded to `RichContentView.nestedHorizontalInset` / `MediaGridView`
+    /// for this note's own attached gallery. Default (56) matches this view's
+    /// most common placement: embedded inline inside another post's own body
+    /// (`RichContentView`'s `.nostrNote` case) under a `PostCardView`'s 16pt
+    /// card edge. `NotificationRowView` places this view directly under its
+    /// own, wider caption indent and must pass its own total.
+    var nestedHorizontalInset: CGFloat = 56
     var onHashtagTap: ((String) -> Void)? = nil
 
     @State private var event: NostrEvent?
     @State private var loaded = false
+    @State private var blocked = false
+    @State private var safetyHidden = false
     @State private var profile: ProfileData?
     @State private var contentExpanded = false
     @State private var attempt: Int = 0
@@ -146,7 +155,14 @@ struct QuotedNoteView: View {
     /// to the same height with a "Show more" toggle instead of pushing the
     /// surrounding card off-screen.
     private static let longPostCharThreshold = 600
-    private static let longPostCollapsedHeight: CGFloat = 280
+    private static let longPostTextCollapsedHeight: CGFloat = 280
+    /// Visible height of trailing media when collapsed. Rendered as its own
+    /// portion (see `renderMode: .mediaPortion` below) with its own height
+    /// budget so a long caption above it can't eat into the gallery's peek —
+    /// previously text and media shared one combined cap, and a caption
+    /// alone could consume nearly all of it, leaving almost nothing of the
+    /// gallery visible. Matches PostCardView's `mediaPeekHeight`.
+    private static let mediaPeekHeight: CGFloat = 80
 
     /// One silent redundancy retry on initial miss — broadens the relay set
     /// without making the user tap. Beyond that the missing card becomes a
@@ -156,7 +172,11 @@ struct QuotedNoteView: View {
 
     var body: some View {
         Group {
-            if let event {
+            if blocked {
+                blockedCard
+            } else if safetyHidden {
+                safetyHiddenCard
+            } else if let event {
                 noteCard(event)
             } else if loaded {
                 missingCard
@@ -165,6 +185,27 @@ struct QuotedNoteView: View {
             }
         }
         .task(id: TaskKey(eventId: eventId, attempt: attempt)) { await load() }
+        // Re-gate in place on snapshot installs (WoT toggle / recompute): the
+        // load()-time check only sees the snapshot of that moment, so an
+        // already-resolved quoted note would otherwise keep rendering after
+        // the filter tightens (and a hidden one would stay hidden after it
+        // relaxes).
+        .onReceive(NotificationCenter.default.publisher(for: .safetyFilterChanged)) { _ in
+            if let event,
+               !PrivateInteractionStore.shared.contains(event.id),
+               SafetyFilter.shared.shouldDrop(event: event, context: .feed) {
+                self.event = nil
+                safetyHidden = true
+                loaded = true
+            } else if safetyHidden {
+                // Re-attempt from cache under the relaxed rules: the attempt
+                // bump re-keys `.task`, and `load()` re-evaluates the cached
+                // event before any network fetch.
+                safetyHidden = false
+                loaded = false
+                attempt += 1
+            }
+        }
     }
 
     /// Composite key so a retry (attempt bump) re-runs `.task` the same way an
@@ -190,6 +231,52 @@ struct QuotedNoteView: View {
             RoundedRectangle(cornerRadius: 12)
                 .stroke(Color.wispSurfaceVariant, lineWidth: 1)
         )
+    }
+
+    /// Shown when the quoted note's author is blocked. Their content is never
+    /// rendered; a neutral stub keeps the surrounding card from looking broken
+    /// (or showing a misleading "Quoted note not found").
+    private var blockedCard: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "nosign")
+                .foregroundStyle(.secondary)
+            Text("Note from a blocked user")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.wispSurfaceVariant.opacity(0.3))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.wispSurfaceVariant, lineWidth: 1)
+        )
+        .accessibilityLabel("Note from a blocked user")
+    }
+
+    /// Shown when the safety filter (Web of Trust, muted word) hides the
+    /// quoted note. Mirrors `blockedCard` — none of the event renders, and
+    /// there's no reveal affordance (the filter gates potentially graphic
+    /// content). Copy stays generic because `.feed`-context `shouldDrop`
+    /// covers more than WoT.
+    private var safetyHiddenCard: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "eye.slash")
+                .foregroundStyle(.secondary)
+            Text("Note hidden by your safety filters")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.wispSurfaceVariant.opacity(0.3))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.wispSurfaceVariant, lineWidth: 1)
+        )
+        .accessibilityLabel("Note hidden by your safety filters")
     }
 
     private var missingCard: some View {
@@ -258,6 +345,13 @@ struct QuotedNoteView: View {
                     let isLong = event.content.count > Self.longPostCharThreshold || hasMedia
                     let collapsed = isLong && !contentExpanded
                     VStack(alignment: .leading, spacing: 6) {
+                        // Text portion: leading inline groups only, capped
+                        // independently of media (see `mediaPortion` below).
+                        // Previously one `RichContentView(renderMode: .all)`
+                        // shared a single height cap between the caption and
+                        // any trailing gallery — a caption alone could
+                        // consume nearly the whole cap, leaving almost
+                        // nothing of the gallery visible beneath it.
                         RichContentView(
                             content: event.content,
                             tags: event.tags,
@@ -267,7 +361,9 @@ struct QuotedNoteView: View {
                             onNoteTap: onNoteTap,
                             onHashtagTap: onHashtagTap,
                             showLinkPreviews: false,
-                            nested: true
+                            nested: true,
+                            nestedHorizontalInset: nestedHorizontalInset,
+                            renderMode: .textPortion
                         )
                         // Render media at intrinsic height so an image
                         // inside an embedded note fills the card's width
@@ -280,7 +376,7 @@ struct QuotedNoteView: View {
                         // bottom rather than scaling the image.
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(
-                            maxHeight: collapsed ? Self.longPostCollapsedHeight : .infinity,
+                            maxHeight: collapsed ? Self.longPostTextCollapsedHeight : .infinity,
                             alignment: .top
                         )
                         .clipped()
@@ -306,6 +402,42 @@ struct QuotedNoteView: View {
                                     .foregroundStyle(Color.wispPrimary)
                             }
                             .buttonStyle(.plain)
+                        }
+                        // Media portion: everything from the first
+                        // block/media group onward. Always rendered, even
+                        // when collapsed — peeked to `mediaPeekHeight` so
+                        // the user can see media (e.g. a gallery) exists
+                        // below, instead of the caption's cap swallowing it
+                        // entirely. Expands to natural size on toggle.
+                        RichContentView(
+                            content: event.content,
+                            tags: event.tags,
+                            profiles: profiles,
+                            authorPubkey: event.pubkey,
+                            onProfileTap: onProfileTap,
+                            onNoteTap: onNoteTap,
+                            onHashtagTap: onHashtagTap,
+                            showLinkPreviews: false,
+                            nested: true,
+                            nestedHorizontalInset: nestedHorizontalInset,
+                            renderMode: .mediaPortion
+                        )
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(
+                            maxHeight: collapsed ? Self.mediaPeekHeight : .infinity,
+                            alignment: .top
+                        )
+                        .clipped()
+                        .overlay(alignment: .bottom) {
+                            if collapsed {
+                                LinearGradient(
+                                    colors: [Color.wispBackground.opacity(0), Color.wispBackground],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                                .frame(height: 32)
+                                .allowsHitTesting(false)
+                            }
                         }
                     }
                 }
@@ -346,6 +478,20 @@ struct QuotedNoteView: View {
 
     private func load() async {
         if let cached = QuotedNoteCache.shared.cached(eventId: eventId) {
+            if SafetyFilter.shared.snapshot.blockedPubkeys.contains(cached.pubkey) {
+                self.blocked = true
+                loaded = true
+                return
+            }
+            // WoT gate — a qualified author quoting a stranger's note would
+            // otherwise inline-render the stranger's content/media right past
+            // the filter. Private rumors keep their gift-wrap exemption.
+            if !PrivateInteractionStore.shared.contains(cached.id),
+               SafetyFilter.shared.shouldDrop(event: cached, context: .feed) {
+                self.safetyHidden = true
+                loaded = true
+                return
+            }
             self.event = cached
             self.profile = profiles[cached.pubkey] ?? ProfileRepository.shared.get(cached.pubkey)
             loaded = true
@@ -375,6 +521,17 @@ struct QuotedNoteView: View {
         if Task.isCancelled { return }
 
         if let result {
+            if SafetyFilter.shared.snapshot.blockedPubkeys.contains(result.pubkey) {
+                self.blocked = true
+                loaded = true
+                return
+            }
+            if !PrivateInteractionStore.shared.contains(result.id),
+               SafetyFilter.shared.shouldDrop(event: result, context: .feed) {
+                self.safetyHidden = true
+                loaded = true
+                return
+            }
             self.event = result
             self.profile = profiles[result.pubkey] ?? ProfileRepository.shared.get(result.pubkey)
             loaded = true

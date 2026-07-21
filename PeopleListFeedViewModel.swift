@@ -73,6 +73,7 @@ final class PeopleListFeedViewModel {
     }
 
     func refresh() async {
+        EngagementRepository.shared.requestFullResync()
         await load(reset: false)
     }
 

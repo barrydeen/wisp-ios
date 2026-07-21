@@ -8,9 +8,15 @@ struct ProfileQrSheet: View {
     let displayName: String
     let avatarUrl: String?
     let lud16: String?
+    /// When provided, a scan button appears in the header; scanning another
+    /// user's Nostr QR (npub / nprofile / `nostr:` URI) dismisses the sheet and
+    /// hands the decoded pubkey here so the host can route to that profile.
+    var onOpenProfile: ((String) -> Void)? = nil
 
     @Environment(\.dismiss) private var dismiss
     @State private var tab: Tab = .nostr
+    @State private var showScanner = false
+    @State private var scanError: String?
 
     private enum Tab: Hashable { case nostr, lightning }
 
@@ -37,7 +43,7 @@ struct ProfileQrSheet: View {
                 .padding(.top, 24)
                 .padding(.horizontal, 20)
 
-            if hasLightning {
+            if hasLightning || onOpenProfile != nil {
                 tabBar
                     .padding(.horizontal, 20)
                     .padding(.top, 16)
@@ -55,6 +61,34 @@ struct ProfileQrSheet: View {
         .background(Color.wispBackground)
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
+        .fullScreenCover(isPresented: $showScanner) {
+            QRCodeScannerView(
+                onScanned: handleScan,
+                onCancel: { showScanner = false }
+            )
+            .ignoresSafeArea()
+        }
+        .alert(
+            "Not a Nostr profile",
+            isPresented: Binding(get: { scanError != nil }, set: { if !$0 { scanError = nil } }),
+            presenting: scanError
+        ) { _ in
+            Button("OK", role: .cancel) { scanError = nil }
+        } message: { Text($0) }
+    }
+
+    /// Decode a scanned payload; route to the profile on success, surface an
+    /// alert when it isn't a Nostr profile reference.
+    private func handleScan(_ raw: String) {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard case .profileRef(let scannedPubkey, _)? = Nip19.decodeNostrUri(trimmed) else {
+            showScanner = false
+            scanError = "That QR code isn't a Nostr profile."
+            return
+        }
+        showScanner = false
+        dismiss()
+        onOpenProfile?(scannedPubkey)
     }
 
     // MARK: - Header
@@ -89,7 +123,14 @@ struct ProfileQrSheet: View {
     private var tabBar: some View {
         HStack(spacing: 4) {
             tabButton(.nostr, label: "Nostr")
-            tabButton(.lightning, label: "Lightning")
+            if hasLightning {
+                tabButton(.lightning, label: "Lightning")
+            }
+            // Scan is an action, not a content pane — it launches the camera
+            // and never shows as the selected segment.
+            if onOpenProfile != nil {
+                scanSegment
+            }
         }
         .padding(4)
         .background(Color.wispSurfaceVariant.opacity(0.4), in: Capsule())
@@ -112,6 +153,25 @@ struct ProfileQrSheet: View {
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+    }
+
+    private var scanSegment: some View {
+        Button {
+            showScanner = true
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "qrcode.viewfinder")
+                    .font(.caption.weight(.semibold))
+                Text("Scan")
+                    .font(.subheadline.weight(.semibold))
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .foregroundStyle(.secondary)
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Scan a Nostr QR code")
     }
 
     // MARK: - Panes

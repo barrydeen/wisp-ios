@@ -59,13 +59,13 @@ struct ProfileView: View {
                     viewModel: viewModel,
                     isMe: isMe,
                     isWatchOnly: NostrKey.isWatchOnly(pubkey: activeUserPubkey),
-                    selectedTab: selectedTab,
                     onEditProfile: { showEditProfile = true },
                     onProfileTap: onProfileTap,
                     onNoteTap: onNoteTap,
                     onHashtagTap: onHashtagTap
                 )
                 Section {
+                    sortRow
                     tabBody
                 } header: {
                     ProfileTabBar(selected: $selectedTab, tabs: visibleTabs)
@@ -105,7 +105,8 @@ struct ProfileView: View {
                 pubkey: pubkey,
                 displayName: viewModel.profile?.displayString ?? shortKey(pubkey),
                 avatarUrl: viewModel.profile?.picture,
-                lud16: viewModel.profile?.lud16
+                lud16: viewModel.profile?.lud16,
+                onOpenProfile: onProfileTap
             )
         }
         .sheet(isPresented: $showEditProfile) {
@@ -199,6 +200,39 @@ struct ProfileView: View {
             Color.wispBackground.opacity(0.92)
                 .ignoresSafeArea(edges: .top)
         )
+    }
+
+    /// Notes/Replies sort control, on its own row directly beneath the pinned
+    /// tab bar (scrolls up under it). Previously sat in the header's stat row,
+    /// where it squished the follow/follower counts; only the sortable tabs
+    /// surface it, every other tab collapses this to nothing.
+    @ViewBuilder
+    private var sortRow: some View {
+        switch selectedTab {
+        case .notes:
+            sortRowBar(selection: viewModel.notesSortMode) { mode in
+                Task { await viewModel.setNotesSortMode(mode) }
+            }
+        case .replies:
+            sortRowBar(selection: viewModel.repliesSortMode) { mode in
+                Task { await viewModel.setRepliesSortMode(mode) }
+            }
+        default:
+            EmptyView()
+        }
+    }
+
+    private func sortRowBar(
+        selection: ProfileSortMode,
+        onSelect: @escaping (ProfileSortMode) -> Void
+    ) -> some View {
+        HStack {
+            Spacer(minLength: 0)
+            ProfileSortPicker(selection: selection, onSelect: onSelect)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
     }
 
     @ViewBuilder
@@ -295,7 +329,6 @@ private struct ProfileHeaderView: View {
     @Bindable var viewModel: ProfileViewModel
     var isMe: Bool = false
     var isWatchOnly: Bool = false
-    var selectedTab: ProfileTab = .notes
     var onEditProfile: () -> Void = {}
     var onProfileTap: ((String) -> Void)? = nil
     var onNoteTap: ((String) -> Void)? = nil
@@ -306,11 +339,19 @@ private struct ProfileHeaderView: View {
     @State private var followBusy = false
     @State private var showDmSheet = false
     @State private var showZapSheet = false
+    /// No-wallet fallback: QR + copy + open-in-external-wallet for the
+    /// profile's lightning address.
+    @State private var showLightningPay = false
+    /// Own profile: shows the receive QR for the user's own lightning
+    /// address (you can't zap yourself).
+    @State private var showLightningReceive = false
     /// Whether the bio is currently shown in full or capped to the
     /// collapsed height. Long bios start collapsed so the lightning
     /// address, follow stats, and tab bar stay above the fold; the
     /// user pulls down a "Read more" to read the rest.
     @State private var bioExpanded = false
+    @State private var showAvatarFullScreen = false
+    @State private var showBannerFullScreen = false
     /// Latched-largest intrinsic height of the bio's `RichContentView`,
     /// measured via a `GeometryReader` background. `bioIsLong` reads from
     /// this to decide whether to apply the collapse — only grows, so
@@ -333,11 +374,25 @@ private struct ProfileHeaderView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             banner
+                .fullScreenCover(isPresented: $showBannerFullScreen) {
+                    if let bannerUrl = viewModel.profile?.banner, !bannerUrl.isEmpty {
+                        FullScreenImageView(url: bannerUrl)
+                    }
+                }
 
             HStack(alignment: .bottom, spacing: 12) {
                 CachedAvatarView(url: viewModel.profile?.picture, size: 84)
                     .overlay(Circle().stroke(Color.wispBackground, lineWidth: 4))
                     .quickFollowOnLongPress(pubkey: viewModel.pubkey)
+                    .onTapGesture {
+                        guard viewModel.profile?.picture != nil else { return }
+                        showAvatarFullScreen = true
+                    }
+                    .fullScreenCover(isPresented: $showAvatarFullScreen) {
+                        if let pictureUrl = viewModel.profile?.picture {
+                            FullScreenImageView(url: pictureUrl)
+                        }
+                    }
                     .offset(y: -28)
 
                 Spacer()
@@ -354,29 +409,28 @@ private struct ProfileHeaderView: View {
                     .buttonStyle(.plain)
                     .offset(y: -28)
                 } else if !isMe && !isWatchOnly {
-                    VStack(alignment: .trailing, spacing: 4) {
-                        actionButtons
-                        if viewModel.followsYou {
-                            Text("Follows you")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .offset(y: -28)
+                    actionButtons
+                        .offset(y: -28)
                 }
             }
             .padding(.horizontal, 16)
             .padding(.bottom, -16)
 
             VStack(alignment: .leading, spacing: 6) {
-                EmojiText(
-                    viewModel.profile?.displayString ?? shortKey(viewModel.pubkey),
-                    emojiMap: viewModel.profile?.emojiMap ?? [:],
-                    textStyle: .title3,
-                    weight: .bold,
-                    color: .label,
-                    lineLimit: 1
-                )
+                HStack(spacing: 8) {
+                    EmojiText(
+                        viewModel.profile?.displayString ?? shortKey(viewModel.pubkey),
+                        emojiMap: viewModel.profile?.emojiMap ?? [:],
+                        textStyle: .title3,
+                        weight: .bold,
+                        color: .label,
+                        lineLimit: 1
+                    )
+                    if viewModel.followsYou {
+                        followsYouBadge
+                    }
+                    Spacer(minLength: 0)
+                }
 
                 if let nip = viewModel.profile?.nip05, !nip.isEmpty {
                     HStack(spacing: 4) {
@@ -403,10 +457,7 @@ private struct ProfileHeaderView: View {
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
-                    .onTapGesture {
-                        UIPasteboard.general.string = lud16
-                        QuickFollowToast.shared.show("Copied")
-                    }
+                    .onTapGesture { handleLightningTap(lud16) }
                 }
 
                 statRow
@@ -435,6 +486,56 @@ private struct ProfileHeaderView: View {
                 )
             }
         }
+        .sheet(isPresented: $showLightningPay) {
+            if let lud16 = viewModel.profile?.lud16, !lud16.isEmpty {
+                LightningPaySheet(
+                    lud16: lud16,
+                    avatarUrl: viewModel.profile?.picture,
+                    allowOpenInWallet: true
+                )
+            }
+        }
+        .sheet(isPresented: $showLightningReceive) {
+            if let lud16 = viewModel.profile?.lud16, !lud16.isEmpty {
+                LightningPaySheet(
+                    lud16: lud16,
+                    avatarUrl: viewModel.profile?.picture,
+                    allowOpenInWallet: false
+                )
+            }
+        }
+    }
+
+    /// Tapping a profile's lightning address. On someone else's profile this
+    /// is a zap intent: open the in-app zap composer when a wallet is
+    /// connected, otherwise a QR + copy pay sheet. On your own profile you
+    /// can't zap yourself — show your receive QR (no external-wallet "pay"
+    /// affordance) instead of routing to a pay sheet.
+    private func handleLightningTap(_ lud16: String) {
+        if isMe {
+            showLightningReceive = true
+        } else if let store = walletStore, store.mode != nil {
+            showZapSheet = true
+        } else {
+            showLightningPay = true
+        }
+    }
+
+    /// Small pill shown beside the display name when this profile's contact
+    /// list p-tags the active user — i.e. they follow you. `fixedSize` keeps it
+    /// intact so a long name truncates around it rather than squeezing it out.
+    private var followsYouBadge: some View {
+        HStack(spacing: 3) {
+            Image(systemName: "person.fill.checkmark")
+                .font(.system(size: 9, weight: .semibold))
+            Text("Follows you")
+                .font(.caption2.weight(.medium))
+        }
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(Color.wispSurfaceVariant, in: Capsule())
+        .fixedSize()
     }
 
     @ViewBuilder
@@ -520,6 +621,8 @@ private struct ProfileHeaderView: View {
                         case .success(let img):
                             img.resizable().scaledToFill()
                                 .frame(width: geo.size.width, height: targetHeight)
+                                .contentShape(Rectangle())
+                                .onTapGesture { showBannerFullScreen = true }
                         default:
                             Color.wispSurfaceVariant
                                 .frame(width: geo.size.width, height: targetHeight)
@@ -545,34 +648,7 @@ private struct ProfileHeaderView: View {
                     ? "∞"
                     : formatCount(viewModel.followersCount)
             )
-            Spacer(minLength: 12)
-            sortPicker
-        }
-    }
-
-    /// The notes/replies sort control lives here, right-aligned next to the
-    /// follow counts, instead of in its own full-width row below the pinned
-    /// tab bar — collapsing two rows into one saves a band of vertical space.
-    /// Only the sortable tabs surface it; everything else leaves the slot empty.
-    @ViewBuilder
-    private var sortPicker: some View {
-        switch selectedTab {
-        case .notes:
-            ProfileSortPicker(
-                selection: viewModel.notesSortMode,
-                onSelect: { mode in
-                    Task { await viewModel.setNotesSortMode(mode) }
-                }
-            )
-        case .replies:
-            ProfileSortPicker(
-                selection: viewModel.repliesSortMode,
-                onSelect: { mode in
-                    Task { await viewModel.setRepliesSortMode(mode) }
-                }
-            )
-        default:
-            EmptyView()
+            Spacer(minLength: 0)
         }
     }
 

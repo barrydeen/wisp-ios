@@ -3,17 +3,20 @@ import SwiftUI
 struct Nip05Badge: View {
     let nip05: String
     let pubkey: String
+    var showHandle: Bool = true
     @ObservedObject private var verifier = Nip05Verifier.shared
 
     var body: some View {
         let _ = verifier.version  // observe
         let status = verifier.status(for: pubkey)
         HStack(spacing: 4) {
-            Text(displayString)
-                .font(.caption)
-                .foregroundStyle(textColor(for: status))
-                .lineLimit(1)
-                .truncationMode(.tail)
+            if showHandle {
+                Text(displayString)
+                    .font(.caption)
+                    .foregroundStyle(textColor(for: status))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
 
             switch status {
             case .verified:

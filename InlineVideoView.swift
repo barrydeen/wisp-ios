@@ -16,6 +16,111 @@ final class GlobalVideoMute {
     private init() {}
 }
 
+/// Owns the `AVPictureInPictureController` for one inline feed video. Bridges
+/// the layer-based PiP API to SwiftUI: `CroppingVideoPlayer` wires the on-screen
+/// player layer in via `attach(layer:player:)`, the PiP button calls `start()`,
+/// and the delegate hands the player to `VideoPiPCoordinator` (so playback
+/// survives the row scrolling off-screen) and requests a fullscreen restore when
+/// the user taps "return to app" on the floating window.
+final class InlineVideoPiP: NSObject, AVPictureInPictureControllerDelegate {
+    private var controller: AVPictureInPictureController?
+    private weak var player: AVPlayer?
+    /// URL used to re-present the video fullscreen on PiP restore.
+    var restoreURL: String?
+    /// Polls `isPictureInPicturePossible` after the audio-session takeover so we
+    /// start PiP the moment the system allows it.
+    private var startTask: Task<Void, Never>?
+
+    static var isSupported: Bool { AVPictureInPictureController.isPictureInPictureSupported() }
+
+    /// Wire the on-screen player layer into a PiP controller. Called from
+    /// `CroppingVideoPlayer.makeUIView`/`updateUIView`. Rebinds if the backing
+    /// layer changed (SwiftUI can recreate the `UIView`), otherwise the
+    /// controller would point at an off-screen layer and PiP would never become
+    /// possible.
+    func attach(layer: AVPlayerLayer, player: AVPlayer) {
+        self.player = player
+        guard Self.isSupported else { return }
+        if controller?.playerLayer !== layer {
+            let c = AVPictureInPictureController(playerLayer: layer)
+            c?.delegate = self
+            controller = c
+        }
+    }
+
+    /// Pop this video into the system PiP window. Hands the controller + this
+    /// delegate to `VideoPiPCoordinator` first so they outlive the recyclable
+    /// feed row; `isOwning` then stops the row's `onDisappear` pausing it.
+    func start() {
+        guard let controller, let player else {
+            QuickFollowToast.shared.show("Picture-in-Picture isn't available here")
+            return
+        }
+        // PiP needs the session as the primary `.playback` route — inline
+        // autoplay leaves it mixable (`.mixWithOthers`), under which PiP can't
+        // start. Take it over, then start once the controller reports it's
+        // possible (the switch propagates a beat later, so a synchronous check
+        // here would falsely fail).
+        MediaAudioSession.activatePlayback()
+        player.isMuted = false
+        VideoPiPCoordinator.shared.begin(player: player, retaining: [controller, self])
+
+        if controller.isPictureInPicturePossible {
+            controller.startPictureInPicture()
+            return
+        }
+        startTask?.cancel()
+        startTask = Task { @MainActor in
+            // Poll up to ~2s for PiP to become possible after the session switch.
+            for _ in 0..<20 {
+                try? await Task.sleep(for: .milliseconds(100))
+                if Task.isCancelled { return }
+                if controller.isPictureInPicturePossible {
+                    controller.startPictureInPicture()
+                    return
+                }
+            }
+            VideoPiPCoordinator.shared.end()
+            QuickFollowToast.shared.show("Picture-in-Picture isn't available here")
+        }
+    }
+
+    nonisolated func pictureInPictureController(
+        _ pictureInPictureController: AVPictureInPictureController,
+        restoreUserInterfaceForPictureInPictureStopWithCompletionHandler completionHandler: @escaping (Bool) -> Void
+    ) {
+        Task { @MainActor in
+            if let url = self.restoreURL, let player = self.player {
+                let seconds = CMTimeGetSeconds(player.currentTime())
+                VideoPiPCoordinator.shared.requestRestore(
+                    .fullscreenVideo(url: url, atSeconds: seconds.isFinite ? seconds : 0)
+                )
+            }
+            completionHandler(true)
+        }
+    }
+
+    nonisolated func pictureInPictureControllerDidStopPictureInPicture(
+        _ pictureInPictureController: AVPictureInPictureController
+    ) {
+        Task { @MainActor in
+            self.startTask?.cancel()
+            VideoPiPCoordinator.shared.end()
+        }
+    }
+
+    nonisolated func pictureInPictureController(
+        _ pictureInPictureController: AVPictureInPictureController,
+        failedToStartPictureInPictureWithError error: Error
+    ) {
+        Task { @MainActor in
+            self.startTask?.cancel()
+            VideoPiPCoordinator.shared.end()
+            QuickFollowToast.shared.show("Couldn't start Picture-in-Picture")
+        }
+    }
+}
+
 struct InlineVideoView: View {
     let meta: MediaMeta
     /// When true the AVPlayer's render surface ignores hit tests so swipes
@@ -29,6 +134,15 @@ struct InlineVideoView: View {
     @State private var player: AVPlayer?
     @State private var showFullScreen = false
     @State private var muteState = GlobalVideoMute.shared
+    /// Per-video Picture-in-Picture controller. Created lazily once the player
+    /// layer is on screen; the PiP button (below) starts the floating window.
+    @State private var pip = InlineVideoPiP()
+    @State private var showPhotosAlert = false
+    /// True when the user deliberately paused inline playback by tapping the
+    /// video. Drives the centered play affordance. Distinct from lifecycle
+    /// pauses (scroll-off) — those don't set it, and `onAppear` clears it on
+    /// the re-appearing autoplay.
+    @State private var isPaused = false
     /// Aspect ratio (W / H) detected from `AVPlayerItem.presentationSize` after
     /// the asset's tracks load. `nil` until known — many notes ship with no
     /// imeta `dim` tag, so we can't trust the static fallback.
@@ -89,23 +203,27 @@ struct InlineVideoView: View {
                 .fill(Color.black)
 
             if loaded, let player {
-                CroppingVideoPlayer(player: player, gravity: videoGravity)
+                CroppingVideoPlayer(player: player, gravity: videoGravity, pip: passthroughHitTests ? nil : pip)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .contentShape(Rectangle())
                     .onTapGesture {
-                        // Tapping anywhere on the playing video expands to
-                        // fullscreen — the corner expand button stays as a
-                        // discoverable affordance, but having to find a
-                        // 28pt target on the move is awkward. The inner
-                        // mute / expand buttons (rendered after this in
-                        // the ZStack) take SwiftUI hit-test priority over
-                        // an `onTapGesture`, so their actions still fire.
+                        // Tapping anywhere on the playing video toggles
+                        // play/pause — fullscreen lives on the dedicated
+                        // corner expand button instead. The inner mute /
+                        // expand buttons (rendered after this in the ZStack)
+                        // take SwiftUI hit-test priority over an
+                        // `onTapGesture`, so their actions still fire.
                         // Skipped in passthrough mode — the parent pager is
                         // already a fullscreen presentation and we want the
                         // tap surface available for its own gestures.
                         guard !passthroughHitTests else { return }
-                        player.pause()
-                        showFullScreen = true
+                        if isPaused {
+                            player.play()
+                            withAnimation(.easeInOut(duration: 0.15)) { isPaused = false }
+                        } else {
+                            player.pause()
+                            withAnimation(.easeInOut(duration: 0.15)) { isPaused = true }
+                        }
                     }
                     .allowsHitTesting(!passthroughHitTests)
                     .onAppear {
@@ -121,8 +239,16 @@ struct InlineVideoView: View {
                         MediaAudioSession.activateMixed()
                         player.isMuted = isMuted
                         player.play()
+                        // A re-appearing row autoplays, so clear any prior
+                        // user-pause. (onDisappear's pause is a lifecycle
+                        // pause and intentionally leaves `isPaused` alone.)
+                        isPaused = false
                     }
                     .onDisappear {
+                        // Don't pause a video that's been popped into PiP — it
+                        // must keep playing in the floating window after the row
+                        // scrolls off-screen.
+                        guard !VideoPiPCoordinator.shared.isOwning(player) else { return }
                         player.pause()
                     }
                     .onChange(of: muteState.unmutedUrl) { _, newValue in
@@ -141,6 +267,20 @@ struct InlineVideoView: View {
                         }
                         player.isMuted = nowMuted
                     }
+
+                // Centered play glyph shown only while the user has tapped to
+                // pause, so the paused state is discoverable and re-tappable.
+                // Non-interactive: taps fall through to the play/pause
+                // `onTapGesture` on the video layer, and the bottom-trailing
+                // mute / expand buttons keep their hit-test priority.
+                if isPaused {
+                    Image(systemName: "play.circle.fill")
+                        .font(.system(size: 56))
+                        .foregroundStyle(.white)
+                        .shadow(radius: 4)
+                        .allowsHitTesting(false)
+                        .transition(.opacity)
+                }
 
                 VStack {
                     Spacer()
@@ -162,6 +302,33 @@ struct InlineVideoView: View {
                         }
 
                         if !passthroughHitTests {
+                            Button {
+                                Task { await saveVideo() }
+                            } label: {
+                                Image(systemName: "square.and.arrow.down")
+                                    .font(.system(size: 14))
+                                    .foregroundStyle(.white)
+                                    .padding(8)
+                                    .background(Color.black.opacity(0.55), in: Circle())
+                            }
+
+                            if InlineVideoPiP.isSupported {
+                                Button {
+                                    // Pop into the system Picture-in-Picture
+                                    // window so the user can keep scrolling the
+                                    // feed (or leave the app) while watching.
+                                    pip.restoreURL = meta.url
+                                    muteState.unmutedUrl = meta.url
+                                    pip.start()
+                                } label: {
+                                    Image(systemName: "pip.enter")
+                                        .font(.system(size: 14))
+                                        .foregroundStyle(.white)
+                                        .padding(8)
+                                        .background(Color.black.opacity(0.55), in: Circle())
+                                }
+                            }
+
                             Button {
                                 // Pause the inline player before the fullscreen
                                 // cover takes over. SwiftUI keeps the underlying
@@ -243,15 +410,42 @@ struct InlineVideoView: View {
             player?.seek(to: .zero)
             player?.play()
         }
+        .alert("Photos Access Required", isPresented: $showPhotosAlert) {
+            Button("Open Settings") {
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    UIApplication.shared.open(url)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Allow Wisp to add to Photos in Settings to save videos.")
+        }
         .fullScreenCover(isPresented: $showFullScreen, onDismiss: {
             // Resume the inline player on dismiss only when autoplay is on,
             // so users who disabled autoplay aren't surprised by audio
-            // restarting in the feed.
+            // restarting in the feed. Keep `isPaused` in sync with whether
+            // the inline player is actually playing so the centered play
+            // glyph reflects reality (otherwise an autoplay-off video would
+            // sit paused with no affordance).
             if settings.autoLoadMedia && settings.videoAutoplay {
                 player?.play()
+                isPaused = false
+            } else {
+                isPaused = true
             }
         }) {
             FullScreenVideoView(url: meta.url)
+        }
+    }
+
+    private func saveVideo() async {
+        do {
+            try await MediaSaveService.saveVideoToPhotos(url: meta.url)
+            QuickFollowToast.shared.show("Saved to Photos")
+        } catch MediaSaveService.SaveError.denied {
+            showPhotosAlert = true
+        } catch {
+            QuickFollowToast.shared.show("Save failed")
         }
     }
 
@@ -300,11 +494,15 @@ struct InlineVideoView: View {
 struct CroppingVideoPlayer: UIViewRepresentable {
     let player: AVPlayer
     let gravity: AVLayerVideoGravity
+    /// Optional Picture-in-Picture controller wired to this layer. Nil for
+    /// passthrough usages (e.g. `FullScreenMediaPager`) that don't offer PiP.
+    var pip: InlineVideoPiP? = nil
 
     func makeUIView(context: Context) -> PlayerView {
         let view = PlayerView()
         view.playerLayer.player = player
         view.playerLayer.videoGravity = gravity
+        pip?.attach(layer: view.playerLayer, player: player)
         return view
     }
 
@@ -313,6 +511,7 @@ struct CroppingVideoPlayer: UIViewRepresentable {
             uiView.playerLayer.player = player
         }
         uiView.playerLayer.videoGravity = gravity
+        pip?.attach(layer: uiView.playerLayer, player: player)
     }
 
     final class PlayerView: UIView {
@@ -323,6 +522,9 @@ struct CroppingVideoPlayer: UIViewRepresentable {
 
 struct FullScreenVideoView: View {
     let url: String
+    /// When restoring from a PiP window, resume at the position the floating
+    /// window was at. 0 for a fresh fullscreen open.
+    var startSeconds: Double = 0
     @Environment(\.dismiss) private var dismiss
     @Environment(AppSettings.self) private var settings
     @State private var player: AVPlayer?
@@ -341,17 +543,32 @@ struct FullScreenVideoView: View {
                 .opacity(1 - dismissProgress * 0.7)
                 .ignoresSafeArea()
             if let player {
-                VideoPlayer(player: player)
+                PiPPlayerViewController(
+                    player: player,
+                    onRestore: {
+                        // "Return to app" tapped on the floating PiP window after
+                        // the fullscreen cover was dismissed — re-present
+                        // fullscreen via MainView at the current position.
+                        let seconds = CMTimeGetSeconds(player.currentTime())
+                        VideoPiPCoordinator.shared.requestRestore(
+                            .fullscreenVideo(url: url, atSeconds: seconds.isFinite ? seconds : 0)
+                        )
+                    }
+                )
                     .ignoresSafeArea()
                     .offset(y: dismissY)
                     .onAppear {
                         MediaAudioSession.activatePlayback()
                         player.play()
                     }
-                    .onDisappear { player.pause() }
-                    // `simultaneousGesture` runs alongside AVPlayer's
+                    .onDisappear {
+                        // Keep playing if the user popped this into PiP.
+                        guard !VideoPiPCoordinator.shared.isOwning(player) else { return }
+                        player.pause()
+                    }
+                    // `simultaneousGesture` runs alongside the player's
                     // built-in tap-to-toggle-controls / scrubber drags, so
-                    // the system mute + PIP + AirPlay + scrubber + 10s-skip
+                    // the system mute + PiP + AirPlay + scrubber + 10s-skip
                     // controls keep working unchanged while the user can
                     // also swipe down anywhere on the video to dismiss.
                     // `minimumDistance: 20` keeps small touches that the
@@ -382,7 +599,11 @@ struct FullScreenVideoView: View {
         }
         .task {
             if let videoURL = URL(string: url) {
-                player = AVPlayer(url: videoURL)
+                let p = AVPlayer(url: videoURL)
+                if startSeconds > 0 {
+                    await p.seek(to: CMTime(seconds: startSeconds, preferredTimescale: 600))
+                }
+                player = p
             }
         }
     }

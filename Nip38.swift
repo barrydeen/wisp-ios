@@ -17,7 +17,7 @@ enum Nip38 {
         pubkey: String,
         content: String,
         dTag: String = dTagGeneral,
-        createdAt: Int = Int(Date().timeIntervalSince1970)
+        createdAt: Int = NostrClock.now()
     ) throws -> NostrEvent {
         var tags: [[String]] = [["d", dTag]]
         if let clientTag = NostrEvent.clientTagIfEnabled() { tags.append(clientTag) }

@@ -17,6 +17,19 @@ struct PollTally: Hashable {
     var userOptionIndex: Int? = nil
 }
 
+/// Per-choice voter breakdown surfaced in the post-details drawer. Keyed by
+/// the same option id (kind 1068) / option index (kind 6969) the tally uses.
+struct PollVoteBreakdown {
+    struct Zapper {
+        let pubkey: String
+        let sats: Int64
+    }
+    /// optionId -> voter pubkeys, newest vote first (kind 1068).
+    var votersByOption: [String: [String]] = [:]
+    /// optionIndex -> zappers, highest sats first (kind 6969).
+    var zappersByOption: [Int: [Zapper]] = [:]
+}
+
 /// In-memory store of poll tallies keyed by poll event id. Modeled on
 /// `EngagementRepository`: viewport-driven REQ fan-out with 300 ms debounce, outbox routing,
 /// per-(relay, kind) subscriptions with a 12 s watchdog. Latest-wins per voter on both
@@ -36,6 +49,12 @@ final class PollTallyRepository {
     @ObservationIgnored private var liveTasks: [Task<Void, Never>] = []
     @ObservationIgnored private var liveSubs: [RelaySubscription] = []
     @ObservationIgnored private var seenEventIds: Set<String> = []
+
+    /// pollId -> newest vote `createdAt` seen (live or disk-seeded). Lets the live
+    /// sub scope `since:` to just the delta: a poll with cached votes only pulls
+    /// newer ones, while a never-seen poll (cold cursor) full-fetches. In-memory,
+    /// rebuilt from disk on each cold start by the disk-seed in `flushBatch`.
+    @ObservationIgnored private var voteCursor: [String: Int] = [:]
 
     /// Per-poll vote-author state. Mirrors Android's `pollVoters`.
     /// pollId -> voterPubkey -> (createdAt, optionIds)
@@ -76,6 +95,7 @@ final class PollTallyRepository {
         queriedPollIds.removeAll()
         pending.removeAll()
         seenEventIds.removeAll()
+        voteCursor.removeAll()
         pollVoters.removeAll()
         zapPollVoters.removeAll()
         pollEventCache.removeAll()
@@ -84,6 +104,32 @@ final class PollTallyRepository {
 
     func tally(for pollId: String) -> PollTally {
         tallies[pollId] ?? PollTally()
+    }
+
+    /// Per-choice voter lists for the details-drawer "Votes" section.
+    /// Built from the latest-wins voter state so each voter appears under
+    /// their current choice only.
+    func voteBreakdown(for pollId: String) -> PollVoteBreakdown {
+        var result = PollVoteBreakdown()
+        if let voters = pollVoters[pollId] {
+            // Newest vote first so the freshest voters surface at the top of
+            // each expanded choice.
+            let ordered = voters.sorted { $0.value.ts > $1.value.ts }
+            for (pubkey, info) in ordered {
+                for optionId in info.options {
+                    result.votersByOption[optionId, default: []].append(pubkey)
+                }
+            }
+        }
+        if let zappers = zapPollVoters[pollId] {
+            // Highest zap first — the loudest backers of each choice lead.
+            let ordered = zappers.sorted { $0.value.sats > $1.value.sats }
+            for (pubkey, info) in ordered {
+                result.zappersByOption[info.optionIndex, default: []]
+                    .append(PollVoteBreakdown.Zapper(pubkey: pubkey, sats: info.sats))
+            }
+        }
+        return result
     }
 
     // MARK: - Optimistic writes
@@ -138,6 +184,9 @@ final class PollTallyRepository {
         guard event.kind == Nip88.kindPollResponse else { return }
         guard seenEventIds.insert(event.id).inserted else { return }
         guard let pollId = Nip88.getPollEventId(event) else { return }
+        // Advance the per-poll cursor for every newly-seen vote (even ones the
+        // latest-wins / endsAt rules below drop) so `since:` doesn't re-fetch it.
+        voteCursor[pollId] = max(voteCursor[pollId] ?? 0, event.createdAt)
         let optionIds = Nip88.getResponseOptionIds(event)
         guard !optionIds.isEmpty else { return }
 
@@ -172,6 +221,7 @@ final class PollTallyRepository {
         // Only proceed if we know the target is a zap poll. Cold-cache → ignore (the receipt
         // will arrive again via the live notification sub when we have the poll event).
         guard let pollEvent = pollEventCache[pollId], pollEvent.kind == Nip69.kindZapPoll else { return }
+        voteCursor[pollId] = max(voteCursor[pollId] ?? 0, event.createdAt)
 
         if let closedAt = Nip69.parseClosedAt(pollEvent), event.createdAt > closedAt { return }
         guard let optionIndex = Nip69.getZapPollOptionFromZapReceipt(event) else { return }
@@ -260,56 +310,102 @@ final class PollTallyRepository {
         let batch = pending
         pending.removeAll()
         guard !batch.isEmpty else { return }
+        // Mark queried synchronously so a re-entrant `markVisible` during the
+        // async relay resolution below can't enqueue the same poll twice.
         for entry in batch { queriedPollIds.insert(entry.pollId) }
 
-        let board = NostrKey.load().flatMap { RelayScoreBoard.load(pubkey: $0.pubkey) }
-        let userReads = NostrKey.load().flatMap { RelayListRepository.shared.cachedReadRelays($0.pubkey) } ?? []
-        let topScored = board?.scoredRelays.prefix(5).map(\.url) ?? []
+        let pollIds = Set(batch.map(\.pollId))
+        Task { @MainActor [weak self] in
+            guard let self else { return }
 
-        // Bucket by (relay, vote-kind). For kind-1068 polls we subscribe kind 1018; for
-        // kind-6969 polls we subscribe kind 9735. Each bucket gets one REQ with #e = pollIds.
-        var subKey: [String: (kind: Int, ids: Set<String>)] = [:]
-        func add(relay: String, voteKind: Int, pollId: String) {
-            let key = "\(relay)::\(voteKind)"
-            if var bucket = subKey[key] {
-                bucket.ids.insert(pollId)
-                subKey[key] = bucket
-            } else {
-                subKey[key] = (voteKind, [pollId])
+            // 1. Replay the on-disk vote cache first: the tally (and the user's
+            //    own-vote flag, which gates re-voting) paints instantly, and the
+            //    live subs only have to deliver deltas. `markVisible` cached every
+            //    poll event synchronously, so zap-receipt gating + `endsAt` checks
+            //    resolve on the seeded path. `ingest*` dedupe via `seenEventIds`.
+            let cached = await EventStore.shared.loadPollVotes(forPollIds: pollIds)
+            for ev in cached {
+                if ev.kind == Nip88.kindPollResponse {
+                    self.ingestPollResponse(ev)
+                } else {
+                    self.ingestZapReceipt(ev)
+                }
             }
-        }
 
-        for entry in batch {
-            let voteKind = entry.kind == Nip88.kindPoll ? Nip88.kindPollResponse : 9735
-            // Author's read relays.
-            if let reads = RelayListRepository.shared.cachedReadRelays(entry.author) {
-                for relay in reads.prefix(3) { add(relay: relay, voteKind: voteKind, pollId: entry.pollId) }
+            // 2. Resolve relays. A vote is addressed to the POLL AUTHOR, so per
+            //    the NIP-65 inbox model the authoritative place to find every
+            //    vote is the author's READ (inbox) relays — plus the relays the
+            //    poll advertised for responses. `getReadRelays` fetches the
+            //    author's kind-10002 from indexers on a cache miss (the common
+            //    case for someone else's poll), which the old cache-only lookup
+            //    silently skipped — that's why dozens of votes never showed.
+            let board = NostrKey.load().flatMap { RelayScoreBoard.load(pubkey: $0.pubkey) }
+            let userReads = NostrKey.load().flatMap { RelayListRepository.shared.cachedReadRelays($0.pubkey) } ?? []
+            // Where the user's OWN vote lands — catches a vote cast on another device.
+            let userWrites = NostrKey.load().map { RelayRouting.topWriteRelays(for: $0.pubkey) } ?? []
+            let topScored = board?.scoredRelays.prefix(5).map(\.url) ?? []
+
+            // Author inbox relays, fetched once per distinct author.
+            var authorInbox: [String: [String]] = [:]
+            for author in Set(batch.map(\.author)) {
+                authorInbox[author] = await RelayListRepository.shared.getReadRelays(author)
             }
-            // User's reads.
-            for relay in userReads.prefix(3) { add(relay: relay, voteKind: voteKind, pollId: entry.pollId) }
-            // Top scored.
-            for relay in topScored { add(relay: relay, voteKind: voteKind, pollId: entry.pollId) }
-            // Relays advertised by the poll itself.
-            for relay in entry.advertisedRelays.prefix(3) { add(relay: relay, voteKind: voteKind, pollId: entry.pollId) }
-        }
 
-        for (key, bucket) in subKey {
-            let relay = String(key.prefix(while: { $0 != ":" }))
-            for chunk in Array(bucket.ids).chunked(into: 150) {
-                openSubscription(relay: relay, voteKind: bucket.kind, pollIds: chunk)
+            // Bucket by (relay, vote-kind): kind-1068 → kind 1018, kind-6969 →
+            // kind 9735. Each bucket = one REQ with #e = pollIds. Key by
+            // "relay::kind" but keep the relay verbatim in the value — relay URLs
+            // contain ':' (wss://…), so the key must NOT be re-parsed.
+            var subKey: [String: (relay: String, kind: Int, ids: Set<String>)] = [:]
+            func add(relay: String, voteKind: Int, pollId: String) {
+                let key = "\(relay)::\(voteKind)"
+                if var bucket = subKey[key] {
+                    bucket.ids.insert(pollId)
+                    subKey[key] = bucket
+                } else {
+                    subKey[key] = (relay, voteKind, [pollId])
+                }
+            }
+
+            for entry in batch {
+                let voteKind = entry.kind == Nip88.kindPoll ? Nip88.kindPollResponse : 9735
+                // Primary: the poll author's inbox relays.
+                for relay in (authorInbox[entry.author] ?? []).prefix(4) { add(relay: relay, voteKind: voteKind, pollId: entry.pollId) }
+                // The relays the poll advertised for responses.
+                for relay in entry.advertisedRelays.prefix(3) { add(relay: relay, voteKind: voteKind, pollId: entry.pollId) }
+                // Backstops: the user's own reads/writes (own vote) + top-scored.
+                for relay in userReads.prefix(2) { add(relay: relay, voteKind: voteKind, pollId: entry.pollId) }
+                for relay in userWrites.prefix(2) { add(relay: relay, voteKind: voteKind, pollId: entry.pollId) }
+                for relay in topScored.prefix(3) { add(relay: relay, voteKind: voteKind, pollId: entry.pollId) }
+            }
+
+            // 3. Open the live subs.
+            for (_, bucket) in subKey {
+                for chunk in Array(bucket.ids).chunked(into: 150) {
+                    self.openSubscription(relay: bucket.relay, voteKind: bucket.kind, pollIds: chunk)
+                }
             }
         }
     }
 
     private func openSubscription(relay: String, voteKind: Int, pollIds: [String]) {
         let subId = "feed-polltally-\(voteKind)-\(UUID().uuidString.prefix(6))"
-        let filter = NostrFilter(kinds: [voteKind], eTags: pollIds, limit: 500)
+        // Only pull NEW votes: the disk-seed in `flushBatch` already replayed every
+        // cached vote and advanced `voteCursor`, so scope to the delta. A poll with
+        // no cached votes has a cold cursor → `since` is nil → full back-fetch.
+        // (Reuses the engagement `since` policy: MIN-overlap when warm, nil if any
+        // poll in the batch is cold.) Overlap + `seenEventIds` absorb the boundary.
+        let since = EngagementRepository.sinceFloor(forTargets: pollIds, cursor: voteCursor, forceFull: false)
+        let filter = NostrFilter(kinds: [voteKind], eTags: pollIds, limit: 500, since: since)
         let sub = RelayPool.subscribe(relays: [relay], filter: filter, id: subId)
         liveSubs.append(sub)
 
         let consumer = Task { [weak self] in
             for await (event, _) in sub.events {
                 if Task.isCancelled { return }
+                // Persist so disk becomes the cross-session vote cache — the next
+                // cold start can disk-seed the full tally + own-vote flag before
+                // this sub re-fetches. Block/dedup is applied at the persist layer.
+                Task { await EventPersistQueue.shared.enqueue(event) }
                 if voteKind == Nip88.kindPollResponse {
                     self?.ingestPollResponse(event)
                 } else {

@@ -68,7 +68,7 @@ enum PrivateReplyPublisher {
         // 3. Pin `created_at` for the rumor so both wraps decrypt to the same
         //    rumor id — the parent author's reply can then e-tag what *we*
         //    have locally, keeping the private chain coherent across devices.
-        let rumorCreatedAt = Int(Date().timeIntervalSince1970)
+        let rumorCreatedAt = NostrClock.now()
 
         // 4. Build canonical reply tags via NIP-10. These already include
         //    `["p", parent.pubkey]` plus every p-tag carried up from the parent.

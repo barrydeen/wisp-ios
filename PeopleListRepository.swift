@@ -63,7 +63,7 @@ final class PeopleListRepository {
         guard !trimmed.isEmpty else { return nil }
 
         let dTag = uniqueDTag(forName: trimmed)
-        let now = Int(Date().timeIntervalSince1970)
+        let now = NostrClock.now()
         let list = PeopleList(
             pubkey: keypair.pubkey,
             dTag: dTag,
@@ -85,7 +85,7 @@ final class PeopleListRepository {
         guard !trimmed.isEmpty else { return }
         var list = lists[idx]
         list.name = trimmed
-        list.createdAt = Int(Date().timeIntervalSince1970)
+        list.createdAt = NostrClock.now()
         lists[idx] = list
         listUpdatedAt[dTag] = list.createdAt
         save(pubkey: keypair.pubkey)
@@ -113,7 +113,7 @@ final class PeopleListRepository {
         } else {
             list.publicMembers.append(normalized)
         }
-        list.createdAt = Int(Date().timeIntervalSince1970)
+        list.createdAt = NostrClock.now()
         lists[idx] = list
         listUpdatedAt[dTag] = list.createdAt
         save(pubkey: keypair.pubkey)
@@ -128,7 +128,7 @@ final class PeopleListRepository {
         list.publicMembers.removeAll { $0 == normalized }
         list.privateMembers.removeAll { $0 == normalized }
         guard list.publicMembers.count + list.privateMembers.count != before else { return }
-        list.createdAt = Int(Date().timeIntervalSince1970)
+        list.createdAt = NostrClock.now()
         lists[idx] = list
         listUpdatedAt[dTag] = list.createdAt
         save(pubkey: keypair.pubkey)
@@ -151,7 +151,7 @@ final class PeopleListRepository {
         } else {
             return
         }
-        list.createdAt = Int(Date().timeIntervalSince1970)
+        list.createdAt = NostrClock.now()
         lists[idx] = list
         listUpdatedAt[dTag] = list.createdAt
         save(pubkey: keypair.pubkey)
@@ -230,7 +230,7 @@ final class PeopleListRepository {
     /// the replacement targets the right address.
     private func publishDeletion(dTag: String, keypair: Keypair) {
         let tags: [[String]] = [["d", dTag]]
-        let createdAt = Int(Date().timeIntervalSince1970)
+        let createdAt = NostrClock.now()
         let relays = topWriteRelays(pubkey: keypair.pubkey)
         Task { @MainActor in
             guard let event = try? await Signer.sign(

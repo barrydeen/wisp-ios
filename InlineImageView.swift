@@ -10,6 +10,7 @@ struct InlineImageView: View {
     @Environment(AppSettings.self) private var settings
     @State private var showFullScreen = false
     @State private var manualLoad = false
+    @State private var showPhotosAlert = false
 
     private func tapped() {
         if let onTap = onTap { onTap() }
@@ -47,6 +48,7 @@ struct InlineImageView: View {
                 } else {
                     RetryingAsyncImage(
                         url: URL(string: meta.url),
+                        maxPixelSize: ImagePixelBudget.feed,
                         content: { image in
                             image.resizable()
                                 .aspectRatio(contentMode: .fit)
@@ -93,6 +95,16 @@ struct InlineImageView: View {
         .fullScreenCover(isPresented: $showFullScreen) {
             FullScreenImageView(url: meta.url, mime: meta.mime)
         }
+        .alert("Photos Access Required", isPresented: $showPhotosAlert) {
+            Button("Open Settings") {
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    UIApplication.shared.open(url)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Allow Wisp to add to Photos in Settings to save images.")
+        }
         .contextMenu {
             Button {
                 UIPasteboard.general.string = meta.url
@@ -100,6 +112,22 @@ struct InlineImageView: View {
             } label: {
                 Label("Copy Image URL", systemImage: "doc.on.doc")
             }
+            Button {
+                Task { await saveImage() }
+            } label: {
+                Label("Save to Photos", systemImage: "square.and.arrow.down")
+            }
+        }
+    }
+
+    private func saveImage() async {
+        do {
+            try await MediaSaveService.saveImageToPhotos(url: meta.url)
+            QuickFollowToast.shared.show("Saved to Photos")
+        } catch MediaSaveService.SaveError.denied {
+            showPhotosAlert = true
+        } catch {
+            QuickFollowToast.shared.show("Save failed")
         }
     }
 
@@ -176,6 +204,17 @@ struct FullScreenImageView: View {
     /// "URL copied" toast trigger. Flipped on by the long-press handler;
     /// auto-dismisses after a short window.
     @State private var copiedToastVisible = false
+    @State private var showPhotosAlert = false
+    /// Latched true once the user zooms in past `fullResZoomThreshold`, which
+    /// swaps the downsampled decode for a full-resolution one in place. Stays
+    /// true after zooming back out — the full-res bitmap is already cached, so
+    /// there's nothing to gain from reverting.
+    @State private var loadFullRes = false
+
+    /// Zoom level at or above which the viewer upgrades from its downsampled
+    /// decode (`ImagePixelBudget.fullscreen`, ~2× screen width) to the full
+    /// source. Below this the downsample is indistinguishable from full res.
+    private static let fullResZoomThreshold: CGFloat = 2.0
 
     /// True when this view runs standalone (handles its own dismiss) vs
     /// embedded inside `FullScreenMediaPager` (forwards drags to the pager).
@@ -247,8 +286,47 @@ struct FullScreenImageView: View {
                         .transition(.opacity)
                         .allowsHitTesting(false)
                 }
+
+                VStack {
+                    HStack {
+                        Spacer()
+                        Button {
+                            Task { await saveImageFromFullScreen() }
+                        } label: {
+                            Image(systemName: "square.and.arrow.down")
+                                .font(.system(size: 16, weight: .medium))
+                                .foregroundStyle(.white)
+                                .padding(10)
+                                .background(Color.black.opacity(0.55), in: Circle())
+                        }
+                        .padding(.top, 16)
+                        .padding(.trailing, 16)
+                    }
+                    Spacer()
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .alert("Photos Access Required", isPresented: $showPhotosAlert) {
+                Button("Open Settings") {
+                    if let url = URL(string: UIApplication.openSettingsURLString) {
+                        UIApplication.shared.open(url)
+                    }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Allow Wisp to add to Photos in Settings to save images.")
+            }
+        }
+    }
+
+    private func saveImageFromFullScreen() async {
+        do {
+            try await MediaSaveService.saveImageToPhotos(url: url)
+            QuickFollowToast.shared.show("Saved to Photos")
+        } catch MediaSaveService.SaveError.denied {
+            showPhotosAlert = true
+        } catch {
+            QuickFollowToast.shared.show("Save failed")
         }
     }
 
@@ -346,6 +424,7 @@ struct FullScreenImageView: View {
         } else {
             RetryingAsyncImage(
                 url: URL(string: url),
+                maxPixelSize: loadFullRes ? nil : ImagePixelBudget.fullscreen,
                 content: { image in
                     image.resizable().scaledToFit()
                 },
@@ -374,6 +453,7 @@ struct FullScreenImageView: View {
         pinching = true
         let newScale = min(Self.maxScale, max(1.0, lastScale * magValue))
         scale = newScale
+        upgradeToFullResIfNeeded(scale: newScale)
         // Apply scale + centroid translation in one go so the image follows
         // the two-finger pivot as the user pinches. Rubber-band lets the
         // offset overshoot bounds smoothly; spring-back on end settles it.
@@ -389,6 +469,7 @@ struct FullScreenImageView: View {
         let newScale = min(Self.maxScale, max(1.0, lastScale * magValue))
         scale = newScale
         lastScale = newScale
+        upgradeToFullResIfNeeded(scale: newScale)
         if newScale <= 1.0 {
             withAnimation(.spring(response: 0.3)) {
                 scale = 1.0
@@ -452,7 +533,16 @@ struct FullScreenImageView: View {
             } else {
                 scale = 2.0
                 lastScale = 2.0
+                upgradeToFullResIfNeeded(scale: 2.0)
             }
+        }
+    }
+
+    /// Latch `loadFullRes` once zoom reaches `fullResZoomThreshold` so the
+    /// decode upgrades to full resolution. One-way — see `loadFullRes`.
+    private func upgradeToFullResIfNeeded(scale: CGFloat) {
+        if !loadFullRes && scale >= Self.fullResZoomThreshold {
+            loadFullRes = true
         }
     }
 }

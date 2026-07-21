@@ -26,7 +26,7 @@ enum Signer {
         content: String,
         createdAt: Int? = nil
     ) async throws -> NostrEvent {
-        let ts = createdAt ?? Int(Date().timeIntervalSince1970)
+        let ts = createdAt ?? NostrClock.now()
         guard let priv = Hex.decode(keypair.privkey), priv.count == 32 else {
             throw SignerError.localKeyMissing
         }

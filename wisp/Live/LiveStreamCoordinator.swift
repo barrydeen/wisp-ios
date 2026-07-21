@@ -16,6 +16,10 @@ final class LiveStreamCoordinator {
     private var consumerTasks: [Task<Void, Never>] = []
     private var profileFetchTask: Task<Void, Never>?
     private var pendingHostFetches = Set<String>()
+    /// Indexer-query attempts per pubkey. Caps the pill row's self-heal so a
+    /// host with no kind-0 anywhere doesn't get refetched on every re-request.
+    private var hostFetchAttempts: [String: Int] = [:]
+    private static let maxHostFetchAttempts = 3
 
     private static let indexerRelays = RelayDefaults.indexers
 
@@ -72,12 +76,28 @@ final class LiveStreamCoordinator {
         profileFetchTask?.cancel()
         profileFetchTask = nil
         pendingHostFetches.removeAll()
+        hostFetchAttempts.removeAll()
     }
 
     // MARK: - Profile prefetch (debounced batch)
 
+    /// Entry point for the pill row's self-heal: request a host profile that
+    /// still hasn't resolved. Rides the same debounced batch as discovery, so
+    /// a burst of requests (streams trickling in during startup) collapses
+    /// into one indexer query instead of overlapping per-stream fetches.
+    func requestHostProfile(_ pubkey: String) {
+        queueHostProfileFetch(pubkey)
+    }
+
     private func queueHostProfileFetch(_ pubkey: String) {
-        if ProfileRepository.shared.get(pubkey) != nil { return }
+        // Already cached → publish straight to the observable repo so the pill
+        // renders the avatar. (`ProfileRepository` alone isn't observable, so a
+        // cache hit that never reaches `hostProfiles` is invisible to the row.)
+        if let cached = ProfileRepository.shared.get(pubkey) {
+            LiveStreamRepository.shared.setHostProfile(cached)
+            return
+        }
+        guard hostFetchAttempts[pubkey, default: 0] < Self.maxHostFetchAttempts else { return }
         pendingHostFetches.insert(pubkey)
         if profileFetchTask == nil || profileFetchTask?.isCancelled == true {
             profileFetchTask = Task { [weak self] in
@@ -92,13 +112,16 @@ final class LiveStreamCoordinator {
         pendingHostFetches.subtract(batch)
         profileFetchTask = nil
         guard !batch.isEmpty else { return }
+        for pk in batch { hostFetchAttempts[pk, default: 0] += 1 }
         let events = await RelayPool.query(
             relays: Self.indexerRelays,
             filter: NostrFilter(kinds: [0], authors: batch, limit: batch.count),
             timeout: 6
         )
         for event in events where event.kind == 0 {
-            _ = ProfileRepository.shared.updateFromEvent(event)
+            if let profile = ProfileRepository.shared.updateFromEvent(event) {
+                LiveStreamRepository.shared.setHostProfile(profile)
+            }
         }
         if !pendingHostFetches.isEmpty {
             profileFetchTask = Task { [weak self] in

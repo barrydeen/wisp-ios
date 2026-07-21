@@ -14,6 +14,12 @@ import os
 @Observable
 final class EngagementBox {
     var counts: EngagementCounts
+    /// Last-known reply count replayed from disk (`EventStore.loadReplyCounts`).
+    /// Kept separate from `counts.replies` — which the live sub *increments* via
+    /// its own dedup set — so a cold-open disk seed and the live increments are
+    /// combined with `max` at render time instead of summing (which would
+    /// double-count). See `PostCardView`'s reply `networkCount`.
+    var diskReplyCount: Int = 0
     init(_ counts: EngagementCounts = .init()) { self.counts = counts }
 }
 
@@ -41,6 +47,16 @@ final class EngagementRepository {
     /// than session-monotonic memory growth, and the working window of live
     /// engagement is far smaller than the capacities chosen here.
     @ObservationIgnored private var queriedIds = BoundedSet(capacity: 5_000)
+    /// Per-target high-water mark: newest engagement `createdAt` we've ingested
+    /// for each note (from disk replay or live). Drives the `since` cursor so a
+    /// warm note's live sub only pulls events newer than what we already have.
+    /// Keyed by event id, lifetime-scoped like `boxes` (cleared on logout).
+    @ObservationIgnored private var engagementCursor: [String: Int] = [:]
+    /// When set, the next `flushBatch` opens its live subs with `since: nil`
+    /// (full re-pull) regardless of cursor state — the completeness safety valve
+    /// for pull-to-refresh and the first batch of a session. Starts `true` so the
+    /// session's first engagement fetch is never `since`-narrowed.
+    @ObservationIgnored private var pendingForceResync = true
     @ObservationIgnored private var pending: [(eventId: String, author: String)] = []
     @ObservationIgnored private var debounceTask: Task<Void, Never>?
     @ObservationIgnored private var liveTasks: [Task<Void, Never>] = []
@@ -114,6 +130,32 @@ final class EngagementRepository {
         }
     }
 
+    /// Force the next feed-engagement batch to fetch without a `since` floor —
+    /// a full re-pull for completeness. Called on pull-to-refresh so a user who
+    /// suspects a missed reaction (e.g. one made on another device that landed
+    /// on a relay outside the warm cursor's window) can recover it.
+    func requestFullResync() {
+        pendingForceResync = true
+    }
+
+    /// Compute the `since` floor for a batched engagement REQ. Returns nil (full
+    /// pull) when forcing a resync or when ANY target is cold (no cursor) — a
+    /// single REQ carries one `since`, so warm batches use the MINIMUM cursor
+    /// across their targets minus an `overlap` buffer (clock skew); dedup absorbs
+    /// the small redundancy for younger targets. A cold id must pull from
+    /// scratch, so its presence disables `since` for the whole REQ. Pure +
+    /// testable; shared with the thread's per-target floor.
+    nonisolated static func sinceFloor(forTargets targets: [String], cursor: [String: Int], overlap: Int = 60, forceFull: Bool) -> Int? {
+        guard !forceFull else { return nil }
+        var minCursor: Int?
+        for t in targets {
+            guard let c = cursor[t] else { return nil }
+            minCursor = Swift.min(minCursor ?? c, c)
+        }
+        guard let m = minCursor else { return nil }
+        return Swift.max(0, m - overlap)
+    }
+
     /// Called on logout / pubkey switch.
     func clear() {
         debounceTask?.cancel()
@@ -124,6 +166,8 @@ final class EngagementRepository {
         liveTasks.removeAll()
         boxes.removeAll()
         queriedIds.removeAll()
+        engagementCursor.removeAll()
+        pendingForceResync = true
         pending.removeAll()
         seenEngagementIds.removeAll()
         seenReactionKeys.removeAll()
@@ -322,6 +366,10 @@ final class EngagementRepository {
         pending.removeAll()
         guard !batch.isEmpty else { return }
         for (id, _) in batch { queriedIds.insert(id) }
+        // Consume the resync flag for this batch (first session batch +
+        // pull-to-refresh open with `since: nil`).
+        let forceFull = pendingForceResync
+        pendingForceResync = false
 
         let board = NostrKey.load().flatMap { RelayScoreBoard.load(pubkey: $0.pubkey) }
         let userReads = NostrKey.load().flatMap { RelayListRepository.shared.cachedReadRelays($0.pubkey) } ?? []
@@ -355,14 +403,41 @@ final class EngagementRepository {
         // single largest source of fan-out. NIP-65 outbox routing above (each
         // author's read relays, plus the homeless fallback) covers correctness.
 
-        for (relay, ids) in relayToIds {
-            for chunk in Array(ids).chunked(into: 150) {
-                openSubscription(relay: relay, eventIds: chunk)
+        // Replay the on-disk engagement cache BEFORE opening the live subs:
+        // (1) cards paint their last-known counts instantly (fixes the "feed
+        // shows 0, thread shows many" gap for previously-seen notes), and
+        // (2) `ingest` updates `engagementCursor`, so the live sub opened below
+        // can scope `since:` to just the delta. Cache reads are local and fast;
+        // opening the live sub a few ms later is a fair trade for the bandwidth
+        // win and the instant counts.
+        let ids = Set(batch.map(\.eventId))
+        Task { [weak self] in
+            let cached = await EventStore.shared.loadEngagement(forTargetIds: ids)
+            let replyCounts = await EventStore.shared.loadReplyCounts(forTargetIds: ids)
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                for ev in cached { self.ingest(ev, relayUrl: "cache") }
+                self.seedReplyCounts(replyCounts)
+                for (relay, idset) in relayToIds {
+                    for chunk in Array(idset).chunked(into: 150) {
+                        self.openSubscription(relay: relay, eventIds: chunk, forceFull: forceFull)
+                    }
+                }
             }
         }
     }
 
-    private func openSubscription(relay: String, eventIds: [String]) {
+    /// Seed each box's last-known reply count from disk. `max` so we never lower
+    /// a count the live sub has already raised; the field is separate from
+    /// `counts.replies` to avoid summing the two channels (see `EngagementBox`).
+    private func seedReplyCounts(_ counts: [String: Int]) {
+        for (id, n) in counts where n > 0 {
+            let b = box(for: id)
+            if n > b.diskReplyCount { b.diskReplyCount = n }
+        }
+    }
+
+    private func openSubscription(relay: String, eventIds: [String], forceFull: Bool) {
         // FIFO-cap before opening: cancel the oldest in-flight sub(s) so the
         // viewport's freshest batch always wins. The cancelled sub's watchdog
         // still runs (idempotently) and `prune(sub:)` is a no-op once gone.
@@ -373,7 +448,12 @@ final class EngagementRepository {
         }
 
         let subId = "feed-engagement-\(UUID().uuidString.prefix(6))"
-        let filter = NostrFilter(kinds: [1, 6, 7, 9735], eTags: eventIds, limit: 500)
+        // Incremental fetch: when every target in this REQ is warm (has a disk
+        // cursor), scope to the batch's MIN cursor minus an overlap buffer so we
+        // only pull the delta since last time. Any cold id, or a forced resync,
+        // disables `since` for the whole REQ (a single REQ carries one `since`).
+        let since = Self.sinceFloor(forTargets: eventIds, cursor: engagementCursor, forceFull: forceFull)
+        let filter = NostrFilter(kinds: [1, 6, 7, 9735], eTags: eventIds, limit: 500, since: since)
         let sub = RelayPool.subscribe(relays: [relay], filter: filter, id: subId)
         liveSubs.append(sub)
         Signposts.feed.emitEvent("engagement.req.opened", "active: \(self.liveSubs.count)/\(self.maxConcurrentSubs) ids: \(eventIds.count)")
@@ -388,6 +468,12 @@ final class EngagementRepository {
         // `quoters` correctly.
         let consumer = Task { [weak self] in
             for await (event, relayUrl) in sub.events {
+                // Persist so disk becomes the cross-session engagement cache:
+                // next launch the cursor is warm (since-narrowed REQs) and cards
+                // paint last-known counts before the live sub returns. EventStore
+                // applies block/dedup at the persist layer. Fire-and-forget; the
+                // queue coalesces writes off-main.
+                Task { await EventPersistQueue.shared.enqueue(event) }
                 self?.ingest(event, relayUrl: relayUrl)
             }
         }
@@ -483,8 +569,29 @@ final class EngagementRepository {
 
     // MARK: - Ingest
 
-    private func ingest(_ event: NostrEvent, relayUrl: String) {
+    /// Funnel a thread-discovered engagement event into the shared feed box.
+    /// Routes through the same `ingest` (and therefore the same dedup sets), so
+    /// when the feed later opens its own sub and re-receives the event it's
+    /// skipped — the count is raised exactly once, never summed. `acceptUntracked`
+    /// bypasses the `queriedIds` gate (the thread already vetted the target)
+    /// without polluting `queriedIds`, so the feed still opens its own sub for
+    /// that note when it scrolls into view.
+    func ingestForwarded(_ event: NostrEvent) {
+        ingest(event, relayUrl: "thread", acceptUntracked: true)
+    }
+
+    private func ingest(_ event: NostrEvent, relayUrl: String, acceptUntracked: Bool = false) {
         guard seenEngagementIds.insert(event.id).inserted else { return }
+
+        // Block at source: a blocked author's reply / quote / repost / reaction
+        // must not bump engagement counts or appear in the reactor / quoter /
+        // reposter drawers. Zaps (9735) are checked separately in the kind
+        // switch below against the *resolved* sender, since `event.pubkey` on a
+        // zap receipt is the LNURL server, not the zapper.
+        if event.kind == 1 || event.kind == 6 || event.kind == 7,
+           SafetyFilter.shared.snapshot.blockedPubkeys.contains(event.pubkey) {
+            return
+        }
 
         // Quote reposts (NIP-18) come in on the parallel `#q` subscription and
         // by convention SHOULD NOT carry an `e` tag for the quoted id — so the
@@ -526,7 +633,11 @@ final class EngagementRepository {
             if tag.count >= 4, tag[3] == "mention" { return nil }
             return tag[1]
         }
-        guard let primary = targets.last, queriedIds.contains(primary) else { return }
+        guard let primary = targets.last, (acceptUntracked || queriedIds.contains(primary)) else { return }
+        // Advance the per-target high-water mark for every engagement event we
+        // attribute here (counted now, or deduped from an earlier delivery) so a
+        // later `since`-scoped REQ asks only for events newer than this.
+        engagementCursor[primary] = Swift.max(engagementCursor[primary] ?? 0, event.createdAt)
 
         let b = box(for: primary)
         var current = b.counts
@@ -576,8 +687,6 @@ final class EngagementRepository {
             if let hash = paymentHash, !seenZapPaymentHashes.insert(hash).inserted {
                 return
             }
-            current.zapSats += sats
-            current.zapCount += 1
 
             // Resolve the real zapper via `Nip57.resolveZapSender`, which handles
             // both public zaps (description.pubkey path) and DIP-03 private zaps
@@ -585,11 +694,18 @@ final class EngagementRepository {
             // to ephemeral pubkey when decryption fails). For DIP-03 receipts
             // arriving for a note that isn't ours (we're a third-party observer)
             // we can't decrypt — those still surface with the ephemeral pubkey,
-            // which is the correct privacy-preserving behavior.
+            // which is the correct privacy-preserving behavior. Resolved up front
+            // so a blocked sender can be dropped *before* it bumps the count.
             let privkey32 = NostrKey.load().flatMap { Hex.decode($0.privkey) }
             let resolved = Nip57.resolveZapSender(receipt: event, recipientPrivkey32: privkey32)
             let zapperPubkey = resolved?.pubkey ?? event.pubkey
+            // Block at source: a blocked zapper must not bump the count or show
+            // in the zappers drawer. `event.pubkey` is the LNURL server, so the
+            // check runs against the resolved sender.
+            if SafetyFilter.shared.snapshot.blockedPubkeys.contains(zapperPubkey) { return }
             let message = resolved?.message ?? ""
+            current.zapSats += sats
+            current.zapCount += 1
             current.zappers.append(Zapper(pubkey: zapperPubkey, sats: sats, message: message))
             // Zapper pubkey is sourced from the description tag (the actual
             // sender), not event.pubkey (the LNURL server). Always observe it
