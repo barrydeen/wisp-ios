@@ -35,6 +35,8 @@
 		4CABCD010000000000F30001 /* PrivateInteractionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30001 /* PrivateInteractionStore.swift */; };
 		4CABCD010000000000F30002 /* PrivateInteractionRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30002 /* PrivateInteractionRouter.swift */; };
 		4CABCD010000000000F30003 /* PeerRelayResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30003 /* PeerRelayResolver.swift */; };
+		4CABCD030000000000F30010 /* DmGiftWrapIngestor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD020000000000F30010 /* DmGiftWrapIngestor.swift */; };
+		4CABCD030000000000F30030 /* NsecIdentityPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD020000000000F30030 /* NsecIdentityPreview.swift */; };
 		4CABCD030000000000F30020 /* PendingPostStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD020000000000F30020 /* PendingPostStore.swift */; };
 		4CABCD030000000000F30021 /* PendingPostRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD020000000000F30021 /* PendingPostRow.swift */; };
 		4CABCD010000000000F30004 /* PrivateReplyPublisher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30004 /* PrivateReplyPublisher.swift */; };
@@ -379,6 +381,8 @@
 		4CABCD000000000000F30001 /* PrivateInteractionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateInteractionStore.swift; sourceTree = "<group>"; };
 		4CABCD000000000000F30002 /* PrivateInteractionRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateInteractionRouter.swift; sourceTree = "<group>"; };
 		4CABCD000000000000F30003 /* PeerRelayResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeerRelayResolver.swift; sourceTree = "<group>"; };
+		4CABCD020000000000F30010 /* DmGiftWrapIngestor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DmGiftWrapIngestor.swift; sourceTree = "<group>"; };
+		4CABCD020000000000F30030 /* NsecIdentityPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NsecIdentityPreview.swift; sourceTree = "<group>"; };
 		4CABCD020000000000F30020 /* PendingPostStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingPostStore.swift; sourceTree = "<group>"; };
 		4CABCD020000000000F30021 /* PendingPostRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingPostRow.swift; sourceTree = "<group>"; };
 		4CABCD000000000000F30004 /* PrivateReplyPublisher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateReplyPublisher.swift; sourceTree = "<group>"; };
@@ -1009,6 +1013,7 @@
 				4CABCD000000000000F30002 /* PrivateInteractionRouter.swift */,
 				4CABCD000000000000F30003 /* PeerRelayResolver.swift */,
 				4CABCD020000000000F30010 /* DmGiftWrapIngestor.swift */,
+				4CABCD020000000000F30030 /* NsecIdentityPreview.swift */,
 				4CABCD020000000000F30040 /* CldrEmojiKeywords.swift */,
 				4CABCD020000000000F30041 /* cldr-emoji-keywords-en.json */,
 				4CABCD020000000000F30020 /* PendingPostStore.swift */,
@@ -1515,6 +1520,7 @@
 				4CABCD010000000000F30002 /* PrivateInteractionRouter.swift in Sources */,
 				4CABCD010000000000F30003 /* PeerRelayResolver.swift in Sources */,
 				4CABCD030000000000F30010 /* DmGiftWrapIngestor.swift in Sources */,
+				4CABCD030000000000F30030 /* NsecIdentityPreview.swift in Sources */,
 				4CABCD030000000000F30040 /* CldrEmojiKeywords.swift in Sources */,
 				4CABCD030000000000F30020 /* PendingPostStore.swift in Sources */,
 				4CABCD030000000000F30021 /* PendingPostRow.swift in Sources */,
