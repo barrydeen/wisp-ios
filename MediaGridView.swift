@@ -346,6 +346,8 @@ struct FullScreenMediaPager: View {
     /// Captured at gesture start so per-frame paging math doesn't have to
     /// re-read `geo.size.width` from inside the inner-driven callback.
     @State private var pageWidth: CGFloat = 0
+    @State private var showPhotosAlert = false
+    @State private var copiedToastVisible = false
 
     init(items: [MediaGridView.MediaItem], initialIndex: Int) {
         self.items = items
@@ -404,7 +406,97 @@ struct FullScreenMediaPager: View {
                         .padding(.bottom, 24)
                         .allowsHitTesting(false)
                 }
+
+                // Fixed toolbar — save / copy / close for the current page.
+                // Lives on the pager (not the inner image page) so it stays
+                // put while pages swipe beneath it; each action reads the
+                // live `items[index]`. Mirrors the Wisp Android gallery's
+                // download · copy · close row.
+                toolbar
+
+                if copiedToastVisible {
+                    Text("Image URL copied")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(.black.opacity(0.7), in: Capsule())
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .transition(.opacity)
+                        .allowsHitTesting(false)
+                }
             }
+            .alert("Photos Access Required", isPresented: $showPhotosAlert) {
+                Button("Open Settings") {
+                    if let url = URL(string: UIApplication.openSettingsURLString) {
+                        UIApplication.shared.open(url)
+                    }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Allow Wisp to add to Photos in Settings to save media.")
+            }
+        }
+    }
+
+    private var toolbar: some View {
+        VStack {
+            HStack(spacing: 12) {
+                Spacer()
+                Button {
+                    Task { await saveCurrent() }
+                } label: {
+                    toolbarIcon("square.and.arrow.down")
+                }
+                Button {
+                    copyCurrentURL()
+                } label: {
+                    toolbarIcon("doc.on.doc")
+                }
+                Button {
+                    dismiss()
+                } label: {
+                    toolbarIcon("xmark")
+                }
+            }
+            .padding(.top, 16)
+            .padding(.trailing, 16)
+            Spacer()
+        }
+    }
+
+    private func toolbarIcon(_ systemName: String) -> some View {
+        Image(systemName: systemName)
+            .font(.system(size: 16, weight: .medium))
+            .foregroundStyle(.white)
+            .padding(10)
+            .background(Color.black.opacity(0.55), in: Circle())
+    }
+
+    private func saveCurrent() async {
+        let item = items[index]
+        do {
+            if item.isVideo {
+                try await MediaSaveService.saveVideoToPhotos(url: item.url)
+                QuickFollowToast.shared.show("Saved to Photos")
+            } else {
+                try await MediaSaveService.saveImageToPhotos(url: item.url)
+                QuickFollowToast.shared.show("Saved to Photos")
+            }
+        } catch MediaSaveService.SaveError.denied {
+            showPhotosAlert = true
+        } catch {
+            QuickFollowToast.shared.show("Save failed")
+        }
+    }
+
+    private func copyCurrentURL() {
+        UIPasteboard.general.string = items[index].url
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        withAnimation(.easeInOut(duration: 0.2)) { copiedToastVisible = true }
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2.5))
+            withAnimation(.easeInOut(duration: 0.25)) { copiedToastVisible = false }
         }
     }
 
