@@ -95,6 +95,19 @@ struct ThreadView: View {
                             }
                         }
 
+                        // Optimistic pending reply — shown at the bottom of
+                        // the replies list (where the new reply will land
+                        // once relays accept it) so the user gets immediate
+                        // visual confirmation. Gated to the kind-1 reply case
+                        // referencing this thread's focal so we don't surface
+                        // a pending reply that belongs to a different thread.
+                        if let pending = PendingPostStore.shared.pending,
+                           pending.event.kind == 1,
+                           PendingPostStore.shared.pendingIsReply,
+                           pendingTargetsCurrentThread(pending: pending) {
+                            PendingPostRow(pending: pending)
+                        }
+
                         if !viewModel.hiddenSpamReplies.isEmpty {
                             hiddenSpamSection
                         }
@@ -651,6 +664,17 @@ struct ThreadView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func pendingTargetsCurrentThread(pending: PendingPostStore.PendingPost) -> Bool {
+        var thisThreadIds: Set<String> = []
+        if let focalId = viewModel.focal?.id { thisThreadIds.insert(focalId) }
+        thisThreadIds.insert(viewModel.rootId)
+        for ancestor in viewModel.ancestors { thisThreadIds.insert(ancestor.id) }
+        for tag in pending.event.tags where tag.first == "e" && tag.count >= 2 {
+            if thisThreadIds.contains(tag[1]) { return true }
+        }
+        return false
     }
 
     /// The sticky reply bar's target: the topmost currently-visible reply

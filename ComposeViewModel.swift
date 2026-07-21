@@ -1223,6 +1223,17 @@ final class ComposeViewModel {
             draftIdToClear: currentDraftId
         )
         currentDraftId = nil
+        // Stand up the optimistic feed row before handing off — the sheet
+        // dismisses immediately after this call, so the row needs to be in
+        // the store by the time the home feed re-renders. The row dissolves
+        // when the real published event arrives via `.nostrEventPublished`,
+        // or flips to a failed state if PostPublisher reports an error.
+        PendingPostStore.shared.start(
+            content: postContent,
+            tags: tags,
+            pubkey: signingKeypair.pubkey,
+            kind: kind
+        )
         PostPublisher.shared.submit(draft)
         Haptics.shared.pulse()
         // Any non-nil id triggers the sheet's dismiss observer. The actual event

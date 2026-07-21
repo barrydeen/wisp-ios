@@ -51,6 +51,9 @@ final class PostPublisher {
         guard case .mining = phase else { return }
         cancelInflight()
         phase = .idle
+        // Drop the optimistic feed row too — the user explicitly killed the
+        // post; no reason to leave a dimmed placeholder hanging around.
+        PendingPostStore.shared.clear()
     }
 
     private func cancelInflight() {
@@ -124,6 +127,7 @@ final class PostPublisher {
         }
 
         phase = .broadcasting(accepted: 0, sent: draft.relays.count)
+        PendingPostStore.shared.setPublishing()
         let succeeded = await RelayPool.publish(
             event: event,
             to: draft.relays,
@@ -170,6 +174,10 @@ final class PostPublisher {
 
     private func fail(_ message: String) {
         phase = .failed(message: message)
+        // Mirror the failure onto the optimistic feed row so the user sees
+        // the error in-context (right where their post was supposed to land)
+        // in addition to the pill.
+        PendingPostStore.shared.markFailed(message)
         scheduleDismiss(after: 4.0)
         inflight = nil
     }

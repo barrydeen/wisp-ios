@@ -1187,6 +1187,19 @@ struct MainView: View {
                         // `events` list is much longer (most events
                         // were rejected by the filter).
                         let visible = viewModel.filteredEvents
+                        // Optimistic post row — appears the instant the user
+                        // taps Post in the composer and dissolves when the
+                        // real published event arrives via the existing
+                        // `.nostrEventPublished` observer on FeedViewModel
+                        // (which inserts the event into `visible` above this
+                        // pending row in the same render). See PendingPostStore.
+                        // Gate on `!pendingIsReply` so the home feed never
+                        // shows a reply that belongs to a thread view.
+                        if let pending = PendingPostStore.shared.pending,
+                           !PendingPostStore.shared.pendingIsReply {
+                            PendingPostRow(pending: pending)
+                                .padding(.vertical, 4)
+                        }
                         // Precompute the last-5 ids once per body eval so each
                         // row's onAppear is an O(1) Set lookup instead of an
                         // O(n) `firstIndex` scan (which made deep scroll O(n²)).
