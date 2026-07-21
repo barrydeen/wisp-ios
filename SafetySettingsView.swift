@@ -113,6 +113,24 @@ struct SafetySettingsView: View {
                 // exists — the filter is fail-closed, so an enabled-but-empty
                 // network hides everything until the graph lands, and a failed
                 // compute has to revert the flip (see the stateStream observer).
+                Toggle("Hellthread filter", isOn: $prefs.hellthreadFilterEnabled)
+                    .toggleStyle(SwitchToggleStyle(tint: theme.primary))
+                Text("Hides notes and notifications that tag more than the threshold number of distinct accounts.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(theme.palette.onSurfaceVariant)
+                if prefs.hellthreadFilterEnabled {
+                    Stepper(value: $prefs.hellthreadThreshold, in: 25...100, step: 5) {
+                        HStack(spacing: 4) {
+                            Text("Threshold:")
+                                .font(.system(size: 14))
+                            Text("\(prefs.hellthreadThreshold) mentions")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(theme.primary)
+                        }
+                    }
+                    .padding(.bottom, 4)
+                }
+
                 Toggle("Web of Trust", isOn: Binding(
                     get: { prefs.wotFilterEnabled },
                     set: { handleWotToggle(on: $0) }

@@ -37,6 +37,15 @@ nonisolated struct NostrEvent {
         kind == 1 && !hasThreadingETag
     }
 
+    /// Default threshold for the hellthread filter. Events with at least this
+    /// many distinct p-tags are considered hellthreads.
+    static let hellthreadThreshold = 25
+
+    func isHellthread(threshold: Int = NostrEvent.hellthreadThreshold) -> Bool {
+        let uniquePubkeys = Set(tags.compactMap { $0.count >= 2 && $0[0] == "p" ? $0[1] : nil })
+        return uniquePubkeys.count >= threshold
+    }
+
     init?(json: [String: Any]) {
         guard let id = json["id"] as? String,
               let pubkey = json["pubkey"] as? String,
