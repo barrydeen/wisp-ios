@@ -125,7 +125,7 @@ nonisolated enum Nip17 {
         // 2. Build seal: encrypt rumor JSON with sender→recipient conversation key, sign with sender.
         let sealConvKey = try Nip44.getConversationKey(privkey32: senderPrivkey32, peerXonlyPubkey32: hexToData(recipientPubkey))
         let sealContent = try Nip44.encrypt(plaintext: rumorJSON(rumor), conversationKey: sealConvKey)
-        let sealCreatedAt = randomizeTimestamp(Int(Date().timeIntervalSince1970))
+        let sealCreatedAt = randomizeTimestamp(NostrClock.now())
         let seal = try NostrEvent.sign(privkey32: senderPrivkey32,
                                        pubkey: senderPubkey,
                                        kind: Kind.seal,
@@ -139,7 +139,7 @@ nonisolated enum Nip17 {
         let ephemeralPubHex = Hex.encode(ephemeralPub)
         let wrapConvKey = try Nip44.getConversationKey(privkey32: ephemeralPriv, peerXonlyPubkey32: hexToData(recipientPubkey))
         let wrapContent = try Nip44.encrypt(plaintext: seal.toJSON(), conversationKey: wrapConvKey)
-        let wrapCreatedAt = randomizeTimestamp(Int(Date().timeIntervalSince1970))
+        let wrapCreatedAt = randomizeTimestamp(NostrClock.now())
         var wrapTags: [[String]] = [["p", recipientPubkey]]
         var wrapFinalCreatedAt = wrapCreatedAt
         if let bits = powTargetBits, bits > 0 {
@@ -195,7 +195,7 @@ nonisolated enum Nip17 {
             peerPubkey: recipientPubkey,
             plaintext: rumorJSON(rumor)
         )
-        let sealCreatedAt = randomizeTimestamp(Int(Date().timeIntervalSince1970))
+        let sealCreatedAt = randomizeTimestamp(NostrClock.now())
         let seal = try await Signer.sign(
             keypair: keypair,
             kind: Kind.seal,
@@ -211,7 +211,7 @@ nonisolated enum Nip17 {
         let ephemeralPubHex = Hex.encode(ephemeralPub)
         let wrapConvKey = try Nip44.getConversationKey(privkey32: ephemeralPriv, peerXonlyPubkey32: hexToData(recipientPubkey))
         let wrapContent = try Nip44.encrypt(plaintext: seal.toJSON(), conversationKey: wrapConvKey)
-        let wrapCreatedAt = randomizeTimestamp(Int(Date().timeIntervalSince1970))
+        let wrapCreatedAt = randomizeTimestamp(NostrClock.now())
         var wrapTags: [[String]] = [["p", recipientPubkey]]
         var wrapFinalCreatedAt = wrapCreatedAt
         if let bits = powTargetBits, bits > 0 {
@@ -260,7 +260,7 @@ nonisolated enum Nip17 {
             peerPubkey: recipientPubkey,
             plaintext: rumorJSON(rumor)
         )
-        let sealCreatedAt = randomizeTimestamp(Int(Date().timeIntervalSince1970))
+        let sealCreatedAt = randomizeTimestamp(NostrClock.now())
         let seal = try await Signer.sign(
             keypair: keypair,
             kind: Kind.seal,
@@ -275,7 +275,7 @@ nonisolated enum Nip17 {
         let ephemeralPubHex = Hex.encode(ephemeralPub)
         let wrapConvKey = try Nip44.getConversationKey(privkey32: ephemeralPriv, peerXonlyPubkey32: hexToData(recipientPubkey))
         let wrapContent = try Nip44.encrypt(plaintext: seal.toJSON(), conversationKey: wrapConvKey)
-        let wrapCreatedAt = randomizeTimestamp(Int(Date().timeIntervalSince1970))
+        let wrapCreatedAt = randomizeTimestamp(NostrClock.now())
         var wrapTags: [[String]] = [["p", recipientPubkey]]
         var wrapFinalCreatedAt = wrapCreatedAt
         if let bits = powTargetBits, bits > 0 {

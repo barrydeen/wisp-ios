@@ -47,6 +47,16 @@ struct RichContentView: View {
     /// rather than the full screen. Used by `MediaGridView` to opt out of
     /// its feed-only edge-bleed layout.
     var nested: Bool = false
+    /// When true, interactive actions inside rich content are suppressed.
+    /// Used by the composer preview so e.g. a lightning invoice card's Pay
+    /// button is disabled — the note hasn't been posted yet.
+    var isPreview: Bool = false
+    /// Forwarded to `MediaGridView.nestedHorizontalInset` — see that
+    /// property's doc. Only meaningful when `nested` is true; callers whose
+    /// chrome differs from `QuotedNoteView`'s default (e.g. `ComposerPreviewCard`)
+    /// must override this or the gallery's reserved height undershoots its
+    /// real height and truncates the host's scrollable region.
+    var nestedHorizontalInset: CGFloat = 56
     /// When true, each inline-text run publishes its rendered height up the
     /// `RichTextContentHeightKey` preference so the host card can base its
     /// "Show more" decision on text length alone. Off by default so nested
@@ -99,10 +109,17 @@ struct RichContentView: View {
 
     private func memoizedParse() -> [ContentSegment] {
         let generation = emojiRepo.generation
-        let key = "\(generation)|\(content)" as NSString
+        // `linksAreInline` is part of the key because the same content
+        // produces different segments when the host folds `.link` into inline
+        // — without it, a feed-card render would poison the cache entry
+        // consumed by a bio (or vice versa).
+        let key = "\(generation)|\(showLinkPreviews ? 1 : 0)|\(content)" as NSString
         if let box = Self.parseCache.object(forKey: key) { return box.segments }
         let signpostState = Signposts.render.beginInterval("parseCacheMiss")
         defer { Signposts.render.endInterval("parseCacheMiss", signpostState) }
+        #if DEBUG
+        PerfTrace.mark("content.parse")
+        #endif
         // Merge the user's resolved emoji packs under the note's own
         // `["emoji", shortcode, url]` tags — the inline tags carry the URL
         // the author/reactor signed for, so they win on shortcode collisions.
@@ -113,7 +130,12 @@ struct RichContentView: View {
         let segments = ContentParser.parse(
             content: content,
             tags: tags,
-            emojiMap: merged
+            emojiMap: merged,
+            // When the host hides link preview cards, `.link` segments get
+            // folded back into inline text below — tell the parser so its
+            // pass-4 blank-line trim treats them as inline neighbors and
+            // doesn't eat the separator newlines between adjacent URLs.
+            linksAreInline: !showLinkPreviews
         )
         Self.parseCache.setObject(SegmentBox(segments), forKey: key)
         return segments
@@ -188,7 +210,21 @@ struct RichContentView: View {
         /// produced when the user's `mediaLayoutStyle` is `.grid`; otherwise
         /// each media item stays a separate `.block` and stacks vertically.
         case mediaGroup([ContentSegment])
+        /// Terminal tile for a stacked media run that exceeded
+        /// `maxStackedMedia`. `remaining` is how many items were folded away;
+        /// `url` is the first folded item so a tap can open the post-wide
+        /// pager at the right page. Caps the non-grid path so a note with
+        /// dozens of images can't instantiate dozens of `InlineImageView`s
+        /// (each eagerly decoding a full-resolution image) in one non-lazy
+        /// VStack — the stack-layout half of the "client killer" note.
+        case mediaOverflow(remaining: Int, url: String)
     }
+
+    /// Maximum number of media items a non-grid (stacked) run renders inline
+    /// before the rest collapse into a single "＋N more" tile. Grid runs are
+    /// unaffected — their `MediaGridView` carousel is a `LazyHStack` that only
+    /// materialises visible tiles.
+    private static let maxStackedMedia = 8
 
     private func groupSegments(_ segments: [ContentSegment], gridLayout: Bool) -> [SegmentGroup] {
         var groups: [SegmentGroup] = []
@@ -218,6 +254,16 @@ struct RichContentView: View {
                 }
                 if gridLayout && run.count >= 2 {
                     groups.append(.mediaGroup(run))
+                } else if run.count > Self.maxStackedMedia {
+                    // Stacked run too long to render every item inline. Show
+                    // the first `maxStackedMedia` as normal blocks, then fold
+                    // the remainder into one "＋N more" tile that opens the
+                    // pager at the first hidden item.
+                    for m in run.prefix(Self.maxStackedMedia) { groups.append(.block(m)) }
+                    let hidden = run.count - Self.maxStackedMedia
+                    if let firstHiddenUrl = mediaItem(from: run[Self.maxStackedMedia])?.url {
+                        groups.append(.mediaOverflow(remaining: hidden, url: firstHiddenUrl))
+                    }
                 } else {
                     for m in run { groups.append(.block(m)) }
                 }
@@ -292,6 +338,7 @@ struct RichContentView: View {
             MediaGridView(
                 items: runItems,
                 nested: nested,
+                nestedHorizontalInset: nestedHorizontalInset,
                 onTileTap: { localIdx in
                     // The carousel's index is local to this run — translate
                     // to the post-wide index before opening the pager.
@@ -299,7 +346,43 @@ struct RichContentView: View {
                     openPager(for: runItems[localIdx].url, in: allMediaItems)
                 }
             )
+        case .mediaOverflow(let remaining, let url):
+            mediaOverflowTile(remaining: remaining, url: url, allMediaItems: allMediaItems)
         }
+    }
+
+    /// Tappable "＋N more" tile that stands in for the tail of an
+    /// over-long stacked media run. Opens the post-wide pager at the first
+    /// hidden item so the user can still swipe through everything.
+    private func mediaOverflowTile(
+        remaining: Int,
+        url: String,
+        allMediaItems: [MediaGridView.MediaItem]
+    ) -> some View {
+        Button {
+            openPager(for: url, in: allMediaItems)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "photo.stack")
+                    .font(.title3)
+                Text("+\(remaining) more")
+                    .font(.callout.weight(.semibold))
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .foregroundStyle(.primary)
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.wispSurfaceVariant.opacity(0.3))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(Color.wispSurfaceVariant, lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
     }
 
     private func mediaItem(from segment: ContentSegment) -> MediaGridView.MediaItem? {
@@ -335,18 +418,48 @@ struct RichContentView: View {
                 fallbackLink(url)
             }
         case .nostrNote(let eventId, let relayHints):
+            // Forward this view's own inset rather than QuotedNoteView's
+            // narrower feed-tuned default (56) — an inline `nostr:nevent…`
+            // quote embedded in a wider host (e.g. NotificationRowView's
+            // caption indent) otherwise undersizes its own gallery's
+            // reserved height, producing a visual overlap with whatever
+            // renders below it.
             QuotedNoteView(
                 eventId: eventId,
                 relayHints: relayHints,
                 profiles: profiles,
                 onProfileTap: onProfileTap,
                 onNoteTap: onNoteTap,
+                nestedHorizontalInset: nestedHorizontalInset,
                 onHashtagTap: onHashtagTap
             )
-        case .nostrAddressable(let dTag, _, let author, let kind):
-            addressablePlaceholder(dTag: dTag, author: author, kind: kind)
+        case .nostrAddressable(let dTag, let relays, let author, let kind):
+            // Long-form articles get a full preview card; other addressable
+            // kinds keep the generic placeholder (matches Android, which only
+            // upgrades kinds it has dedicated cards for).
+            if kind == 30023, let author {
+                ArticleCardView(
+                    dTag: dTag,
+                    author: author,
+                    relayHints: relays,
+                    profiles: profiles,
+                    onProfileTap: onProfileTap
+                )
+            } else if kind == MusicTrackCache.kind, let author {
+                MusicTrackCardView(
+                    dTag: dTag,
+                    author: author,
+                    relayHints: relays,
+                    profiles: profiles,
+                    onProfileTap: onProfileTap
+                )
+            } else {
+                addressablePlaceholder(dTag: dTag, author: author, kind: kind)
+            }
         case .lightningInvoice(let invoice, let amount, let summary):
-            LightningInvoiceView(invoice: invoice, amountSats: amount, summary: summary)
+            LightningInvoiceView(invoice: invoice, amountSats: amount, summary: summary, isPreview: isPreview)
+        case .lightningAddress(let address):
+            LightningAddressButton(address: address)
         default:
             EmptyView()
         }
@@ -401,6 +514,7 @@ struct RichContentView: View {
     private func addressableTitle(kind: Int?) -> String {
         switch kind {
         case 30023: return "Long-form article"
+        case 36787: return "Music track"
         case 30311: return "Live stream"
         case 30030: return "Emoji pack"
         case 34550: return "Community"

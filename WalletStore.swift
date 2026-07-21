@@ -458,9 +458,9 @@ final class WalletStore {
         }
     }
 
-    func makeInvoice(amountSats: Int64, description: String) async -> Result<String, WalletError> {
+    func makeInvoice(amountSats: Int64, description: String, expirySecs: Int64 = 3600) async -> Result<String, WalletError> {
         guard let wallet else { return .failure(.notConnected) }
-        return await wallet.makeInvoice(amountMsats: amountSats * 1000, description: description)
+        return await wallet.makeInvoice(amountMsats: amountSats * 1000, description: description, expirySecs: expirySecs)
     }
 
     private(set) var hasMoreTransactions: Bool = false
@@ -476,10 +476,11 @@ final class WalletStore {
         let pageSize = 50
         switch await wallet.listTransactions(limit: pageSize, offset: 0) {
         case .success(let txs):
-            transactions = txs
+            let deduped = Self.dedupTransactions(txs)
+            transactions = deduped
             hasMoreTransactions = txs.count == pageSize
             lastTransactionError = nil
-            WalletCache.saveTransactions(txs, for: keypair.pubkey)
+            WalletCache.saveTransactions(deduped, for: keypair.pubkey)
         case .failure(let err):
             lastTransactionError = err.errorDescription ?? "Failed to fetch transactions"
         }
@@ -490,8 +491,32 @@ final class WalletStore {
         let pageSize = 50
         let offset = transactions.count
         if case .success(let more) = await wallet.listTransactions(limit: pageSize, offset: offset) {
-            transactions.append(contentsOf: more)
+            transactions = Self.dedupTransactions(transactions + more)
             hasMoreTransactions = more.count == pageSize
+        }
+    }
+
+    /// Strips backend-returned duplicates by `(paymentHash, type)` and sorts
+    /// newest-first. A genuine self-payment surfaces as (hash, outgoing) +
+    /// (hash, incoming) — the type suffix keeps both rows. The same suffix
+    /// also disambiguates SwiftUI's `ForEach` row identity (see
+    /// `WalletTransaction.id`).
+    ///
+    /// Sorting here is the only guarantee of newest-first order: NWC and
+    /// Spark return lists in different directions, so without this the list
+    /// reads bottom-up on one backend.
+    static func dedupTransactions(_ txs: [WalletTransaction]) -> [WalletTransaction] {
+        var seen = Set<String>()
+        let deduped = txs.filter { seen.insert("\($0.paymentHash)|\($0.type.rawValue)").inserted }
+        return deduped.sorted { a, b in
+            let ta = a.settledAt ?? a.createdAt
+            let tb = b.settledAt ?? b.createdAt
+            if ta != tb { return ta > tb }
+            // Tiebreak: NWC stamps the (incoming, outgoing) pair of a
+            // self-payment with identical timestamps. The receive is the
+            // *conclusion* of the send, so it reads more naturally on top.
+            if a.type != b.type { return a.type == .incoming }
+            return false
         }
     }
 

@@ -50,7 +50,7 @@ nonisolated enum Nip25 {
         emoji: String,
         customEmoji: (shortcode: String, url: String)? = nil,
         relayHint: String? = nil,
-        createdAt: Int = Int(Date().timeIntervalSince1970)
+        createdAt: Int = NostrClock.now()
     ) throws -> NostrEvent {
         let tags = reactionTags(targetEvent: targetEvent, customEmoji: customEmoji, relayHint: relayHint)
         return try NostrEvent.sign(

@@ -12,6 +12,7 @@ struct SocialGraphView: View {
     @State private var selectedNode: GraphNode?
     @State private var selectedNodeFollowers: [String] = []
     @State private var profileFetchTask: Task<Void, Never>?
+    @State private var detailFetchTask: Task<Void, Never>?
     @State private var navigateToPubkey: PubkeyRoute?
 
     init(keypair: Keypair) {
@@ -71,6 +72,7 @@ struct SocialGraphView: View {
         }
         .onDisappear {
             profileFetchTask?.cancel()
+            detailFetchTask?.cancel()
         }
     }
 
@@ -354,53 +356,58 @@ struct SocialGraphView: View {
         }()
         selectedNodeFollowers = followers
         selectedNode = node
-        // Lazy-fetch profiles for any followers shown in the strip that we don't yet have.
-        let needed = followers.prefix(30).filter { profiles[$0] == nil }
+        // Lazy-fetch profiles for any followers shown in the strip that we don't yet
+        // have. Uses its own task so tapping a node doesn't cancel the in-flight
+        // top-node hydration kicked off by `refreshProfiles`.
+        let needed = Array(followers.prefix(30).filter { profiles[$0] == nil })
         if !needed.isEmpty {
-            fetchProfiles(pubkeys: Array(needed))
+            detailFetchTask?.cancel()
+            detailFetchTask = Task { await hydrate(needed) }
         }
     }
 
-    /// Batch-fetch profiles for nodes shown on the graph (and the active user).
+    /// Batch-fetch profiles for exactly the nodes the canvas + ranked list render.
+    ///
+    /// This must request the *same sorted top-N* set that `buildGraphInputs` draws.
+    /// The previous implementation fetched `cache.…FollowerCount.keys.prefix(N)`, but
+    /// `.keys` on a `[String: Int]` enumerates in hash order, so it pulled an arbitrary
+    /// subset of the qualified set that barely overlapped the sorted nodes actually on
+    /// screen — on a large graph ~95% of rendered avatars/names stayed blank.
     private func refreshProfiles(for cache: SocialGraphCache) {
-        // Pre-populate from local cache.
-        var topNodes = Set([keypair.pubkey])
-        topNodes.formUnion(cache.firstDegreeFollowerCount.keys.prefix(SocialGraphRepository.Constants.topFirstDegreeForViz))
-        topNodes.formUnion(cache.secondDegreeFollowerCount.keys.prefix(SocialGraphRepository.Constants.topSecondDegreeForViz + 30))
-        let repo = ProfileRepository.shared
-        var collected: [String: ProfileData] = [:]
-        for pk in topNodes {
-            if let p = repo.get(pk) { collected[pk] = p }
-        }
-        profiles = collected
-        let missing = topNodes.filter { collected[$0] == nil }
-        if !missing.isEmpty {
-            fetchProfiles(pubkeys: Array(missing))
-        }
+        var wanted = Set([keypair.pubkey])
+        wanted.formUnion(renderedPubkeys(for: cache))
+        // Paint anything already cached immediately; hydrate the rest off-screen.
+        profiles = ProfileRepository.shared.getAll(Array(wanted))
+        let missing = Array(wanted.filter { profiles[$0] == nil })
+        guard !missing.isEmpty else { return }
+        profileFetchTask?.cancel()
+        profileFetchTask = Task { await hydrate(missing) }
     }
 
-    private func fetchProfiles(pubkeys: [String]) {
-        profileFetchTask?.cancel()
-        profileFetchTask = Task {
-            let indexers = RelayDefaults.indexers
-            for batch in pubkeys.chunked(into: 150) {
-                let events = await RelayPool.query(
-                    relays: indexers,
-                    filter: NostrFilter(kinds: [0], authors: batch),
-                    timeout: 8
-                )
-                var bestByAuthor: [String: NostrEvent] = [:]
-                for event in events where event.kind == 0 {
-                    if let existing = bestByAuthor[event.pubkey], event.createdAt <= existing.createdAt { continue }
-                    bestByAuthor[event.pubkey] = event
-                }
-                for (_, event) in bestByAuthor {
-                    if let updated = ProfileRepository.shared.updateFromEvent(event) {
-                        profiles[event.pubkey] = updated
-                    }
-                }
-            }
-        }
+    /// Pubkeys for the nodes `buildGraphInputs` will draw: top first-degree by
+    /// mutual-follow count and top second-degree by within-network follower count.
+    /// Selected by descending count (not hash order) and kept in lockstep with
+    /// `buildGraphInputs` through the shared viz `Constants`.
+    private func renderedPubkeys(for cache: SocialGraphCache) -> Set<String> {
+        let firstTop = cache.firstDegreeFollowerCount
+            .sorted { $0.value > $1.value }
+            .prefix(SocialGraphRepository.Constants.topFirstDegreeForViz)
+            .map(\.key)
+        let secondTop = cache.secondDegreeFollowerCount
+            .sorted { $0.value > $1.value }
+            .prefix(SocialGraphRepository.Constants.topSecondDegreeForViz)
+            .map(\.key)
+        return Set(firstTop).union(secondTop)
+    }
+
+    /// Resolve + merge kind-0 profiles via `ProfileRepository.ensure`, which batches,
+    /// coalesces duplicate in-flight requests, queries indexers with
+    /// `waitForAllRelays: true` (so a profile that only lives on a slow relay isn't
+    /// dropped by the fast-path EOSE cancel), persists, and prefetches avatars.
+    private func hydrate(_ pubkeys: [String]) async {
+        guard !pubkeys.isEmpty else { return }
+        let resolved = await ProfileRepository.shared.ensure(pubkeys)
+        for (pk, profile) in resolved { profiles[pk] = profile }
     }
 
     private func formatCount(_ n: Int) -> String {

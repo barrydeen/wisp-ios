@@ -1,6 +1,4 @@
 import Foundation
-import LinkPresentation
-import UIKit
 
 struct OpenGraphData: Sendable {
     let title: String?
@@ -101,9 +99,15 @@ actor LinkPreviewService {
                     return synthesizeYoutubeChannelPreview(urlString)
                 }
             }
-            // Use first 256KB. YouTube + similar SPA-ish pages bury the OG
-            // meta tags well past the 64KB mark we used to allow.
-            let limited = data.prefix(256 * 1024)
+            // Parse up to the first 1MB. Google SPA pages (Chrome Web Store,
+            // YouTube) push the `<head>` OG meta tags far down behind inline
+            // bootstrap scripts — the Chrome Web Store buries og:title/image
+            // past the 470KB mark, so the old 256KB cap truncated them and the
+            // card fell back to a bare link. `URLSession.data` already fetched
+            // the whole body, so raising this only costs decode + regex time,
+            // not bandwidth; the 1MB ceiling bounds the regex work on the rare
+            // multi-megabyte page.
+            let limited = data.prefix(1024 * 1024)
             guard let html = String(data: Data(limited), encoding: .utf8) ??
                              String(data: Data(limited), encoding: .isoLatin1) else {
                 return synthesizeYoutubeChannelPreview(urlString)
@@ -112,88 +116,16 @@ actor LinkPreviewService {
                 return parsed
             }
             // HTML parser came up empty (page served a JS shell, consent
-            // wall, or stripped tags). Hand off to Apple's WebKit-backed
-            // LinkPresentation, which competing clients use for tricky
-            // sites like YouTube channel pages.
-            if let lp = await fetchViaLinkPresentation(urlString) { return lp }
-            // Last resort: synthesize a minimal card from the URL itself
-            // for YouTube channels.
+            // wall, or stripped tags). We deliberately do NOT fall back to
+            // Apple's WebKit-backed `LPMetadataProvider` here: it spins up a
+            // WebContent + GPU process and does heavy main-thread work, which
+            // froze the feed for 5–10s the first time a hard-to-parse link
+            // (e.g. one with no OG tags) scrolled into view. Synthesize a
+            // minimal card for YouTube channels; otherwise the caller renders
+            // a plain tappable link.
             return synthesizeYoutubeChannelPreview(urlString)
         } catch {
-            if let lp = await fetchViaLinkPresentation(urlString) { return lp }
             return synthesizeYoutubeChannelPreview(urlString)
-        }
-    }
-
-    /// Use Apple's `LPMetadataProvider` (WebKit-backed) to fetch link
-    /// metadata. Slower than our regex-on-HTML path but handles consent
-    /// walls, JS-rendered OG tags, and other cases that defeat the
-    /// generic fetch — notably YouTube channel pages. The provided
-    /// image is loaded into the on-device caches directory and the
-    /// returned `image` field points at the resulting `file://` URL so
-    /// downstream `AsyncImage` can render it without a second fetch.
-    private func fetchViaLinkPresentation(_ urlString: String) async -> OpenGraphData? {
-        guard let url = URL(string: urlString) else { return nil }
-        let provider = LPMetadataProvider()
-        provider.timeout = 8
-
-        let metadata: LPLinkMetadata
-        do {
-            metadata = try await provider.startFetchingMetadata(for: url)
-        } catch {
-            return nil
-        }
-
-        let title = metadata.title?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let siteName = metadata.url?.host?.replacingOccurrences(of: "www.", with: "")
-
-        var imageUrl: String?
-        if let imageProvider = metadata.imageProvider ?? metadata.iconProvider {
-            imageUrl = await loadProvidedImageToCache(imageProvider, sourceUrl: urlString)
-        }
-
-        let hasTitle = (title?.isEmpty == false)
-        guard hasTitle || imageUrl != nil else { return nil }
-        return OpenGraphData(
-            title: title,
-            description: nil,
-            image: imageUrl,
-            siteName: siteName
-        )
-    }
-
-    /// Pull a UIImage out of the `NSItemProvider`, encode it as JPEG, and
-    /// write it to a stable path under the caches directory. The returned
-    /// `file://` URL string can be handed to AsyncImage / RetryingAsyncImage
-    /// like any other URL. Stable filename per source URL means re-fetches
-    /// reuse the same cached file.
-    private nonisolated func loadProvidedImageToCache(
-        _ provider: NSItemProvider,
-        sourceUrl: String
-    ) async -> String? {
-        let image: UIImage? = await withCheckedContinuation { continuation in
-            provider.loadObject(ofClass: UIImage.self) { object, _ in
-                continuation.resume(returning: object as? UIImage)
-            }
-        }
-        guard let image, let data = image.jpegData(compressionQuality: 0.85) else {
-            return nil
-        }
-        let safeKey = sourceUrl
-            .replacingOccurrences(of: "://", with: "_")
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "?", with: "_")
-            .replacingOccurrences(of: "&", with: "_")
-        let filename = "lp-\(safeKey.suffix(120)).jpg"
-        guard let cachesDir = FileManager.default.urls(
-            for: .cachesDirectory, in: .userDomainMask
-        ).first else { return nil }
-        let target = cachesDir.appendingPathComponent(filename)
-        do {
-            try data.write(to: target, options: .atomic)
-            return target.absoluteString
-        } catch {
-            return nil
         }
     }
 

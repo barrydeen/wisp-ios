@@ -200,10 +200,53 @@
         }
       ],
       "relations": []
+    },
+    {
+      "id": "4:5566778899001122334",
+      "lastPropertyId": "6:6366666666666666666",
+      "name": "DmMessageEntity",
+      "properties": [
+        {
+          "id": "1:1311111111111111111",
+          "name": "id",
+          "type": 6,
+          "flags": 1
+        },
+        {
+          "id": "2:2322222222222222222",
+          "name": "ownerPlusGiftWrap",
+          "indexId": "9:7777888899990000111",
+          "type": 9,
+          "flags": 2088
+        },
+        {
+          "id": "3:3333333333333333333",
+          "name": "ownerPubkey",
+          "indexId": "10:8888999900001111222",
+          "type": 9,
+          "flags": 2056
+        },
+        {
+          "id": "4:4344444444444444444",
+          "name": "conversationKey",
+          "type": 9
+        },
+        {
+          "id": "5:5355555555555555555",
+          "name": "createdAt",
+          "type": 6
+        },
+        {
+          "id": "6:6366666666666666666",
+          "name": "payloadJson",
+          "type": 9
+        }
+      ],
+      "relations": []
     }
   ],
-  "lastEntityId": "3:4122230795942758656",
-  "lastIndexId": "8:1534493641155105792",
+  "lastEntityId": "4:5566778899001122334",
+  "lastIndexId": "10:8888999900001111222",
   "lastRelationId": "0:0",
   "lastSequenceId": "0:0",
   "modelVersion": 5,

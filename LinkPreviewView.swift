@@ -1,5 +1,7 @@
 import SwiftUI
 import UIKit
+import QuartzCore
+import os
 
 struct LinkPreviewView: View {
     let url: String
@@ -18,12 +20,21 @@ struct LinkPreviewView: View {
             }
         }
         .task(id: url) {
+            #if DEBUG
+            PerfTrace.mark("linkPreview.task", url: url)
+            #endif
             if let cached = await LinkPreviewService.shared.cached(url) {
                 data = cached
                 loaded = true
                 return
             }
+            #if DEBUG
+            let t0 = CACurrentMediaTime()
+            #endif
             data = await LinkPreviewService.shared.fetch(url)
+            #if DEBUG
+            mediaPerfLog.log("linkPreview.fetch \(Int((CACurrentMediaTime() - t0) * 1000), privacy: .public)ms hit=\(data != nil, privacy: .public) url=\(url, privacy: .public)")
+            #endif
             loaded = true
         }
     }

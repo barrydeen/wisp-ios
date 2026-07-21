@@ -32,24 +32,21 @@ struct HashtagFeedView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            Divider().overlay(Color.wispSurfaceVariant.opacity(0.5))
-            content
-        }
-        .background(Color.wispBackground)
-        .toolbar(.hidden, for: .navigationBar)
-        .swipeBackFromLeftEdge()
-        .task {
-            await viewModel.start()
-        }
-        .sheet(isPresented: $showAddToSet) {
-            if case .single(let tag) = viewModel.source {
-                NavigationStack {
-                    HashtagSetPickerSheet(hashtag: tag, keypair: keypair)
+        content
+            .background(Color.wispBackground)
+            .wispTopHeader { header }
+            .toolbar(.hidden, for: .navigationBar)
+            .swipeBackFromLeftEdge()
+            .task {
+                await viewModel.start()
+            }
+            .sheet(isPresented: $showAddToSet) {
+                if case .single(let tag) = viewModel.source {
+                    NavigationStack {
+                        HashtagSetPickerSheet(hashtag: tag, keypair: keypair)
+                    }
                 }
             }
-        }
     }
 
     // MARK: - Header
@@ -131,6 +128,14 @@ struct HashtagFeedView: View {
                         .buttonStyle(.plain)
                         .onAppear {
                             engagementRepo.markVisible(event: event)
+                            MediaLookaheadPrefetcher.shared.noteAppeared(
+                                eventId: event.id,
+                                in: viewModel.events,
+                                profiles: viewModel.profiles
+                            )
+                        }
+                        .onDisappear {
+                            engagementRepo.markInvisible(event: event)
                         }
                         Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
                     }

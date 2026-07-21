@@ -7,8 +7,6 @@ struct GroupRoomView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
-            Divider().overlay(Color.wispSurfaceVariant.opacity(0.5))
             messageList
 
             if !viewModel.keypair.isWatchOnly {
@@ -27,6 +25,7 @@ struct GroupRoomView: View {
             }
         }
         .background(Color.wispBackground)
+        .wispTopHeader { header }
         .toolbar(.hidden, for: .navigationBar)
         .navigationDestination(isPresented: $showDetail) {
             GroupDetailView(viewModel: viewModel)
@@ -75,22 +74,13 @@ struct GroupRoomView: View {
                     }
                 }
                 .padding(.vertical, 8)
-                // First-time anchor: when the room opens with messages already
-                // buffered (cache seed) the count change below never fires, so
-                // we'd land at the top. Jump to the latest unanimated on first
-                // paint, then again whenever the head of the list changes
-                // (covers the empty → non-empty transition for an async seed).
-                .onAppear {
-                    if let last = viewModel.messages.last {
-                        proxy.scrollTo(last.id, anchor: .bottom)
-                    }
-                }
-                .onChange(of: viewModel.messages.first?.id) { _, _ in
-                    if let last = viewModel.messages.last {
-                        proxy.scrollTo(last.id, anchor: .bottom)
-                    }
-                }
             }
+            // Start pinned to the newest message and stay there as content
+            // grows. Unlike a post-appear proxy.scrollTo (a no-op while the
+            // LazyVStack rows are still unlaid), this anchors during layout, so
+            // it works whether the room opens from cache (already joined) or
+            // seeds async — both land at the bottom instead of the top.
+            .defaultScrollAnchor(.bottom)
             .onChange(of: viewModel.messages.count) { _, _ in
                 if let last = viewModel.messages.last {
                     withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
@@ -115,21 +105,27 @@ struct GroupRoomView: View {
     }
 
     private var composer: some View {
-        HStack(spacing: 8) {
-            TextField("Message", text: $viewModel.messageText, axis: .vertical)
-                .textFieldStyle(.plain)
-                .padding(10)
-                .background(Color.wispSurfaceVariant, in: RoundedRectangle(cornerRadius: 18))
-                .lineLimit(1...5)
-            Button {
-                Task { await viewModel.sendMessage() }
-            } label: {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.system(size: 30))
-                    .foregroundStyle(viewModel.messageText.trimmingCharacters(in: .whitespaces).isEmpty
-                                     ? Color.gray : Color.wispPrimary)
+        VStack(spacing: 6) {
+            if !viewModel.emojiCandidates.isEmpty {
+                EmojiSuggestionBar(candidates: viewModel.emojiCandidates) { emoji in
+                    viewModel.selectEmoji(emoji)
+                }
             }
-            .disabled(viewModel.messageText.trimmingCharacters(in: .whitespaces).isEmpty || viewModel.isSending)
+            HStack(spacing: 8) {
+                EmojiComposerTextView(viewModel: viewModel, placeholder: "Message")
+                    .padding(.horizontal, 8)
+                    .frame(maxWidth: .infinity)
+                    .background(Color.wispSurfaceVariant, in: RoundedRectangle(cornerRadius: 18))
+                Button {
+                    Task { await viewModel.sendMessage() }
+                } label: {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.system(size: 30))
+                        .foregroundStyle(viewModel.messageText.trimmingCharacters(in: .whitespaces).isEmpty
+                                         ? Color.gray : Color.wispPrimary)
+                }
+                .disabled(viewModel.messageText.trimmingCharacters(in: .whitespaces).isEmpty || viewModel.isSending)
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -173,6 +169,13 @@ private struct GroupMessageBubble: View {
                 }
 
                 bubbleBody
+                    // Force the text to take all the vertical space it needs and
+                    // wrap, instead of SwiftUI intermittently laying it out as a
+                    // single tail-truncated ("…") line next to the row's Spacer.
+                    // The maxWidth:.infinity on the row gives it width; this gives
+                    // it height. Both are needed — width alone fixed most but not
+                    // all messages.
+                    .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                     .background(isMine ? Color.wispPrimary : Color.wispSurfaceVariant,
@@ -193,6 +196,10 @@ private struct GroupMessageBubble: View {
             if !isMine { Spacer(minLength: 40) }
         }
         .padding(.horizontal, 12)
+        // Give the row a definite full width so the bubble's text view receives
+        // a finite width proposal and wraps instead of clipping to one line —
+        // mirrors DmMessageBubbleView. Without this, long group messages truncate.
+        .frame(maxWidth: .infinity, alignment: isMine ? .trailing : .leading)
         .task(id: message.senderPubkey) {
             profile = ProfileRepository.shared.get(message.senderPubkey)
         }

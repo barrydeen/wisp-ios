@@ -15,9 +15,12 @@ enum NotificationKind: String, Hashable {
 struct FlatNotificationItem: Identifiable, Hashable {
     let id: String
     let kind: NotificationKind
-    let actorPubkey: String
+    /// Mutable so a consolidated poll row can re-point at its most-recent
+    /// voter as new votes fold in. Required (no default) in the memberwise init.
+    var actorPubkey: String
     let referencedEventId: String
-    let timestamp: Int
+    /// Mutable so a consolidated poll row floats to its newest vote's time.
+    var timestamp: Int
     var emoji: String? = nil
     var emojiUrl: String? = nil
     var zapSats: Int64 = 0
@@ -34,8 +37,21 @@ struct FlatNotificationItem: Identifiable, Hashable {
     var dmConversationKey: String? = nil
     var dmUnread: Int = 0
     var relayHints: [String] = []
+    /// For `.reply` rows: whether `referencedEventId` (the immediate parent the
+    /// actor replied to) is one of my own notes. Drives the caption — "replying
+    /// to your note" vs "replying in your thread" when the parent is someone
+    /// else's reply nested under my note. Defaults `true` (direct-reply wording).
+    var replyTargetIsMine: Bool = true
     /// Option ids chosen by a kind-1018 poll voter (for `.pollVote` items).
+    /// On a consolidated poll row this holds the most-recent voter's choice,
+    /// used for the collapsed-row hint.
     var voteOptionIds: [String] = []
+    /// Consolidated poll-vote state: voterPubkey -> their latest vote.
+    /// Latest-wins by timestamp so a re-vote updates rather than stacks.
+    /// Empty on every non-poll item. A `.pollVote` row aggregates every
+    /// voter on one poll here instead of spawning a row per vote — that keeps
+    /// a busy poll from evicting itself out of the capped flat buffer.
+    var pollVotes: [String: PollVoteRecord] = [:]
     /// Index of the option zapped on a kind-6969 zap poll (annotates `.zap` items
     /// whose target is one of our zap polls).
     var zapPollOptionIndex: Int? = nil
@@ -51,6 +67,27 @@ struct FlatNotificationItem: Identifiable, Hashable {
     var totalZapSats: Int64 {
         mergedZaps.reduce(zapSats) { $0 + $1.zapSats }
     }
+
+    /// Distinct voters folded into a consolidated poll row.
+    var pollVoterCount: Int { pollVotes.count }
+
+    /// optionId -> number of voters currently picking it (consolidated rows).
+    /// Reflects latest-wins state, so a voter who changed their pick only
+    /// counts toward their current choice.
+    var pollVoteCounts: [String: Int] {
+        var counts: [String: Int] = [:]
+        for record in pollVotes.values {
+            for id in record.optionIds { counts[id, default: 0] += 1 }
+        }
+        return counts
+    }
+}
+
+/// One voter's latest choice on a poll, tracked inside a consolidated
+/// `.pollVote` notification row.
+struct PollVoteRecord: Hashable {
+    let timestamp: Int
+    let optionIds: [String]
 }
 
 struct NotificationSummary: Hashable {
@@ -73,8 +110,8 @@ enum NotificationFilter: String, CaseIterable, Hashable {
     case zaps
     case reposts
     case mentions
-    case votes
     case dms
+    case votes
 
     /// Map a `NotificationKind` to its filter bucket.
     /// Quote+mention collapse to .mentions; pollVote and pollEnded → .votes.

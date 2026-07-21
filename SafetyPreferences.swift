@@ -21,6 +21,14 @@ final class SafetyPreferences {
         didSet { persist() }
     }
 
+    var hellthreadFilterEnabled: Bool = false {
+        didSet { persist() }
+    }
+
+    var hellthreadThreshold: Int = NostrEvent.hellthreadThreshold {
+        didSet { persist() }
+    }
+
     var spamSafelist: Set<String> = [] {
         didSet { persist() }
     }
@@ -36,6 +44,8 @@ final class SafetyPreferences {
         let defaults = UserDefaults.standard
         spamFilterEnabled = defaults.object(forKey: spamKey(pk)) as? Bool ?? true
         wotFilterEnabled = defaults.bool(forKey: wotKey(pk))
+        hellthreadFilterEnabled = defaults.object(forKey: hellthreadKey(pk)) as? Bool ?? false
+        hellthreadThreshold = defaults.object(forKey: hellthreadThresholdKey(pk)) as? Int ?? NostrEvent.hellthreadThreshold
         spamSafelist = Set(defaults.stringArray(forKey: safelistKey(pk)) ?? [])
     }
 
@@ -45,6 +55,8 @@ final class SafetyPreferences {
         activePubkey = nil
         spamFilterEnabled = true
         wotFilterEnabled = false
+        hellthreadFilterEnabled = false
+        hellthreadThreshold = NostrEvent.hellthreadThreshold
         spamSafelist = []
     }
 
@@ -62,10 +74,14 @@ final class SafetyPreferences {
 
     static func spamKey(_ pubkey: String) -> String { "spam_filter_enabled_\(pubkey)" }
     static func wotKey(_ pubkey: String) -> String { "wot_filter_enabled_\(pubkey)" }
+    static func hellthreadKey(_ pubkey: String) -> String { "hellthread_filter_enabled_\(pubkey)" }
+    static func hellthreadThresholdKey(_ pubkey: String) -> String { "hellthread_threshold_\(pubkey)" }
     static func safelistKey(_ pubkey: String) -> String { "spam_safelist_\(pubkey)" }
 
     private func spamKey(_ pubkey: String) -> String { Self.spamKey(pubkey) }
     private func wotKey(_ pubkey: String) -> String { Self.wotKey(pubkey) }
+    private func hellthreadKey(_ pubkey: String) -> String { Self.hellthreadKey(pubkey) }
+    private func hellthreadThresholdKey(_ pubkey: String) -> String { Self.hellthreadThresholdKey(pubkey) }
     private func safelistKey(_ pubkey: String) -> String { Self.safelistKey(pubkey) }
 
     private func persist() {
@@ -74,6 +90,8 @@ final class SafetyPreferences {
         let d = UserDefaults.standard
         d.set(spamFilterEnabled, forKey: spamKey(pk))
         d.set(wotFilterEnabled, forKey: wotKey(pk))
+        d.set(hellthreadFilterEnabled, forKey: hellthreadKey(pk))
+        d.set(hellthreadThreshold, forKey: hellthreadThresholdKey(pk))
         d.set(Array(spamSafelist), forKey: safelistKey(pk))
         Task { await SafetyFilter.shared.rebuildSnapshot() }
     }

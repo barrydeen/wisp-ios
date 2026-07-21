@@ -2,6 +2,16 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+	</array>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Wisp saves images and videos from posts to your Photos library.</string>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>lightning</string>
+	</array>
 	<key>GIDClientID</key>
 	<string>410412439051-tj9a37iln81vlsmqtun5nfmo1k8h4qme.apps.googleusercontent.com</string>
 	<key>CFBundleURLTypes</key>
@@ -14,6 +24,16 @@
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>com.googleusercontent.apps.410412439051-tj9a37iln81vlsmqtun5nfmo1k8h4qme</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>barrydeen.wisp.share</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>wisp</string>
 			</array>
 		</dict>
 	</array>

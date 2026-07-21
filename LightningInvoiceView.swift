@@ -1,30 +1,77 @@
 import SwiftUI
 import UIKit
+import Combine
 
 struct LightningInvoiceView: View {
     let invoice: String
     let amountSats: Int64?
     let summary: String?
+    var isPreview: Bool = false
 
     @Environment(WalletStore.self) private var walletStore: WalletStore?
     @State private var showSendSheet = false
     @State private var showWalletSetupPrompt = false
+    @State private var showQR = false
+    @State private var now = Date()
+
+    private let timer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
+    private let decoded: Bolt11.DecodedInvoice?
+
+    init(invoice: String, amountSats: Int64?, summary: String?, isPreview: Bool = false) {
+        self.invoice = invoice
+        self.amountSats = amountSats
+        self.summary = summary
+        self.isPreview = isPreview
+        self.decoded = Bolt11.decode(invoice)
+    }
+
+    private var secondsRemaining: Int64 {
+        guard let d = decoded else { return Int64.max }
+        return d.timestamp + d.expiry - Int64(now.timeIntervalSince1970)
+    }
+
+    private var isExpired: Bool { secondsRemaining <= 0 }
+
+    private var expiryText: String {
+        if secondsRemaining <= 0 { return "Expired" }
+        if secondsRemaining < 60 { return "< 1m left" }
+        if secondsRemaining < 3600 { return "\(secondsRemaining / 60)m left" }
+        let h = secondsRemaining / 3600
+        if h < 24 { return "\(h)h left" }
+        return "\(h / 24)d left"
+    }
+
+    private var expiryColor: Color {
+        if secondsRemaining <= 300 { return .red }
+        if secondsRemaining < 3600 { return .orange }
+        return Color(uiColor: .secondaryLabel)
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 14) {
+            // Header
             HStack(spacing: 8) {
                 Image(systemName: "bolt.fill")
                     .foregroundStyle(Color.wispZapColor)
                 Text("Lightning Invoice")
                     .font(.subheadline.weight(.semibold))
                 Spacer()
-                if let amountSats {
-                    Text(CurrencyFormatter.full(sats: amountSats))
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(Color.wispZapColor)
+                if decoded != nil {
+                    Text(expiryText)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(expiryColor)
                 }
             }
 
+            // Amount — large, centred
+            if let sats = amountSats {
+                Text(CurrencyFormatter.full(sats: sats))
+                    .font(.title.weight(.bold))
+                    .foregroundStyle(Color.wispZapColor)
+                    .frame(maxWidth: .infinity, alignment: .center)
+            }
+
+            // Description
             if let summary, !summary.isEmpty {
                 Text(summary)
                     .font(.callout)
@@ -32,16 +79,17 @@ struct LightningInvoiceView: View {
                     .lineLimit(4)
             }
 
-            HStack(spacing: 8) {
+            // Buttons
+            HStack(spacing: 10) {
                 Button {
                     UIPasteboard.general.string = invoice
                     QuickFollowToast.shared.show("Copied")
                 } label: {
-                    Label("Copy", systemImage: "doc.on.doc")
-                        .font(.caption.weight(.medium))
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(Color.wispSurfaceVariant, in: Capsule())
+                    Image(systemName: "doc.on.doc")
+                        .font(.system(size: 15))
+                        .foregroundStyle(.secondary)
+                        .padding(10)
+                        .background(Color.wispSurfaceVariant, in: Circle())
                 }
                 .buttonStyle(.plain)
 
@@ -49,16 +97,31 @@ struct LightningInvoiceView: View {
                     payTapped()
                 } label: {
                     Label("Pay", systemImage: "bolt.fill")
-                        .font(.caption.weight(.semibold))
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(Color.wispZapColor.opacity(0.2), in: Capsule())
-                        .foregroundStyle(Color.wispZapColor)
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(
+                            (isExpired || isPreview) ? Color.wispZapColor.opacity(0.3) : Color.wispZapColor,
+                            in: Capsule()
+                        )
+                        .foregroundStyle((isExpired || isPreview) ? Color.white.opacity(0.5) : .white)
+                }
+                .buttonStyle(.plain)
+                .disabled(isExpired || isPreview)
+
+                Button {
+                    showQR = true
+                } label: {
+                    Image(systemName: "qrcode")
+                        .font(.system(size: 15))
+                        .foregroundStyle(.secondary)
+                        .padding(10)
+                        .background(Color.wispSurfaceVariant, in: Circle())
                 }
                 .buttonStyle(.plain)
             }
         }
-        .padding(12)
+        .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.wispSurfaceVariant.opacity(0.4))
         .clipShape(RoundedRectangle(cornerRadius: 12))
@@ -66,6 +129,27 @@ struct LightningInvoiceView: View {
             RoundedRectangle(cornerRadius: 12)
                 .stroke(Color.wispZapColor.opacity(0.4), lineWidth: 1)
         )
+        .onReceive(timer) { _ in now = Date() }
+        .sheet(isPresented: $showQR) {
+            VStack(spacing: 20) {
+                Text("Lightning Invoice")
+                    .font(.headline)
+                QRCodeImage(payload: invoice.uppercased(), sideLength: 260)
+                if let sats = amountSats {
+                    Text(CurrencyFormatter.full(sats: sats))
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(Color.wispZapColor)
+                }
+                if let summary, !summary.isEmpty {
+                    Text(summary)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+            }
+            .padding(24)
+            .presentationDetents([.medium])
+        }
         .sheet(isPresented: $showSendSheet) {
             if let store = walletStore {
                 NavigationStack {
@@ -96,9 +180,6 @@ struct LightningInvoiceView: View {
         }
     }
 
-    /// Routes to the in-app wallet's Send sheet (pre-filled with the invoice)
-    /// when one is configured. Otherwise prompts the user to set one up,
-    /// with a fallback button to hand the invoice off to an external wallet.
     private func payTapped() {
         if let store = walletStore, store.mode != nil {
             showSendSheet = true

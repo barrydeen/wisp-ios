@@ -120,8 +120,11 @@ final class GroupListViewModel {
         case Nip29.kindChatMessage:
             let replyId = Nip29.extractReplyId(from: event)
             let emojiTags = ContentParser.parseEmojiTags(event.tags)
+            // Clamp so a sender with a fast clock can't pin their message below
+            // every subsequent (correctly-stamped) reply.
             let msg = GroupMessage(id: event.id, senderPubkey: event.pubkey,
-                                   content: event.content, createdAt: event.createdAt,
+                                   content: event.content,
+                                   createdAt: NostrClock.clampIncoming(event.createdAt),
                                    replyToId: replyId, emojiTags: emojiTags)
             repository.addMessage(msg, relayUrl: relayUrl, groupId: groupId)
             // Eagerly load any custom-emoji images referenced by this message.
@@ -440,7 +443,7 @@ final class GroupListViewModel {
         let priv = Hex.decode(keypair.privkey) ?? Data()
         guard let event = try? NostrEvent.sign(privkey32: priv, pubkey: keypair.pubkey,
                                                kind: Nip51Groups.kindSimpleGroups,
-                                               createdAt: Int(Date().timeIntervalSince1970),
+                                               createdAt: NostrClock.now(),
                                                tags: tags, content: "") else { return }
 
         // Publish to: known group relays + chat.wisp.talk + indexers (best-effort).

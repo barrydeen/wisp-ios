@@ -438,7 +438,7 @@ final class EmojiRepository {
         guard let privkey32 = Hex.decode(keypair.privkey) else {
             throw PublishError.missingKey
         }
-        let createdAt = max(Int(Date().timeIntervalSince1970), userListCreatedAt + 1)
+        let createdAt = max(NostrClock.now(), userListCreatedAt + 1)
         var tags: [[String]] = []
         for ce in directEmojis {
             tags.append(["emoji", ce.shortcode, ce.url])

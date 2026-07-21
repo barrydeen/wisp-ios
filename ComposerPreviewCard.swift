@@ -42,7 +42,15 @@ struct ComposerPreviewCard: View {
                 // must size against the card's available width instead of
                 // the feed's edge-bleed math — without this, a 2+ image
                 // post paints past the card's right edge.
-                nested: true
+                nested: true,
+                isPreview: true,
+                // This card's chrome (12pt card padding + 12pt inner VStack
+                // padding, each side) differs from MediaGridView's
+                // QuotedNoteView-tuned default of 56 — using that default
+                // here undershoots the gallery's real height by a few
+                // points, which silently truncates how far the composer's
+                // outer ScrollView can scroll to reveal it.
+                nestedHorizontalInset: 48
             )
         }
         .padding(12)

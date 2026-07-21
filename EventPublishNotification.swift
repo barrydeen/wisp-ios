@@ -21,4 +21,17 @@ extension Notification.Name {
     /// `MainView` switches to the messages tab and `MessagesView` joins
     /// the group + navigates to the chat room.
     static let openWispChatLink = Notification.Name("WispOpenChatLink")
+
+    /// Posted from `FollowsCache.update` whenever the active user's follow
+    /// set changes (long-press follow/unfollow, onboarding, sign-up). Avatar
+    /// follow-status badges observe this to re-query and toggle. May be
+    /// posted off the main thread, so observers must hop to main
+    /// (`.receive(on: RunLoop.main)`).
+    static let followsDidChange = Notification.Name("WispFollowsDidChange")
+
+    /// Posted by `wispApp`'s `onOpenURL` when the Share Extension hands off
+    /// media via `wisp://share`. `object` carries the `[NSItemProvider]`
+    /// built from the staged files. `MainView` observes this to open a new
+    /// note pre-loaded with the shared attachment(s).
+    static let pendingShareReceived = Notification.Name("WispPendingShareReceived")
 }

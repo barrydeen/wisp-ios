@@ -28,10 +28,11 @@ struct LiveStreamView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
-            Divider().overlay(Color.wispSurfaceVariant.opacity(0.5))
             VStack(spacing: 0) {
-                StreamPlayer(url: vm.activity?.streamingUrl)
+                StreamPlayer(
+                    url: vm.activity?.streamingUrl,
+                    onRestore: { VideoPiPCoordinator.shared.requestRestore(.liveStream(route)) }
+                )
                 StreamInfoBar(
                     hostPubkey: vm.hostPubkey,
                     profile: profileRepo.get(vm.activity?.streamerPubkey ?? vm.hostPubkey),
@@ -59,6 +60,7 @@ struct LiveStreamView: View {
             }
             LiveChatInputBar(vm: vm)
         }
+        .wispTopHeader { header }
         .toolbar(.hidden, for: .navigationBar)
         .task { await vm.start() }
         .onDisappear {
@@ -154,6 +156,9 @@ final class LivePlayerStore {
 
 private struct StreamPlayer: View {
     let url: String?
+    /// Called when the user taps "return to app" on the system PiP window so
+    /// the live stream can be re-opened. Threaded down to the PiP delegate.
+    var onRestore: () -> Void = {}
     @State private var failureMessage: String?
 
     var body: some View {
@@ -162,7 +167,8 @@ private struct StreamPlayer: View {
             if let urlString = url, !urlString.isEmpty {
                 AVPlayerControllerRepresentable(
                     urlString: urlString,
-                    onFailure: { failureMessage = $0 }
+                    onFailure: { failureMessage = $0 },
+                    onRestore: onRestore
                 )
                 .id(urlString)
                 if let failureMessage {
@@ -211,9 +217,10 @@ private struct StreamPlayer: View {
 private struct AVPlayerControllerRepresentable: UIViewControllerRepresentable {
     let urlString: String
     let onFailure: (String) -> Void
+    var onRestore: () -> Void = {}
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onFailure: onFailure)
+        Coordinator(onFailure: onFailure, onRestore: onRestore)
     }
 
     func makeUIViewController(context: Context) -> AVPlayerViewController {
@@ -247,12 +254,14 @@ private struct AVPlayerControllerRepresentable: UIViewControllerRepresentable {
 
     final class Coordinator: NSObject, AVPlayerViewControllerDelegate {
         private let onFailure: (String) -> Void
+        private let onRestore: () -> Void
         private var player: AVPlayer?
         private var statusObservation: NSKeyValueObservation?
         private var failedObserver: NSObjectProtocol?
 
-        init(onFailure: @escaping (String) -> Void) {
+        init(onFailure: @escaping (String) -> Void, onRestore: @escaping () -> Void) {
             self.onFailure = onFailure
+            self.onRestore = onRestore
         }
 
         func attach(player: AVPlayer?) {
@@ -287,11 +296,36 @@ private struct AVPlayerControllerRepresentable: UIViewControllerRepresentable {
         }
 
         nonisolated func playerViewControllerDidStartPictureInPicture(_ playerViewController: AVPlayerViewController) {
-            Task { @MainActor in LivePlayerStore.shared.pipActive = true }
+            Task { @MainActor in
+                LivePlayerStore.shared.pipActive = true
+                // Keep the player view controller + this delegate alive past
+                // `LiveStreamView` dismissal so PiP (and its restore button)
+                // survive navigating away. `LivePlayerStore` owns the player.
+                VideoPiPCoordinator.shared.begin(
+                    player: LivePlayerStore.shared.player,
+                    retaining: [playerViewController, self]
+                )
+            }
         }
 
         nonisolated func playerViewControllerDidStopPictureInPicture(_ playerViewController: AVPlayerViewController) {
-            Task { @MainActor in LivePlayerStore.shared.pipActive = false }
+            Task { @MainActor in
+                LivePlayerStore.shared.pipActive = false
+                VideoPiPCoordinator.shared.end()
+            }
+        }
+
+        /// Tapped "return to app" on the PiP window. Re-open the live stream via
+        /// `onRestore` (which posts a `.liveStream` restore request to `MainView`),
+        /// then tell the system the UI is back.
+        nonisolated func playerViewController(
+            _ playerViewController: AVPlayerViewController,
+            restoreUserInterfaceForPictureInPictureStopWithCompletionHandler completionHandler: @escaping (Bool) -> Void
+        ) {
+            Task { @MainActor in
+                self.onRestore()
+                completionHandler(true)
+            }
         }
     }
 }
@@ -445,9 +479,14 @@ private struct LiveChatBubble: View {
                         .font(.caption2)
                         .foregroundStyle(Color.wispOnSurfaceVariant)
                 }
-                Text(message.content)
-                    .font(.subheadline)
-                    .fixedSize(horizontal: false, vertical: true)
+                EmojiText(
+                    message.content,
+                    emojiMap: message.emojiTags.merging(EmojiRepository.shared.resolvedCustomMap) { msgTag, _ in msgTag },
+                    textStyle: .subheadline,
+                    lineLimit: nil
+                )
+                .font(.subheadline)
+                .fixedSize(horizontal: false, vertical: true)
                 if !message.reactions.isEmpty {
                     reactionStrip
                 }
@@ -564,27 +603,29 @@ private struct ReplyQuoteBar: View {
 
 private struct LiveChatInputBar: View {
     @Bindable var vm: LiveStreamViewModel
-    @FocusState private var focused: Bool
 
     var body: some View {
-        HStack(spacing: 8) {
-            TextField("Message", text: $vm.messageText, axis: .vertical)
-                .lineLimit(1...4)
-                .focused($focused)
-                .submitLabel(.send)
-                .onSubmit { send() }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(Color.wispSurfaceVariant.opacity(0.5), in: RoundedRectangle(cornerRadius: 20))
-            Button(action: send) {
-                Image(systemName: "paperplane.fill")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .padding(10)
-                    .background(Color.wispPrimary, in: Circle())
+        VStack(spacing: 6) {
+            if !vm.emojiCandidates.isEmpty {
+                EmojiSuggestionBar(candidates: vm.emojiCandidates) { emoji in
+                    vm.selectEmoji(emoji)
+                }
             }
-            .disabled(vm.messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            .buttonStyle(.plain)
+            HStack(spacing: 8) {
+                EmojiComposerTextView(viewModel: vm, placeholder: "Message", maxLines: 4, onSubmit: { send() })
+                    .padding(.horizontal, 10)
+                    .frame(maxWidth: .infinity)
+                    .background(Color.wispSurfaceVariant.opacity(0.5), in: RoundedRectangle(cornerRadius: 20))
+                Button(action: send) {
+                    Image(systemName: "paperplane.fill")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(10)
+                        .background(Color.wispPrimary, in: Circle())
+                }
+                .disabled(vm.messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .buttonStyle(.plain)
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -592,7 +633,6 @@ private struct LiveChatInputBar: View {
     }
 
     private func send() {
-        focused = false
         hideKeyboard()
         vm.sendMessage()
     }

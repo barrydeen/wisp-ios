@@ -1,4 +1,5 @@
 import SwiftUI
+import Translation
 
 struct PostCardView: View {
     let event: NostrEvent
@@ -23,10 +24,16 @@ struct PostCardView: View {
     /// count so the bubble matches the visible REPLIES list — without it
     /// the engagement repo / network total would still show blocked authors.
     var forcedReplyCount: Int? = nil
-    /// When false, the "Replying to @user" row is suppressed even if the event
-    /// is a reply. Used for stacked nested replies in ThreadView where the
-    /// visual indentation already communicates the reply relationship.
+    /// When false, the "Replying to @user" row is suppressed even if the
+    /// event is a reply.
     var showReplyContext: Bool = true
+    /// Overrides the "Replying to @user" row's text with a single name —
+    /// the author of the ONE event this reply directly targets — instead
+    /// of the default multi-participant list. Set by ThreadView's threaded
+    /// reply rows: the connector rail already shows nesting structure, but
+    /// not identity, and depth-cap folding means a reply's visual position
+    /// doesn't always trace cleanly back to its parent.
+    var replyToLabelOverride: String? = nil
     /// When true, the card renders a lock chip in the header and hides
     /// repost / quote actions (they would re-publish the rumor id as a public
     /// kind-6 or kind-1 with `q` tag, breaking the encryption invariant).
@@ -50,6 +57,13 @@ struct PostCardView: View {
     var onOpenQuoteCompose: ((NostrEvent) -> Void)? = nil
     @Environment(WalletStore.self) private var walletStore: WalletStore?
     @Environment(AppSettings.self) private var settings
+    /// App-level composer router (reply / quote / emoji reaction). Optional so
+    /// cards rendered outside the injected environment (previews, embeddings)
+    /// still compile and fall back to the in-card `.sheet(item:)`. When present,
+    /// it's preferred over the in-card sheet so the composer is hosted from the
+    /// stable app root rather than this recyclable `LazyVStack` row. See
+    /// `ComposePresenter`.
+    @Environment(ComposePresenter.self) private var composePresenter: ComposePresenter?
     @State private var expanded = false
     @State private var contentExpanded = false
     /// Largest rendered height we've observed for the body's *text* runs
@@ -91,7 +105,6 @@ struct PostCardView: View {
     /// with `.presentationCompactAdaptation(.popover)` keeps the
     /// anchored-popup feel without animating the launching icon.
     @State private var showRepostMenu = false
-    @State private var showRemoveReactionMenu = false
     @State private var showOverflowMenu = false
     /// True when the user tapped Zap but no wallet is configured. Surfaces a
     /// confirmation prompt that can launch the Wallet tab to set one up.
@@ -137,6 +150,15 @@ struct PostCardView: View {
     @State private var sourceTracker = NoteSourceTracker.shared
     @State private var engagementRepo = EngagementRepository.shared
     @State private var zapStore = ZapAnimationStore.shared
+    @State private var translationRepo = TranslationRepository.shared
+    /// Whether the translated text (vs the original) is shown once a
+    /// translation is done. Toggled from the overflow menu; mirrors Android
+    /// wisp's local `showTranslation` state in PostCard.
+    @State private var showTranslation = true
+    /// Drives the `.translationTask` on the card root. Set by
+    /// `startTranslation` (menu tap) or the auto-translate task; the
+    /// view-bound session it creates performs the actual translation.
+    @State private var translationConfig: TranslationSession.Configuration?
     /// Inner kind-1 fetched for a kind-6 repost whose `content` is empty
     /// (NIP-18 tag-only form). The JSON-embedded variant resolves
     /// synchronously inside `resolveRepost()`; this state covers reposts
@@ -200,15 +222,33 @@ struct PostCardView: View {
     /// only on this card's box, not on the entire EngagementRepository dict.
     private var repoBox: EngagementBox { engagementRepo.box(for: displayEventId) }
 
-    private var myReactor: Reactor? {
-        guard let me = myPubkey else { return nil }
-        // Read the shared repo first so optimistic reactions reflect immediately.
-        if let mine = repoBox.counts.reactors.first(where: { $0.pubkey == me }) {
-            return mine
+    /// All reactions the current user has placed on this post, repo first so
+    /// optimistic reactions reflect immediately, deduped by emoji.
+    private var myReactors: [Reactor] {
+        guard let me = myPubkey else { return [] }
+        var seen = Set<String>()
+        var result: [Reactor] = []
+        for r in repoBox.counts.reactors where r.pubkey == me {
+            if seen.insert(r.emoji).inserted { result.append(r) }
         }
-        return engagement?.reactors.first(where: { $0.pubkey == me })
+        for r in (engagement?.reactors ?? []) where r.pubkey == me {
+            if seen.insert(r.emoji).inserted { result.append(r) }
+        }
+        return result
     }
+    private var myReactor: Reactor? { myReactors.first }
     private var iReactedEmoji: String? { myReactor?.emoji }
+    /// Picker keys the user has already reacted with, normalized so legacy
+    /// NIP-25 "+"/"" reactions match the ❤️ picker cell.
+    private var myReactedKeys: Set<String> {
+        Set(myReactors.map { Self.normalizeReactionKey($0.emoji) })
+    }
+
+    /// Map legacy NIP-25 `+` / empty content to the ❤️ picker key; otherwise
+    /// pass the emoji / `:shortcode:` key through unchanged.
+    private static func normalizeReactionKey(_ raw: String) -> String {
+        (raw == "+" || raw.isEmpty) ? "\u{2764}\u{FE0F}" : raw
+    }
     private var iReposted: Bool {
         guard let me = myPubkey else { return false }
         if repoBox.counts.reposters.contains(me) { return true }
@@ -268,14 +308,14 @@ struct PostCardView: View {
                 replyingToRow(for: displayEvent)
             }
 
-            // Header row — avatar + name + nip05 + badges/time. Indented to
-            // align with the avatar. In ancestor-compact mode the inner profile
-            // links are dropped so the outer ThreadRoute link owns every tap.
-            // Skipped entirely for unresolved tag-only reposts: the reposter
-            // avatar/name/timestamp would be redundant with the banner and
-            // sit above the loading/missing placeholder.
+            // Header row — avatar + name + nip05 badge + badges/time. Indented
+            // to align with the avatar. In ancestor-compact mode the inner
+            // profile links are dropped so the outer ThreadRoute link owns
+            // every tap. Skipped entirely for unresolved tag-only reposts: the
+            // reposter avatar/name/timestamp would be redundant with the
+            // banner and sit above the loading/missing placeholder.
             if !isUnresolvedRepost {
-            HStack(alignment: .top, spacing: 12) {
+            HStack(alignment: .center, spacing: 12) {
                 if ancestorCompact {
                     CachedAvatarView(url: displayProfile?.picture, size: 24)
                         .quickFollowOnLongPress(pubkey: displayEvent.pubkey)
@@ -287,8 +327,12 @@ struct PostCardView: View {
                     .quickFollowOnLongPress(pubkey: displayEvent.pubkey)
                 }
 
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    // Centered as a pair rather than pinned to firstTextBaseline —
+                    // the badge is an icon, not a text glyph, so baseline-aligning
+                    // it against the name (as the outer row does for its other,
+                    // text-based children) makes it hang low.
+                    HStack(spacing: 4) {
                         Group {
                             if ancestorCompact {
                                 EmojiText(
@@ -314,42 +358,45 @@ struct PostCardView: View {
                             }
                         }
 
-                        if isPrivate {
-                            HStack(spacing: 3) {
-                                Image(systemName: "lock.fill")
-                                    .font(.caption2)
-                                Text("Private")
-                                    .font(.caption2.weight(.semibold))
-                            }
-                            .foregroundStyle(Color.wispPrimary)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(
-                                Capsule().fill(Color.wispPrimary.opacity(0.12))
-                            )
-                            .accessibilityLabel("Private reply")
-                        }
-
-                        Spacer(minLength: 0)
-
-                        let powBits = Nip13.verifyDifficulty(displayEvent)
-                        if powBits >= 16 {
-                            PowBadge(bits: powBits)
-                        }
-
-                        Text(useAbsoluteTimestamp
-                             ? absoluteTimestamp(displayEvent.createdAt)
-                             : relativeTime(from: displayEvent.createdAt))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-
-                        if !ancestorCompact {
-                            overflowMenu
+                        // Icon only — the handle itself is reserved for the
+                        // profile screen so timeline/thread rows don't carry
+                        // the extra clutter of a second line.
+                        if !ancestorCompact, let nip05 = displayProfile?.nip05, !nip05.isEmpty {
+                            Nip05Badge(nip05: nip05, pubkey: displayEvent.pubkey, showHandle: false)
                         }
                     }
 
-                    if !ancestorCompact, let nip05 = displayProfile?.nip05, !nip05.isEmpty {
-                        Nip05Badge(nip05: nip05, pubkey: displayEvent.pubkey)
+                    if isPrivate {
+                        HStack(spacing: 3) {
+                            Image(systemName: "lock.fill")
+                                .font(.caption2)
+                            Text("Private")
+                                .font(.caption2.weight(.semibold))
+                        }
+                        .foregroundStyle(Color.wispPrimary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(
+                            Capsule().fill(Color.wispPrimary.opacity(0.12))
+                        )
+                        .accessibilityLabel("Private reply")
+                    }
+
+                    Spacer(minLength: 0)
+
+                    let powBits = Nip13.verifyDifficulty(displayEvent)
+                    if powBits >= 16 {
+                        PowBadge(bits: powBits)
+                    }
+
+                    Text(useAbsoluteTimestamp
+                         ? absoluteTimestamp(displayEvent.createdAt)
+                         : relativeTime(from: displayEvent.createdAt))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    if !ancestorCompact {
+                        overflowMenu
                     }
                 }
             }
@@ -374,18 +421,61 @@ struct PostCardView: View {
                 // shrink, which left InlineImageView's clipShape rounding the
                 // empty parent frame instead of the image edges. Render at
                 // natural size so corner rounding actually shows.
-                RichContentView(
-                    content: displayEvent.content,
-                    tags: displayEvent.tags,
-                    profiles: profiles,
-                    authorPubkey: displayEvent.pubkey,
-                    onProfileTap: nil,
-                    onNoteTap: onNoteTap,
-                    onHashtagTap: nil
-                )
+                //
+                // Action bar is included here so the user can react, reply,
+                // repost, zap, bookmark, or expand details on an ancestor
+                // (parent / grand-parent) note directly from the thread view
+                // without having to navigate into the ancestor's own thread.
+                // Polls and the top-zapper pill stay out of compact mode
+                // intentionally — those would crowd the slim ancestor row.
+                VStack(alignment: .leading, spacing: 8) {
+                    RichContentView(
+                        content: displayEvent.content,
+                        tags: displayEvent.tags,
+                        profiles: profiles,
+                        authorPubkey: displayEvent.pubkey,
+                        onProfileTap: nil,
+                        onNoteTap: onNoteTap,
+                        onHashtagTap: nil
+                    )
+
+                    if !activeUserIsWatchOnly { actionBar }
+
+                    if expanded {
+                        NoteDetailsPanel(
+                            zappers: repoBox.counts.zappers.isEmpty ? (engagement?.zappers ?? []) : repoBox.counts.zappers,
+                            reactors: repoBox.counts.reactors.isEmpty ? (engagement?.reactors ?? []) : repoBox.counts.reactors,
+                            reposters: repoBox.counts.reposters.isEmpty ? (engagement?.reposters ?? []) : repoBox.counts.reposters,
+                            quoters: repoBox.counts.quoters.isEmpty ? (engagement?.quoters ?? []) : repoBox.counts.quoters,
+                            relays: combinedRelays(for: displayEvent.id),
+                            tags: displayEvent.tags,
+                            createdAt: displayEvent.createdAt,
+                            pollEvent: (displayEvent.kind == Nip88.kindPoll || displayEvent.kind == Nip69.kindZapPoll) ? displayEvent : nil,
+                            profiles: profiles,
+                            onProfileTap: onProfileTap,
+                            onNoteTap: onNoteTap
+                        )
+                        .task(id: displayEvent.id) {
+                            engagementRepo.fetchQuoters(
+                                eventId: displayEvent.id,
+                                authorPubkey: displayEvent.pubkey
+                            )
+                        }
+                        .transition(.opacity)
+                    }
+                }
                 .padding(.horizontal, 16)
                 .padding(.top, 14)
                 .padding(.bottom, 12)
+            } else if displayEvent.kind == 30023 {
+                // Long-form article: render the rich preview card (hero,
+                // title, summary) that taps through to the full reader,
+                // instead of dumping the raw markdown body. The author row
+                // (above) and action bar / details panel (below) come from
+                // PostCardView's shared chrome — mirrors Android's
+                // FeedArticleItem. Extracted to a helper so the main `body`
+                // builder stays under the Swift type-checker's complexity cap.
+                articleBody(displayEvent)
             } else {
             VStack(alignment: .leading, spacing: 8) {
                 if !displayEvent.content.isEmpty || !displayEvent.tags.isEmpty {
@@ -394,8 +484,13 @@ struct PostCardView: View {
                     // Char-count path is independent of measured height: a
                     // 600+ char body wraps to ~12 lines (well under the
                     // 66%-screen cap), so the height check alone would let
-                    // it escape truncation entirely.
+                    // it escape truncation entirely. Measure the *text*
+                    // length (excluding inline media URLs) — a short caption
+                    // with several image URLs can exceed the raw threshold
+                    // without being a long text post. The raw-count guard
+                    // keeps the parse off the hot path for short posts.
                     let charLong = displayEvent.content.count > Self.longPostCharThreshold
+                        && ContentParser.textualLength(content: displayEvent.content, tags: displayEvent.tags) > Self.longPostCharThreshold
                     let isLong = pixelLong || charLong
                     let collapsedHeight = pixelLong ? cap : Self.longPostTextCollapsedHeight
                     let collapsed = isLong && !contentExpanded
@@ -500,6 +595,8 @@ struct PostCardView: View {
                     }
                 }
 
+                translationInline(for: displayEvent)
+
                 if displayEvent.kind == Nip88.kindPoll || displayEvent.kind == Nip69.kindZapPoll {
                     PollSection(
                         pollEvent: displayEvent,
@@ -532,6 +629,7 @@ struct PostCardView: View {
                         relays: combinedRelays(for: displayEvent.id),
                         tags: displayEvent.tags,
                         createdAt: displayEvent.createdAt,
+                        pollEvent: (displayEvent.kind == Nip88.kindPoll || displayEvent.kind == Nip69.kindZapPoll) ? displayEvent : nil,
                         profiles: profiles,
                         onProfileTap: onProfileTap,
                         onNoteTap: onNoteTap
@@ -565,8 +663,28 @@ struct PostCardView: View {
         .modifier(TapToExpand(enabled: expandOnTap && !ancestorCompact, expanded: $expanded))
         .onAppear {
             let displayed = resolveRepost().event
+            #if DEBUG
+            // Stall-diagnostics breadcrumb: record which row is on screen so a
+            // MAIN STALL during this row's render names the offending note.
+            let imeta = displayed.tags.reduce(0) { $0 + ($1.first == "imeta" ? 1 : 0) }
+            let hasQuote = displayed.tags.contains { $0.first == "q" }
+                || displayed.content.contains("nostr:nevent")
+                || displayed.content.contains("nostr:note")
+            let snippet = displayed.content.prefix(48).replacingOccurrences(of: "\n", with: " ")
+            PerfTrace.enterRow(
+                note: String(displayed.id.prefix(12)),
+                media: "kind=\(displayed.kind) clen=\(displayed.content.count) imeta=\(imeta) quote=\(hasQuote) “\(snippet)”"
+            )
+            #endif
             if displayed.kind == Nip88.kindPoll || displayed.kind == Nip69.kindZapPoll {
-                PollTallyRepository.shared.markVisible(pollEvent: displayed)
+                // Deferred: markVisible can seed an @Observable tally box this
+                // card reads — avoid mutating observed state during the update.
+                Task { @MainActor in PollTallyRepository.shared.markVisible(pollEvent: displayed) }
+            }
+            if displayed.kind == 30023 {
+                // Seed the article cache from the in-hand event so tapping the
+                // preview opens the full reader without a relay round-trip.
+                ArticleCache.shared.store(displayed)
             }
         }
         // Tag-only NIP-18 repost: `content` is empty so the inline JSON path
@@ -580,6 +698,71 @@ struct PostCardView: View {
         // switches from spinner to a tap-to-retry button.
         .task(id: InnerFetchTaskKey(eventId: event.id, attempt: innerFetchAttempt)) {
             await fetchInnerForRepost()
+        }
+        // Translation runs through this view-bound session — TranslationSession
+        // can only be obtained via this modifier. `startTranslation` (menu tap)
+        // or the auto-translate task below set `translationConfig`, which spins
+        // up a session scoped to this card. Progress and results land in the
+        // shared TranslationRepository keyed by the repost-resolved event id,
+        // so completed state survives row recycling.
+        .translationTask(translationConfig) { session in
+            let target = resolveRepost().event
+            // The action also re-runs when an already-translated card
+            // re-appears with its config still set — only proceed when work
+            // is actually pending, so a terminal state isn't clobbered back
+            // into a spinner (and translated again from scratch).
+            let status = translationRepo.state(for: target.id).status
+            guard status == .identifyingLanguage
+                || status == .downloadingModel
+                || status == .translating else { return }
+            do {
+                translationRepo.markDownloadingModel(eventId: target.id)
+                // Shows the system download-consent sheet when the language
+                // pair's model isn't installed yet.
+                try await session.prepareTranslation()
+                translationRepo.markTranslating(eventId: target.id)
+                let response = try await session.translate(target.content)
+                translationRepo.finish(eventId: target.id, translatedText: response.targetText)
+            } catch is CancellationError {
+                // View-bound session torn down mid-flight (row recycled /
+                // navigation). Reset so the card doesn't show a permanent
+                // spinner with the menu item disabled; the user can re-tap.
+                translationRepo.resetToIdle(eventId: target.id)
+            } catch {
+                // Mirror Android's `e.message ?: "Translation failed"`.
+                translationRepo.fail(eventId: target.id, message: error.localizedDescription)
+            }
+        }
+        // Auto-translate (mirrors Android wisp's LaunchedEffect in PostCard).
+        // iOS deviation: only fires when the language model is already
+        // installed — prepareTranslation() would pop the system download
+        // sheet mid-scroll otherwise. A manual Translate tap is the consent
+        // path that downloads the model.
+        .task(id: displayEventId) {
+            // Ancestor-compact rows have no overflow menu and no inline
+            // translation render site — don't burn detection/translation
+            // work on them.
+            guard !ancestorCompact, settings.autoTranslate else { return }
+            let target = resolveRepost().event
+            guard !target.content.isEmpty,
+                  translationRepo.state(for: target.id).status == .idle else { return }
+            guard let source = translationRepo.beginTranslation(
+                eventId: target.id,
+                content: target.content
+            ) else { return }
+            switch await LanguageAvailability().status(from: source, to: translationRepo.targetLanguage) {
+            case .installed:
+                armTranslation(source: source)
+            case .supported:
+                // Model not downloaded — skip silently (terminal, so
+                // re-appearing doesn't re-detect); the menu still offers
+                // Translate as the manual consent/download path.
+                translationRepo.markSkippedNotInstalled(eventId: target.id)
+            case .unsupported:
+                translationRepo.fail(eventId: target.id, message: "Unsupported source language")
+            @unknown default:
+                break
+            }
         }
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
@@ -687,7 +870,10 @@ struct PostCardView: View {
         .onChange(of: zapStore.errors[displayEventId]) { _, message in
             guard let message else { return }
             actionAlert = ActionAlert(title: "Zap Failed", message: message)
-            zapStore.clearError(eventId: displayEventId)
+            // Deferred: clearError mutates the same @Observable store this
+            // onChange observes — mutating it inline publishes during the update.
+            let id = displayEventId
+            Task { @MainActor in zapStore.clearError(eventId: id) }
         }
     }
 
@@ -702,7 +888,7 @@ struct PostCardView: View {
     private func replyingToRow(for displayEvent: NostrEvent) -> some View {
         if !ancestorCompact,
            Nip10.replyTarget(of: displayEvent) != nil,
-           let label = replyingToLabel(for: displayEvent) {
+           let label = replyToLabelOverride ?? replyingToLabel(for: displayEvent) {
             HStack(spacing: 4) {
                 Image(systemName: "arrowshape.turn.up.left.fill")
                     .font(.caption2)
@@ -802,7 +988,14 @@ struct PostCardView: View {
         .padding(.top, 8)
         .padding(.horizontal, 16)
         .onAppear {
-            engagementRepo.seedReposter(eventId: displayEventId, reposterPubkey: wrapperPubkey)
+            // Defer one runloop tick: `seedReposter` mutates an @Observable
+            // EngagementBox this card observes, so running it synchronously here
+            // mutates observed state *during* the view-update commit — SwiftUI's
+            // "Publishing changes from within view updates" warning, which forces
+            // an extra render pass for every repost card as it scrolls into view.
+            let id = displayEventId
+            let pk = wrapperPubkey
+            Task { @MainActor in engagementRepo.seedReposter(eventId: id, reposterPubkey: pk) }
         }
     }
 
@@ -812,14 +1005,66 @@ struct PostCardView: View {
         CachedAvatarView(url: picture, size: 40)
     }
 
+    // MARK: - Article body
+
+    /// Long-form (kind-30023) content region: the rich preview card plus the
+    /// shared top-zapper pill, action bar, and details panel. Split out of the
+    /// main `body` builder to keep that expression under the type-checker cap.
+    @ViewBuilder
+    private func articleBody(_ displayEvent: NostrEvent) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ArticleFeedPreview(event: displayEvent)
+
+            let effectiveZappers = repoBox.counts.zappers.isEmpty ? (engagement?.zappers ?? []) : repoBox.counts.zappers
+            if let topZapper = effectiveZappers.max(by: { $0.sats < $1.sats }) {
+                TopZapperPill(
+                    zapper: topZapper,
+                    profile: profiles[topZapper.pubkey] ?? ProfileRepository.shared.get(topZapper.pubkey)
+                ) {
+                    onProfileTap?(topZapper.pubkey)
+                }
+            }
+
+            if !activeUserIsWatchOnly { actionBar }
+
+            if expanded {
+                NoteDetailsPanel(
+                    zappers: repoBox.counts.zappers.isEmpty ? (engagement?.zappers ?? []) : repoBox.counts.zappers,
+                    reactors: repoBox.counts.reactors.isEmpty ? (engagement?.reactors ?? []) : repoBox.counts.reactors,
+                    reposters: repoBox.counts.reposters.isEmpty ? (engagement?.reposters ?? []) : repoBox.counts.reposters,
+                    quoters: repoBox.counts.quoters.isEmpty ? (engagement?.quoters ?? []) : repoBox.counts.quoters,
+                    relays: combinedRelays(for: displayEvent.id),
+                    tags: displayEvent.tags,
+                    createdAt: displayEvent.createdAt,
+                    pollEvent: nil,
+                    profiles: profiles,
+                    onProfileTap: onProfileTap,
+                    onNoteTap: onNoteTap
+                )
+                .task(id: displayEvent.id) {
+                    engagementRepo.fetchQuoters(
+                        eventId: displayEvent.id,
+                        authorPubkey: displayEvent.pubkey
+                    )
+                }
+                .transition(.opacity)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 14)
+        .padding(.bottom, 12)
+    }
+
     // MARK: - Action Bar
 
     private var actionBar: some View {
         HStack(spacing: 0) {
             Button {
+                let target = resolveRepost().event
                 if let route = onOpenReplyCompose {
-                    let target = resolveRepost().event
                     route(target, replyRootStub(for: target))
+                } else if let composePresenter {
+                    composePresenter.openReply(parent: target, root: replyRootStub(for: target))
                 } else {
                     activeSheet = .replyCompose
                 }
@@ -830,11 +1075,11 @@ struct PostCardView: View {
                 // event to stream in. `forcedReplyCount` (the in-thread
                 // visible count, blocked-author-aware) wins as more local
                 // replies arrive.
-                let networkCount = max(repoBox.counts.replies, engagement?.replies ?? 0)
+                let networkCount = max(repoBox.counts.replies, max(repoBox.diskReplyCount, engagement?.replies ?? 0))
                 let replyCount = max(forcedReplyCount ?? 0, networkCount)
                 actionItem(
                     icon: "bubble.right",
-                    count: replyCount > 0 ? replyCount : nil
+                    count: replyCount
                 )
             }
             .buttonStyle(.plain)
@@ -897,21 +1142,20 @@ struct PostCardView: View {
                     .frame(height: 28)
             } else {
                 let zapSats = repoBox.counts.zapSats > 0 ? repoBox.counts.zapSats : (engagement?.zapSats ?? 0)
-                let iconTint: Color = zapSats > 0
-                    ? (isOwnPost ? Color.wispZapColor.opacity(0.4) : Color.wispZapColor)
-                    : .secondary
-                let labelTint: Color = zapSats > 0 ? Color.wispZapColor : .secondary
+                // Orange only when *we* zapped (mirrors iReposted / iReactedEmoji);
+                // otherwise grey, even when others have zapped the note.
+                let iconTint: Color = iZapped ? Color.wispZapColor : .secondary
+                let labelTint: Color = iZapped ? Color.wispZapColor : .secondary
                 HStack(spacing: 4) {
                     settings.zapImage
                         .resizable()
                         .scaledToFit()
                         .frame(width: 18, height: 18)
                         .foregroundStyle(iconTint)
-                    if let label = zapLabel(zapSats), !label.isEmpty {
-                        Text(label)
-                            .font(.caption)
-                            .foregroundStyle(labelTint)
-                    }
+                    // Always show a number; plain "0" (not a fiat "$0.00") when unzapped.
+                    Text(zapSats > 0 ? (zapLabel(zapSats) ?? "0") : "0")
+                        .font(.caption)
+                        .foregroundStyle(labelTint)
                 }
                 .frame(height: 28)
             }
@@ -988,7 +1232,7 @@ struct PostCardView: View {
         return Button {
             showRepostMenu = true
         } label: {
-            actionItem(icon: "arrow.2.squarepath", count: count > 0 ? count : nil, tint: tint)
+            actionItem(icon: "arrow.2.squarepath", count: count, tint: tint)
         }
         .buttonStyle(.plain)
         .popover(isPresented: $showRepostMenu) {
@@ -1019,6 +1263,8 @@ struct PostCardView: View {
                     showRepostMenu = false
                     if let route = onOpenQuoteCompose {
                         route(resolveRepost().event)
+                    } else if let composePresenter {
+                        composePresenter.openQuote(resolveRepost().event)
                     } else {
                         activeSheet = .quoteCompose
                     }
@@ -1127,22 +1373,17 @@ struct PostCardView: View {
                     Divider()
                 }
 
-                // ShareLink kept as-is — it opens the system share sheet
-                // and there's no `Menu`-style bouncy parent here, just a
-                // popover row that dismisses naturally when the sheet
-                // takes over.
-                ShareLink(item: shareItem) {
-                    HStack(spacing: 12) {
-                        Text("Share")
-                        Spacer(minLength: 0)
-                        Image(systemName: "square.and.arrow.up")
+                // A bare `ShareLink` here never presented: the row's tap both
+                // dismissed this popover and tried to present the share sheet,
+                // and the dismissal tore down the presenter first. Dismiss the
+                // popover, then present a `UIActivityViewController` on the VC
+                // beneath it (next runloop tick so the dismissal has settled).
+                popoverMenuItem(title: "Share", systemImage: "square.and.arrow.up") {
+                    showOverflowMenu = false
+                    DispatchQueue.main.async {
+                        ShareSheetPresenter.present(url: shareItem)
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
-                    .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
-                .simultaneousGesture(TapGesture().onEnded { showOverflowMenu = false })
                 Divider()
 
                 popoverMenuItem(
@@ -1185,13 +1426,132 @@ struct PostCardView: View {
                         showDeleteConfirm = true
                     }
                 }
+
+                // Last row, matching Android wisp's PostCard menu order. The
+                // label tracks the translation lifecycle: idle → "Translate",
+                // done → a Show Original / Show Translation toggle, and a
+                // disabled "Same Language" when the note already matches the
+                // device language.
+                let tState = translationRepo.state(for: target.id)
+                let translating = tState.status == .identifyingLanguage
+                    || tState.status == .downloadingModel
+                    || tState.status == .translating
+                Divider()
+                popoverMenuItem(
+                    title: {
+                        switch tState.status {
+                        case .done: return showTranslation ? "Show Original" : "Show Translation"
+                        case .sameLanguage: return "Same Language"
+                        default: return "Translate"
+                        }
+                    }(),
+                    systemImage: "character.bubble",
+                    disabled: translating || tState.status == .sameLanguage
+                ) {
+                    showOverflowMenu = false
+                    if tState.status == .done {
+                        showTranslation.toggle()
+                    } else {
+                        startTranslation(target)
+                    }
+                }
             }
             .frame(minWidth: 240)
             .presentationCompactAdaptation(.popover)
         }
     }
 
-    private var myReactionEventId: String? { myReactor?.reactionEventId }
+    /// Inline translation status / result block rendered directly below the
+    /// note content. Ported from Android wisp's PostCard translation UI:
+    /// spinner + status text while working, divider + "Translated from X" +
+    /// the translated text (same rich-content renderer as the body) when
+    /// done, red error text on failure.
+    @ViewBuilder
+    private func translationInline(for displayEvent: NostrEvent) -> some View {
+        let s = translationRepo.state(for: displayEvent.id)
+        switch s.status {
+        case .identifyingLanguage, .downloadingModel, .translating:
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(Color.wispPrimary)
+                Text(s.status == .identifyingLanguage ? "Detecting language…"
+                     : s.status == .downloadingModel ? "Downloading language model…"
+                     : "Translating…")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.wispOnSurfaceVariant)
+            }
+            .padding(.vertical, 4)
+        case .done:
+            if showTranslation {
+                VStack(alignment: .leading, spacing: 4) {
+                    Divider().overlay(Color.wispOutline.opacity(0.3))
+                    Text("Translated from \(s.sourceLanguage)")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Color.wispOnSurfaceVariant)
+                    RichContentView(
+                        content: s.translatedText,
+                        // Strip imeta tags: the parser appends orphan imeta
+                        // media not referenced in the content, which would
+                        // duplicate the note's gallery below the translated
+                        // text. Keep the rest (custom-emoji tags etc.).
+                        tags: displayEvent.tags.filter { $0.first != "imeta" },
+                        profiles: profiles,
+                        authorPubkey: displayEvent.pubkey,
+                        onProfileTap: onProfileTap,
+                        onNoteTap: onNoteTap,
+                        onHashtagTap: onHashtagTap,
+                        onPlainTextTap: { onNoteTap?(displayEvent.id) },
+                        linksEnabled: true
+                    )
+                }
+                .padding(.top, 4)
+            }
+        case .error:
+            Text(s.errorMessage)
+                .font(.system(size: 12))
+                .foregroundStyle(.red)
+                .padding(.vertical, 4)
+        case .idle, .sameLanguage, .skippedNotInstalled:
+            EmptyView()
+        }
+    }
+
+    /// Kick off detection + translation for the (repost-resolved) note.
+    /// Mirrors Android wisp's FeedViewModel.translateEvent →
+    /// TranslationRepository.translate. The repository performs detection
+    /// and the same-language short-circuit; on a translatable note, setting
+    /// `translationConfig` drives the `.translationTask` on the card root,
+    /// which owns the actual session.
+    private func startTranslation(_ target: NostrEvent) {
+        guard let source = translationRepo.beginTranslation(
+            eventId: target.id,
+            content: target.content
+        ) else { return }
+        showTranslation = true
+        armTranslation(source: source)
+    }
+
+    /// Set or re-arm the configuration driving `.translationTask`.
+    /// `TranslationSession.Configuration` is Equatable with an internal
+    /// version counter that only `invalidate()` bumps — a freshly
+    /// constructed config with the same language pair compares EQUAL to the
+    /// old value and would never re-run the task (a retry after an error
+    /// would hang on the spinner forever). So re-triggers must mutate +
+    /// invalidate the existing config instead of replacing it.
+    private func armTranslation(source: Locale.Language) {
+        if translationConfig != nil {
+            translationConfig?.source = source
+            translationConfig?.target = translationRepo.targetLanguage
+            translationConfig?.invalidate()
+        } else {
+            translationConfig = TranslationSession.Configuration(
+                source: source,
+                target: translationRepo.targetLanguage
+            )
+        }
+    }
+
     private var myRepostEventId: String? {
         guard let me = myPubkey else { return nil }
         return repoBox.counts.reposterEventIds[me]
@@ -1200,30 +1560,27 @@ struct PostCardView: View {
     private var heartAction: some View {
         let displayed = displayReactedEmoji
         let custom = displayReactedCustomEmoji
-        let alreadyReacted = iReactedEmoji != nil
         return Button {
-            if alreadyReacted {
-                showRemoveReactionMenu = true
-            } else {
-                // Pick whichever side of the heart has more usable vertical
-                // space, then size the picker to fit that space so it scrolls
-                // internally instead of getting clipped by the popover. Reserve
-                // small margins for the status bar above and the home indicator
-                // / tab bar below. Frame is read live from the tracker so the
-                // anchor is correct for the heart's current scroll position.
-                let frame = heartFrameTracker.frame
-                let screenHeight = UIScreen.main.bounds.height
-                let topReserve: CGFloat = 60
-                let bottomReserve: CGFloat = 80
-                let popoverChrome: CGFloat = 32
-                let availableBelow = max(0, screenHeight - bottomReserve - frame.maxY - popoverChrome)
-                let availableAbove = max(0, frame.minY - topReserve - popoverChrome)
-                let preferBelow = availableBelow >= availableAbove
-                reactionArrowEdge = preferBelow ? .top : .bottom
-                let chosenSpace = preferBelow ? availableBelow : availableAbove
-                reactionPickerMaxHeight = min(192, max(80, chosenSpace))
-                showReactionPicker = true
-            }
+            // Always open the picker — existing reactions are highlighted in
+            // it and tapping one removes it. Pick whichever side of the heart
+            // has more usable vertical space, then size the picker to fit that
+            // space so it scrolls internally instead of getting clipped by the
+            // popover. Reserve small margins for the status bar above and the
+            // home indicator / tab bar below. Frame is read live from the
+            // tracker so the anchor is correct for the heart's current scroll
+            // position.
+            let frame = heartFrameTracker.frame
+            let screenHeight = UIScreen.main.bounds.height
+            let topReserve: CGFloat = 60
+            let bottomReserve: CGFloat = 80
+            let popoverChrome: CGFloat = 32
+            let availableBelow = max(0, screenHeight - bottomReserve - frame.maxY - popoverChrome)
+            let availableAbove = max(0, frame.minY - topReserve - popoverChrome)
+            let preferBelow = availableBelow >= availableAbove
+            reactionArrowEdge = preferBelow ? .top : .bottom
+            let chosenSpace = preferBelow ? availableBelow : availableAbove
+            reactionPickerMaxHeight = min(192, max(80, chosenSpace))
+            showReactionPicker = true
         } label: {
             if let emoji = displayed {
                 HStack(spacing: 4) {
@@ -1255,7 +1612,7 @@ struct PostCardView: View {
             } else {
                 actionItem(
                     icon: iReactedEmoji != nil ? "heart.fill" : "heart",
-                    count: resolvedReactionCount > 0 ? resolvedReactionCount : nil,
+                    count: resolvedReactionCount,
                     tint: iReactedEmoji != nil ? .pink : nil
                 )
             }
@@ -1275,35 +1632,23 @@ struct PostCardView: View {
                     }
             }
         )
-        .popover(isPresented: $showRemoveReactionMenu) {
-            Button(role: .destructive) {
-                showRemoveReactionMenu = false
-                undoReaction()
-            } label: {
-                HStack {
-                    Spacer()
-                    Label("Remove Reaction", systemImage: "minus.circle")
-                    Spacer()
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(Color.red)
-            .frame(minWidth: 200)
-            .presentationCompactAdaptation(.popover)
-        }
         .popover(isPresented: $showReactionPicker, arrowEdge: reactionArrowEdge) {
             EmojiReactionPicker(
+                reactedKeys: myReactedKeys,
                 onSelect: { picked in
                     showReactionPicker = false
-                    sendReaction(picked)
+                    if myReactedKeys.contains(Self.normalizeReactionKey(picked.frequencyKey)) {
+                        removeReaction(key: picked.frequencyKey)
+                    } else {
+                        sendReaction(picked)
+                    }
                 },
                 onPlus: {
                     showReactionPicker = false
                     if let route = onOpenEmojiLibrary {
                         route { picked in sendReaction(picked) }
+                    } else if let composePresenter {
+                        composePresenter.openEmojiReaction { picked in sendReaction(picked) }
                     } else {
                         activeSheet = .emojiLibrary
                     }
@@ -1395,11 +1740,14 @@ struct PostCardView: View {
         }
     }
 
-    private func undoReaction() {
-        guard let keypair = NostrKey.load(),
-              let me = myPubkey,
-              let reactor = myReactor,
-              let reactionEventId = myReactionEventId else { return }
+    /// Remove the user's reaction matching `key` (a picker key: a unicode char
+    /// or `:shortcode:`). Matches on the normalized key so a ❤️ tap also clears
+    /// a legacy NIP-25 `+` reaction.
+    private func removeReaction(key: String) {
+        guard let keypair = NostrKey.load(), let me = myPubkey else { return }
+        let nk = Self.normalizeReactionKey(key)
+        guard let reactor = myReactors.first(where: { Self.normalizeReactionKey($0.emoji) == nk }),
+              let reactionEventId = reactor.reactionEventId else { return }
         ReactionSender.shared.clearSent(pubkey: me, targetEventId: displayEventId, frequencyKey: reactor.emoji)
         EngagementRepository.shared.undoReaction(eventId: displayEventId, pubkey: me, emoji: reactor.emoji)
         Haptics.shared.blip()
@@ -1556,7 +1904,7 @@ struct PostCardView: View {
                 .frame(width: 22, height: 17, alignment: .center)
             if let label, !label.isEmpty {
                 Text(label).font(.caption)
-            } else if let count, count > 0 {
+            } else if let count {
                 Text(formatCount(count)).font(.caption)
             }
         }
@@ -1575,7 +1923,7 @@ struct PostCardView: View {
                 .frame(width: 18, height: 18)
             if let label, !label.isEmpty {
                 Text(label).font(.caption)
-            } else if let count, count > 0 {
+            } else if let count {
                 Text(formatCount(count)).font(.caption)
             }
         }
@@ -1767,10 +2115,46 @@ struct PostCardView: View {
     /// when `walletStore` is unset, leaving the user wondering whether
     /// the tap registered).
     private func triggerZapOrWalletSetup() {
-        if let store = walletStore, store.mode != nil {
-            activeSheet = .zap
-        } else {
+        let resolved = resolveRepost()
+        let target = resolved.event
+        guard let store = walletStore, store.mode != nil else {
             showWalletSetupPrompt = true
+            return
+        }
+        if let composePresenter {
+            // Route to the app-root host. The zap sheet raises the keyboard
+            // (deferred amountFocused in ZapSheet.onAppear); presenting it
+            // from this recyclable row caused the open/close loop — a
+            // diagnostic trace (2026-06-07) showed keyboard willShow → row
+            // recycled ~2ms later → sheet torn down → the surviving @State
+            // re-presents, cycling every ~0.5s. Same cure as
+            // reply/quote/emoji: host from the never-recycled root.
+            let pollOptionIdx = zapPollOptionIndex
+            composePresenter.openZap(ZapSheetRequest(
+                recipientPubkey: target.pubkey,
+                recipientLud16: resolved.profile?.lud16,
+                recipientName: resolved.profile?.displayString,
+                eventId: target.id,
+                extraTags: pollOptionIdx.map { [["poll_option", String($0)]] } ?? [],
+                forcePrivate: isPrivate,
+                onSuccess: { sats in
+                    if target.kind == Nip69.kindZapPoll, let idx = pollOptionIdx,
+                       let me = NostrKey.load() {
+                        PollTallyRepository.shared.applyOptimisticZapVote(
+                            pollEvent: target,
+                            optionIndex: idx,
+                            voterPubkey: me.pubkey,
+                            sats: sats,
+                            ts: Int(Date().timeIntervalSince1970)
+                        )
+                    }
+                }
+            ))
+            // Consumed into the request above; clear so a later non-poll
+            // zap on this card doesn't inherit a stale option index.
+            zapPollOptionIndex = nil
+        } else {
+            activeSheet = .zap
         }
     }
 }
@@ -1835,6 +2219,9 @@ private struct NoteDetailsPanel: View {
     let relays: [String]
     let tags: [[String]]
     let createdAt: Int
+    /// Set when the note is a NIP-88 (1068) or NIP-69 (6969) poll. Drives the
+    /// "Votes" section that groups voters under their chosen option.
+    let pollEvent: NostrEvent?
     let profiles: [String: ProfileData]
     let onProfileTap: ((String) -> Void)?
     /// Tap on a quote-post avatar navigates to that quote's thread. Wired
@@ -1842,6 +2229,9 @@ private struct NoteDetailsPanel: View {
     let onNoteTap: ((String) -> Void)?
 
     @State private var relaysExpanded = false
+    /// Option ids / zap-option keys whose voter list is currently expanded.
+    @State private var expandedVoteOptions: Set<String> = []
+    @State private var tallyRepo = PollTallyRepository.shared
 
     private static let relayChipLimit = 6
 
@@ -1853,6 +2243,9 @@ private struct NoteDetailsPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            if pollEvent != nil {
+                pollVotesSection
+            }
             if !zappers.isEmpty {
                 zapsSection
             }
@@ -1885,12 +2278,153 @@ private struct NoteDetailsPanel: View {
             // MissingProfileWatcher never sees them during feed load.
             // Submit them here so their profiles are fetched and broadcast
             // back into FeedViewModel's profiles dict for the avatar rows.
-            let unknown = Set(zappers.map(\.pubkey) + reposters + reactors.map(\.pubkey) + quoters.map(\.pubkey))
-                .filter { profiles[$0] == nil }
+            var actors = Set(zappers.map(\.pubkey) + reposters + reactors.map(\.pubkey) + quoters.map(\.pubkey))
+            if let pollEvent {
+                let breakdown = PollTallyRepository.shared.voteBreakdown(for: pollEvent.id)
+                actors.formUnion(breakdown.votersByOption.values.flatMap { $0 })
+                actors.formUnion(breakdown.zappersByOption.values.flatMap { $0.map(\.pubkey) })
+            }
+            let unknown = actors.filter { profiles[$0] == nil }
             if !unknown.isEmpty {
                 MissingProfileWatcher.shared.observePubkeys(unknown)
             }
         }
+    }
+
+    // MARK: - Poll votes (grouped by choice)
+
+    /// Renders each poll choice as an expandable tab. Collapsed, a tab shows the
+    /// option label and its tally; expanded, it lists the voters who picked it.
+    /// Choices are ordered by tally (votes, or sats for zap polls) descending so
+    /// the leading option leads.
+    @ViewBuilder
+    private var pollVotesSection: some View {
+        if let pollEvent {
+            // Touch `version` so live vote ingestion re-renders the section.
+            let _ = tallyRepo.version
+            let isZap = pollEvent.kind == Nip69.kindZapPoll
+            let tally = PollTallyRepository.shared.tally(for: pollEvent.id)
+            let breakdown = PollTallyRepository.shared.voteBreakdown(for: pollEvent.id)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Votes")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+
+                if isZap {
+                    let options = Nip69.parseZapPollOptions(pollEvent)
+                        .sorted { (tally.satsCounts[$0.index] ?? 0) > (tally.satsCounts[$1.index] ?? 0) }
+                    ForEach(options, id: \.index) { option in
+                        let zappers = breakdown.zappersByOption[option.index] ?? []
+                        voteTab(
+                            key: "z\(option.index)",
+                            label: option.label,
+                            detail: "\(tally.satsCounts[option.index] ?? 0) sats · \(zappers.count)",
+                            voterCount: zappers.count,
+                            tint: Color.wispZapColor
+                        ) {
+                            ForEach(Array(zappers.enumerated()), id: \.offset) { _, z in
+                                voterRow(pubkey: z.pubkey, trailing: "\(z.sats) sats", tint: Color.wispZapColor)
+                            }
+                        }
+                    }
+                } else {
+                    let options = Nip88.parsePollOptions(pollEvent)
+                        .sorted { (tally.voteCounts[$0.id] ?? 0) > (tally.voteCounts[$1.id] ?? 0) }
+                    ForEach(options, id: \.id) { option in
+                        let voters = breakdown.votersByOption[option.id] ?? []
+                        let count = tally.voteCounts[option.id] ?? 0
+                        voteTab(
+                            key: option.id,
+                            label: option.label,
+                            detail: voteDetail(count: count, total: tally.totalVotes),
+                            voterCount: voters.count,
+                            tint: Color.wispPrimary
+                        ) {
+                            ForEach(Array(voters.enumerated()), id: \.offset) { _, pk in
+                                voterRow(pubkey: pk, trailing: nil, tint: Color.wispPrimary)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func voteTab<Content: View>(
+        key: String,
+        label: String,
+        detail: String,
+        voterCount: Int,
+        tint: Color,
+        @ViewBuilder content: @escaping () -> Content
+    ) -> some View {
+        let header = HStack(spacing: 8) {
+            Text(label)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+            Spacer(minLength: 4)
+            Text(detail)
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.primary)
+        }
+
+        if voterCount == 0 {
+            // No voters to reveal — render a flat, non-expandable row.
+            header
+                .padding(.vertical, 2)
+        } else {
+            DisclosureGroup(isExpanded: voteOptionBinding(key)) {
+                VStack(alignment: .leading, spacing: 4) {
+                    content()
+                }
+                .padding(.top, 4)
+            } label: {
+                header
+            }
+            .tint(.secondary)
+        }
+    }
+
+    private func voteOptionBinding(_ key: String) -> Binding<Bool> {
+        Binding(
+            get: { expandedVoteOptions.contains(key) },
+            set: { expand in
+                if expand { expandedVoteOptions.insert(key) } else { expandedVoteOptions.remove(key) }
+            }
+        )
+    }
+
+    @ViewBuilder
+    private func voterRow(pubkey: String, trailing: String?, tint: Color) -> some View {
+        let profile = profiles[pubkey] ?? ProfileRepository.shared.get(pubkey)
+        Button {
+            onProfileTap?(pubkey)
+        } label: {
+            HStack(spacing: 8) {
+                CachedAvatarView(url: profile?.picture, size: 24)
+                Text(profile?.displayString ?? short(pubkey))
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                if let trailing {
+                    Text(trailing)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(tint)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .padding(.leading, 8)
+    }
+
+    private func voteDetail(count: Int, total: Int) -> String {
+        guard total > 0 else { return "\(count)" }
+        let pct = Int((Double(count) / Double(total) * 100).rounded())
+        return "\(count) · \(pct)%"
     }
 
     /// Multiple zaps from the same pubkey collapse into one row showing the
@@ -2242,14 +2776,30 @@ private struct ChipFlowLayout: Layout {
     }
 }
 
+// Module-level, lazily-created once. `DateFormatter()` construction is
+// expensive and these were being rebuilt on every call — i.e. per row, per
+// body evaluation, during scroll. Reused here; both functions are MainActor-
+// isolated (default isolation) so no cross-thread access to the formatters.
+private let postCardMonthDayFormatter: DateFormatter = {
+    let f = DateFormatter()
+    f.dateFormat = "MMM d"
+    return f
+}()
+private let postCardAbsoluteDateFormatter: DateFormatter = {
+    let f = DateFormatter()
+    f.dateFormat = "MMM d, yyyy"
+    return f
+}()
+private let postCardAbsoluteTimeFormatter: DateFormatter = {
+    let f = DateFormatter()
+    f.timeStyle = .short
+    return f
+}()
+
 /// Twitter-style "Mar 5, 2026 · 8:52 PM" — used by ThreadView's focal post.
 func absoluteTimestamp(_ timestamp: Int) -> String {
     let date = Date(timeIntervalSince1970: Double(timestamp))
-    let dateFmt = DateFormatter()
-    dateFmt.dateFormat = "MMM d, yyyy"
-    let timeFmt = DateFormatter()
-    timeFmt.timeStyle = .short
-    return "\(dateFmt.string(from: date)) · \(timeFmt.string(from: date))"
+    return "\(postCardAbsoluteDateFormatter.string(from: date)) · \(postCardAbsoluteTimeFormatter.string(from: date))"
 }
 
 func relativeTime(from timestamp: Int) -> String {
@@ -2259,9 +2809,31 @@ func relativeTime(from timestamp: Int) -> String {
     if seconds < 86400 { return "\(seconds / 3600)h" }
     if seconds < 604_800 { return "\(seconds / 86400)d" }
     if seconds >= 31_536_000 { return "\(Int((Double(seconds) / 31_536_000).rounded()))y" }
-    let formatter = DateFormatter()
-    formatter.dateFormat = "MMM d"
-    return formatter.string(from: Date(timeIntervalSince1970: Double(timestamp)))
+    return postCardMonthDayFormatter.string(from: Date(timeIntervalSince1970: Double(timestamp)))
 }
 
 
+
+extension PostCardView: Equatable {
+    /// Lets `.equatable()` skip re-rendering a feed row whose meaningful inputs
+    /// are unchanged. The `LazyVStack` re-invokes the `ForEach` row builder on
+    /// every scroll tick and hands each card freshly-created closures; without
+    /// this gate SwiftUI re-runs every visible row's (2000+ line) body
+    /// repeatedly during scroll. Closures and the `profiles` dictionary are
+    /// intentionally excluded — closures aren't comparable and behave
+    /// identically per row, and per-event engagement still flows through the
+    /// `@Observable EngagementBox`, which invalidates regardless of this `==`.
+    /// (Inline mention names may resolve a beat later; fine for the scroll win.)
+    static func == (lhs: PostCardView, rhs: PostCardView) -> Bool {
+        lhs.event.id == rhs.event.id
+            && lhs.profile == rhs.profile
+            && lhs.engagement == rhs.engagement
+            && lhs.expandOnTap == rhs.expandOnTap
+            && lhs.ancestorCompact == rhs.ancestorCompact
+            && lhs.useAbsoluteTimestamp == rhs.useAbsoluteTimestamp
+            && lhs.forcedReplyCount == rhs.forcedReplyCount
+            && lhs.showReplyContext == rhs.showReplyContext
+            && lhs.replyToLabelOverride == rhs.replyToLabelOverride
+            && lhs.isPrivate == rhs.isPrivate
+    }
+}

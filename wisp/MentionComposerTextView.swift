@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 extension NSAttributedString.Key {
     /// Carries the pill fill color over a `@mention` run. `WispPillLayoutManager`
@@ -21,12 +22,27 @@ final class WispPillLayoutManager: NSLayoutManager {
         let charRange = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
         textStorage.enumerateAttribute(.wispMentionPill, in: charRange, options: []) { value, range, _ in
             guard let color = value as? UIColor else { return }
+            let font = (textStorage.attribute(.font, at: range.location, effectiveRange: nil) as? UIFont)
+                ?? UIFont.preferredFont(forTextStyle: .body)
             let glyphRange = self.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
             guard let container = self.textContainer(forGlyphAt: glyphRange.location, effectiveRange: nil) else { return }
-            self.enumerateLineFragments(forGlyphRange: glyphRange) { _, _, _, lineGlyphRange, _ in
+            self.enumerateLineFragments(forGlyphRange: glyphRange) { _, usedRect, _, lineGlyphRange, _ in
                 let slice = NSIntersectionRange(lineGlyphRange, glyphRange)
                 guard slice.length > 0 else { return }
-                var rect = self.boundingRect(forGlyphRange: slice, in: container)
+                let glyphRect = self.boundingRect(forGlyphRange: slice, in: container)
+                // Horizontal extent comes from the glyphs; height is pinned to
+                // the run's font line-height centered on the line's used rect.
+                // `boundingRect(forGlyphRange:)` spans the whole line fragment,
+                // which includes the paragraph style's `lineSpacing`. Drawing
+                // the pill at that height — even at the original `dy: -1`
+                // inset — made each chip tall enough to overlap the lines
+                // above and below, colliding with mentions on adjacent rows.
+                var rect = CGRect(
+                    x: glyphRect.minX,
+                    y: usedRect.midY - font.lineHeight / 2,
+                    width: glyphRect.width,
+                    height: font.lineHeight
+                )
                 rect.origin.x += origin.x
                 rect.origin.y += origin.y
                 // Background hugs the glyph bounds horizontally so adjacent
@@ -121,9 +137,20 @@ enum ComposerTextStyling {
         storage.setAttributes(base, range: full)
         let pills = pillRanges(in: text, mentions: mentions).map(\.range)
         applyLinkColor(to: storage, text: text, avoiding: pills)
+        let ns = text as NSString
         for r in pills {
             storage.addAttribute(.foregroundColor, value: pillTextColor, range: r)
             storage.addAttribute(.wispMentionPill, value: pillFillColor, range: r)
+            // Widen the space characters immediately before and after the pill by
+            // the same amount as the background's dx expansion so the pill's
+            // background never visually consumes the surrounding word spaces.
+            if r.location > 0 && ns.character(at: r.location - 1) == 0x0020 {
+                storage.addAttribute(.kern, value: CGFloat(5), range: NSRange(location: r.location - 1, length: 1))
+            }
+            let tail = r.location + r.length
+            if tail < ns.length && ns.character(at: tail) == 0x0020 {
+                storage.addAttribute(.kern, value: CGFloat(5), range: NSRange(location: tail, length: 1))
+            }
         }
         storage.endEditing()
     }
@@ -159,6 +186,12 @@ enum ComposerTextStyling {
 // MARK: - Self-sizing editable text view
 
 final class ComposerSizingTextView: UITextView {
+    /// Hooked by `MentionComposerTextView` so the long-press Paste menu can
+    /// route image clipboard contents into the composer's upload pipeline.
+    /// Without this, `paste(_:)` falls through to UITextView's text-only
+    /// implementation and an image on the clipboard silently no-ops.
+    var onPasteImageProviders: (([NSItemProvider]) -> Void)?
+
     convenience init() {
         let storage = NSTextStorage()
         let layout = WispPillLayoutManager()
@@ -179,6 +212,42 @@ final class ComposerSizingTextView: UITextView {
 
     override var intrinsicContentSize: CGSize {
         CGSize(width: UIView.noIntrinsicMetric, height: UIView.noIntrinsicMetric)
+    }
+
+    /// Make Paste show in the long-press menu whenever the clipboard has
+    /// either text (default behavior) or an image. UITextView's stock check
+    /// only enables Paste for text — without this override, an image-only
+    /// clipboard has no menu entry to surface.
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        if action == #selector(paste(_:)) {
+            if UIPasteboard.general.hasStrings { return true }
+            if pasteboardImageProviders().isEmpty == false { return true }
+            if UIPasteboard.general.image != nil { return true }
+            return false
+        }
+        return super.canPerformAction(action, withSender: sender)
+    }
+
+    /// Intercept Paste. Image content goes through the composer's upload
+    /// pipeline; text content falls through to UITextView's default.
+    override func paste(_ sender: Any?) {
+        let providers = pasteboardImageProviders()
+        if !providers.isEmpty {
+            onPasteImageProviders?(providers)
+            return
+        }
+        if let image = UIPasteboard.general.image, let png = image.pngData() {
+            let provider = NSItemProvider(item: png as NSData, typeIdentifier: UTType.png.identifier)
+            onPasteImageProviders?([provider])
+            return
+        }
+        super.paste(sender)
+    }
+
+    private func pasteboardImageProviders() -> [NSItemProvider] {
+        UIPasteboard.general.itemProviders.filter {
+            $0.hasItemConformingToTypeIdentifier(UTType.image.identifier)
+        }
     }
 }
 
@@ -201,6 +270,12 @@ struct MentionComposerTextView: UIViewRepresentable {
             for: viewModel.content, mentions: viewModel.mentions, font: font
         )
         tv.typingAttributes = ComposerTextStyling.baseAttributes(font: font)
+        // Route long-press Paste of image content into the upload pipeline.
+        // Text content still uses UITextView's default paste path.
+        let vm = viewModel
+        tv.onPasteImageProviders = { providers in
+            Task { @MainActor in await vm.addPastedImages(providers) }
+        }
         context.coordinator.lastSyncedPlain = viewModel.content
         // Mirror the previous TextEditor behavior: the composer takes focus as
         // soon as it appears.
@@ -474,8 +549,10 @@ struct MentionComposerTextView: UIViewRepresentable {
                 viewModel.updateMentionTrigger(query: nil, atOffsetUtf16: nil, endUtf16: nil)
             }
 
-            if token.hasPrefix(":"), token.count >= 2, !token.dropFirst().contains(":") {
-                viewModel.updateEmojiTrigger(query: String(token.dropFirst()), atOffsetUtf16: utf16Offset)
+            // Emoji `:shortcode` uses the shared detector (independent of the
+            // mention token walk above) so it fires mid-text after a space too.
+            if let (emojiQuery, emojiOffset) = EmojiShortcode.detectTrigger(in: ns as String, caretUtf16: caret) {
+                viewModel.updateEmojiTrigger(query: emojiQuery, atOffsetUtf16: emojiOffset)
             } else {
                 viewModel.updateEmojiTrigger(query: nil, atOffsetUtf16: nil)
             }

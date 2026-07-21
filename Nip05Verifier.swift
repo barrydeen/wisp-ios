@@ -1,5 +1,9 @@
 import Foundation
 import Combine
+import QuartzCore
+import os
+
+nonisolated private let nip05Log = Logger(subsystem: "wisp", category: "nip05")
 
 enum Nip05Status: Sendable {
     case unknown
@@ -19,6 +23,11 @@ final class Nip05Verifier: ObservableObject {
     private var lastChecked: [String: Date] = [:]
 
     private let cacheTTL: TimeInterval = 6 * 3600
+    /// A down / slow domain returns `.error`; cache that briefly instead of
+    /// re-fetching on every row appearance. The old guard skipped the cache
+    /// entirely for `.error`, so a user who showed up in many feed/search rows
+    /// got their failing domain hammered and the badge spinner flickered.
+    private let errorRetryTTL: TimeInterval = 120
 
     func status(for pubkey: String) -> Nip05Status {
         statusByPubkey[pubkey] ?? .unknown
@@ -28,9 +37,9 @@ final class Nip05Verifier: ObservableObject {
     func checkOrFetch(pubkey: String, nip05: String) {
         guard !nip05.isEmpty else { return }
         if inflight.contains(pubkey) { return }
-        if let last = lastChecked[pubkey], Date().timeIntervalSince(last) < cacheTTL,
-           let s = statusByPubkey[pubkey], s != .error {
-            return
+        if let last = lastChecked[pubkey], let s = statusByPubkey[pubkey] {
+            let ttl: TimeInterval = (s == .error) ? errorRetryTTL : cacheTTL
+            if Date().timeIntervalSince(last) < ttl { return }
         }
         inflight.insert(pubkey)
         statusByPubkey[pubkey] = .checking
@@ -38,7 +47,7 @@ final class Nip05Verifier: ObservableObject {
 
         Task { [weak self] in
             let result = await Nip05Verifier.verify(identifier: nip05, pubkeyHex: pubkey)
-            await self?.applyResult(pubkey: pubkey, status: result)
+            self?.applyResult(pubkey: pubkey, status: result)
         }
     }
 
@@ -59,7 +68,11 @@ final class Nip05Verifier: ObservableObject {
 
     /// Resolve a NIP-05 identifier to a hex pubkey without requiring a known pubkey.
     /// Returns `nil` on network error, malformed identifier, or name not found.
-    static func lookup(identifier: String) async -> String? {
+    // `nonisolated` so the fetch + JSON parse run OFF the main actor. The class
+    // is @MainActor (SWIFT_DEFAULT_ACTOR_ISOLATION default), which would
+    // otherwise run `JSONSerialization` on main — a domain returning a large
+    // nostr.json (ignoring `?name=`) freezes the UI. See verify() too.
+    nonisolated static func lookup(identifier: String) async -> String? {
         let parts = identifier.split(separator: "@", maxSplits: 1, omittingEmptySubsequences: false)
         guard parts.count == 2,
               let local = parts.first.map(String.init),
@@ -82,7 +95,7 @@ final class Nip05Verifier: ObservableObject {
         return (names.first { $0.key.caseInsensitiveCompare(local) == .orderedSame }?.value as? String)?.lowercased()
     }
 
-    private static func verify(identifier: String, pubkeyHex: String) async -> Nip05Status {
+    nonisolated private static func verify(identifier: String, pubkeyHex: String) async -> Nip05Status {
         let parts = identifier.split(separator: "@", maxSplits: 1, omittingEmptySubsequences: false)
         guard parts.count == 2,
               let local = parts.first.map(String.init),
@@ -103,7 +116,17 @@ final class Nip05Verifier: ObservableObject {
             if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
                 return .error
             }
-            guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+            #if DEBUG
+            let parseStart = CACurrentMediaTime()
+            #endif
+            let parsed = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            #if DEBUG
+            // Flags a domain that ignores `?name=` and returns a huge nostr.json:
+            // before verify was nonisolated this parse ran on the main actor and
+            // could freeze the UI. Now off-main — size/time still surfaces it.
+            nip05Log.log("verify host=\(domain, privacy: .public) bytes=\(data.count, privacy: .public) parse=\(Int((CACurrentMediaTime() - parseStart) * 1000), privacy: .public)ms")
+            #endif
+            guard let obj = parsed,
                   let names = obj["names"] as? [String: Any] else {
                 return .mismatch
             }

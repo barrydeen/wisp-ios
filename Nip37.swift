@@ -35,7 +35,7 @@ nonisolated enum Nip37 {
     /// NIP-44 self-encrypted into the wrapper's `content`. Key order is not
     /// significant — relays only see the encrypted blob.
     static func serializeInner(pubkeyHex: String, innerKind: Int, content: String, tags: [[String]],
-                               createdAt: Int = Int(Date().timeIntervalSince1970)) -> String {
+                               createdAt: Int = NostrClock.now()) -> String {
         var out = "{\"kind\":"
         out.append(String(innerKind))
         out.append(",\"pubkey\":\"")

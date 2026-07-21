@@ -162,6 +162,8 @@ final class SparkWallet: Wallet {
             // has caught up. Until then, the dashboard renders the cached balance from
             // UserDefaults so the user isn't staring at a spinner.
             Task { await self.refreshBalance() }
+            // Claim any on-chain deposits that became claimable while the app was closed.
+            Task { await self.claimPendingDeposits() }
         } catch {
             emit("Connection failed: \(error.localizedDescription)")
             isConnected = false
@@ -199,6 +201,8 @@ final class SparkWallet: Wallet {
             emit("Payment failed")
         case .paymentPending:
             emit("Payment pending")
+        case .unclaimedDeposits(let deposits):
+            Task { await self.claimDeposits(deposits) }
         default:
             break
         }
@@ -215,6 +219,48 @@ final class SparkWallet: Wallet {
             balanceContinuation.yield(msats)
         } catch {
             emit("Balance refresh failed: \(error.localizedDescription)")
+        }
+    }
+
+    // MARK: - On-chain deposit claiming
+
+    /// On-chain deposits sit unclaimed (and show as pending in history) until
+    /// explicitly claimed once they have enough confirmations. The SDK emits
+    /// `.unclaimedDeposits` when deposits become claimable; claim them
+    /// automatically so they settle without user action.
+    private func claimDeposits(_ deposits: [DepositInfo]) async {
+        guard let sdk else { return }
+        var claimedAny = false
+        for deposit in deposits {
+            do {
+                _ = try await sdk.claimDeposit(
+                    request: ClaimDepositRequest(
+                        txid: deposit.txid,
+                        vout: deposit.vout,
+                        maxFee: .networkRecommended(leewaySatPerVbyte: 5)
+                    )
+                )
+                claimedAny = true
+                emit("Claimed on-chain deposit")
+            } catch {
+                emit("Failed to claim deposit: \(error.localizedDescription)")
+            }
+        }
+        if claimedAny {
+            await refreshBalance()
+        }
+    }
+
+    /// Claim any deposits that became claimable while the app was closed.
+    private func claimPendingDeposits() async {
+        guard let sdk else { return }
+        do {
+            let response = try await sdk.listUnclaimedDeposits(request: ListUnclaimedDepositsRequest())
+            if !response.deposits.isEmpty {
+                await claimDeposits(response.deposits)
+            }
+        } catch {
+            // Best-effort — the SDK will retry via `.unclaimedDeposits` events.
         }
     }
 
@@ -328,8 +374,9 @@ final class SparkWallet: Wallet {
             let response = try await sdk.lnurlPay(request: LnurlPayRequest(prepareResponse: prepare))
             return .success(response.payment.id)
         } catch {
-            emit("Payment failed: \(error.localizedDescription)")
-            return .failure(.other(error.localizedDescription))
+            let friendly = Self.friendlyPayError(error)
+            emit("Payment failed: \(friendly)")
+            return .failure(.other(friendly))
         }
     }
 
@@ -356,12 +403,35 @@ final class SparkWallet: Wallet {
             )
             return .success(response.payment.id)
         } catch {
-            emit("Payment failed: \(error.localizedDescription)")
-            return .failure(.other(error.localizedDescription))
+            let friendly = Self.friendlyPayError(error)
+            emit("Payment failed: \(friendly)")
+            return .failure(.other(friendly))
         }
     }
 
-    func makeInvoice(amountMsats: Int64, description: String) async -> Result<String, WalletError> {
+    /// Translates raw Spark SDK errors into user-readable strings. The SDK
+    /// surfaces full gRPC envelopes including internal field names and byte
+    /// arrays — exposing those in the Send sheet is hostile. Falls back to
+    /// `localizedDescription` for unknown errors.
+    private static func friendlyPayError(_ error: Error) -> String {
+        let raw = error.localizedDescription
+        let lower = raw.lowercased()
+        if lower.contains("alreadyexists") || lower.contains("preimage request already exists") {
+            return "This invoice has already been paid."
+        }
+        if lower.contains("insufficient") {
+            return "Insufficient balance to pay this invoice."
+        }
+        if lower.contains("expired") {
+            return "This invoice has expired."
+        }
+        if lower.contains("route") && lower.contains("not found") {
+            return "Could not find a payment route. Try again in a moment."
+        }
+        return raw
+    }
+
+    func makeInvoice(amountMsats: Int64, description: String, expirySecs: Int64) async -> Result<String, WalletError> {
         guard let sdk else { return .failure(.notConnected) }
         do {
             let amountSats = UInt64(max(amountMsats / 1000, 1))
@@ -370,7 +440,7 @@ final class SparkWallet: Wallet {
                     paymentMethod: ReceivePaymentMethod.bolt11Invoice(
                         description: description.isEmpty ? "Wisp wallet" : description,
                         amountSats: amountSats,
-                        expirySecs: 3600,
+                        expirySecs: UInt32(min(expirySecs, Int64(UInt32.max))),
                         paymentHash: nil
                     )
                 )
@@ -394,16 +464,30 @@ final class SparkWallet: Wallet {
             let txs: [WalletTransaction] = response.payments.map { payment in
                 let amountSats = Int64(payment.amount.description) ?? 0
                 let feeSats = Int64(payment.fees.description) ?? 0
-                let lightning = payment.details.flatMap { details -> (invoice: String, description: String?)? in
-                    if case .lightning(let description, let invoice, _, _, _, _, _) = details {
-                        return (invoice, description)
+                var paymentHash = payment.id
+                var description: String? = nil
+                var bitcoinTxId: String? = nil
+
+                if let details = payment.details {
+                    switch details {
+                    case .lightning(let desc, let invoice, _, _, _, _, _):
+                        if let decoded = Bolt11.decode(invoice) {
+                            paymentHash = decoded.paymentHash ?? payment.id
+                            description = desc ?? decoded.description
+                        } else {
+                            description = desc
+                        }
+                    case .deposit(let txId):
+                        bitcoinTxId = txId
+                    case .withdraw(let txId):
+                        bitcoinTxId = txId
+                    default:
+                        break
                     }
-                    return nil
                 }
-                let decoded = lightning.flatMap { Bolt11.decode($0.invoice) }
-                let paymentHash = decoded?.paymentHash ?? payment.id
-                let description = lightning?.description ?? decoded?.description
-                return WalletTransaction(
+
+                let isOnchain = bitcoinTxId != nil
+                var tx = WalletTransaction(
                     type: payment.paymentType == .send ? .outgoing : .incoming,
                     description: description,
                     paymentHash: paymentHash,
@@ -413,6 +497,14 @@ final class SparkWallet: Wallet {
                     settledAt: Int64(payment.timestamp),
                     counterpartyPubkey: nil
                 )
+                // On-chain payments made outside this app instance (another wallet on
+                // the same seed) aren't tracked by this SDK session, so PaymentStatus
+                // can stay stuck at .pending long after the underlying transaction is
+                // confirmed. Wisp doesn't initiate on-chain send/receive itself, so
+                // don't trust that flag for on-chain rows.
+                tx.pending = !isOnchain && payment.status == .pending
+                tx.bitcoinTxId = bitcoinTxId
+                return tx
             }
             return .success(txs)
         } catch {

@@ -10,12 +10,15 @@ struct NotificationRowView: View {
     let onDmTap: (String) -> Void
     var onNoteTap: ((String, String?) -> Void)? = nil
 
-    @State private var expanded = false
     @State private var profiles: [String: ProfileData] = [:]
     @State private var sendingReply = false
 
     private let repo = NotificationRepository.shared
     private let profileRepo = ProfileRepository.shared
+
+    /// Single source of truth lives on the view model so only one row is open
+    /// at a time (accordion). See `NotificationsViewModel.expandedItemId`.
+    private var expanded: Bool { viewModel.expandedItemId == item.id }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -37,35 +40,48 @@ struct NotificationRowView: View {
         HStack(alignment: .center, spacing: 8) {
             NotificationTypeIcon(item: item)
 
-            CachedAvatarView(url: profiles[item.actorPubkey]?.picture, size: 32)
-                .onTapGesture { onPeerTap(item.actorPubkey) }
-                .quickFollowOnLongPress(pubkey: item.actorPubkey)
+            if !(item.kind == .pollVote && item.pollVoterCount > 1) {
+                CachedAvatarView(url: profiles[item.actorPubkey]?.picture, size: 32)
+                    .onTapGesture { onPeerTap(item.actorPubkey) }
+                    .quickFollowOnLongPress(pubkey: item.actorPubkey)
+            }
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(displayName(item.actorPubkey))
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(1)
-                        .layoutPriority(1)
-                    Text(NotificationStyle.actionText(item.kind))
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                    if item.isPrivate || item.isPrivateZap {
-                        Image(systemName: "lock.fill")
-                            .font(.caption2)
-                            .foregroundStyle(Color.wispPrimary)
-                            .accessibilityLabel("Private")
+                    if item.kind == .pollVote, item.pollVoterCount > 1 {
+                        Text("\(item.pollVoterCount) votes")
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
+                            .layoutPriority(1)
+                        Text("on your poll")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    } else {
+                        Text(displayName(item.actorPubkey))
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
+                            .layoutPriority(1)
+                        Text(NotificationStyle.actionText(item.kind))
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                        if item.isPrivate || item.isPrivateZap {
+                            Image(systemName: "lock.fill")
+                                .font(.caption2)
+                                .foregroundStyle(Color.wispPrimary)
+                                .accessibilityLabel("Private")
+                        }
+                        mergedZapsBadge
                     }
-                    mergedZapsBadge
                 }
-                voteOptionLabel
                 if let snippet = referencedSnippet {
                     Text(snippet)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                 }
+                voteOptionLabel
             }
 
             Spacer(minLength: 8)
@@ -95,20 +111,54 @@ struct NotificationRowView: View {
         }
     }
 
+    /// Pill shown next to "voted on your poll" when a consolidated poll row
+    /// stands in for more than one voter. Tapping the row expands the poll.
+    @ViewBuilder
+    private var pollVotersBadge: some View {
+        if item.kind == .pollVote, item.pollVoterCount > 1 {
+            let n = item.pollVoterCount
+            Text("\(n) votes")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(Color.wispPrimary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(
+                    Capsule().fill(Color.wispPrimary.opacity(0.15))
+                )
+                .accessibilityLabel("\(n) votes")
+        }
+    }
+
     @ViewBuilder
     private var voteOptionLabel: some View {
-        // NIP-88 poll votes: show selected option labels.
-        if item.kind == .pollVote, !item.voteOptionIds.isEmpty,
-           let pollEvent = repo.event(forId: item.referencedEventId) {
-            let options = Nip88.parsePollOptions(pollEvent)
-            let labels = item.voteOptionIds.compactMap { id in
-                options.first(where: { $0.id == id })?.label
-            }
-            if !labels.isEmpty {
-                Text(labels.joinToString())
-                    .font(.caption)
-                    .foregroundStyle(Color.wispPrimary)
-                    .lineLimit(1)
+        // NIP-88 poll votes consolidate per poll — show each chosen option with
+        // its current voter count, ordered by the poll's option order. Falls
+        // back to the most-recent voter's choice when the poll event (the label
+        // source) isn't cached yet.
+        if item.kind == .pollVote {
+            if let pollEvent = repo.event(forId: item.referencedEventId) {
+                let options = Nip88.parsePollOptions(pollEvent)
+                let counts = item.pollVoteCounts
+                let parts = options.compactMap { opt -> String? in
+                    let c = counts[opt.id] ?? 0
+                    return c > 0 ? "\(opt.label) (\(c))" : nil
+                }
+                if !parts.isEmpty {
+                    Text(parts.joined(separator: " · "))
+                        .font(.caption)
+                        .foregroundStyle(Color.wispPrimary)
+                        .lineLimit(2)
+                } else if !item.voteOptionIds.isEmpty {
+                    let labels = item.voteOptionIds.compactMap { id in
+                        options.first(where: { $0.id == id })?.label
+                    }
+                    if !labels.isEmpty {
+                        Text(labels.joinToString())
+                            .font(.caption)
+                            .foregroundStyle(Color.wispPrimary)
+                            .lineLimit(1)
+                    }
+                }
             }
         }
         // Kind-6969 zap polls: show selected option label.
@@ -138,8 +188,10 @@ struct NotificationRowView: View {
                 quoteExpansion
             case .mention:
                 mentionExpansion
-            case .reaction, .repost, .pollVote, .pollEnded:
+            case .reaction, .repost:
                 referencedNoteExpansion
+            case .pollVote, .pollEnded:
+                pollExpansion
             case .zap:
                 zapExpansion
             }
@@ -160,11 +212,19 @@ struct NotificationRowView: View {
     /// being indented under the avatar like caption snippets.
     private static let composerSidePadding: CGFloat = 2
 
+    /// Total horizontal inset from the screen edge to a `QuotedNoteView`
+    /// placed below via `captionLeadingIndent` (leading) + 12pt (trailing),
+    /// plus that view's own 12pt internal padding (doubled). Passed as
+    /// `nestedHorizontalInset` so its attached gallery reserves the correct
+    /// height instead of undershooting it with the view's feed-embedded
+    /// default (56, tuned for a much narrower PostCardView-edge context).
+    private static let quotedNoteHorizontalInset: CGFloat = captionLeadingIndent + 12 + 24
+
     @ViewBuilder
     private var replyExpansion: some View {
         if !item.referencedEventId.isEmpty {
             VStack(alignment: .leading, spacing: 6) {
-                Text("replying to your note")
+                Text(item.replyTargetIsMine ? "replying to your note" : "replying in your thread")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                 QuotedNoteView(
@@ -172,7 +232,8 @@ struct NotificationRowView: View {
                     relayHints: [],
                     profiles: profiles,
                     onProfileTap: onPeerTap,
-                    onNoteTap: { id in onNoteTap?(id, nil) }
+                    onNoteTap: { id in onNoteTap?(id, nil) },
+                    nestedHorizontalInset: Self.quotedNoteHorizontalInset
                 )
             }
             .padding(.leading, Self.captionLeadingIndent)
@@ -225,7 +286,8 @@ struct NotificationRowView: View {
                     relayHints: item.relayHints,
                     profiles: profiles,
                     onProfileTap: onPeerTap,
-                    onNoteTap: { id in onNoteTap?(id, nil) }
+                    onNoteTap: { id in onNoteTap?(id, nil) },
+                    nestedHorizontalInset: Self.quotedNoteHorizontalInset
                 )
             }
             .padding(.leading, Self.captionLeadingIndent)
@@ -272,10 +334,33 @@ struct NotificationRowView: View {
                 relayHints: [],
                 profiles: profiles,
                 onProfileTap: onPeerTap,
-                onNoteTap: { id in onNoteTap?(id, nil) }
+                onNoteTap: { id in onNoteTap?(id, nil) },
+                nestedHorizontalInset: Self.quotedNoteHorizontalInset
             )
             .padding(.leading, Self.captionLeadingIndent)
             .padding(.trailing, 12)
+        }
+    }
+
+    /// Poll vote / poll-ended expansion: render the poll itself with its live
+    /// results inline (a full `PostCardView` of the poll event) so the user can
+    /// read the standings and vote without leaving the notifications screen. The
+    /// card's `.onAppear` registers the poll with `PollTallyRepository`, so the
+    /// tally fills in here just like in the feed. Falls back to the quoted-note
+    /// link if the poll event isn't cached yet.
+    @ViewBuilder
+    private var pollExpansion: some View {
+        if let poll = repo.event(forId: item.referencedEventId) {
+            PostCardView(
+                event: poll,
+                profile: profiles[poll.pubkey] ?? ProfileRepository.shared.get(poll.pubkey),
+                profiles: profiles,
+                onNoteTap: { _ in onNoteTap?(poll.id, poll.pubkey) }
+            )
+            .contentShape(Rectangle())
+            .onTapGesture { onNoteTap?(poll.id, poll.pubkey) }
+        } else {
+            referencedNoteExpansion
         }
     }
 
@@ -288,7 +373,8 @@ struct NotificationRowView: View {
                     relayHints: [],
                     profiles: profiles,
                     onProfileTap: onPeerTap,
-                    onNoteTap: { id in onNoteTap?(id, nil) }
+                    onNoteTap: { id in onNoteTap?(id, nil) },
+                    nestedHorizontalInset: Self.quotedNoteHorizontalInset
                 )
             }
             if item.mergedZaps.isEmpty {
@@ -468,7 +554,9 @@ struct NotificationRowView: View {
             onDmTap(key)
             return
         }
-        withAnimation(.easeInOut(duration: 0.18)) { expanded.toggle() }
+        withAnimation(.easeInOut(duration: 0.18)) {
+            viewModel.expandedItemId = (viewModel.expandedItemId == item.id) ? nil : item.id
+        }
     }
 
     private func displayName(_ pubkey: String) -> String {
