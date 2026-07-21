@@ -67,8 +67,12 @@ enum ContentParser {
     // Mirrors Android's combined regex with the same TLD whitelist + hashtag, npub, nostr-uri, bare bech32 patterns.
     private static let combinedRegex: NSRegularExpression = {
         let tlds = "com|net|org|io|dev|app|pro|ai|co|me|info|xyz|cc|tv|to|gg|sh|im|is|it|rs|ly|site|online|store|tech|cloud|social|world|earth|space|lol|wtf|family|life|art|design|blog|news|live|video|media|chat|games|money|finance|agency|studio|build|run|codes|systems|network|zone|pub|blue|limo|fyi|wiki|page|link|click|exchange|markets|fun|club|today"
-        let pattern = #"nostr:(?:note1|nevent1|npub1|nprofile1|naddr1)[a-z0-9]+"#
-            + #"|(?<!\w)(npub1[a-z0-9]{58})(?!\w|\.[a-zA-Z])"#
+        // bech32 bodies are constrained with (?-i:…) so the outer .caseInsensitive
+        // flag doesn't let [a-z0-9] absorb uppercase letters that immediately follow
+        // a URI — e.g. "nostr:nprofile1…Bitcoin" would otherwise greedily swallow
+        // "Bitcoin" into the token, failing the decode and rendering the raw string.
+        let pattern = #"nostr:(?:note1|nevent1|npub1|nprofile1|naddr1)(?-i:[a-z0-9]+)"#
+            + #"|(?<!\w)(npub1(?-i:[a-z0-9]{58}))(?!\w|\.[a-zA-Z])"#
             + #"|(?:https?|wss?):\/\/\S+"#
             // Lookbehind excludes `@` and `.` in addition to word chars so the
             // domain half of a lightning / email address (`user@getalby.com`)
@@ -76,7 +80,7 @@ enum ContentParser {
             // and rendered as a link-preview card.
             + #"|(?<![\w@.])((?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+(?:\#(tlds))(?:\/\S*)?)(?!\w)"#
             + #"|(?<!\w)#([a-zA-Z0-9_][a-zA-Z0-9_-]*)"#
-            + #"|(?<!\w)((?:note1|nevent1|nprofile1|naddr1)[a-z0-9]{10,})(?!\w)"#
+            + #"|(?<!\w)((?:note1|nevent1|nprofile1|naddr1)(?-i:[a-z0-9]{10,}))(?!\w)"#
         return try! NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
     }()
 
@@ -362,9 +366,34 @@ enum ContentParser {
     }
 
     private static func decodeNostrToken(_ token: String) -> ContentSegment {
-        guard let decoded = Nip19.decodeNostrUri(token) else {
-            return .text(token)
+        // Fast path.
+        if let decoded = Nip19.decodeNostrUri(token) {
+            return segment(from: decoded)
         }
+        // Slow path: two bech32 strings may have been concatenated with no
+        // separator (e.g. "nprofile1…k6nprofile1…k6" published without a
+        // space). The greedy regex matched both as one token whose checksum
+        // fails. Trim one character at a time from the end until the
+        // bech32 checksum of the remaining prefix validates, then decode
+        // that portion and silently drop the broken tail rather than
+        // rendering the entire mangled string as plain text.
+        let scheme = token.hasPrefix("nostr:") ? "nostr:" : ""
+        let body = String(token.dropFirst(scheme.count))
+        // Shortest conceivable valid body: hrp + "1" + 6-char checksum ≈ 12.
+        // Use 20 as the floor so we don't waste cycles on obviously-too-short
+        // suffixes.
+        let minBody = 20
+        var trimmed = body
+        while trimmed.count > minBody {
+            trimmed = String(trimmed.dropLast())
+            if let decoded = Nip19.decodeNostrUri(scheme + trimmed) {
+                return segment(from: decoded)
+            }
+        }
+        return .text(token)
+    }
+
+    private static func segment(from decoded: NostrUriData) -> ContentSegment {
         switch decoded {
         case .noteRef(let eventId, let relays, _):
             return .nostrNote(eventId: eventId, relayHints: relays)
