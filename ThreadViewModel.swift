@@ -816,7 +816,10 @@ final class ThreadViewModel {
     }
 
     private func fetchRoot(from relays: [String]) async {
-        guard let event = await fetchEvent(id: rootId, from: relays) else { return }
+        guard let event = await fetchEvent(id: rootId, from: relays) else {
+            await reRootToSeedIfRootUnreachable(relays: relays)
+            return
+        }
         insertStructural(event)
         rootEvent = event
         // The root we just fetched may itself be a reply; re-resolve and re-fetch.
@@ -835,10 +838,56 @@ final class ThreadViewModel {
                 insertStructural(upstreamRoot)
                 rootEvent = upstreamRoot
             }
+            // The upstream root can be pruned too — same dead end as above, so
+            // fall back rather than leaving the focal pinned to a missing id.
+            if rootEvent == nil {
+                await eventStore.persist([event])
+                await reRootToSeedIfRootUnreachable(relays: relays)
+                return
+            }
         }
         await eventStore.persist([event])
         // Repaint with the (possibly re-rooted) focal — the live stream may not
         // have delivered anything yet on a cold load.
+        rebuildSlices()
+    }
+
+    /// Fall back to showing the tapped note as its own root when the ancestor
+    /// it points at can't be retrieved from any relay.
+    ///
+    /// `seedFromCache` optimistically re-roots to `Nip10.rootId` so the whole
+    /// conversation renders inline. That assumes the root is *fetchable* — for
+    /// an old note whose ancestors have since been pruned from every relay it
+    /// isn't, and the optimism is unrecoverable: `focalEventId` points at an
+    /// event that will never arrive, so `rebuildSlices` leaves `focal` nil and
+    /// renders nothing. Worse, the reply stream is subscribed on the dead
+    /// root's id, so unrelated siblings of the tapped note stream in and are
+    /// the only thing on screen — the user opens their own note and sees
+    /// somebody else's reply instead.
+    ///
+    /// Re-anchoring to the seed shows the note the user actually asked for,
+    /// with whatever subtree hangs off it. The ancestors stay missing (they're
+    /// genuinely gone), but a truncated thread beats an empty one.
+    private func reRootToSeedIfRootUnreachable(relays: [String]) async {
+        guard rootEvent == nil, rootId != seedTargetId else { return }
+        // Usually cached (that's how we learned the root id at all), but a
+        // re-root discovered mid-fetch can leave the seed itself unloaded.
+        var seed = events[seedTargetId]
+        if seed == nil, let fetched = await fetchEvent(id: seedTargetId, from: relays) {
+            insertStructural(fetched)
+            await eventStore.persist([fetched])
+            seed = fetched
+        }
+        guard let seed else { return }
+        rootId = seedTargetId
+        focalEventId = seedTargetId
+        rootEvent = seed
+        isLoading = false
+        // The seed is the focal now, so there's nothing left to scroll to.
+        pendingScrollToId = nil
+        // Non-nil `rootEvent` + changed `rootId` makes `start()` step 5
+        // re-resolve relays and restart the reply stream on this id, so the
+        // subtree that actually hangs off the tapped note subscribes.
         rebuildSlices()
     }
 
