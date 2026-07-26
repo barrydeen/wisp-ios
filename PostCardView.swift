@@ -1802,7 +1802,7 @@ struct PostCardView: View {
 
     private func broadcast(_ target: NostrEvent) {
         guard let me = myPubkey else { return }
-        // `@MainActor in` pins the alert mutation to main. Without it, the
+        // `@MainActor in` pins the UI mutation to main. Without it, the
         // assignment runs on whatever actor `RelayPool.publish` suspended on,
         // which leaves the alert in an inconsistent presentation state — the
         // OK button needs two or three taps to dismiss because SwiftUI is
@@ -1817,16 +1817,26 @@ struct PostCardView: View {
                 set = ["wss://relay.damus.io", "wss://relay.primal.net", "wss://nos.lol"]
             }
             let succeeded = await RelayPool.publish(event: target, to: Array(set), timeout: 8)
-            // Yield one runloop tick so the overflow popover finishes its
-            // dismiss animation before the alert is presented. Without the
-            // hop the alert can mount on top of a still-dismissing popover
-            // and the popover dismissal eats the first OK tap.
-            try? await Task.sleep(nanoseconds: 50_000_000)
-            actionAlert = ActionAlert(
-                title: succeeded.isEmpty ? "Broadcast failed" : "Broadcasted",
-                message: succeeded.isEmpty
-                    ? "No relays accepted the event."
-                    : "Re-published to \(succeeded.count) relay\(succeeded.count == 1 ? "" : "s")."
+            guard !succeeded.isEmpty else {
+                // Yield one runloop tick so the overflow popover finishes its
+                // dismiss animation before the alert is presented. Without the
+                // hop the alert can mount on top of a still-dismissing popover
+                // and the popover dismissal eats the first OK tap. Only the
+                // alert needs this; the toast is an overlay, not a presentation.
+                try? await Task.sleep(nanoseconds: 50_000_000)
+                actionAlert = ActionAlert(
+                    title: "Broadcast failed",
+                    message: "No relays accepted the event."
+                )
+                return
+            }
+            // Success confirms through the same top pill the composer uses on
+            // publish — a modal interrupted the user for a fire-and-forget
+            // re-publish they don't need to act on. Failure keeps the alert:
+            // that one does warrant a deliberate acknowledgement.
+            SuccessToast.shared.show(
+                "Broadcast to \(succeeded.count) relay\(succeeded.count == 1 ? "" : "s")",
+                icon: "antenna.radiowaves.left.and.right"
             )
         }
     }
