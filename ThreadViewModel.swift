@@ -52,7 +52,11 @@ final class ThreadViewModel {
     var childCounts: [String: Int] = [:]
     var profiles: [String: ProfileData] = [:]
     var engagement: [String: EngagementCounts] = [:]
-    var isLoading = false
+    /// Starts true so the very first render already shows the loader. `start()`
+    /// runs from `.task`, i.e. after the first frame, so defaulting to false
+    /// left the pushed screen blank until the cache read resolved — read as a
+    /// lag between tapping a note and anything appearing.
+    var isLoading = true
     var errorMessage: String?
     var isSending = false
     /// Set when the view should scroll to a specific event. Cleared by ThreadView
@@ -1227,7 +1231,17 @@ final class ThreadViewModel {
     /// Recompute `ancestors`, `focal`, `replies`, `childCounts`, and `hiddenSpamReplies`
     /// from the current `events` map. Called whenever events change.
     private func rebuildSlices() {
-        focal = events[focalEventId].map { makeRow($0) }
+        // Render against the seed until the re-rooted focal actually loads.
+        //
+        // `seedFromCache` re-roots `focalEventId` to `Nip10.rootId` optimistically,
+        // before anything confirms that root is fetchable. While it's unresolved
+        // the tree below would be rooted at an event we don't have, so the dead
+        // root's OTHER children — the seed's siblings — became the top-level rows
+        // and the user saw a stranger's reply in place of the note they tapped.
+        // Anchoring to the seed until the real root arrives means the screen only
+        // ever shows the note that was asked for, or its own subtree.
+        let renderRootId = events[focalEventId] != nil ? focalEventId : seedTargetId
+        focal = events[renderRootId].map { makeRow($0) }
         // The focal is always the conversation root now, so there is never an
         // ancestor chain — skip the walk (and never surface the searching /
         // missing-ancestor UI, which assumes a partial-tree focal).
@@ -1245,7 +1259,7 @@ final class ThreadViewModel {
         // `effectiveReplyCount` as `max(local, remote)` in ThreadView, so the
         // narrowing is benign and arguably more consistent with the relay count.
         var childrenByParent: [String: [NostrEvent]] = [:]
-        for event in events.values where event.kind == 1 && event.id != focalEventId {
+        for event in events.values where event.kind == 1 && event.id != renderRootId {
             guard let parentId = parent(of: event) else { continue }
             childrenByParent[parentId, default: []].append(event)
         }
@@ -1256,7 +1270,7 @@ final class ThreadViewModel {
         childCounts = childrenByParent.mapValues(\.count)
 
         // Direct replies are the focal's bucket — already sorted oldest-first.
-        let directReplies = childrenByParent[focalEventId] ?? []
+        let directReplies = childrenByParent[renderRootId] ?? []
 
         // WoT-hidden replies are NOT dropped — they render as a placeholder
         // ("Hidden by Web of Trust filter") so the user knows a reply exists
@@ -1280,7 +1294,7 @@ final class ThreadViewModel {
             hiddenSpamReplies = hidden
         }
 
-        nestedReplies = buildNestedReplies(childrenByParent: childrenByParent)
+        nestedReplies = buildNestedReplies(childrenByParent: childrenByParent, rootId: renderRootId)
 
         // Promote the pending scroll target the first time it appears in the
         // rendered list, so ThreadView scrolls after data is visible rather
@@ -1300,9 +1314,9 @@ final class ThreadViewModel {
     /// and the walk continues into their children (same as WoT-hidden), so the
     /// user's own replies nested under a blocked note are never silently dropped.
     /// Spam-hidden authors drop with their subtree.
-    private func buildNestedReplies(childrenByParent: [String: [NostrEvent]]) -> [NestedReplyRow] {
+    private func buildNestedReplies(childrenByParent: [String: [NostrEvent]], rootId: String) -> [NestedReplyRow] {
         var result: [NestedReplyRow] = []
-        var visited: Set<String> = [focalEventId]
+        var visited: Set<String> = [rootId]
 
         func walk(parentId: String, depth: Int) {
             guard let kids = childrenByParent[parentId] else { return }
@@ -1338,7 +1352,7 @@ final class ThreadViewModel {
                 walk(parentId: kid.id, depth: depth + 1)
             }
         }
-        walk(parentId: focalEventId, depth: 0)
+        walk(parentId: rootId, depth: 0)
         return result
     }
 
