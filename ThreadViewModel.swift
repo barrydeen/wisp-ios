@@ -52,7 +52,11 @@ final class ThreadViewModel {
     var childCounts: [String: Int] = [:]
     var profiles: [String: ProfileData] = [:]
     var engagement: [String: EngagementCounts] = [:]
-    var isLoading = false
+    /// Starts true so the very first render already shows the loader. `start()`
+    /// runs from `.task`, i.e. after the first frame, so defaulting to false
+    /// left the pushed screen blank until the cache read resolved — read as a
+    /// lag between tapping a note and anything appearing.
+    var isLoading = true
     var errorMessage: String?
     var isSending = false
     /// Set when the view should scroll to a specific event. Cleared by ThreadView
@@ -816,7 +820,10 @@ final class ThreadViewModel {
     }
 
     private func fetchRoot(from relays: [String]) async {
-        guard let event = await fetchEvent(id: rootId, from: relays) else { return }
+        guard let event = await fetchEvent(id: rootId, from: relays) else {
+            await reRootToSeedIfRootUnreachable(relays: relays)
+            return
+        }
         insertStructural(event)
         rootEvent = event
         // The root we just fetched may itself be a reply; re-resolve and re-fetch.
@@ -835,10 +842,56 @@ final class ThreadViewModel {
                 insertStructural(upstreamRoot)
                 rootEvent = upstreamRoot
             }
+            // The upstream root can be pruned too — same dead end as above, so
+            // fall back rather than leaving the focal pinned to a missing id.
+            if rootEvent == nil {
+                await eventStore.persist([event])
+                await reRootToSeedIfRootUnreachable(relays: relays)
+                return
+            }
         }
         await eventStore.persist([event])
         // Repaint with the (possibly re-rooted) focal — the live stream may not
         // have delivered anything yet on a cold load.
+        rebuildSlices()
+    }
+
+    /// Fall back to showing the tapped note as its own root when the ancestor
+    /// it points at can't be retrieved from any relay.
+    ///
+    /// `seedFromCache` optimistically re-roots to `Nip10.rootId` so the whole
+    /// conversation renders inline. That assumes the root is *fetchable* — for
+    /// an old note whose ancestors have since been pruned from every relay it
+    /// isn't, and the optimism is unrecoverable: `focalEventId` points at an
+    /// event that will never arrive, so `rebuildSlices` leaves `focal` nil and
+    /// renders nothing. Worse, the reply stream is subscribed on the dead
+    /// root's id, so unrelated siblings of the tapped note stream in and are
+    /// the only thing on screen — the user opens their own note and sees
+    /// somebody else's reply instead.
+    ///
+    /// Re-anchoring to the seed shows the note the user actually asked for,
+    /// with whatever subtree hangs off it. The ancestors stay missing (they're
+    /// genuinely gone), but a truncated thread beats an empty one.
+    private func reRootToSeedIfRootUnreachable(relays: [String]) async {
+        guard rootEvent == nil, rootId != seedTargetId else { return }
+        // Usually cached (that's how we learned the root id at all), but a
+        // re-root discovered mid-fetch can leave the seed itself unloaded.
+        var seed = events[seedTargetId]
+        if seed == nil, let fetched = await fetchEvent(id: seedTargetId, from: relays) {
+            insertStructural(fetched)
+            await eventStore.persist([fetched])
+            seed = fetched
+        }
+        guard let seed else { return }
+        rootId = seedTargetId
+        focalEventId = seedTargetId
+        rootEvent = seed
+        isLoading = false
+        // The seed is the focal now, so there's nothing left to scroll to.
+        pendingScrollToId = nil
+        // Non-nil `rootEvent` + changed `rootId` makes `start()` step 5
+        // re-resolve relays and restart the reply stream on this id, so the
+        // subtree that actually hangs off the tapped note subscribes.
         rebuildSlices()
     }
 
@@ -1178,7 +1231,17 @@ final class ThreadViewModel {
     /// Recompute `ancestors`, `focal`, `replies`, `childCounts`, and `hiddenSpamReplies`
     /// from the current `events` map. Called whenever events change.
     private func rebuildSlices() {
-        focal = events[focalEventId].map { makeRow($0) }
+        // Render against the seed until the re-rooted focal actually loads.
+        //
+        // `seedFromCache` re-roots `focalEventId` to `Nip10.rootId` optimistically,
+        // before anything confirms that root is fetchable. While it's unresolved
+        // the tree below would be rooted at an event we don't have, so the dead
+        // root's OTHER children — the seed's siblings — became the top-level rows
+        // and the user saw a stranger's reply in place of the note they tapped.
+        // Anchoring to the seed until the real root arrives means the screen only
+        // ever shows the note that was asked for, or its own subtree.
+        let renderRootId = events[focalEventId] != nil ? focalEventId : seedTargetId
+        focal = events[renderRootId].map { makeRow($0) }
         // The focal is always the conversation root now, so there is never an
         // ancestor chain — skip the walk (and never surface the searching /
         // missing-ancestor UI, which assumes a partial-tree focal).
@@ -1196,7 +1259,7 @@ final class ThreadViewModel {
         // `effectiveReplyCount` as `max(local, remote)` in ThreadView, so the
         // narrowing is benign and arguably more consistent with the relay count.
         var childrenByParent: [String: [NostrEvent]] = [:]
-        for event in events.values where event.kind == 1 && event.id != focalEventId {
+        for event in events.values where event.kind == 1 && event.id != renderRootId {
             guard let parentId = parent(of: event) else { continue }
             childrenByParent[parentId, default: []].append(event)
         }
@@ -1207,7 +1270,7 @@ final class ThreadViewModel {
         childCounts = childrenByParent.mapValues(\.count)
 
         // Direct replies are the focal's bucket — already sorted oldest-first.
-        let directReplies = childrenByParent[focalEventId] ?? []
+        let directReplies = childrenByParent[renderRootId] ?? []
 
         // WoT-hidden replies are NOT dropped — they render as a placeholder
         // ("Hidden by Web of Trust filter") so the user knows a reply exists
@@ -1231,7 +1294,7 @@ final class ThreadViewModel {
             hiddenSpamReplies = hidden
         }
 
-        nestedReplies = buildNestedReplies(childrenByParent: childrenByParent)
+        nestedReplies = buildNestedReplies(childrenByParent: childrenByParent, rootId: renderRootId)
 
         // Promote the pending scroll target the first time it appears in the
         // rendered list, so ThreadView scrolls after data is visible rather
@@ -1251,9 +1314,9 @@ final class ThreadViewModel {
     /// and the walk continues into their children (same as WoT-hidden), so the
     /// user's own replies nested under a blocked note are never silently dropped.
     /// Spam-hidden authors drop with their subtree.
-    private func buildNestedReplies(childrenByParent: [String: [NostrEvent]]) -> [NestedReplyRow] {
+    private func buildNestedReplies(childrenByParent: [String: [NostrEvent]], rootId: String) -> [NestedReplyRow] {
         var result: [NestedReplyRow] = []
-        var visited: Set<String> = [focalEventId]
+        var visited: Set<String> = [rootId]
 
         func walk(parentId: String, depth: Int) {
             guard let kids = childrenByParent[parentId] else { return }
@@ -1289,7 +1352,7 @@ final class ThreadViewModel {
                 walk(parentId: kid.id, depth: depth + 1)
             }
         }
-        walk(parentId: focalEventId, depth: 0)
+        walk(parentId: rootId, depth: 0)
         return result
     }
 
