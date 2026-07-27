@@ -2813,13 +2813,22 @@ func absoluteTimestamp(_ timestamp: Int) -> String {
 }
 
 func relativeTime(from timestamp: Int) -> String {
-    let seconds = Int(Date().timeIntervalSince1970) - timestamp
+    let now = Date()
+    let date = Date(timeIntervalSince1970: Double(timestamp))
+    let seconds = Int(now.timeIntervalSince1970) - timestamp
     if seconds < 60 { return "now" }
     if seconds < 3600 { return "\(seconds / 60)m" }
     if seconds < 86400 { return "\(seconds / 3600)h" }
     if seconds < 604_800 { return "\(seconds / 86400)d" }
-    if seconds >= 31_536_000 { return "\(Int((Double(seconds) / 31_536_000).rounded()))y" }
-    return postCardMonthDayFormatter.string(from: Date(timeIntervalSince1970: Double(timestamp)))
+    // Years elapsed, counted on the calendar and truncated — a Jan 2023 note
+    // read "4y" in mid-2026 because the old math divided by a fixed 365 days
+    // and *rounded*, so anything past 3.5y jumped a year early. Every other
+    // unit here truncates (59 minutes is "59m", never "1h"); this now matches,
+    // and Calendar handles leap years so the boundary lands on the anniversary.
+    if let years = Calendar.current.dateComponents([.year], from: date, to: now).year, years >= 1 {
+        return "\(years)y"
+    }
+    return postCardMonthDayFormatter.string(from: date)
 }
 
 
