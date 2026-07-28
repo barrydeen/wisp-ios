@@ -1806,7 +1806,7 @@ final class ComposeViewModel {
         }
 
         if !relays.isEmpty { return Array(relays) }
-        return ["wss://relay.damus.io", "wss://relay.primal.net", "wss://nos.lol"]
+        return topWriteRelays()
     }
 
     private func topWriteRelays() -> [String] {
