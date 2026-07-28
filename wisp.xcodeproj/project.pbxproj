@@ -35,16 +35,15 @@
 		4CABCD010000000000F30001 /* PrivateInteractionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30001 /* PrivateInteractionStore.swift */; };
 		4CABCD010000000000F30002 /* PrivateInteractionRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30002 /* PrivateInteractionRouter.swift */; };
 		4CABCD010000000000F30003 /* PeerRelayResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30003 /* PeerRelayResolver.swift */; };
-		4CABCD030000000000F30010 /* DmGiftWrapIngestor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD020000000000F30010 /* DmGiftWrapIngestor.swift */; };
-		4CABCD030000000000F30030 /* NsecIdentityPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD020000000000F30030 /* NsecIdentityPreview.swift */; };
-		4CABCD030000000000F30020 /* PendingPostStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD020000000000F30020 /* PendingPostStore.swift */; };
-		4CABCD030000000000F30021 /* PendingPostRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD020000000000F30021 /* PendingPostRow.swift */; };
 		4CABCD010000000000F30004 /* PrivateReplyPublisher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30004 /* PrivateReplyPublisher.swift */; };
 		4CABCD010000000000F30005 /* PrivateReactionPublisher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30005 /* PrivateReactionPublisher.swift */; };
 		4CABCD010000000000F30006 /* Dip03.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30006 /* Dip03.swift */; };
 		4CABCD010000000000F30050 /* WispTopHeader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30050 /* WispTopHeader.swift */; };
 		4CABCD010000000000F30051 /* AccountSwitcherSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30051 /* AccountSwitcherSheet.swift */; };
 		4CABCD030000000000F30010 /* DmGiftWrapIngestor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD020000000000F30010 /* DmGiftWrapIngestor.swift */; };
+		4CABCD030000000000F30020 /* PendingPostStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD020000000000F30020 /* PendingPostStore.swift */; };
+		4CABCD030000000000F30021 /* PendingPostRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD020000000000F30021 /* PendingPostRow.swift */; };
+		4CABCD030000000000F30030 /* NsecIdentityPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD020000000000F30030 /* NsecIdentityPreview.swift */; };
 		4CABCD030000000000F30040 /* CldrEmojiKeywords.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD020000000000F30040 /* CldrEmojiKeywords.swift */; };
 		4CABCD040000000000F30041 /* cldr-emoji-keywords-en.json in Resources */ = {isa = PBXBuildFile; fileRef = 4CABCD020000000000F30041 /* cldr-emoji-keywords-en.json */; };
 		4CABCE0100000000000F4607 /* Signer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCE0000000000000F4607 /* Signer.swift */; };
@@ -128,14 +127,13 @@
 		4CFF010700000000000000A4 /* LinkPreviewService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF010600000000000000A4 /* LinkPreviewService.swift */; };
 		4CFF010900000000000000A5 /* LinkPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF010800000000000000A5 /* LinkPreviewView.swift */; };
 		4CFF010B00000000000000A6 /* LightningInvoiceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF010A00000000000000A6 /* LightningInvoiceView.swift */; };
-		4CFF0A0100000000000000B1 /* LightningPaySheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF0A0000000000000000B1 /* LightningPaySheet.swift */; };
-		4CFF011900000000000000AD /* LnurlPayableView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF011800000000000000AD /* LnurlPayableView.swift */; };
 		4CFF010D00000000000000A7 /* QuotedNoteView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF010C00000000000000A7 /* QuotedNoteView.swift */; };
 		4CFF010F00000000000000A8 /* InlineVideoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF010E00000000000000A8 /* InlineVideoView.swift */; };
 		4CFF011100000000000000A9 /* InlineAudioView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF011000000000000000A9 /* InlineAudioView.swift */; };
 		4CFF011300000000000000AA /* InlineImageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF011200000000000000AA /* InlineImageView.swift */; };
 		4CFF011500000000000000AB /* AnimatedImageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF011400000000000000AB /* AnimatedImageView.swift */; };
 		4CFF011700000000000000AC /* MediaAudioSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF011600000000000000AC /* MediaAudioSession.swift */; };
+		4CFF011900000000000000AD /* LnurlPayableView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF011800000000000000AD /* LnurlPayableView.swift */; };
 		4CFF020100000000000000A8 /* VideoPiPCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF020000000000000000A8 /* VideoPiPCoordinator.swift */; };
 		4CFF020100000000000000B1 /* ProfileRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF020000000000000000B1 /* ProfileRoute.swift */; };
 		4CFF020300000000000000A8 /* PiPPlayerViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF020200000000000000A8 /* PiPPlayerViewController.swift */; };
@@ -383,16 +381,15 @@
 		4CABCD000000000000F30001 /* PrivateInteractionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateInteractionStore.swift; sourceTree = "<group>"; };
 		4CABCD000000000000F30002 /* PrivateInteractionRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateInteractionRouter.swift; sourceTree = "<group>"; };
 		4CABCD000000000000F30003 /* PeerRelayResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeerRelayResolver.swift; sourceTree = "<group>"; };
-		4CABCD020000000000F30010 /* DmGiftWrapIngestor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DmGiftWrapIngestor.swift; sourceTree = "<group>"; };
-		4CABCD020000000000F30030 /* NsecIdentityPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NsecIdentityPreview.swift; sourceTree = "<group>"; };
-		4CABCD020000000000F30020 /* PendingPostStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingPostStore.swift; sourceTree = "<group>"; };
-		4CABCD020000000000F30021 /* PendingPostRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingPostRow.swift; sourceTree = "<group>"; };
 		4CABCD000000000000F30004 /* PrivateReplyPublisher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateReplyPublisher.swift; sourceTree = "<group>"; };
 		4CABCD000000000000F30005 /* PrivateReactionPublisher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateReactionPublisher.swift; sourceTree = "<group>"; };
 		4CABCD000000000000F30006 /* Dip03.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Dip03.swift; sourceTree = "<group>"; };
 		4CABCD000000000000F30050 /* WispTopHeader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WispTopHeader.swift; sourceTree = "<group>"; };
 		4CABCD000000000000F30051 /* AccountSwitcherSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountSwitcherSheet.swift; sourceTree = "<group>"; };
 		4CABCD020000000000F30010 /* DmGiftWrapIngestor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DmGiftWrapIngestor.swift; sourceTree = "<group>"; };
+		4CABCD020000000000F30020 /* PendingPostStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingPostStore.swift; sourceTree = "<group>"; };
+		4CABCD020000000000F30021 /* PendingPostRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingPostRow.swift; sourceTree = "<group>"; };
+		4CABCD020000000000F30030 /* NsecIdentityPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NsecIdentityPreview.swift; sourceTree = "<group>"; };
 		4CABCD020000000000F30040 /* CldrEmojiKeywords.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CldrEmojiKeywords.swift; sourceTree = "<group>"; };
 		4CABCD020000000000F30041 /* cldr-emoji-keywords-en.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "cldr-emoji-keywords-en.json"; sourceTree = "<group>"; };
 		4CABCE0000000000000F4607 /* Signer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Signer.swift; sourceTree = "<group>"; };
@@ -454,6 +451,7 @@
 		4CDFAB0000000000000DF007 /* PollsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PollsViewModel.swift; sourceTree = "<group>"; };
 		4CDFAB0000000000000DF009 /* PollsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PollsView.swift; sourceTree = "<group>"; };
 		4CDFAB0000000000000DF201 /* Nip38.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Nip38.swift; sourceTree = "<group>"; };
+		4CECCBFD3018FFE100EFB672 /* ShareExtensionRelease.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = ShareExtensionRelease.entitlements; sourceTree = "<group>"; };
 		4CFA00020001000000A1BA01 /* RelayDefaults.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayDefaults.swift; sourceTree = "<group>"; };
 		4CFA00040001000000A1BA01 /* FollowsCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowsCache.swift; sourceTree = "<group>"; };
 		4CFA00060001000000A1BA01 /* EventPersistQueue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventPersistQueue.swift; sourceTree = "<group>"; };
@@ -476,14 +474,13 @@
 		4CFF010600000000000000A4 /* LinkPreviewService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkPreviewService.swift; sourceTree = "<group>"; };
 		4CFF010800000000000000A5 /* LinkPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkPreviewView.swift; sourceTree = "<group>"; };
 		4CFF010A00000000000000A6 /* LightningInvoiceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LightningInvoiceView.swift; sourceTree = "<group>"; };
-		4CFF0A0000000000000000B1 /* LightningPaySheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LightningPaySheet.swift; sourceTree = "<group>"; };
-		4CFF011800000000000000AD /* LnurlPayableView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LnurlPayableView.swift; sourceTree = "<group>"; };
 		4CFF010C00000000000000A7 /* QuotedNoteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotedNoteView.swift; sourceTree = "<group>"; };
 		4CFF010E00000000000000A8 /* InlineVideoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InlineVideoView.swift; sourceTree = "<group>"; };
 		4CFF011000000000000000A9 /* InlineAudioView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InlineAudioView.swift; sourceTree = "<group>"; };
 		4CFF011200000000000000AA /* InlineImageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InlineImageView.swift; sourceTree = "<group>"; };
 		4CFF011400000000000000AB /* AnimatedImageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnimatedImageView.swift; sourceTree = "<group>"; };
 		4CFF011600000000000000AC /* MediaAudioSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaAudioSession.swift; sourceTree = "<group>"; };
+		4CFF011800000000000000AD /* LnurlPayableView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LnurlPayableView.swift; sourceTree = "<group>"; };
 		4CFF020000000000000000A8 /* VideoPiPCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoPiPCoordinator.swift; sourceTree = "<group>"; };
 		4CFF020000000000000000B1 /* ProfileRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileRoute.swift; sourceTree = "<group>"; };
 		4CFF020200000000000000A8 /* PiPPlayerViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiPPlayerViewController.swift; sourceTree = "<group>"; };
@@ -665,22 +662,16 @@
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		4CDA87AD2F9C4BC10079A1BA /* wisp */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-			);
 			path = wisp;
 			sourceTree = "<group>";
 		};
 		4CDA87BB2F9C4BC20079A1BA /* wispTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-			);
 			path = wispTests;
 			sourceTree = "<group>";
 		};
 		4CDA87C52F9C4BC20079A1BA /* wispUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-			);
 			path = wispUITests;
 			sourceTree = "<group>";
 		};
@@ -1055,11 +1046,11 @@
 		98E664502F89AB4B1A0D93CD /* ShareExtension */ = {
 			isa = PBXGroup;
 			children = (
+				4CECCBFD3018FFE100EFB672 /* ShareExtensionRelease.entitlements */,
 				C21B5D026207FD4CF0931588 /* ShareViewController.swift */,
 				1C51B88C4BCC0FBAFD394BE8 /* Info.plist */,
 				9DADF962DB484ADC87FF23E5 /* ShareExtension.entitlements */,
 			);
-			name = ShareExtension;
 			path = ShareExtension;
 			sourceTree = "<group>";
 		};
@@ -1597,7 +1588,7 @@
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CLANG_ENABLE_OBJC_WEAK = YES;
-				CODE_SIGN_ENTITLEMENTS = ShareExtension/ShareExtension.entitlements;
+				CODE_SIGN_ENTITLEMENTS = ShareExtension/ShareExtensionRelease.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = G738XL8P49;
@@ -1821,7 +1812,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = wisp.entitlements;
+				CODE_SIGN_ENTITLEMENTS = wisp/wispRelease.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = G738XL8P49;
