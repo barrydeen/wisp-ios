@@ -62,9 +62,15 @@ enum LnurlResolver {
             let payUrl: URL
             let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
 
-            if trimmed.hasPrefix("lnurl") {
-                // Bech32-encoded LNURL — skip, this is an edge case for NWC users
-                return .failure(.other("Encoded LNURLs not supported via NWC. Paste the decoded URL or a lightning address."))
+            if trimmed.hasPrefix("lnurl1") {
+                // Bech32-encoded LNURL: decode to the underlying HTTPS URL.
+                guard let (hrp, data) = Bech32.decode(trimmed),
+                      hrp == "lnurl",
+                      let decodedUrl = String(data: data, encoding: .utf8),
+                      let url = URL(string: decodedUrl) else {
+                    return .failure(.other("Invalid LNURL encoding"))
+                }
+                payUrl = url
             } else if isLightningAddress(trimmed) {
                 let parts = trimmed.split(separator: "@", maxSplits: 1)
                 let user = String(parts[0])
