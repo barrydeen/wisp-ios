@@ -35,21 +35,35 @@ struct ComposeView: View {
     /// (which ignores `State(initialValue:)` when state already exists for this view identity).
     private let initialDraft: Nip37.Draft?
 
+    /// Media handed off from the Share Extension (see `PendingShareStore` /
+    /// `wispApp.onOpenURL`), loaded the same way as a `PhotosPicker`
+    /// selection once the view appears.
+    private let pendingAttachmentProviders: [NSItemProvider]
+
     private let previewAnchorID = "composer-preview-card"
 
     init(keypair: Keypair, mode: ComposeMode = .new) {
         self.initialDraft = nil
+        self.pendingAttachmentProviders = []
         _viewModel = State(initialValue: ComposeViewModel(keypair: keypair, mode: mode))
     }
 
     init(keypair: Keypair, draft: Nip37.Draft) {
         self.initialDraft = draft
+        self.pendingAttachmentProviders = []
         _viewModel = State(initialValue: ComposeViewModel(keypair: keypair, mode: .new))
     }
 
     init(keypair: Keypair, initialText: String) {
         self.initialDraft = nil
+        self.pendingAttachmentProviders = []
         _viewModel = State(initialValue: ComposeViewModel(keypair: keypair, initialText: initialText))
+    }
+
+    init(keypair: Keypair, pendingAttachmentProviders: [NSItemProvider]) {
+        self.initialDraft = nil
+        self.pendingAttachmentProviders = pendingAttachmentProviders
+        _viewModel = State(initialValue: ComposeViewModel(keypair: keypair, mode: .new))
     }
 
     var body: some View {
@@ -226,6 +240,9 @@ struct ComposeView: View {
             // Drafts / reply prefills land before the view observes
             // `content`, so warm their links once on open too.
             viewModel.prefetchSocialPreviews()
+            if !pendingAttachmentProviders.isEmpty {
+                await viewModel.addMediaProviders(pendingAttachmentProviders)
+            }
         }
         .interactiveDismissDisabled(
             viewModel.isPublishing

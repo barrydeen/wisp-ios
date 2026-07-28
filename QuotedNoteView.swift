@@ -134,6 +134,13 @@ struct QuotedNoteView: View {
     let profiles: [String: ProfileData]
     var onProfileTap: ((String) -> Void)? = nil
     var onNoteTap: ((String) -> Void)? = nil
+    /// Forwarded to `RichContentView.nestedHorizontalInset` / `MediaGridView`
+    /// for this note's own attached gallery. Default (56) matches this view's
+    /// most common placement: embedded inline inside another post's own body
+    /// (`RichContentView`'s `.nostrNote` case) under a `PostCardView`'s 16pt
+    /// card edge. `NotificationRowView` places this view directly under its
+    /// own, wider caption indent and must pass its own total.
+    var nestedHorizontalInset: CGFloat = 56
     var onHashtagTap: ((String) -> Void)? = nil
 
     @State private var event: NostrEvent?
@@ -148,7 +155,14 @@ struct QuotedNoteView: View {
     /// to the same height with a "Show more" toggle instead of pushing the
     /// surrounding card off-screen.
     private static let longPostCharThreshold = 600
-    private static let longPostCollapsedHeight: CGFloat = 280
+    private static let longPostTextCollapsedHeight: CGFloat = 280
+    /// Visible height of trailing media when collapsed. Rendered as its own
+    /// portion (see `renderMode: .mediaPortion` below) with its own height
+    /// budget so a long caption above it can't eat into the gallery's peek —
+    /// previously text and media shared one combined cap, and a caption
+    /// alone could consume nearly all of it, leaving almost nothing of the
+    /// gallery visible. Matches PostCardView's `mediaPeekHeight`.
+    private static let mediaPeekHeight: CGFloat = 80
 
     /// One silent redundancy retry on initial miss — broadens the relay set
     /// without making the user tap. Beyond that the missing card becomes a
@@ -331,6 +345,13 @@ struct QuotedNoteView: View {
                     let isLong = event.content.count > Self.longPostCharThreshold || hasMedia
                     let collapsed = isLong && !contentExpanded
                     VStack(alignment: .leading, spacing: 6) {
+                        // Text portion: leading inline groups only, capped
+                        // independently of media (see `mediaPortion` below).
+                        // Previously one `RichContentView(renderMode: .all)`
+                        // shared a single height cap between the caption and
+                        // any trailing gallery — a caption alone could
+                        // consume nearly the whole cap, leaving almost
+                        // nothing of the gallery visible beneath it.
                         RichContentView(
                             content: event.content,
                             tags: event.tags,
@@ -340,7 +361,9 @@ struct QuotedNoteView: View {
                             onNoteTap: onNoteTap,
                             onHashtagTap: onHashtagTap,
                             showLinkPreviews: false,
-                            nested: true
+                            nested: true,
+                            nestedHorizontalInset: nestedHorizontalInset,
+                            renderMode: .textPortion
                         )
                         // Render media at intrinsic height so an image
                         // inside an embedded note fills the card's width
@@ -353,7 +376,7 @@ struct QuotedNoteView: View {
                         // bottom rather than scaling the image.
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(
-                            maxHeight: collapsed ? Self.longPostCollapsedHeight : .infinity,
+                            maxHeight: collapsed ? Self.longPostTextCollapsedHeight : .infinity,
                             alignment: .top
                         )
                         .clipped()
@@ -379,6 +402,42 @@ struct QuotedNoteView: View {
                                     .foregroundStyle(Color.wispPrimary)
                             }
                             .buttonStyle(.plain)
+                        }
+                        // Media portion: everything from the first
+                        // block/media group onward. Always rendered, even
+                        // when collapsed — peeked to `mediaPeekHeight` so
+                        // the user can see media (e.g. a gallery) exists
+                        // below, instead of the caption's cap swallowing it
+                        // entirely. Expands to natural size on toggle.
+                        RichContentView(
+                            content: event.content,
+                            tags: event.tags,
+                            profiles: profiles,
+                            authorPubkey: event.pubkey,
+                            onProfileTap: onProfileTap,
+                            onNoteTap: onNoteTap,
+                            onHashtagTap: onHashtagTap,
+                            showLinkPreviews: false,
+                            nested: true,
+                            nestedHorizontalInset: nestedHorizontalInset,
+                            renderMode: .mediaPortion
+                        )
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(
+                            maxHeight: collapsed ? Self.mediaPeekHeight : .infinity,
+                            alignment: .top
+                        )
+                        .clipped()
+                        .overlay(alignment: .bottom) {
+                            if collapsed {
+                                LinearGradient(
+                                    colors: [Color.wispBackground.opacity(0), Color.wispBackground],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                                .frame(height: 32)
+                                .allowsHitTesting(false)
+                            }
                         }
                     }
                 }

@@ -1210,6 +1210,7 @@ final class ComposeViewModel {
         // Normal post: hand off to PostPublisher so the sheet can dismiss
         // immediately while mining + broadcasting run in the background.
         let createdAt = NostrClock.now()
+        let relayTargets = await resolvePublishRelays()
         let draft = PreparedDraft(
             kind: kind,
             tags: tags,
@@ -1218,11 +1219,22 @@ final class ComposeViewModel {
             signingKeypair: signingKeypair,
             powEnabled: powEnabled,
             powDifficulty: powDifficulty,
-            relays: topWriteRelays(),
+            relays: relayTargets,
             autosaveKeyToClear: autosaveKey,
             draftIdToClear: currentDraftId
         )
         currentDraftId = nil
+        // Stand up the optimistic feed row before handing off — the sheet
+        // dismisses immediately after this call, so the row needs to be in
+        // the store by the time the home feed re-renders. The row dissolves
+        // when the real published event arrives via `.nostrEventPublished`,
+        // or flips to a failed state if PostPublisher reports an error.
+        PendingPostStore.shared.start(
+            content: postContent,
+            tags: tags,
+            pubkey: signingKeypair.pubkey,
+            kind: kind
+        )
         PostPublisher.shared.submit(draft)
         Haptics.shared.pulse()
         // Any non-nil id triggers the sheet's dismiss observer. The actual event
@@ -1538,7 +1550,7 @@ final class ComposeViewModel {
                 let nextIdx = r.upperBound
                 if nextIdx < out.endIndex {
                     let c = out[nextIdx]
-                    if (c >= "a" && c <= "z") || (c >= "0" && c <= "9") {
+                    if (c >= "a" && c <= "z") || (c >= "A" && c <= "Z") || (c >= "0" && c <= "9") {
                         out.insert(" ", at: nextIdx)
                         cursor = out.index(after: nextIdx)
                         continue
@@ -1779,8 +1791,30 @@ final class ComposeViewModel {
         return cleaned.isEmpty ? "user" : cleaned
     }
 
+    private func resolvePublishRelays() async -> [String] {
+        var relays = Set(await RelayListRepository.shared.getWriteRelays(signingKeypair.pubkey))
+
+        switch mode {
+        case .new:
+            break
+        case .reply(let parent, _):
+            let authorReads = await RelayListRepository.shared.getReadRelays(parent.pubkey)
+            relays.formUnion(authorReads)
+        case .quote(let q):
+            let authorReads = await RelayListRepository.shared.getReadRelays(q.pubkey)
+            relays.formUnion(authorReads)
+        }
+
+        if !relays.isEmpty { return Array(relays) }
+        return topWriteRelays()
+    }
+
     private func topWriteRelays() -> [String] {
-        RelayRouting.topWriteRelays(for: signingKeypair.pubkey)
+        if let board = RelayScoreBoard.load(pubkey: signingKeypair.pubkey) {
+            let top = board.scoredRelays.map(\.url)
+            if !top.isEmpty { return top }
+        }
+        return ["wss://relay.damus.io", "wss://relay.primal.net", "wss://nos.lol"]
     }
 }
 

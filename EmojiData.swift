@@ -410,7 +410,13 @@ enum EmojiData {
         "💯": ["100", "hundred"],
         "🆗": ["ok"],
         "🆕": ["new"],
-        "⭕": ["circle", "o", "ring"]
+        "⭕": ["circle", "o", "ring"],
+        // "italian" — gesture nickname plus food/flag CLDR doesn't cross-list
+        // under this term (flag: Italy has no CLDR keyword entry at all)
+        "🤌": ["italian", "italian hand", "italian hands"],
+        "🍕": ["italian"],
+        "🍝": ["italian"],
+        "🇮🇹": ["italian", "italy"]
     ]
 
     /// Reverse index used by `searchEmojis`. Built once on first access so

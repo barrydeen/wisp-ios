@@ -217,12 +217,22 @@ final class FeedViewModel {
             forName: .nostrEventPublished, object: nil, queue: .main
         ) { [weak self] note in
             guard let event = note.userInfo?["event"] as? NostrEvent else { return }
-            Task { @MainActor [weak self] in
+            // Synchronous main-actor call instead of `Task { @MainActor in }`
+            // so this observer and `PendingPostStore`'s observer run in the
+            // same runloop tick — SwiftUI batches both writes (events insert
+            // + pending clear) into a single render pass. Without this, the
+            // dimmed pending row could sit visible under the real card for a
+            // beat before the deferred clear committed.
+            MainActor.assumeIsolated {
                 guard let self else { return }
                 guard event.pubkey == self.keypair.pubkey else { return }
                 guard self.currentKind == .follows else { return }
                 guard Self.isFeedRenderable(event, includeReplies: AppSettings.shared.includeRepliesInFeed) else { return }
                 guard self.seenIds.insert(event.id).inserted else { return }
+                // Clear the optimistic placeholder atomically with the real
+                // insert. PendingPostStore's own observer is also listening;
+                // this just guarantees the swap regardless of observer order.
+                PendingPostStore.shared.clearIfMatches(realEvent: event)
                 self.events = self.windowTrimmed(Self.consolidateReposts(
                     Self.mergeSortedDesc(self.events, [event])
                 ))
@@ -1063,6 +1073,28 @@ final class FeedViewModel {
            let updated = profileRepo.updateFromEvent(best) {
             userProfile = updated
             profiles[pubkey] = updated
+        }
+
+        // Reconcile the local follow set with the freshest kind-3 on relays.
+        // `FollowsCache` is otherwise only written at onboarding and on in-app
+        // follow/unfollow, so a follow list changed in another client (e.g.
+        // trimmed via an external tool) never lands locally — and the next
+        // in-app edit republishes the stale set, undoing the change.
+        // `reconcile` adopts the relay copy only when its `created_at` is
+        // newer than the set we already hold, so it can't clobber a fresher
+        // local edit.
+        let contactResults = await RelayPool.query(
+            relays: Self.indexerRelays,
+            filter: NostrFilter(kinds: [3], authors: [pubkey], limit: 1),
+            waitForAllRelays: true
+        )
+        if let bestContacts = contactResults.filter({ $0.kind == 3 }).max(by: { $0.createdAt < $1.createdAt }) {
+            let followPubkeys = bestContacts.tags.compactMap { tag -> String? in
+                tag.count >= 2 && tag[0] == "p" ? tag[1] : nil
+            }
+            if FollowsCache.shared.reconcile(pubkey: pubkey, follows: followPubkeys, createdAt: bestContacts.createdAt) {
+                reloadFollowsCache()
+            }
         }
     }
 

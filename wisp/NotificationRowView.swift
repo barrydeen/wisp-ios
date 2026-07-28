@@ -212,6 +212,14 @@ struct NotificationRowView: View {
     /// being indented under the avatar like caption snippets.
     private static let composerSidePadding: CGFloat = 2
 
+    /// Total horizontal inset from the screen edge to a `QuotedNoteView`
+    /// placed below via `captionLeadingIndent` (leading) + 12pt (trailing),
+    /// plus that view's own 12pt internal padding (doubled). Passed as
+    /// `nestedHorizontalInset` so its attached gallery reserves the correct
+    /// height instead of undershooting it with the view's feed-embedded
+    /// default (56, tuned for a much narrower PostCardView-edge context).
+    private static let quotedNoteHorizontalInset: CGFloat = captionLeadingIndent + 12 + 24
+
     @ViewBuilder
     private var replyExpansion: some View {
         if !item.referencedEventId.isEmpty {
@@ -224,7 +232,8 @@ struct NotificationRowView: View {
                     relayHints: [],
                     profiles: profiles,
                     onProfileTap: onPeerTap,
-                    onNoteTap: { id in onNoteTap?(id, nil) }
+                    onNoteTap: { id in onNoteTap?(id, nil) },
+                    nestedHorizontalInset: Self.quotedNoteHorizontalInset
                 )
             }
             .padding(.leading, Self.captionLeadingIndent)
@@ -277,7 +286,8 @@ struct NotificationRowView: View {
                     relayHints: item.relayHints,
                     profiles: profiles,
                     onProfileTap: onPeerTap,
-                    onNoteTap: { id in onNoteTap?(id, nil) }
+                    onNoteTap: { id in onNoteTap?(id, nil) },
+                    nestedHorizontalInset: Self.quotedNoteHorizontalInset
                 )
             }
             .padding(.leading, Self.captionLeadingIndent)
@@ -324,7 +334,8 @@ struct NotificationRowView: View {
                 relayHints: [],
                 profiles: profiles,
                 onProfileTap: onPeerTap,
-                onNoteTap: { id in onNoteTap?(id, nil) }
+                onNoteTap: { id in onNoteTap?(id, nil) },
+                nestedHorizontalInset: Self.quotedNoteHorizontalInset
             )
             .padding(.leading, Self.captionLeadingIndent)
             .padding(.trailing, 12)
@@ -362,7 +373,8 @@ struct NotificationRowView: View {
                     relayHints: [],
                     profiles: profiles,
                     onProfileTap: onPeerTap,
-                    onNoteTap: { id in onNoteTap?(id, nil) }
+                    onNoteTap: { id in onNoteTap?(id, nil) },
+                    nestedHorizontalInset: Self.quotedNoteHorizontalInset
                 )
             }
             if item.mergedZaps.isEmpty {

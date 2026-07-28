@@ -225,6 +225,7 @@ struct RichInlineTextView: UIViewRepresentable {
         let style = NSMutableParagraphStyle()
         style.lineSpacing = 3
         style.lineBreakMode = .byWordWrapping
+        style.hyphenationFactor = 0
 
         let baseAttrs: [NSAttributedString.Key: Any] = [
             .font: baseFont,

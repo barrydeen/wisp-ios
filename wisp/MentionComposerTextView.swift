@@ -45,7 +45,15 @@ final class WispPillLayoutManager: NSLayoutManager {
                 )
                 rect.origin.x += origin.x
                 rect.origin.y += origin.y
-                let pill = rect.insetBy(dx: -5, dy: -1)
+                // Background hugs the glyph bounds horizontally so adjacent
+                // space characters render visibly outside the pill — the old
+                // `dx: -4` inset extended the chip 4pt past the last glyph on
+                // each side, which at body font size completely covered the
+                // ~4pt-wide trailing space and made it look like there was no
+                // separator between the pill and the next word. Vertical
+                // padding stays so the chip still reads as a rounded capsule
+                // rather than a flush highlight.
+                let pill = rect.insetBy(dx: 0, dy: -2)
                 let path = UIBezierPath(roundedRect: pill, cornerRadius: pill.height / 2)
                 color.setFill()
                 path.fill()

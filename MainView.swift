@@ -69,6 +69,11 @@ struct MainView: View {
     /// the draft-saved toast tap). Separate from `showCompose` so SwiftUI
     /// mounts a fresh `ComposeView` keyed off the draft's dTag.
     @State private var reopenDraft: Nip37.Draft?
+    /// Set when the Share Extension hands off media via `wisp://share` (see
+    /// `PendingShareStore` / `wispApp.onOpenURL`). Drives its own
+    /// `.sheet(item:)`, separate from `showCompose`, so SwiftUI mounts a
+    /// fresh `ComposeView` carrying the hand-off's attachments.
+    @State private var pendingShare: PendingShareItem?
     /// Bumped from `popToRoot(.home)` so the feed `ScrollViewReader` can scroll
     /// to the top anchor. Tap-on-active-tab clears the nav stack first; on a
     /// subsequent tap (when the stack is already empty) it animates to the top.
@@ -483,6 +488,17 @@ struct MainView: View {
         }
         .sheet(item: $reopenDraft) { draft in
             ComposeView(keypair: keypair, draft: draft)
+        }
+        .sheet(item: $pendingShare) { share in
+            if let text = share.text {
+                ComposeView(keypair: keypair, initialText: text)
+            } else {
+                ComposeView(keypair: keypair, pendingAttachmentProviders: share.providers)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .pendingShareReceived)) { note in
+            guard let item = note.object as? PendingShareItem else { return }
+            pendingShare = item
         }
         .onChange(of: draftToast.pendingDraft?.dTag) { _, dTag in
             // ComposeView's autosave-on-dismiss writes the draft here from
@@ -1171,6 +1187,19 @@ struct MainView: View {
                         // `events` list is much longer (most events
                         // were rejected by the filter).
                         let visible = viewModel.filteredEvents
+                        // Optimistic post row — appears the instant the user
+                        // taps Post in the composer and dissolves when the
+                        // real published event arrives via the existing
+                        // `.nostrEventPublished` observer on FeedViewModel
+                        // (which inserts the event into `visible` above this
+                        // pending row in the same render). See PendingPostStore.
+                        // Gate on `!pendingIsReply` so the home feed never
+                        // shows a reply that belongs to a thread view.
+                        if let pending = PendingPostStore.shared.pending,
+                           !PendingPostStore.shared.pendingIsReply {
+                            PendingPostRow(pending: pending)
+                                .padding(.vertical, 4)
+                        }
                         // Precompute the last-5 ids once per body eval so each
                         // row's onAppear is an O(1) Set lookup instead of an
                         // O(n) `firstIndex` scan (which made deep scroll O(n²)).

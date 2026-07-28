@@ -24,10 +24,16 @@ struct PostCardView: View {
     /// count so the bubble matches the visible REPLIES list — without it
     /// the engagement repo / network total would still show blocked authors.
     var forcedReplyCount: Int? = nil
-    /// When false, the "Replying to @user" row is suppressed even if the event
-    /// is a reply. Used for stacked nested replies in ThreadView where the
-    /// visual indentation already communicates the reply relationship.
+    /// When false, the "Replying to @user" row is suppressed even if the
+    /// event is a reply.
     var showReplyContext: Bool = true
+    /// Overrides the "Replying to @user" row's text with a single name —
+    /// the author of the ONE event this reply directly targets — instead
+    /// of the default multi-participant list. Set by ThreadView's threaded
+    /// reply rows: the connector rail already shows nesting structure, but
+    /// not identity, and depth-cap folding means a reply's visual position
+    /// doesn't always trace cleanly back to its parent.
+    var replyToLabelOverride: String? = nil
     /// When true, the card renders a lock chip in the header and hides
     /// repost / quote actions (they would re-publish the rumor id as a public
     /// kind-6 or kind-1 with `q` tag, breaking the encryption invariant).
@@ -302,14 +308,14 @@ struct PostCardView: View {
                 replyingToRow(for: displayEvent)
             }
 
-            // Header row — avatar + name + nip05 + badges/time. Indented to
-            // align with the avatar. In ancestor-compact mode the inner profile
-            // links are dropped so the outer ThreadRoute link owns every tap.
-            // Skipped entirely for unresolved tag-only reposts: the reposter
-            // avatar/name/timestamp would be redundant with the banner and
-            // sit above the loading/missing placeholder.
+            // Header row — avatar + name + nip05 badge + badges/time. Indented
+            // to align with the avatar. In ancestor-compact mode the inner
+            // profile links are dropped so the outer ThreadRoute link owns
+            // every tap. Skipped entirely for unresolved tag-only reposts: the
+            // reposter avatar/name/timestamp would be redundant with the
+            // banner and sit above the loading/missing placeholder.
             if !isUnresolvedRepost {
-            HStack(alignment: .top, spacing: 12) {
+            HStack(alignment: .center, spacing: 12) {
                 if ancestorCompact {
                     CachedAvatarView(url: displayProfile?.picture, size: 24)
                         .quickFollowOnLongPress(pubkey: displayEvent.pubkey)
@@ -321,8 +327,12 @@ struct PostCardView: View {
                     .quickFollowOnLongPress(pubkey: displayEvent.pubkey)
                 }
 
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    // Centered as a pair rather than pinned to firstTextBaseline —
+                    // the badge is an icon, not a text glyph, so baseline-aligning
+                    // it against the name (as the outer row does for its other,
+                    // text-based children) makes it hang low.
+                    HStack(spacing: 4) {
                         Group {
                             if ancestorCompact {
                                 EmojiText(
@@ -348,42 +358,45 @@ struct PostCardView: View {
                             }
                         }
 
-                        if isPrivate {
-                            HStack(spacing: 3) {
-                                Image(systemName: "lock.fill")
-                                    .font(.caption2)
-                                Text("Private")
-                                    .font(.caption2.weight(.semibold))
-                            }
-                            .foregroundStyle(Color.wispPrimary)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(
-                                Capsule().fill(Color.wispPrimary.opacity(0.12))
-                            )
-                            .accessibilityLabel("Private reply")
-                        }
-
-                        Spacer(minLength: 0)
-
-                        let powBits = Nip13.verifyDifficulty(displayEvent)
-                        if powBits >= 16 {
-                            PowBadge(bits: powBits)
-                        }
-
-                        Text(useAbsoluteTimestamp
-                             ? absoluteTimestamp(displayEvent.createdAt)
-                             : relativeTime(from: displayEvent.createdAt))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-
-                        if !ancestorCompact {
-                            overflowMenu
+                        // Icon only — the handle itself is reserved for the
+                        // profile screen so timeline/thread rows don't carry
+                        // the extra clutter of a second line.
+                        if !ancestorCompact, let nip05 = displayProfile?.nip05, !nip05.isEmpty {
+                            Nip05Badge(nip05: nip05, pubkey: displayEvent.pubkey, showHandle: false)
                         }
                     }
 
-                    if !ancestorCompact, let nip05 = displayProfile?.nip05, !nip05.isEmpty {
-                        Nip05Badge(nip05: nip05, pubkey: displayEvent.pubkey)
+                    if isPrivate {
+                        HStack(spacing: 3) {
+                            Image(systemName: "lock.fill")
+                                .font(.caption2)
+                            Text("Private")
+                                .font(.caption2.weight(.semibold))
+                        }
+                        .foregroundStyle(Color.wispPrimary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(
+                            Capsule().fill(Color.wispPrimary.opacity(0.12))
+                        )
+                        .accessibilityLabel("Private reply")
+                    }
+
+                    Spacer(minLength: 0)
+
+                    let powBits = Nip13.verifyDifficulty(displayEvent)
+                    if powBits >= 16 {
+                        PowBadge(bits: powBits)
+                    }
+
+                    Text(useAbsoluteTimestamp
+                         ? absoluteTimestamp(displayEvent.createdAt)
+                         : relativeTime(from: displayEvent.createdAt))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    if !ancestorCompact {
+                        overflowMenu
                     }
                 }
             }
@@ -471,8 +484,13 @@ struct PostCardView: View {
                     // Char-count path is independent of measured height: a
                     // 600+ char body wraps to ~12 lines (well under the
                     // 66%-screen cap), so the height check alone would let
-                    // it escape truncation entirely.
+                    // it escape truncation entirely. Measure the *text*
+                    // length (excluding inline media URLs) — a short caption
+                    // with several image URLs can exceed the raw threshold
+                    // without being a long text post. The raw-count guard
+                    // keeps the parse off the hot path for short posts.
                     let charLong = displayEvent.content.count > Self.longPostCharThreshold
+                        && ContentParser.textualLength(content: displayEvent.content, tags: displayEvent.tags) > Self.longPostCharThreshold
                     let isLong = pixelLong || charLong
                     let collapsedHeight = pixelLong ? cap : Self.longPostTextCollapsedHeight
                     let collapsed = isLong && !contentExpanded
@@ -870,7 +888,7 @@ struct PostCardView: View {
     private func replyingToRow(for displayEvent: NostrEvent) -> some View {
         if !ancestorCompact,
            Nip10.replyTarget(of: displayEvent) != nil,
-           let label = replyingToLabel(for: displayEvent) {
+           let label = replyToLabelOverride ?? replyingToLabel(for: displayEvent) {
             HStack(spacing: 4) {
                 Image(systemName: "arrowshape.turn.up.left.fill")
                     .font(.caption2)
@@ -1784,7 +1802,7 @@ struct PostCardView: View {
 
     private func broadcast(_ target: NostrEvent) {
         guard let me = myPubkey else { return }
-        // `@MainActor in` pins the alert mutation to main. Without it, the
+        // `@MainActor in` pins the UI mutation to main. Without it, the
         // assignment runs on whatever actor `RelayPool.publish` suspended on,
         // which leaves the alert in an inconsistent presentation state — the
         // OK button needs two or three taps to dismiss because SwiftUI is
@@ -1799,16 +1817,26 @@ struct PostCardView: View {
                 set = ["wss://relay.damus.io", "wss://relay.primal.net", "wss://nos.lol"]
             }
             let succeeded = await RelayPool.publish(event: target, to: Array(set), timeout: 8)
-            // Yield one runloop tick so the overflow popover finishes its
-            // dismiss animation before the alert is presented. Without the
-            // hop the alert can mount on top of a still-dismissing popover
-            // and the popover dismissal eats the first OK tap.
-            try? await Task.sleep(nanoseconds: 50_000_000)
-            actionAlert = ActionAlert(
-                title: succeeded.isEmpty ? "Broadcast failed" : "Broadcasted",
-                message: succeeded.isEmpty
-                    ? "No relays accepted the event."
-                    : "Re-published to \(succeeded.count) relay\(succeeded.count == 1 ? "" : "s")."
+            guard !succeeded.isEmpty else {
+                // Yield one runloop tick so the overflow popover finishes its
+                // dismiss animation before the alert is presented. Without the
+                // hop the alert can mount on top of a still-dismissing popover
+                // and the popover dismissal eats the first OK tap. Only the
+                // alert needs this; the toast is an overlay, not a presentation.
+                try? await Task.sleep(nanoseconds: 50_000_000)
+                actionAlert = ActionAlert(
+                    title: "Broadcast failed",
+                    message: "No relays accepted the event."
+                )
+                return
+            }
+            // Success confirms through the same top pill the composer uses on
+            // publish — a modal interrupted the user for a fire-and-forget
+            // re-publish they don't need to act on. Failure keeps the alert:
+            // that one does warrant a deliberate acknowledgement.
+            SuccessToast.shared.show(
+                "Broadcast to \(succeeded.count) relay\(succeeded.count == 1 ? "" : "s")",
+                icon: "antenna.radiowaves.left.and.right"
             )
         }
     }
@@ -2785,13 +2813,22 @@ func absoluteTimestamp(_ timestamp: Int) -> String {
 }
 
 func relativeTime(from timestamp: Int) -> String {
-    let seconds = Int(Date().timeIntervalSince1970) - timestamp
+    let now = Date()
+    let date = Date(timeIntervalSince1970: Double(timestamp))
+    let seconds = Int(now.timeIntervalSince1970) - timestamp
     if seconds < 60 { return "now" }
     if seconds < 3600 { return "\(seconds / 60)m" }
     if seconds < 86400 { return "\(seconds / 3600)h" }
     if seconds < 604_800 { return "\(seconds / 86400)d" }
-    if seconds >= 31_536_000 { return "\(Int((Double(seconds) / 31_536_000).rounded()))y" }
-    return postCardMonthDayFormatter.string(from: Date(timeIntervalSince1970: Double(timestamp)))
+    // Years elapsed, counted on the calendar and truncated — a Jan 2023 note
+    // read "4y" in mid-2026 because the old math divided by a fixed 365 days
+    // and *rounded*, so anything past 3.5y jumped a year early. Every other
+    // unit here truncates (59 minutes is "59m", never "1h"); this now matches,
+    // and Calendar handles leap years so the boundary lands on the anniversary.
+    if let years = Calendar.current.dateComponents([.year], from: date, to: now).year, years >= 1 {
+        return "\(years)y"
+    }
+    return postCardMonthDayFormatter.string(from: date)
 }
 
 
@@ -2815,6 +2852,7 @@ extension PostCardView: Equatable {
             && lhs.useAbsoluteTimestamp == rhs.useAbsoluteTimestamp
             && lhs.forcedReplyCount == rhs.forcedReplyCount
             && lhs.showReplyContext == rhs.showReplyContext
+            && lhs.replyToLabelOverride == rhs.replyToLabelOverride
             && lhs.isPrivate == rhs.isPrivate
     }
 }
