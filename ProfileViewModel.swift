@@ -156,11 +156,40 @@ final class ProfileViewModel {
         let myFollows = FollowsCache.shared.follows(for: activeUserPubkey)
         youFollow = myFollows.contains(pubkey)
 
+        // Paint the cached following count immediately so the stat doesn't
+        // start at 0 and visibly fill in once the kind-3 query lands — the
+        // profile read as "loading my follows from scratch" on every visit.
+        // `loadContacts` overwrites this with the relay copy when it arrives.
+        //
+        // Only the count is seeded, not `followingPubkeys`: that array gates
+        // whether `loadFollowingProfiles` re-fetches contacts, so priming it
+        // would let the Following tab render the cached list and mark itself
+        // loaded without ever consulting a relay.
+        let cachedFollows = pubkey == activeUserPubkey
+            ? myFollows
+            : FollowsCache.shared.follows(for: pubkey)
+        if !cachedFollows.isEmpty {
+            followingCount = cachedFollows.count
+        }
+
         await withTaskGroup(of: Void.self) { group in
             group.addTask { [weak self] in await self?.loadProfileHeader() }
             group.addTask { [weak self] in await self?.loadContacts() }
             group.addTask { [weak self] in await self?.loadTargetWriteRelays() }
             group.addTask { [weak self] in await self?.loadFollowerCount() }
+        }
+
+        // Retry contacts once the target's own write relays are known.
+        //
+        // `loadContacts` races `loadTargetWriteRelays` in the group above, so
+        // its `queryRelays()` set is built before `targetWriteRelays` is
+        // populated — for a profile whose kind-3 lives only on its author's
+        // write relays, the first attempt searches the wrong servers and
+        // finds nothing. Nothing else re-runs it (`start()` is one-shot via
+        // `hasStarted`, and there's no pull-to-refresh on the header), so the
+        // count stayed at 0 for the life of the screen rather than briefly.
+        if followingPubkeys.isEmpty && !targetWriteRelays.isEmpty {
+            await loadContacts()
         }
 
         // Now that we know the target's write relays, load notes/replies in parallel
