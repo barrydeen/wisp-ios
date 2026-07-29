@@ -478,6 +478,15 @@ struct PostCardView: View {
                 articleBody(displayEvent)
             } else {
             VStack(alignment: .leading, spacing: 8) {
+                // NIP-22 comment scoped to a web page (or other external
+                // identifier). Sits above the comment text, matching Amethyst
+                // and Jumble: the page is what's being discussed, so it reads
+                // as the subject the remark answers rather than a link
+                // trailing off the end of it.
+                if let external = Nip22.externalRoot(of: displayEvent) {
+                    externalContentCard(external)
+                }
+
                 if !displayEvent.content.isEmpty || !displayEvent.tags.isEmpty {
                     let cap = Self.longPostCollapsedHeight
                     let pixelLong = naturalTextHeight > cap + Self.longPostMinOverflow
@@ -596,14 +605,6 @@ struct PostCardView: View {
                 }
 
                 translationInline(for: displayEvent)
-
-                // NIP-22 comment scoped to a web page (or other external
-                // identifier). Without this the comment renders with no
-                // subject — the reader sees a remark about an article they
-                // can't see or open.
-                if let external = Nip22.externalRoot(of: displayEvent) {
-                    externalContentCard(external)
-                }
 
                 if displayEvent.kind == Nip88.kindPoll || displayEvent.kind == Nip69.kindZapPoll {
                     PollSection(
@@ -1075,7 +1076,8 @@ struct PostCardView: View {
     // MARK: - External content (NIP-22)
 
     /// The web page (or other NIP-73 identifier) a kind-1111 comment is
-    /// scoped to, rendered under the comment so it reads in context.
+    /// scoped to, rendered *above* the comment text so the subject reads
+    /// before the remark answering it — matching Amethyst and Jumble.
     ///
     /// Web roots reuse `LinkPreviewView`, which already handles OpenGraph
     /// fetch, caching, and the no-metadata fallback. Identifiers with no
@@ -1108,7 +1110,6 @@ struct PostCardView: View {
             }
         }
         .padding(.horizontal, 16)
-        .padding(.top, 8)
     }
 
     /// Human label for a NIP-73 identifier type, used when there's no host to
