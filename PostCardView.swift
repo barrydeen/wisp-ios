@@ -479,10 +479,9 @@ struct PostCardView: View {
             } else {
             VStack(alignment: .leading, spacing: 8) {
                 // NIP-22 comment scoped to a web page (or other external
-                // identifier). Sits above the comment text, matching Amethyst
-                // and Jumble: the page is what's being discussed, so it reads
-                // as the subject the remark answers rather than a link
-                // trailing off the end of it.
+                // identifier). Sits above the comment text: the page is what's
+                // being discussed, so it reads as the subject the remark
+                // answers rather than a link trailing off the end of it.
                 if let external = Nip22.externalRoot(of: displayEvent) {
                     externalContentCard(external)
                 }
@@ -1077,7 +1076,7 @@ struct PostCardView: View {
 
     /// The web page (or other NIP-73 identifier) a kind-1111 comment is
     /// scoped to, rendered *above* the comment text so the subject reads
-    /// before the remark answering it — matching Amethyst and Jumble.
+    /// before the remark answering it.
     ///
     /// Web roots reuse `LinkPreviewView`, which already handles OpenGraph
     /// fetch, caching, and the no-metadata fallback. Identifiers with no
