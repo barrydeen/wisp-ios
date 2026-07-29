@@ -429,7 +429,10 @@ final class SearchViewModel {
     private func handleNoteResults(_ events: [NostrEvent]) {
         var seen = Set<String>()
         var ordered: [NostrEvent] = []
-        for event in events where event.kind == 1 {
+        // Kind 1111 admitted alongside kind 1: `runEventLookup` resolves a
+        // pasted note1/nevent1 by id, so a NIP-22 comment reaches here intact
+        // and would otherwise be dropped as "No results found".
+        for event in events where event.kind == 1 || event.kind == Nip22.kindComment {
             // Search was the one surface with no safety gate at all — relay
             // text search (and pasted note1/nevent1 lookups) returned
             // arbitrary-author events straight into the result list. Same

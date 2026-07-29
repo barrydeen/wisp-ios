@@ -303,6 +303,7 @@
 		4CFFFA01000000000000F001 /* PowPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFFFA00000000000000F001 /* PowPreferences.swift */; };
 		4CFFFA01000000000000F002 /* ProofOfWorkSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFFFA00000000000000F002 /* ProofOfWorkSettingsView.swift */; };
 		4CFFFB010000000000000F10 /* BlurHash.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFFFB000000000000000F10 /* BlurHash.swift */; };
+		8692D90F33201F73DBEF8F0A /* Nip22.swift in Sources */ = {isa = PBXBuildFile; fileRef = E52D6BE71D8CFC1D8162E733 /* Nip22.swift */; };
 		8C3D92E0FCDBF00AFDF20671 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 741E8309A7019FA697D18D53 /* Foundation.framework */; };
 		9399A5358082EE4084A6797A /* PendingShareStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A85D99D72ADD7AFCEFF789A6 /* PendingShareStore.swift */; };
 		B0NWCBACKUP00000000000001 /* NwcBackup.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0NWCBACKUP00000000000002 /* NwcBackup.swift */; };
@@ -658,6 +659,7 @@
 		A85D99D72ADD7AFCEFF789A6 /* PendingShareStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PendingShareStore.swift; sourceTree = "<group>"; };
 		B0NWCBACKUP00000000000002 /* NwcBackup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NwcBackup.swift; sourceTree = "<group>"; };
 		C21B5D026207FD4CF0931588 /* ShareViewController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ShareViewController.swift; sourceTree = "<group>"; };
+		E52D6BE71D8CFC1D8162E733 /* Nip22.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Nip22.swift; sourceTree = "<group>"; };
 		F8CCD16A2BD383B0A6B0F4DF /* LnurlResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LnurlResolver.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -1038,6 +1040,7 @@
 				A85D99D72ADD7AFCEFF789A6 /* PendingShareStore.swift */,
 				A78518B540AA47061D0E80AC /* ThreadReplyFolder.swift */,
 				2C12B572C3ABAA62935E4C87 /* DeletionTracker.swift */,
+				E52D6BE71D8CFC1D8162E733 /* Nip22.swift */,
 			);
 			sourceTree = "<group>";
 		};
@@ -1545,6 +1548,7 @@
 				9399A5358082EE4084A6797A /* PendingShareStore.swift in Sources */,
 				347CAC4DB369991D001F8634 /* ThreadReplyFolder.swift in Sources */,
 				CFB7EF5B4C80F43ABDB8DFC8 /* DeletionTracker.swift in Sources */,
+				8692D90F33201F73DBEF8F0A /* Nip22.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
