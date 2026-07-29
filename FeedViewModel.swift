@@ -187,7 +187,7 @@ final class FeedViewModel {
     /// Kinds queried from a single relay or relay set, matching the Android client.
     /// 1068 = NIP-88 poll, 6969 = NIP-69 zap poll, 30023 = long-form. Polls render as
     /// `PollSection` in `PostCardView`; long-form falls through to the text path.
-    static let relayFeedKinds = [1, 6, 1068, 6969, 30023, 20, 21, 22, Nip22.kindComment]
+    static let relayFeedKinds = [1, 6, 1068, 6969, 30023, 20, 21, 22]
 
     /// True for events that should appear as top-level rows in the feed list.
     /// Kept consistent across cache seed, live ingest, and relay backfill paths.
@@ -196,14 +196,12 @@ final class FeedViewModel {
     nonisolated static func isFeedRenderable(_ event: NostrEvent, includeReplies: Bool) -> Bool {
         if event.isRootNote { return true }
         if includeReplies && event.kind == 1 { return true }
-        // A NIP-22 comment on an external item (a web page, a podcast
-        // episode) is a top-level post from the feed's point of view — its
-        // subject is the linked item, rendered inline, not another nostr
-        // note. Comments that reply to a nostr event are threaded and follow
-        // the same include-replies rule as kind-1 replies.
-        if event.kind == Nip22.kindComment {
-            return Nip22.externalRoot(of: event) != nil || includeReplies
-        }
+        // NIP-22 comments are deliberately absent here: they surface on the
+        // profile Comments tab, not the timeline. Matching Jumble and
+        // Amethyst, which both keep external-content comments out of the
+        // feed — a comment on a blog post is conversation about that
+        // article, not a broadcast to the author's followers. A dedicated
+        // follows-wide Comments feed is planned separately.
         switch event.kind {
         case 6, 20, Nip88.kindPoll, Nip69.kindZapPoll: return true
         default: return false

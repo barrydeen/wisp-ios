@@ -38,6 +38,13 @@ final class ProfileViewModel {
     var isLoadingGallery: Bool = false
     var galleryLoaded: Bool = false
 
+    /// NIP-22 comments this user left on external items (web pages, podcast
+    /// episodes). Kept out of Notes/Replies: those are kind-1 surfaces, and a
+    /// comment's subject is the linked item rather than another nostr note.
+    var comments: [NostrEvent] = []
+    var isLoadingComments: Bool = false
+    var commentsLoaded: Bool = false
+
     var followingPubkeys: [String] = []
     var followingProfiles: [ProfileData] = []
     var isLoadingFollowing: Bool = false
@@ -86,6 +93,10 @@ final class ProfileViewModel {
     @ObservationIgnored private var galleryPending: [NostrEvent] = []
     @ObservationIgnored private var galleryFlushScheduled = false
     @ObservationIgnored private var galleryStreamTask: Task<Void, Never>?
+
+    @ObservationIgnored private var commentsPending: [NostrEvent] = []
+    @ObservationIgnored private var commentsFlushScheduled = false
+    @ObservationIgnored private var commentsStreamTask: Task<Void, Never>?
 
     @ObservationIgnored private var followersOffset = 0
     @ObservationIgnored private var sortedNotesStreamTask: Task<Void, Never>?
@@ -181,6 +192,8 @@ final class ProfileViewModel {
         switch tab {
         case .notes, .replies, .media:
             return  // Notes/replies always loaded; media derives from them.
+        case .comments:
+            if !commentsLoaded { await loadComments() }
         case .gallery:
             if !galleryLoaded { await loadGallery() }
         case .following:
@@ -568,6 +581,60 @@ final class ProfileViewModel {
         guard !batch.isEmpty else { return }
         let sortedBatch = batch.sorted { $0.createdAt > $1.createdAt }
         galleryPosts = FeedViewModel.mergeSortedDesc(galleryPosts, sortedBatch)
+        Task { await EventPersistQueue.shared.enqueue(batch) }
+    }
+
+    // MARK: - Comments (NIP-22)
+
+    /// This user's kind-1111 comments, newest first.
+    ///
+    /// Only externally-rooted ones are listed. A comment replying to another
+    /// comment already appears in that thread, and without its own subject
+    /// card it would read here exactly like the context-free rows this tab
+    /// exists to avoid.
+    private func loadComments() async {
+        commentsStreamTask?.cancel()
+        isLoadingComments = true
+
+        let relays = queryRelays()
+        let filter = NostrFilter(kinds: [Nip22.kindComment], authors: [pubkey], limit: 100)
+        let queries = relays.map { RelayQuery(relayUrl: $0, filter: filter) }
+
+        commentsStreamTask = Task { [weak self] in
+            guard let self else { return }
+            var seen = Set(self.comments.map(\.id))
+            for await (event, _) in RelayPool.stream(queries: queries, timeout: 12) {
+                if Task.isCancelled { return }
+                if SafetyFilter.shared.shouldDrop(event: event, context: .feed) { continue }
+                guard event.kind == Nip22.kindComment,
+                      Nip22.externalRoot(of: event) != nil,
+                      seen.insert(event.id).inserted else { continue }
+                self.enqueueComment(event)
+            }
+            self.flushCommentsPending()
+            self.isLoadingComments = false
+            self.commentsLoaded = true
+        }
+    }
+
+    private func enqueueComment(_ event: NostrEvent) {
+        commentsPending.append(event)
+        if isLoadingComments { isLoadingComments = false }
+        guard !commentsFlushScheduled else { return }
+        commentsFlushScheduled = true
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(Self.liveFlushDelayMs))
+            await self?.flushCommentsPending()
+        }
+    }
+
+    private func flushCommentsPending() {
+        commentsFlushScheduled = false
+        let batch = commentsPending
+        commentsPending.removeAll(keepingCapacity: true)
+        guard !batch.isEmpty else { return }
+        let sortedBatch = batch.sorted { $0.createdAt > $1.createdAt }
+        comments = FeedViewModel.mergeSortedDesc(comments, sortedBatch)
         Task { await EventPersistQueue.shared.enqueue(batch) }
     }
 
