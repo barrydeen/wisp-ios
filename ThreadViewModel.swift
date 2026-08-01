@@ -942,13 +942,22 @@ final class ThreadViewModel {
         // store without the root e-tag.
         var eTagTargets = [rootId]
         if focalEventId != rootId { eTagTargets.append(focalEventId) }
-        let filter = NostrFilter(kinds: [1], eTags: eTagTargets, limit: 500)
+        // Kind 5 rides the same subscription — a deletion request e-tags the
+        // deleted event, so it matches the same `#e` filter as replies. No
+        // extra round-trip; the relay returns deletions alongside replies.
+        let filter = NostrFilter(kinds: [1, Nip09.kindDeletion], eTags: eTagTargets, limit: 500)
         let subId = "thread-replies-\(UUID().uuidString.prefix(6))"
         let sub = RelayPool.subscribe(relays: relays, filter: filter, id: subId)
 
         let consumer = Task { [weak self, rootId, focalEventId] in
             for await (event, _) in sub.events {
                 guard let self else { break }
+                // Intercept deletion requests so the tracker learns before
+                // the deleted reply renders.
+                if event.kind == Nip09.kindDeletion {
+                    DeletionTracker.shared.ingest(event)
+                    continue
+                }
                 guard event.kind == 1 else { continue }
                 // Accept any event tagging the root or the focal — both
                 // are valid for the current screen.

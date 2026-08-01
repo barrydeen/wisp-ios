@@ -9,7 +9,9 @@ actor EventStore {
     // 1068, 1018, 6969 are NIP-88 polls / poll responses and NIP-69 zap polls.
     // 10030 / 30030 are NIP-30 user emoji list / emoji set (custom emoji packs).
     // 30023 is NIP-23 long-form articles.
-    private static let persistedKinds: Set<Int> = [0, 1, 6, 7, 9735, 10002, 10012, 10030, 20, 21, 22, 30000, 30002, 30003, 30023, 30030, 1068, 1018, 6969]
+    // 5 is NIP-09 deletion requests, persisted so the DeletionTracker can
+    // re-seed from disk on launch.
+    private static let persistedKinds: Set<Int> = [0, 1, 5, 6, 7, 9735, 10002, 10012, 10030, 20, 21, 22, 30000, 30002, 30003, 30023, 30030, 1068, 1018, 6969]
 
     /// Kinds retained on disk *even for a blocked author* so the block-list
     /// settings UI, name/avatar resolution, and installed emoji packs keep
@@ -88,6 +90,22 @@ actor EventStore {
     }
 
     // MARK: - Read
+
+    /// Load persisted kind-5 deletion events so `DeletionTracker` can
+    /// re-seed its deleted-ids set on launch without waiting for the live
+    /// subscription to deliver them.
+    func loadDeletionEvents() -> [NostrEvent] {
+        guard let box = ensureBox() else { return [] }
+        do {
+            let query = try box.query {
+                EventEntity.kind == Nip09.kindDeletion
+            }.build()
+            let entities = try query.find(offset: 0, limit: 5000)
+            return entities.compactMap { $0.toNostrEvent() }
+        } catch {
+            return []
+        }
+    }
 
     /// Seed the home/feed cache from disk. `excludingEventIds` filters out
     /// gift-wrap-materialized private replies/reactions so they never bleed

@@ -367,6 +367,36 @@ final class SearchViewModel {
             ) == id
         }
         handleNoteResults(match.map { [$0] } ?? [])
+        // Fire the kind-5 check in the background so it doesn't delay the
+        // search result. If a deletion is found the tracker updates and
+        // `shouldDrop` hides the note on the next render cycle — the user
+        // may see it flash briefly before it disappears, but the search
+        // itself isn't slowed by a second serial query.
+        if let match {
+            let lookupRelays = relays
+            let matchId = match.id
+            let matchAuthor = match.pubkey
+            Task { [weak self] in
+                let deletionFilter = NostrFilter(
+                    kinds: [Nip09.kindDeletion], authors: [matchAuthor],
+                    eTags: [matchId], limit: 50
+                )
+                let deletions = await RelayPool.query(
+                    relays: lookupRelays, filter: deletionFilter, timeout: 4
+                )
+                if !deletions.isEmpty {
+                    DeletionTracker.shared.ingestBatch(deletions)
+                    // Re-run the same results through the filter so the note
+                    // disappears without waiting for the next user action.
+                    guard let self, !Task.isCancelled else { return }
+                    await MainActor.run {
+                        self.notes = self.notes.filter {
+                            !DeletionTracker.shared.isDeleted($0.id)
+                        }
+                    }
+                }
+            }
+        }
         isSearching = false
     }
 
