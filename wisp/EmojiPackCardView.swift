@@ -35,6 +35,10 @@ struct EmojiPackCardView: View {
 
     @State private var updating = false
     @State private var errorMessage: String?
+    /// Pack creator's profile. Resolved by the card itself rather than injected,
+    /// for the same reason as `keypair`: two of the three hosts (note content,
+    /// the Explore feed) have no profile dict to hand down.
+    @State private var creator: ProfileData?
 
     /// Resolved lazily rather than injected: the card renders inside note
     /// content (`RichContentView`), which has no keypair to hand down.
@@ -80,19 +84,40 @@ struct EmojiPackCardView: View {
                 emojiCache.ensureLoaded(e.url)
             }
         }
+        .task(id: pack.pubkey) {
+            if let cached = ProfileRepository.shared.get(pack.pubkey) {
+                creator = cached
+                return
+            }
+            // `ensure` coalesces per pubkey, so a screen full of Explore cards
+            // by the same author shares one indexer query.
+            creator = await ProfileRepository.shared.ensure([pack.pubkey])[pack.pubkey]
+        }
     }
 
     // MARK: - Header
 
     private var header: some View {
         HStack(alignment: .top, spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text(pack.title ?? pack.dTag)
                     .font(.system(size: 16, weight: .semibold))
                     .lineLimit(2)
-                Text("\(pack.emojis.count) emoji" + (pack.emojis.count == 1 ? "" : "s"))
-                    .font(.system(size: 11))
-                    .foregroundStyle(theme.palette.onSurfaceVariant)
+                // Who made it. Many packs ship no `title` tag at all, so
+                // without this the card is a bare `d` tag with no provenance —
+                // and the author is the main signal for whether a pack is worth
+                // adding while scrolling Explore.
+                HStack(spacing: 5) {
+                    CachedAvatarView(url: creator?.picture, size: 14)
+                    Text(creator?.displayString ?? Nip19.shortNpub(hex: pack.pubkey))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Text("·")
+                    Text("\(pack.emojis.count) emoji" + (pack.emojis.count == 1 ? "" : "s"))
+                        .fixedSize()
+                }
+                .font(.system(size: 11))
+                .foregroundStyle(theme.palette.onSurfaceVariant)
             }
             Spacer(minLength: 0)
             shareButton
