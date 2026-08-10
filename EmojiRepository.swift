@@ -282,9 +282,13 @@ final class EmojiRepository {
         userListCreatedAt = event.createdAt
     }
 
-    private func ingestEmojiSet(_ event: NostrEvent) {
-        guard event.kind == 30030 else { return }
-        guard let dTag = event.tags.first(where: { $0.count >= 2 && $0[0] == "d" })?[1] else { return }
+    /// Parse a kind-30030 event into a `ResolvedEmojiPack`. Pure — callers that
+    /// only want to *display* a pack (the discovery feed, an `naddr` card) use
+    /// this directly instead of `ingestEmojiSet`, so browsing hundreds of packs
+    /// never grows the repository's `resolvedPacks` cache.
+    static func parsePack(_ event: NostrEvent) -> ResolvedEmojiPack? {
+        guard event.kind == 30030 else { return nil }
+        guard let dTag = event.tags.first(where: { $0.count >= 2 && $0[0] == "d" })?[1] else { return nil }
         let title = event.tags.first(where: { $0.count >= 2 && $0[0] == "title" })?[1]
         var emojis: [CustomEmoji] = []
         var seen = Set<String>()
@@ -294,14 +298,31 @@ final class EmojiRepository {
             guard !sc.isEmpty, !url.isEmpty, seen.insert(sc).inserted else { continue }
             emojis.append(CustomEmoji(shortcode: sc, url: url))
         }
-        let addr = "30030:\(event.pubkey):\(dTag)"
-        resolvedPacks[addr] = ResolvedEmojiPack(
-            address: addr,
+        return ResolvedEmojiPack(
+            address: "30030:\(event.pubkey):\(dTag)",
             pubkey: event.pubkey,
             dTag: dTag,
             title: title,
             emojis: emojis
         )
+    }
+
+    /// Insert an already-parsed pack into the resolution cache. Called just
+    /// before adding a pack the user picked out of the discovery feed or an
+    /// `naddr` card — `publishKind10030` then finds it already resolved and
+    /// skips the redundant relay round-trip in `fetchReferencedPacks`.
+    func primeResolvedPack(_ pack: ResolvedEmojiPack) {
+        resolvedPacks[pack.address] = pack
+    }
+
+    /// Whether the user's kind-10030 already references this pack address.
+    func isPackAdded(_ addr: String) -> Bool {
+        referencedPackAddrs.contains(addr)
+    }
+
+    private func ingestEmojiSet(_ event: NostrEvent) {
+        guard let pack = Self.parsePack(event) else { return }
+        resolvedPacks[pack.address] = pack
     }
 
     private func fetchReferencedPacks() async {
