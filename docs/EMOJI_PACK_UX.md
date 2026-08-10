@@ -1,6 +1,6 @@
 # Emoji pack UX — discovery, cards, sharing
 
-Branch: `claude/emoji-pack-ux-vkx2rp` · Commits: `eafba05`, `2819bdb`
+Branch: `feat/emoji-pack-discovery`
 
 ## TL;DR
 
@@ -11,10 +11,10 @@ renders as a card with its own Add / Added toggle wherever it appears, there is
 an Explore feed to find packs by scrolling, and a pack can be shared as a
 `nostr:naddr1…` that renders as that same card on the receiving end.
 
-> **This branch has never been compiled.** It was written in a Linux container
-> with no Swift toolchain, against an Xcode project whose dependencies resolve
-> through Xcode. Everything below is verified by inspection only. Build it
-> before you trust it — see [Verification status](#verification-status).
+> The first draft of this branch was written in a Linux container with no Swift
+> toolchain and had never been compiled. It has since been built and tested —
+> see [Verification status](#verification-status). Simulator smoke-testing of
+> the three surfaces is still outstanding.
 
 ## The problem
 
@@ -138,12 +138,18 @@ added, so they need no pbxproj change either.
 
 | | |
 | --- | --- |
-| Compiled | ❌ never — no Swift toolchain in the authoring environment |
-| Unit tests run | ❌ never |
-| Run on device/simulator | ❌ never |
+| Compiled | ✅ builds clean for the iOS Simulator |
+| Unit tests run | ✅ 19/19 pass |
+| Run on device/simulator | ⏳ installed and launched; the three surfaces are not smoke-tested |
 | Reviewed by inspection | ✅ |
 
-Tests were written but not executed:
+Note: a full-suite run also fails `FeedRenderableTests.mentionTaggedNoteFollowsReplyGate`
+and three `SafetyTests`. Those reproduce identically on `main` with this branch's
+commits absent — they are not from this work. Root cause is that `SafetyTests`
+mutate the process-global `SafetyFilter.shared` while `MuteRepository`'s load
+path installs its own snapshot over it.
+
+Tests:
 
 - `wispTests/EmojiPackTests.swift` — 6 tests over `EmojiRepository.parsePack`:
   kind rejection, missing `d` tag, optional title, duplicate and malformed
@@ -152,18 +158,55 @@ Tests were written but not executed:
   pre-existing `naddrDecode` as the oracle: coordinate, relay-hint, unicode
   `d`-tag and `nostr:`-prefixed round-trips, plus both rejection paths.
 
-Both use plain `#expect` rather than `try #require` — nothing else in the suite
-uses `#require`, and matching the established style seemed safer than
-introducing an API that could not be compile-checked.
+- `wispTests/EmojiPackResolutionTests.swift` — 6 tests over
+  `packResolutionRelays` (see [Resolving a pack](#7-resolving-a-pack-by-coordinate)).
+
+Both of the first two use plain `#expect` rather than `try #require` — nothing
+else in the suite uses `#require`, and matching the established style seemed
+safer than introducing an API that could not be compile-checked.
+
+## 7. Resolving a pack by coordinate
+
+A kind-10030 `a` tag stores a **coordinate** (`30030:<pubkey>:<d>`), which is
+what other clients read — an `naddr` is that same triple bech32-encoded, plus
+relay hints. So the coordinate is what we must store; the `naddr` is an input
+and share format, not a storage format.
+
+The catch is that a coordinate says nothing about *where* the event lives. Both
+resolution paths used to treat the built-in indexers as a fallback for authors
+with no relay list at all:
+
+```swift
+let relays = authorWrites.isEmpty ? indexers : Array(authorWrites.prefix(5))
+```
+
+That strands any pack whose author *does* publish a kind-10002 which omits the
+relay the pack actually landed on — not rare, since a pack is published once and
+the relay list drifts afterwards. Real case: `30030:a9434ee1…:Wisp` advertises
+only `relay.primal.net`, while the pack itself is on `nos.lol` and
+`relay.damus.io` — both already in `RelayDefaults.indexers`, never queried. The
+row rendered as a raw coordinate reading "Couldn't load this pack".
+
+Now `EmojiRepository.packResolutionRelays` returns the **union** — author writes,
+then `naddr` hints, then indexers — deduped (trailing slashes normalized, since
+a kind-10002 writes `wss://nos.lol/` where the constants say `wss://nos.lol`) and
+capped at 8. Both `fetchReferencedPacks` and `EmojiPackCardLoader` use it, so the
+Mine list and a shared link resolve through identical logic.
+
+Relay hints are no longer discarded at input: `normalizedPackAddress` returns
+them alongside the address, `addPackReference(_:relayHints:keypair:)` records
+them, and `publishKind10030` emits them in the third slot of the `a` tag, which
+is where NIP-51 puts them. They survive a cold launch and travel to other
+clients.
+
+The unresolved row shows the pack's `d` tag — its name, and the only
+human-readable part of a coordinate — with a retry, instead of
+`30030:npub1…:Wisp`.
 
 ## Picking this up — suggested order
 
-1. **Build it.** `xcodebuild -project wisp.xcodeproj -scheme wisp -destination
-   'platform=iOS Simulator,name=iPhone 16' build`. Concurrency isolation is the
-   likeliest source of errors: `EmojiRepository` and `EmojiPackExploreModel` are
-   both `@MainActor`, and the views rely on global-actor inference from
-   `SwiftUI.View` conformance.
-2. **Run the tests.** `-scheme wisp … test`.
+Steps 1 and 2 (build, unit tests) are done. Remaining:
+
 3. **Smoke the three surfaces:** Explore tab loads and paginates; a pack added
    from Explore shows Added in Mine and its emojis appear in the reaction
    picker; a `nostr:naddr1…` for a kind-30030 pasted into a note renders as a
