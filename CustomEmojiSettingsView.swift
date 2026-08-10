@@ -42,6 +42,9 @@ struct CustomEmojiSettingsView: View {
     @State private var directUrl = ""
     @State private var packAddress = ""
     @State private var errorMessage: String? = nil
+    /// Pack addresses with a retry in flight, so the row can swap its button for
+    /// a spinner without a second round-trip being startable underneath it.
+    @State private var retryingPacks: Set<String> = []
 
     var body: some View {
         ScrollView {
@@ -351,24 +354,42 @@ struct CustomEmojiSettingsView: View {
 
     /// A subscribed pack. Once resolved it renders as the same card used in
     /// Explore and in note content, so "Added" means the same thing and taps
-    /// the same way everywhere. Until the kind-30030 arrives we can only show
-    /// the coordinate, with a direct remove so a dead reference isn't stuck.
+    /// the same way everywhere. Until the kind-30030 arrives we show the pack's
+    /// `d` tag — its name, and the only human-readable part of a coordinate —
+    /// with a retry, and a direct remove so a dead reference isn't stuck.
     @ViewBuilder
     private func packRow(_ addr: String) -> some View {
         if let pack = emojiRepo.resolvedPacks[addr] {
             EmojiPackCardView(pack: pack, style: .inline)
         } else {
+            let retrying = retryingPacks.contains(addr)
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(shortAddress(addr))
+                    Text(packName(addr))
                         .font(.system(size: 13))
                         .lineLimit(1)
-                        .truncationMode(.middle)
-                    Text("Couldn't load this pack")
+                        .truncationMode(.tail)
+                    Text(retrying ? "Looking for this pack…" : "Couldn't load this pack")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
+                if retrying {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Button {
+                        retryingPacks.insert(addr)
+                        Task {
+                            await emojiRepo.retryPack(addr)
+                            retryingPacks.remove(addr)
+                        }
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                            .foregroundStyle(theme.primary)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.trailing, 4)
+                }
                 Button {
                     Task {
                         do {
@@ -410,7 +431,7 @@ struct CustomEmojiSettingsView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Save") {
-                        guard let addr = normalizedPackAddress(packAddress) else {
+                        guard let parsed = normalizedPackAddress(packAddress) else {
                             errorMessage = "That doesn't look like an emoji pack link. Paste an `naddr1…` or a `30030:<pubkey>:<d>` address."
                             return
                         }
@@ -419,7 +440,11 @@ struct CustomEmojiSettingsView: View {
                         Task {
                             defer { Task { @MainActor in addingPack = false } }
                             do {
-                                try await emojiRepo.addPackReference(addr, keypair: keypair)
+                                try await emojiRepo.addPackReference(
+                                    parsed.addr,
+                                    relayHints: parsed.relayHints,
+                                    keypair: keypair
+                                )
                             } catch {
                                 errorMessage = "Failed to publish to relays."
                             }
@@ -435,24 +460,29 @@ struct CustomEmojiSettingsView: View {
     /// `nostr:`-prefixed) shared from another client, or the raw coordinate.
     /// Returns the canonical `30030:<pubkey>:<d>` address, or nil if the input
     /// isn't an emoji pack.
-    private func normalizedPackAddress(_ input: String) -> String? {
+    /// Relay hints are returned alongside the address rather than discarded: the
+    /// coordinate we store can't carry them, and they're often the only thing
+    /// that finds a pack whose author's relay list has drifted.
+    private func normalizedPackAddress(_ input: String) -> (addr: String, relayHints: [String])? {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
-        if emojiRepo.isValidPackAddress(trimmed) { return trimmed }
-        guard case .addressRef(let dTag, _, let author, let kind)? = Nip19.decodeNostrUri(trimmed),
+        if emojiRepo.isValidPackAddress(trimmed) { return (trimmed, []) }
+        guard case .addressRef(let dTag, let relays, let author, let kind)? = Nip19.decodeNostrUri(trimmed),
               kind == 30030,
               let author else { return nil }
         let addr = "30030:\(author):\(dTag)"
-        return emojiRepo.isValidPackAddress(addr) ? addr : nil
+        return emojiRepo.isValidPackAddress(addr) ? (addr, relays) : nil
     }
 
     // MARK: - Helpers
 
-    private func shortAddress(_ addr: String) -> String {
-        let parts = addr.split(separator: ":")
-        guard parts.count == 3 else { return addr }
-        let pk = String(parts[1])
-        return "\(parts[0]):\(Nip19.shortNpub(hex: pk)):\(parts[2])"
+    /// The `d` tag of a `30030:<pubkey>:<d>` coordinate — the pack's name, and
+    /// the only part of the address worth showing a person. `maxSplits: 2` keeps
+    /// a `d` tag that itself contains a colon intact.
+    private func packName(_ addr: String) -> String {
+        let parts = addr.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false)
+        guard parts.count == 3, !parts[2].isEmpty else { return addr }
+        return String(parts[2])
     }
 
     private func isValidShortcode(_ s: String) -> Bool {

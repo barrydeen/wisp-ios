@@ -301,11 +301,7 @@ struct EmojiPackCardLoader: View {
             return
         }
 
-        let authorWrites = await RelayListRepository.shared.getWriteRelays(author)
-        var relays = Array(authorWrites.prefix(4)) + relayHints
-        if relays.isEmpty {
-            relays = RelayDefaults.indexers
-        }
+        let relays = await EmojiRepository.packResolutionRelays(author: author, hints: relayHints)
         let events = await RelayPool.query(
             relays: relays,
             filter: NostrFilter(kinds: [30030], authors: [author], dTags: [dTag], limit: 1),
