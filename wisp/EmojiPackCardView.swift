@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// A NIP-51 emoji set (kind 30030) rendered as self-describing content: title,
-/// the pack's actual emoji art, and a single Add / Added toggle wired to the
-/// user's kind-10030 list.
+/// the pack's actual emoji art, a single Add / Added toggle wired to the user's
+/// kind-10030 list, and a share menu that emits the pack's `nostr:naddr1…`.
 ///
 /// This is the piece that removes the "paste `30030:<pubkey>:<d>`" step. The
 /// same card is used in three places, so wherever a user *encounters* a pack
@@ -95,10 +95,60 @@ struct EmojiPackCardView: View {
                     .foregroundStyle(theme.palette.onSurfaceVariant)
             }
             Spacer(minLength: 0)
+            shareButton
             if canMutate {
                 addButton
             }
         }
+    }
+
+    /// Sharing is the other half of discovery: a pack is only findable by
+    /// scrolling Explore until someone can hand you a link. The payload is a
+    /// `nostr:naddr1…`, which `RichContentView` now renders as this same card —
+    /// so a shared pack arrives as something the recipient can tap Add on,
+    /// rather than a coordinate they have to transcribe.
+    private var shareButton: some View {
+        Menu {
+            Button {
+                Task { ShareSheetPresenter.present(text: await shareUri()) }
+            } label: {
+                Label("Share pack", systemImage: "square.and.arrow.up")
+            }
+            Button {
+                Task {
+                    UIPasteboard.general.string = await shareUri()
+                    QuickFollowToast.shared.show("Copied")
+                }
+            } label: {
+                Label("Copy link", systemImage: "doc.on.doc")
+            }
+        } label: {
+            Image(systemName: "square.and.arrow.up")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(theme.palette.onSurfaceVariant)
+                .frame(width: 30, height: 30)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// `nostr:naddr1…` carrying the pack author's write relays as hints, so a
+    /// recipient whose relays don't carry the set can still resolve it. Falls
+    /// back to the raw coordinate if the key won't decode — never silently
+    /// shares nothing.
+    private func shareUri() async -> String {
+        let hints = Array(await RelayListRepository.shared.getWriteRelays(pack.pubkey).prefix(2))
+        guard let pubkeyBytes = Hex.decode(pack.pubkey),
+              let naddr = Nip19.naddrEncode(
+                  kind: 30030,
+                  pubkey32: Array(pubkeyBytes),
+                  dTag: pack.dTag,
+                  relays: hints
+              )
+        else {
+            return pack.address
+        }
+        return "nostr:\(naddr)"
     }
 
     private var addButton: some View {

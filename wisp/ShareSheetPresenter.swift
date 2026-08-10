@@ -39,6 +39,25 @@ enum ShareSheetPresenter {
         presenter.present(activityVC, animated: true)
     }
 
+    /// Present the system share sheet for plain text. Use this instead of
+    /// `present(url:)` when the payload is an identifier rather than a web
+    /// link — a `nostr:naddr1…` parses as a `URL` with a `nostr` scheme, and
+    /// sharing it as one makes iOS offer link-shaped targets that can't open
+    /// it, while text shares cleanly into any message or note.
+    static func present(text: String) {
+        guard let presenter = topmostPresenter() else { return }
+
+        let activityVC = UIActivityViewController(activityItems: [text], applicationActivities: nil)
+        if let pop = activityVC.popoverPresentationController {
+            pop.sourceView = presenter.view
+            pop.sourceRect = CGRect(x: presenter.view.bounds.midX,
+                                    y: presenter.view.bounds.midY,
+                                    width: 0, height: 0)
+            pop.permittedArrowDirections = []
+        }
+        presenter.present(activityVC, animated: true)
+    }
+
     /// Walk the key window's VC chain to the topmost presented controller,
     /// skipping any controller mid-dismissal (e.g. the popover we just closed).
     private static func topmostPresenter() -> UIViewController? {
