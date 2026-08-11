@@ -437,7 +437,7 @@ private struct ProfileHeaderView: View {
                         Image(systemName: "checkmark.seal.fill")
                             .font(.caption)
                             .foregroundStyle(Color.wispPrimary)
-                        Text(nip)
+                        Text(nip.nip05DisplayString)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }

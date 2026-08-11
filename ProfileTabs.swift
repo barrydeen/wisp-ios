@@ -559,7 +559,7 @@ private struct ProfileRow: View {
                         weight: .semibold
                     )
                     if let nip = profile.nip05, !nip.isEmpty {
-                        Text(nip)
+                        Text(nip.nip05DisplayString)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
