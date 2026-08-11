@@ -61,6 +61,9 @@ struct WalletView: View {
             case .recoveryPhrase: RecoveryPhraseView(store: store)
             }
         }
+        .navigationDestination(isPresented: $pushSettingsForAddress) {
+            WalletSettingsView(store: store, autoOpenAddressSheet: true)
+        }
         .task { await store.startIfConfigured() }
         .sheet(item: $setupMode) { mode in
             NavigationStack {
@@ -382,9 +385,12 @@ struct WalletView: View {
                 syncPulse = syncing
             }
 
-            // Lightning address
+            // Lightning address — or a prompt to set one up on Spark wallets
+            // that don't have one yet.
             if let addr = store.lightningAddress {
                 lightningAddressPill(addr)
+            } else if store.mode == .spark && !addressPromptDismissed {
+                addressSetupPrompt
             }
         }
     }
@@ -392,6 +398,13 @@ struct WalletView: View {
     @State private var addressCopied = false
     @State private var syncPulse = false
     @State private var isRefreshing = false
+    /// Session-only dismissal of the "set up lightning address" prompt.
+    /// Not persisted — it should come back next session until the user either
+    /// sets an address or dismisses again.
+    @State private var addressPromptDismissed = false
+    /// Drives the programmatic push into settings with the address sheet
+    /// auto-opened, separate from the gear icon's route-based push.
+    @State private var pushSettingsForAddress = false
 
     private func lightningAddressPill(_ address: String) -> some View {
         Button {
@@ -416,6 +429,39 @@ struct WalletView: View {
         }
         .buttonStyle(.plain)
         .animation(.easeInOut(duration: 0.15), value: addressCopied)
+    }
+
+    // MARK: - Address setup prompt
+
+    private var addressSetupPrompt: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "at.badge.plus")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color.wispZapColor)
+            Button {
+                pushSettingsForAddress = true
+            } label: {
+                Text("Set up your lightning address")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .buttonStyle(.plain)
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    addressPromptDismissed = true
+                }
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.tertiary)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(Color.wispSurfaceVariant.opacity(0.5), in: Capsule())
+        .transition(.opacity.combined(with: .scale(scale: 0.9)))
     }
 
     // MARK: - Reconnecting

@@ -91,9 +91,13 @@ struct WalletSettingsView: View {
     // Lightning address management state
     @State private var showAddressSheet = false
     @State private var addressError: String?
+    /// Set by the wallet dashboard's "set up your lightning address" prompt so
+    /// the address registration sheet opens itself on first appearance.
+    @State private var autoOpenAddressSheet: Bool = false
 
-    init(store: WalletStore) {
+    init(store: WalletStore, autoOpenAddressSheet: Bool = false) {
         self.store = store
+        self._autoOpenAddressSheet = State(initialValue: autoOpenAddressSheet)
         _balanceDisplayRaw = AppStorage(
             wrappedValue: WalletBalanceDisplayMode.sats.rawValue,
             WalletBalanceDisplayMode.storageKey(pubkey: store.keypair.pubkey))
@@ -139,6 +143,12 @@ struct WalletSettingsView: View {
         .background(Color.wispBackground.ignoresSafeArea())
         .navigationTitle("Wallet Settings")
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            if autoOpenAddressSheet {
+                showAddressSheet = true
+                autoOpenAddressSheet = false
+            }
+        }
         .alert("Switch to a different wallet?", isPresented: $showDisconnectAlert) {
             Button("Switch", role: .destructive) {
                 store.resetToNoWallet()
