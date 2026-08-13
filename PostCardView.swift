@@ -2201,8 +2201,12 @@ private struct TopZapperPill: View {
                     .font(.system(size: 11))
                 Text(CurrencyFormatter.short(sats: zapper.sats))
                     .font(.caption2.weight(.semibold))
-                if !zapper.message.isEmpty {
-                    Text(zapper.message)
+                // The pill is one line, so an image comment shows as an
+                // `[image]` marker rather than a truncated URL. The image
+                // itself renders in the details panel's zap row.
+                let message = ContentParser.compactImageMarkers(zapper.message)
+                if !message.isEmpty {
+                    Text(message)
                         .font(.caption2)
                         .lineLimit(1)
                         .truncationMode(.tail)
@@ -2244,6 +2248,17 @@ private struct NoteDetailsPanel: View {
     @State private var tallyRepo = PollTallyRepository.shared
 
     private static let relayChipLimit = 6
+    /// Aligns an image comment with the zap row's text column (30pt avatar +
+    /// 8pt spacing) instead of the panel edge.
+    private static let zapCommentIndent: CGFloat = 38
+    /// Keeps an image comment secondary to the zap row itself — the panel is a
+    /// details list, not a media surface, so the image renders narrower than
+    /// the full width a feed image gets. Tap opens it full screen. Bounding the
+    /// width alone (rather than the height too) is deliberate: `InlineImageView`
+    /// always claims the width it's offered, so a height bound would center a
+    /// portrait image inside an over-wide slot and leave its rounded corners
+    /// outside the drawn image.
+    private static let zapImageMaxWidth: CGFloat = 240
 
     private var clientName: String? {
         guard let tag = tags.first(where: { $0.count >= 2 && $0[0] == "client" }) else { return nil }
@@ -2484,34 +2499,53 @@ private struct NoteDetailsPanel: View {
         VStack(alignment: .leading, spacing: 6) {
             ForEach(groupedZappers) { group in
                 let zapProfile = profiles[group.pubkey] ?? ProfileRepository.shared.get(group.pubkey)
-                Button {
-                    onProfileTap?(group.pubkey)
-                } label: {
-                    HStack(spacing: 8) {
-                        CachedAvatarView(url: zapProfile?.picture, size: 30)
-                        VStack(alignment: .leading, spacing: 1) {
-                            let baseLabel = group.primaryMessage.isEmpty
-                                ? (zapProfile?.displayString ?? short(group.pubkey))
-                                : group.primaryMessage
-                            let label = group.count > 1
-                                ? "\(baseLabel) (×\(group.count))"
-                                : baseLabel
-                            Text(label)
-                                .font(.caption)
-                                .foregroundStyle(.primary)
-                                .lineLimit(2)
+                // Image URLs in the comment render as images below the row, so
+                // the label carries only what's left of the text. A comment
+                // that was nothing but an image falls back to the sender's
+                // name, which is what the row would show for a bare zap.
+                let comment = ContentParser.splitImages(from: group.primaryMessage)
+                VStack(alignment: .leading, spacing: 6) {
+                    Button {
+                        onProfileTap?(group.pubkey)
+                    } label: {
+                        HStack(spacing: 8) {
+                            CachedAvatarView(url: zapProfile?.picture, size: 30)
+                            VStack(alignment: .leading, spacing: 1) {
+                                let baseLabel = comment.text.isEmpty
+                                    ? (zapProfile?.displayString ?? short(group.pubkey))
+                                    : comment.text
+                                let label = group.count > 1
+                                    ? "\(baseLabel) (×\(group.count))"
+                                    : baseLabel
+                                Text(label)
+                                    .font(.caption)
+                                    .foregroundStyle(.primary)
+                                    .lineLimit(2)
+                            }
+                            Spacer(minLength: 0)
+                            HStack(spacing: 3) {
+                                Image(systemName: "bolt.fill")
+                                    .font(.system(size: 11))
+                                Text(CurrencyFormatter.short(sats: group.totalSats))
+                                    .font(.caption.weight(.semibold))
+                            }
+                            .foregroundStyle(Color.wispZapColor)
                         }
-                        Spacer(minLength: 0)
-                        HStack(spacing: 3) {
-                            Image(systemName: "bolt.fill")
-                                .font(.system(size: 11))
-                            Text(CurrencyFormatter.short(sats: group.totalSats))
-                                .font(.caption.weight(.semibold))
+                    }
+                    .buttonStyle(.plain)
+
+                    // Outside the profile Button so the image keeps its own
+                    // tap (full screen) and long-press (copy / save) gestures.
+                    if !comment.images.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(comment.images, id: \.url) { meta in
+                                InlineImageView(meta: meta)
+                                    .frame(maxWidth: Self.zapImageMaxWidth)
+                            }
                         }
-                        .foregroundStyle(Color.wispZapColor)
+                        .padding(.leading, Self.zapCommentIndent)
                     }
                 }
-                .buttonStyle(.plain)
             }
         }
     }
