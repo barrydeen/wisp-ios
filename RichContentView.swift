@@ -453,6 +453,12 @@ struct RichContentView: View {
                     profiles: profiles,
                     onProfileTap: onProfileTap
                 )
+            } else if kind == 30030, let author {
+                // NIP-51 emoji set. Rendering it as a card with its own
+                // Add/Added toggle is what makes sharing a pack link a working
+                // install flow — the recipient never has to copy a coordinate
+                // into settings.
+                EmojiPackCardLoader(dTag: dTag, author: author, relayHints: relays)
             } else {
                 addressablePlaceholder(dTag: dTag, author: author, kind: kind)
             }
