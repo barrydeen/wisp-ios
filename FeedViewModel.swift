@@ -696,11 +696,16 @@ final class FeedViewModel {
         guard hold != holdNewPosts else { return }
         holdNewPosts = hold
         if !hold {
-            // Apply anything that accumulated while held. Re-uses the same
-            // flush pathway so persistence / profile hydration paths stay
-            // identical between the held-then-applied and at-top-merge
-            // cases.
-            flushPendingInserts()
+            // Apply anything that accumulated while held — but defer to the
+            // next runloop tick. This is called from the view's
+            // `onScrollGeometryChange` action, and reassigning `events`
+            // synchronously inside that callback can corrupt SwiftUI's
+            // scroll-offset bookkeeping for the pass in flight, which
+            // manifests as the feed becoming unable to scroll to the top.
+            // The flag flips immediately; only the mutation is deferred.
+            Task { @MainActor in
+                flushPendingInserts()
+            }
         }
     }
 

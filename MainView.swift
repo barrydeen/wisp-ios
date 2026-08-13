@@ -1270,6 +1270,9 @@ struct MainView: View {
                         .transaction { $0.animation = nil }
                     }
                 }
+                // Anchor at the top on first mount so the feed never appears
+                // scrolled down after a cold launch or a content reset.
+                .defaultScrollAnchor(.top)
                 // Keep the feed's layout stable when a composer raises the
                 // keyboard — without this the safe-area shrink reflows the
                 // LazyVStack and recycles rows. Parity with every other feed
