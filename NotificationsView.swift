@@ -53,6 +53,22 @@ struct NotificationsView: View {
             }
             Spacer()
             Button {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    viewModel.setFeedStyle(viewModel.feedStyle == .expanded ? .compact : .expanded)
+                }
+            } label: {
+                Image(systemName: viewModel.feedStyle == .expanded
+                      ? "rectangle.compress.vertical" : "rectangle.expand.vertical")
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 32, height: 32)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(viewModel.feedStyle == .expanded
+                                ? "Switch to compact notifications" : "Switch to expanded notifications")
+
+            Button {
                 showFilterSheet = true
             } label: {
                 Image(systemName: "slider.horizontal.3")

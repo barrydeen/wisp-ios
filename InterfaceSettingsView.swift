@@ -134,6 +134,24 @@ struct InterfaceSettingsView: View {
                         .foregroundStyle(theme.palette.onSurfaceVariant)
                 }
 
+                section(title: "Notifications") {
+                    HStack {
+                        Text("List style")
+                            .foregroundStyle(theme.palette.onSurface)
+                        Spacer()
+                        Picker("", selection: $settings.notificationFeedStyle) {
+                            ForEach(AppSettings.NotificationFeedStyle.allCases, id: \.self) { style in
+                                Text(style.label).tag(style)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(width: 180)
+                    }
+                    Text("Expanded: every notification shows its note, zap message, or poll inline. Compact: one-line rows you tap to open.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(theme.palette.onSurfaceVariant)
+                }
+
                 section(title: "Translation") {
                     Toggle("Auto-translate notes", isOn: $settings.autoTranslate)
                         .toggleStyle(SwitchToggleStyle(tint: theme.primary))
