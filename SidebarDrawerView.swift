@@ -51,7 +51,7 @@ struct SidebarDrawerView: View {
         return pubkey
     }
     private var subtitleText: String {
-        if let nip05 = profile?.nip05, !nip05.isEmpty { return nip05 }
+        if let nip05 = profile?.nip05, !nip05.isEmpty { return nip05.nip05DisplayString }
         return String(npub.prefix(16)) + "\u{2026}"
     }
     private var versionString: String {

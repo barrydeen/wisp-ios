@@ -30,7 +30,7 @@ struct NsecIdentityPreview: View {
                             .foregroundStyle(.primary)
                             .lineLimit(1)
                         if let nip05 = previewProfile?.nip05, !nip05.isEmpty {
-                            Text(nip05)
+                            Text(nip05.nip05DisplayString)
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
