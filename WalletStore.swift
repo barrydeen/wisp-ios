@@ -175,6 +175,15 @@ final class WalletStore {
         return NwcConnection.parse(uri)
     }
 
+    /// The raw `nostr+walletconnect://…` URI backing the active NWC wallet,
+    /// as stored in the keychain. This is the NWC counterpart of
+    /// `sparkMnemonic` — it carries the client secret, so it's only read on
+    /// demand by the connection-string export screen. Nil for Spark wallets.
+    var nwcConnectionUri: String? {
+        guard mode == .nwc else { return nil }
+        return WalletKeychain.loadNwcUri(for: keypair.pubkey)
+    }
+
     /// Try to bring up whatever wallet the user previously configured. Safe to call repeatedly.
     /// On a re-call after wallet is already wired up, just refresh balance + transactions
     /// in the background so the user sees fresh data on tab open.

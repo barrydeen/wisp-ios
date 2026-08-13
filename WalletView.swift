@@ -8,6 +8,7 @@ enum WalletRoute: Hashable {
     case settings
     case transactions
     case recoveryPhrase
+    case nwcConnectionString
 }
 
 // MARK: - Main wallet view
@@ -59,6 +60,7 @@ struct WalletView: View {
             case .settings:   WalletSettingsView(store: store)
             case .transactions: TransactionHistoryView(store: store)
             case .recoveryPhrase: RecoveryPhraseView(store: store)
+            case .nwcConnectionString: NwcConnectionStringView(store: store)
             }
         }
         .task { await store.startIfConfigured() }
