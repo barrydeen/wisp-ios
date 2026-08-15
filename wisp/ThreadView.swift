@@ -13,10 +13,6 @@ struct ThreadView: View {
     @State private var suppressNextDisappearChainRemoval: Bool = false
     /// Anchors whose depth-capped subtree the user expanded inline.
     @State private var expandedBranchIds: Set<String> = []
-    /// Reply row ids currently on-screen (via onAppear/onDisappear), used to
-    /// pick the sticky reply bar's target — the topmost visible reply,
-    /// falling back to the thread's default parent.
-    @State private var visibleRowIds: Set<String> = []
     @Environment(\.dismiss) private var dismiss
 
     /// The active tab's NavigationStack path. Mutated directly by smart-pop so a
@@ -86,8 +82,6 @@ struct ThreadView: View {
                             case .single(let row, let midAir):
                                 nestedReplyRow(row, midAir: midAir)
                                     .id(row.id)
-                                    .onAppear { visibleRowIds.insert(row.id) }
-                                    .onDisappear { visibleRowIds.remove(row.id) }
                             case .wotGroup(let count, let depth, _):
                                 nestedWotGroupRow(count: count, depth: depth)
                             case .collapsedReplies(let anchor, let depth, let hiddenCount):
@@ -184,9 +178,10 @@ struct ThreadView: View {
             Button("OK") { viewModel.errorMessage = nil }
         } message: { msg in Text(msg) }
         .sheet(isPresented: $showReplyCompose) {
-            // Targets whichever reply is topmost in the viewport, falling
-            // back to the note the user opened the thread on (not the
-            // re-rooted focal, which is now the conversation root).
+            // Always targets the note this thread was opened on — the OP for a
+            // plain thread, the tapped reply for a pushed sub-thread — never
+            // whatever happens to be scrolled into view. To reply to a specific
+            // reply, tap that note's comment icon.
             if let parent = focusedReplyTarget {
                 ComposeView(
                     keypair: viewModel.keypair,
@@ -677,18 +672,16 @@ struct ThreadView: View {
         return false
     }
 
-    /// The sticky reply bar's target: the topmost currently-visible reply
-    /// (via `visibleRowIds`, in rendered order), falling back to the
-    /// thread's default parent when no reply row is on screen yet (e.g.
-    /// scrolled to the very top) — the bar follows what you're scrolled to
-    /// instead of always targeting the root.
+    /// The sticky reply bar's target. Deliberately NOT scroll-dependent: an
+    /// earlier version targeted the topmost reply on screen, tracked via
+    /// onAppear/onDisappear — but LazyVStack's appear/disappear events fire
+    /// for prefetched rows below the fold and often never fire for rows
+    /// scrolled out the top, so the tracked set went stale and the bar
+    /// targeted notes the user had long scrolled past. The bar now always
+    /// anchors to the note this thread was opened on; per-reply targeting
+    /// stays with each note's comment icon.
     private var focusedReplyTarget: NostrEvent? {
-        for item in groupedNestedReplies {
-            if case .single(let row, _) = item, visibleRowIds.contains(row.id) {
-                return row.row.event
-            }
-        }
-        return viewModel.composerDefaultParent ?? viewModel.focal?.event
+        viewModel.composerDefaultParent ?? viewModel.focal?.event
     }
 
     private var composer: some View {
