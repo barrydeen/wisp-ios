@@ -336,28 +336,56 @@ enum ContentParser {
             return [seg]
         }
 
-        // Pass 5: trim blank lines preceding block segments
+        // Pass 5: trim blank lines adjacent to block segments.
+        //
+        // Block segments (image, video, quoted note, invoice, link preview…)
+        // render as their own card in RichContentView's 8pt-spaced VStack.
+        // Blank lines around them used to survive as (possibly empty) text
+        // rows — each one a full line of height inside the UITextView plus
+        // VStack spacing on both sides — which read as a large gap between
+        // e.g. a paragraph and a lightning invoice. Trim newline runs on both
+        // sides of the adjacency, and drop the text segment entirely when
+        // nothing but whitespace remains.
         if trimBlankLines, segments.count > 1 {
-            for i in 0..<(segments.count - 1) {
-                let next = segments[i + 1]
-                let isBlock: Bool
-                switch next {
+            func isBlock(_ seg: ContentSegment) -> Bool {
+                switch seg {
                 // .nostrProfile (npub @mention) is rendered inline by
-                // RichInlineTextView, not as a card — leave preceding blank
+                // RichInlineTextView, not as a card — leave surrounding blank
                 // lines alone so a bio that puts a mention on its own line,
                 // or after a paragraph break, keeps the line break the user
                 // typed.
-                case .text, .inlineLink, .customEmoji, .hashtag, .nostrProfile: isBlock = false
-                case .link: isBlock = !linksAreInline
-                default: isBlock = true
-                }
-                if isBlock, case .text(let text) = segments[i] {
-                    let trimmed = trimTrailingNewlines(text)
-                    if trimmed != text {
-                        segments[i] = .text(trimmed.isEmpty ? "" : trimmed + "\n")
-                    }
+                case .text, .inlineLink, .customEmoji, .hashtag, .nostrProfile: return false
+                case .link: return !linksAreInline
+                default: return true
                 }
             }
+            var pruned: [ContentSegment] = []
+            pruned.reserveCapacity(segments.count)
+            for (i, seg) in segments.enumerated() {
+                guard case .text(let text) = seg else {
+                    pruned.append(seg)
+                    continue
+                }
+                let prevIsBlock = i > 0 && isBlock(segments[i - 1])
+                let nextIsBlock = i + 1 < segments.count && isBlock(segments[i + 1])
+                // Only block-adjacent text is eligible: a whitespace-only run
+                // between two inline segments is a joiner (e.g. the single
+                // space between two custom-emoji URLs) and must survive.
+                guard prevIsBlock || nextIsBlock else {
+                    pruned.append(seg)
+                    continue
+                }
+                var t = text
+                if prevIsBlock {
+                    while t.first == "\n" { t.removeFirst() }
+                }
+                if nextIsBlock {
+                    while t.last == "\n" { t.removeLast() }
+                }
+                if t.allSatisfy({ $0 == " " || $0 == "\n" || $0 == "\t" || $0 == "\r" }) { continue }
+                pruned.append(.text(t))
+            }
+            segments = pruned
         }
 
         return segments
