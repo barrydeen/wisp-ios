@@ -59,9 +59,26 @@ struct WalletTransactionRow: View {
                     Text(profile?.displayString ?? (tx.description?.isEmpty == false ? tx.description! : (isIncoming ? "Received" : "Sent")))
                         .font(.subheadline.weight(profile != nil ? .semibold : .regular))
                         .lineLimit(1)
-                    Text(relativeTime(from: Int(tx.settledAt ?? tx.createdAt)))
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                    HStack(spacing: 4) {
+                        Text(relativeTime(from: Int(tx.settledAt ?? tx.createdAt)))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        // Surfaced on the collapsed row, not just in the detail
+                        // sheet: a failed send that reads as an ordinary row is
+                        // exactly what leads to paying the same invoice twice.
+                        switch tx.resolvedStatus {
+                        case .failed:
+                            Text("· Failed")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.red.opacity(0.85))
+                        case .pending:
+                            Text("· Pending")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.orange)
+                        case .completed:
+                            EmptyView()
+                        }
+                    }
                 }
                 Spacer(minLength: 8)
                 VStack(alignment: .trailing, spacing: 2) {
@@ -129,6 +146,16 @@ private struct TransactionDetailPanel: View {
 
     private var idLabel: String { tx.isOnchain ? "Transaction ID" : "Payment hash" }
 
+    /// Says outright that the money didn't move on a failure — "Failed" alone
+    /// leaves the reader guessing whether the sats left the wallet.
+    static func statusLabel(for tx: WalletTransaction) -> String {
+        switch tx.resolvedStatus {
+        case .completed: return "Completed"
+        case .pending:   return "Pending"
+        case .failed:    return tx.type == .outgoing ? "Failed — not sent" : "Failed"
+        }
+    }
+
     private var fullDate: String {
         let secs = tx.settledAt ?? tx.createdAt
         let formatter = DateFormatter()
@@ -149,7 +176,7 @@ private struct TransactionDetailPanel: View {
         let feeSats = tx.feeMsats / 1000
 
         VStack(alignment: .leading, spacing: 10) {
-            TxDetailRow(label: "Status", value: tx.settledAt != nil ? "Completed" : "Pending")
+            TxDetailRow(label: "Status", value: Self.statusLabel(for: tx))
             TxDetailRow(label: "Type", value: tx.isOnchain ? "On-chain" : "Lightning")
             TxDetailRow(label: "Amount", value: "\(CurrencyFormatter.formatNumber(sats)) sats")
             if feeSats > 0 {
