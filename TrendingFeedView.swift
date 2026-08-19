@@ -241,7 +241,7 @@ struct TrendingFeedView: View {
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                     if let nip05 = profile.nip05, !nip05.isEmpty {
-                        Text(nip05)
+                        Text(nip05.nip05DisplayString)
                             .font(.caption)
                             .foregroundStyle(Color.wispPrimary)
                             .lineLimit(1)

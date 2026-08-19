@@ -24,10 +24,16 @@ struct PostCardView: View {
     /// count so the bubble matches the visible REPLIES list — without it
     /// the engagement repo / network total would still show blocked authors.
     var forcedReplyCount: Int? = nil
-    /// When false, the "Replying to @user" row is suppressed even if the event
-    /// is a reply. Used for stacked nested replies in ThreadView where the
-    /// visual indentation already communicates the reply relationship.
+    /// When false, the "Replying to @user" row is suppressed even if the
+    /// event is a reply.
     var showReplyContext: Bool = true
+    /// Overrides the "Replying to @user" row's text with a single name —
+    /// the author of the ONE event this reply directly targets — instead
+    /// of the default multi-participant list. Set by ThreadView's threaded
+    /// reply rows: the connector rail already shows nesting structure, but
+    /// not identity, and depth-cap folding means a reply's visual position
+    /// doesn't always trace cleanly back to its parent.
+    var replyToLabelOverride: String? = nil
     /// When true, the card renders a lock chip in the header and hides
     /// repost / quote actions (they would re-publish the rumor id as a public
     /// kind-6 or kind-1 with `q` tag, breaking the encryption invariant).
@@ -302,14 +308,14 @@ struct PostCardView: View {
                 replyingToRow(for: displayEvent)
             }
 
-            // Header row — avatar + name + nip05 + badges/time. Indented to
-            // align with the avatar. In ancestor-compact mode the inner profile
-            // links are dropped so the outer ThreadRoute link owns every tap.
-            // Skipped entirely for unresolved tag-only reposts: the reposter
-            // avatar/name/timestamp would be redundant with the banner and
-            // sit above the loading/missing placeholder.
+            // Header row — avatar + name + nip05 badge + badges/time. Indented
+            // to align with the avatar. In ancestor-compact mode the inner
+            // profile links are dropped so the outer ThreadRoute link owns
+            // every tap. Skipped entirely for unresolved tag-only reposts: the
+            // reposter avatar/name/timestamp would be redundant with the
+            // banner and sit above the loading/missing placeholder.
             if !isUnresolvedRepost {
-            HStack(alignment: .top, spacing: 12) {
+            HStack(alignment: .center, spacing: 12) {
                 if ancestorCompact {
                     CachedAvatarView(url: displayProfile?.picture, size: 24)
                         .quickFollowOnLongPress(pubkey: displayEvent.pubkey)
@@ -321,8 +327,12 @@ struct PostCardView: View {
                     .quickFollowOnLongPress(pubkey: displayEvent.pubkey)
                 }
 
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    // Centered as a pair rather than pinned to firstTextBaseline —
+                    // the badge is an icon, not a text glyph, so baseline-aligning
+                    // it against the name (as the outer row does for its other,
+                    // text-based children) makes it hang low.
+                    HStack(spacing: 4) {
                         Group {
                             if ancestorCompact {
                                 EmojiText(
@@ -348,42 +358,45 @@ struct PostCardView: View {
                             }
                         }
 
-                        if isPrivate {
-                            HStack(spacing: 3) {
-                                Image(systemName: "lock.fill")
-                                    .font(.caption2)
-                                Text("Private")
-                                    .font(.caption2.weight(.semibold))
-                            }
-                            .foregroundStyle(Color.wispPrimary)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(
-                                Capsule().fill(Color.wispPrimary.opacity(0.12))
-                            )
-                            .accessibilityLabel("Private reply")
-                        }
-
-                        Spacer(minLength: 0)
-
-                        let powBits = Nip13.verifyDifficulty(displayEvent)
-                        if powBits >= 16 {
-                            PowBadge(bits: powBits)
-                        }
-
-                        Text(useAbsoluteTimestamp
-                             ? absoluteTimestamp(displayEvent.createdAt)
-                             : relativeTime(from: displayEvent.createdAt))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-
-                        if !ancestorCompact {
-                            overflowMenu
+                        // Icon only — the handle itself is reserved for the
+                        // profile screen so timeline/thread rows don't carry
+                        // the extra clutter of a second line.
+                        if !ancestorCompact, let nip05 = displayProfile?.nip05, !nip05.isEmpty {
+                            Nip05Badge(nip05: nip05, pubkey: displayEvent.pubkey, showHandle: false)
                         }
                     }
 
-                    if !ancestorCompact, let nip05 = displayProfile?.nip05, !nip05.isEmpty {
-                        Nip05Badge(nip05: nip05, pubkey: displayEvent.pubkey)
+                    if isPrivate {
+                        HStack(spacing: 3) {
+                            Image(systemName: "lock.fill")
+                                .font(.caption2)
+                            Text("Private")
+                                .font(.caption2.weight(.semibold))
+                        }
+                        .foregroundStyle(Color.wispPrimary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(
+                            Capsule().fill(Color.wispPrimary.opacity(0.12))
+                        )
+                        .accessibilityLabel("Private reply")
+                    }
+
+                    Spacer(minLength: 0)
+
+                    let powBits = Nip13.verifyDifficulty(displayEvent)
+                    if powBits >= 16 {
+                        PowBadge(bits: powBits)
+                    }
+
+                    Text(useAbsoluteTimestamp
+                         ? absoluteTimestamp(displayEvent.createdAt)
+                         : relativeTime(from: displayEvent.createdAt))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    if !ancestorCompact {
+                        overflowMenu
                     }
                 }
             }
@@ -454,16 +467,38 @@ struct PostCardView: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 14)
                 .padding(.bottom, 12)
+            } else if displayEvent.kind == 30023 {
+                // Long-form article: render the rich preview card (hero,
+                // title, summary) that taps through to the full reader,
+                // instead of dumping the raw markdown body. The author row
+                // (above) and action bar / details panel (below) come from
+                // PostCardView's shared chrome — mirrors Android's
+                // FeedArticleItem. Extracted to a helper so the main `body`
+                // builder stays under the Swift type-checker's complexity cap.
+                articleBody(displayEvent)
             } else {
             VStack(alignment: .leading, spacing: 8) {
+                // NIP-22 comment scoped to a web page (or other external
+                // identifier). Sits above the comment text: the page is what's
+                // being discussed, so it reads as the subject the remark
+                // answers rather than a link trailing off the end of it.
+                if let external = Nip22.externalRoot(of: displayEvent) {
+                    externalContentCard(external)
+                }
+
                 if !displayEvent.content.isEmpty || !displayEvent.tags.isEmpty {
                     let cap = Self.longPostCollapsedHeight
                     let pixelLong = naturalTextHeight > cap + Self.longPostMinOverflow
                     // Char-count path is independent of measured height: a
                     // 600+ char body wraps to ~12 lines (well under the
                     // 66%-screen cap), so the height check alone would let
-                    // it escape truncation entirely.
+                    // it escape truncation entirely. Measure the *text*
+                    // length (excluding inline media URLs) — a short caption
+                    // with several image URLs can exceed the raw threshold
+                    // without being a long text post. The raw-count guard
+                    // keeps the parse off the hot path for short posts.
                     let charLong = displayEvent.content.count > Self.longPostCharThreshold
+                        && ContentParser.textualLength(content: displayEvent.content, tags: displayEvent.tags) > Self.longPostCharThreshold
                     let isLong = pixelLong || charLong
                     let collapsedHeight = pixelLong ? cap : Self.longPostTextCollapsedHeight
                     let collapsed = isLong && !contentExpanded
@@ -653,6 +688,11 @@ struct PostCardView: View {
                 // Deferred: markVisible can seed an @Observable tally box this
                 // card reads — avoid mutating observed state during the update.
                 Task { @MainActor in PollTallyRepository.shared.markVisible(pollEvent: displayed) }
+            }
+            if displayed.kind == 30023 {
+                // Seed the article cache from the in-hand event so tapping the
+                // preview opens the full reader without a relay round-trip.
+                ArticleCache.shared.store(displayed)
             }
         }
         // Tag-only NIP-18 repost: `content` is empty so the inline JSON path
@@ -854,9 +894,12 @@ struct PostCardView: View {
     /// avatars with a count-aware label.
     @ViewBuilder
     private func replyingToRow(for displayEvent: NostrEvent) -> some View {
+        // Web-scoped NIP-22 comments have no `e` reply target, so admit them
+        // explicitly — their context comes from the `I` tag instead.
         if !ancestorCompact,
-           Nip10.replyTarget(of: displayEvent) != nil,
-           let label = replyingToLabel(for: displayEvent) {
+           Nip10.replyTarget(of: displayEvent) != nil
+             || Nip22.externalRoot(of: displayEvent) != nil,
+           let label = replyToLabelOverride ?? replyingToLabel(for: displayEvent) {
             HStack(spacing: 4) {
                 Image(systemName: "arrowshape.turn.up.left.fill")
                     .font(.caption2)
@@ -873,6 +916,12 @@ struct PostCardView: View {
     }
 
     private func replyingToLabel(for displayEvent: NostrEvent) -> String? {
+        // A comment scoped to a web page carries no `p` tags to name, so fall
+        // back to the source itself — otherwise the row renders blank and the
+        // comment looks like it's replying to nobody.
+        if let external = Nip22.externalRoot(of: displayEvent) {
+            return "Commenting on \(external.displayHost ?? externalKindLabel(external.kind))"
+        }
         var seen = Set<String>()
         let unique = displayEvent.tags
             .filter { $0.count >= 2 && $0[0] == "p" && $0[1] != displayEvent.pubkey }
@@ -971,6 +1020,109 @@ struct PostCardView: View {
 
     private func avatar(picture: String?) -> some View {
         CachedAvatarView(url: picture, size: 40)
+    }
+
+    // MARK: - Article body
+
+    /// Long-form (kind-30023) content region: the rich preview card plus the
+    /// shared top-zapper pill, action bar, and details panel. Split out of the
+    /// main `body` builder to keep that expression under the type-checker cap.
+    @ViewBuilder
+    private func articleBody(_ displayEvent: NostrEvent) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ArticleFeedPreview(event: displayEvent)
+
+            let effectiveZappers = repoBox.counts.zappers.isEmpty ? (engagement?.zappers ?? []) : repoBox.counts.zappers
+            if let topZapper = effectiveZappers.max(by: { $0.sats < $1.sats }) {
+                TopZapperPill(
+                    zapper: topZapper,
+                    profile: profiles[topZapper.pubkey] ?? ProfileRepository.shared.get(topZapper.pubkey)
+                ) {
+                    onProfileTap?(topZapper.pubkey)
+                }
+            }
+
+            if !activeUserIsWatchOnly { actionBar }
+
+            if expanded {
+                NoteDetailsPanel(
+                    zappers: repoBox.counts.zappers.isEmpty ? (engagement?.zappers ?? []) : repoBox.counts.zappers,
+                    reactors: repoBox.counts.reactors.isEmpty ? (engagement?.reactors ?? []) : repoBox.counts.reactors,
+                    reposters: repoBox.counts.reposters.isEmpty ? (engagement?.reposters ?? []) : repoBox.counts.reposters,
+                    quoters: repoBox.counts.quoters.isEmpty ? (engagement?.quoters ?? []) : repoBox.counts.quoters,
+                    relays: combinedRelays(for: displayEvent.id),
+                    tags: displayEvent.tags,
+                    createdAt: displayEvent.createdAt,
+                    pollEvent: nil,
+                    profiles: profiles,
+                    onProfileTap: onProfileTap,
+                    onNoteTap: onNoteTap
+                )
+                .task(id: displayEvent.id) {
+                    engagementRepo.fetchQuoters(
+                        eventId: displayEvent.id,
+                        authorPubkey: displayEvent.pubkey
+                    )
+                }
+                .transition(.opacity)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 14)
+        .padding(.bottom, 12)
+    }
+
+    // MARK: - External content (NIP-22)
+
+    /// The web page (or other NIP-73 identifier) a kind-1111 comment is
+    /// scoped to, rendered *above* the comment text so the subject reads
+    /// before the remark answering it.
+    ///
+    /// Web roots reuse `LinkPreviewView`, which already handles OpenGraph
+    /// fetch, caching, and the no-metadata fallback. Identifiers with no
+    /// openable URL (a bare podcast GUID, an ISBN) get a plain labelled row
+    /// instead of a dead preview card.
+    @ViewBuilder
+    private func externalContentCard(_ ref: Nip22.ExternalRef) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 4) {
+                Image(systemName: "link")
+                    .font(.caption2)
+                Text(ref.displayHost ?? externalKindLabel(ref.kind))
+                    .font(.caption)
+                    .lineLimit(1)
+            }
+            .foregroundStyle(.secondary)
+
+            if let url = ref.openableURL {
+                LinkPreviewView(url: url.absoluteString)
+            } else {
+                Text(ref.value)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.wispSurfaceVariant.opacity(0.3),
+                                in: RoundedRectangle(cornerRadius: 12))
+            }
+        }
+        .padding(.horizontal, 16)
+    }
+
+    /// Human label for a NIP-73 identifier type, used when there's no host to
+    /// show (`podcast:item:guid` → "Podcast episode").
+    private func externalKindLabel(_ kind: String) -> String {
+        switch kind {
+        case "web": return "Web page"
+        case "isbn": return "Book"
+        case "geo": return "Location"
+        case "doi": return "Paper"
+        default:
+            if kind.hasPrefix("podcast:") { return "Podcast" }
+            return "External content"
+        }
     }
 
     // MARK: - Action Bar
@@ -1720,7 +1872,7 @@ struct PostCardView: View {
 
     private func broadcast(_ target: NostrEvent) {
         guard let me = myPubkey else { return }
-        // `@MainActor in` pins the alert mutation to main. Without it, the
+        // `@MainActor in` pins the UI mutation to main. Without it, the
         // assignment runs on whatever actor `RelayPool.publish` suspended on,
         // which leaves the alert in an inconsistent presentation state — the
         // OK button needs two or three taps to dismiss because SwiftUI is
@@ -1735,16 +1887,26 @@ struct PostCardView: View {
                 set = ["wss://relay.damus.io", "wss://relay.primal.net", "wss://nos.lol"]
             }
             let succeeded = await RelayPool.publish(event: target, to: Array(set), timeout: 8)
-            // Yield one runloop tick so the overflow popover finishes its
-            // dismiss animation before the alert is presented. Without the
-            // hop the alert can mount on top of a still-dismissing popover
-            // and the popover dismissal eats the first OK tap.
-            try? await Task.sleep(nanoseconds: 50_000_000)
-            actionAlert = ActionAlert(
-                title: succeeded.isEmpty ? "Broadcast failed" : "Broadcasted",
-                message: succeeded.isEmpty
-                    ? "No relays accepted the event."
-                    : "Re-published to \(succeeded.count) relay\(succeeded.count == 1 ? "" : "s")."
+            guard !succeeded.isEmpty else {
+                // Yield one runloop tick so the overflow popover finishes its
+                // dismiss animation before the alert is presented. Without the
+                // hop the alert can mount on top of a still-dismissing popover
+                // and the popover dismissal eats the first OK tap. Only the
+                // alert needs this; the toast is an overlay, not a presentation.
+                try? await Task.sleep(nanoseconds: 50_000_000)
+                actionAlert = ActionAlert(
+                    title: "Broadcast failed",
+                    message: "No relays accepted the event."
+                )
+                return
+            }
+            // Success confirms through the same top pill the composer uses on
+            // publish — a modal interrupted the user for a fire-and-forget
+            // re-publish they don't need to act on. Failure keeps the alert:
+            // that one does warrant a deliberate acknowledgement.
+            SuccessToast.shared.show(
+                "Broadcast to \(succeeded.count) relay\(succeeded.count == 1 ? "" : "s")",
+                icon: "antenna.radiowaves.left.and.right"
             )
         }
     }
@@ -2109,8 +2271,12 @@ private struct TopZapperPill: View {
                     .font(.system(size: 11))
                 Text(CurrencyFormatter.short(sats: zapper.sats))
                     .font(.caption2.weight(.semibold))
-                if !zapper.message.isEmpty {
-                    Text(zapper.message)
+                // The pill is one line, so an image comment shows as an
+                // `[image]` marker rather than a truncated URL. The image
+                // itself renders in the details panel's zap row.
+                let message = ContentParser.compactImageMarkers(zapper.message)
+                if !message.isEmpty {
+                    Text(message)
                         .font(.caption2)
                         .lineLimit(1)
                         .truncationMode(.tail)
@@ -2152,6 +2318,17 @@ private struct NoteDetailsPanel: View {
     @State private var tallyRepo = PollTallyRepository.shared
 
     private static let relayChipLimit = 6
+    /// Aligns an image comment with the zap row's text column (30pt avatar +
+    /// 8pt spacing) instead of the panel edge.
+    private static let zapCommentIndent: CGFloat = 38
+    /// Keeps an image comment secondary to the zap row itself — the panel is a
+    /// details list, not a media surface, so the image renders narrower than
+    /// the full width a feed image gets. Tap opens it full screen. Bounding the
+    /// width alone (rather than the height too) is deliberate: `InlineImageView`
+    /// always claims the width it's offered, so a height bound would center a
+    /// portrait image inside an over-wide slot and leave its rounded corners
+    /// outside the drawn image.
+    private static let zapImageMaxWidth: CGFloat = 240
 
     private var clientName: String? {
         guard let tag = tags.first(where: { $0.count >= 2 && $0[0] == "client" }) else { return nil }
@@ -2392,34 +2569,53 @@ private struct NoteDetailsPanel: View {
         VStack(alignment: .leading, spacing: 6) {
             ForEach(groupedZappers) { group in
                 let zapProfile = profiles[group.pubkey] ?? ProfileRepository.shared.get(group.pubkey)
-                Button {
-                    onProfileTap?(group.pubkey)
-                } label: {
-                    HStack(spacing: 8) {
-                        CachedAvatarView(url: zapProfile?.picture, size: 30)
-                        VStack(alignment: .leading, spacing: 1) {
-                            let baseLabel = group.primaryMessage.isEmpty
-                                ? (zapProfile?.displayString ?? short(group.pubkey))
-                                : group.primaryMessage
-                            let label = group.count > 1
-                                ? "\(baseLabel) (×\(group.count))"
-                                : baseLabel
-                            Text(label)
-                                .font(.caption)
-                                .foregroundStyle(.primary)
-                                .lineLimit(2)
+                // Image URLs in the comment render as images below the row, so
+                // the label carries only what's left of the text. A comment
+                // that was nothing but an image falls back to the sender's
+                // name, which is what the row would show for a bare zap.
+                let comment = ContentParser.splitImages(from: group.primaryMessage)
+                VStack(alignment: .leading, spacing: 6) {
+                    Button {
+                        onProfileTap?(group.pubkey)
+                    } label: {
+                        HStack(spacing: 8) {
+                            CachedAvatarView(url: zapProfile?.picture, size: 30)
+                            VStack(alignment: .leading, spacing: 1) {
+                                let baseLabel = comment.text.isEmpty
+                                    ? (zapProfile?.displayString ?? short(group.pubkey))
+                                    : comment.text
+                                let label = group.count > 1
+                                    ? "\(baseLabel) (×\(group.count))"
+                                    : baseLabel
+                                Text(label)
+                                    .font(.caption)
+                                    .foregroundStyle(.primary)
+                                    .lineLimit(2)
+                            }
+                            Spacer(minLength: 0)
+                            HStack(spacing: 3) {
+                                Image(systemName: "bolt.fill")
+                                    .font(.system(size: 11))
+                                Text(CurrencyFormatter.short(sats: group.totalSats))
+                                    .font(.caption.weight(.semibold))
+                            }
+                            .foregroundStyle(Color.wispZapColor)
                         }
-                        Spacer(minLength: 0)
-                        HStack(spacing: 3) {
-                            Image(systemName: "bolt.fill")
-                                .font(.system(size: 11))
-                            Text(CurrencyFormatter.short(sats: group.totalSats))
-                                .font(.caption.weight(.semibold))
+                    }
+                    .buttonStyle(.plain)
+
+                    // Outside the profile Button so the image keeps its own
+                    // tap (full screen) and long-press (copy / save) gestures.
+                    if !comment.images.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(comment.images, id: \.url) { meta in
+                                InlineImageView(meta: meta)
+                                    .frame(maxWidth: Self.zapImageMaxWidth)
+                            }
                         }
-                        .foregroundStyle(Color.wispZapColor)
+                        .padding(.leading, Self.zapCommentIndent)
                     }
                 }
-                .buttonStyle(.plain)
             }
         }
     }
@@ -2721,13 +2917,22 @@ func absoluteTimestamp(_ timestamp: Int) -> String {
 }
 
 func relativeTime(from timestamp: Int) -> String {
-    let seconds = Int(Date().timeIntervalSince1970) - timestamp
+    let now = Date()
+    let date = Date(timeIntervalSince1970: Double(timestamp))
+    let seconds = Int(now.timeIntervalSince1970) - timestamp
     if seconds < 60 { return "now" }
     if seconds < 3600 { return "\(seconds / 60)m" }
     if seconds < 86400 { return "\(seconds / 3600)h" }
     if seconds < 604_800 { return "\(seconds / 86400)d" }
-    if seconds >= 31_536_000 { return "\(Int((Double(seconds) / 31_536_000).rounded()))y" }
-    return postCardMonthDayFormatter.string(from: Date(timeIntervalSince1970: Double(timestamp)))
+    // Years elapsed, counted on the calendar and truncated — a Jan 2023 note
+    // read "4y" in mid-2026 because the old math divided by a fixed 365 days
+    // and *rounded*, so anything past 3.5y jumped a year early. Every other
+    // unit here truncates (59 minutes is "59m", never "1h"); this now matches,
+    // and Calendar handles leap years so the boundary lands on the anniversary.
+    if let years = Calendar.current.dateComponents([.year], from: date, to: now).year, years >= 1 {
+        return "\(years)y"
+    }
+    return postCardMonthDayFormatter.string(from: date)
 }
 
 
@@ -2751,6 +2956,7 @@ extension PostCardView: Equatable {
             && lhs.useAbsoluteTimestamp == rhs.useAbsoluteTimestamp
             && lhs.forcedReplyCount == rhs.forcedReplyCount
             && lhs.showReplyContext == rhs.showReplyContext
+            && lhs.replyToLabelOverride == rhs.replyToLabelOverride
             && lhs.isPrivate == rhs.isPrivate
     }
 }

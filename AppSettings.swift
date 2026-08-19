@@ -23,6 +23,22 @@ final class AppSettings {
         case bitcoin
     }
 
+    /// How the notifications list renders each row.
+    enum NotificationFeedStyle: String, CaseIterable {
+        /// Every row renders its detail (referenced note, zap message, poll,
+        /// reply composer) inline without a tap — the default.
+        case expanded
+        /// One-line rows; tapping opens a single row at a time (accordion).
+        case compact
+
+        var label: String {
+            switch self {
+            case .expanded: "Expanded"
+            case .compact:  "Compact"
+            }
+        }
+    }
+
     private struct Keys {
         static let largeText = "wisp_settings_large_text"
         static let themeName = "wisp_settings_theme_name"
@@ -36,6 +52,7 @@ final class AppSettings {
         static let fiatModeEnabled = "wisp_settings_fiat_mode_enabled"
         static let fiatCurrency = "wisp_settings_fiat_currency"
         static let notificationSoundsEnabled = "wisp_settings_notification_sounds_enabled"
+        static let notificationFeedStyle = "wisp_settings_notification_feed_style"
         static let postUndoTimerEnabled = "wisp_settings_post_undo_timer_enabled"
         static let postUndoTimerSeconds = "wisp_settings_post_undo_timer_seconds"
         static let postUndoTimerForReplies = "wisp_settings_post_undo_timer_for_replies"
@@ -99,6 +116,13 @@ final class AppSettings {
     }
     var notificationSoundsEnabled: Bool {
         didSet { UserDefaults.standard.set(notificationSoundsEnabled, forKey: Keys.notificationSoundsEnabled) }
+    }
+    /// Display density of the notifications list. Defaults to `.expanded` so
+    /// the feed reads end-to-end without tapping every row; the user can flip
+    /// back to `.compact` (the accordion) from the notifications top bar or
+    /// interface settings, and the choice survives relaunch.
+    var notificationFeedStyle: NotificationFeedStyle {
+        didSet { UserDefaults.standard.set(notificationFeedStyle.rawValue, forKey: Keys.notificationFeedStyle) }
     }
     /// When true, publishing a top-level post (and optionally replies — see
     /// `postUndoTimerForReplies`) waits `postUndoTimerSeconds` before sending,
@@ -169,7 +193,8 @@ final class AppSettings {
     }
     /// Optional default message included on an instant zap / payment. Empty
     /// string means "no message" — the zap fires with `content: ""` exactly
-    /// as the composer's blank state would produce. Persisted + synced.
+    /// as the composer's blank state would produce. Persisted per account
+    /// (device-local; NIP-78 cross-device sync deferred — see #70).
     var quickZapMessage: String {
         didSet {
             let pk = NostrKey.load()?.pubkey
@@ -193,6 +218,8 @@ final class AppSettings {
         self.fiatModeEnabled = defaults.object(forKey: Keys.fiatModeEnabled) as? Bool ?? false
         self.fiatCurrency = defaults.string(forKey: Keys.fiatCurrency) ?? "USD"
         self.notificationSoundsEnabled = defaults.object(forKey: Keys.notificationSoundsEnabled) as? Bool ?? true
+        let notifStyleRaw = defaults.string(forKey: Keys.notificationFeedStyle) ?? NotificationFeedStyle.expanded.rawValue
+        self.notificationFeedStyle = NotificationFeedStyle(rawValue: notifStyleRaw) ?? .expanded
         self.postUndoTimerEnabled = defaults.object(forKey: Keys.postUndoTimerEnabled) as? Bool ?? true
         let storedSeconds = defaults.object(forKey: Keys.postUndoTimerSeconds) as? Int ?? 10
         self.postUndoTimerSeconds = Self.postUndoTimerOptions.contains(storedSeconds) ? storedSeconds : 10

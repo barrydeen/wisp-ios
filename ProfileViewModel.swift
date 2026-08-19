@@ -38,6 +38,13 @@ final class ProfileViewModel {
     var isLoadingGallery: Bool = false
     var galleryLoaded: Bool = false
 
+    /// NIP-22 comments this user left on external items (web pages, podcast
+    /// episodes). Kept out of Notes/Replies: those are kind-1 surfaces, and a
+    /// comment's subject is the linked item rather than another nostr note.
+    var comments: [NostrEvent] = []
+    var isLoadingComments: Bool = false
+    var commentsLoaded: Bool = false
+
     var followingPubkeys: [String] = []
     var followingProfiles: [ProfileData] = []
     var isLoadingFollowing: Bool = false
@@ -86,6 +93,10 @@ final class ProfileViewModel {
     @ObservationIgnored private var galleryPending: [NostrEvent] = []
     @ObservationIgnored private var galleryFlushScheduled = false
     @ObservationIgnored private var galleryStreamTask: Task<Void, Never>?
+
+    @ObservationIgnored private var commentsPending: [NostrEvent] = []
+    @ObservationIgnored private var commentsFlushScheduled = false
+    @ObservationIgnored private var commentsStreamTask: Task<Void, Never>?
 
     @ObservationIgnored private var followersOffset = 0
     @ObservationIgnored private var sortedNotesStreamTask: Task<Void, Never>?
@@ -156,11 +167,18 @@ final class ProfileViewModel {
         let myFollows = FollowsCache.shared.follows(for: activeUserPubkey)
         youFollow = myFollows.contains(pubkey)
 
+        // Deletions run alongside header/contacts — those already take several
+        // seconds on slow relays, so the kind-5 query rides for free. Placed
+        // in the first group rather than blocking the notes load so profile
+        // open speed is unchanged. The notes load in the second group picks
+        // up whatever the tracker learned; if deletions arrive after notes
+        // render, `shouldDrop` catches them on the next `rebuildSlices`.
         await withTaskGroup(of: Void.self) { group in
             group.addTask { [weak self] in await self?.loadProfileHeader() }
             group.addTask { [weak self] in await self?.loadContacts() }
             group.addTask { [weak self] in await self?.loadTargetWriteRelays() }
             group.addTask { [weak self] in await self?.loadFollowerCount() }
+            group.addTask { [weak self] in await self?.loadDeletions() }
         }
 
         // Now that we know the target's write relays, load notes/replies in parallel
@@ -174,6 +192,8 @@ final class ProfileViewModel {
         switch tab {
         case .notes, .replies, .media:
             return  // Notes/replies always loaded; media derives from them.
+        case .comments:
+            if !commentsLoaded { await loadComments() }
         case .gallery:
             if !galleryLoaded { await loadGallery() }
         case .following:
@@ -244,6 +264,28 @@ final class ProfileViewModel {
         followingCount = pubkeys.count
         // Their contact list p-tags the active user → they follow us.
         followsYou = pubkeys.contains(activeUserPubkey)
+
+        // When this IS our own profile, push the freshest relay copy into the
+        // local follow cache so a list edited in another client replaces our
+        // frozen snapshot before the next in-app follow/unfollow rebuilds off
+        // it. Gated on `created_at`, so a stale relay copy can't undo a newer
+        // local edit.
+        if pubkey == activeUserPubkey {
+            FollowsCache.shared.reconcile(pubkey: pubkey, follows: pubkeys, createdAt: best.createdAt)
+        }
+    }
+
+    /// Fetch the author's kind-5 deletion requests so the DeletionTracker
+    /// knows which of their notes to hide before the notes/replies render.
+    private func loadDeletions() async {
+        let relays = queryRelays()
+        let results = await RelayPool.query(
+            relays: relays,
+            filter: NostrFilter(kinds: [Nip09.kindDeletion], authors: [pubkey], limit: 200),
+            timeout: 6
+        )
+        DeletionTracker.shared.ingestBatch(results.filter { $0.kind == Nip09.kindDeletion })
+        await EventPersistQueue.shared.enqueue(results.filter { $0.kind == Nip09.kindDeletion })
     }
 
     private func loadTargetWriteRelays() async {
@@ -539,6 +581,60 @@ final class ProfileViewModel {
         guard !batch.isEmpty else { return }
         let sortedBatch = batch.sorted { $0.createdAt > $1.createdAt }
         galleryPosts = FeedViewModel.mergeSortedDesc(galleryPosts, sortedBatch)
+        Task { await EventPersistQueue.shared.enqueue(batch) }
+    }
+
+    // MARK: - Comments (NIP-22)
+
+    /// This user's kind-1111 comments, newest first.
+    ///
+    /// Only externally-rooted ones are listed. A comment replying to another
+    /// comment already appears in that thread, and without its own subject
+    /// card it would read here exactly like the context-free rows this tab
+    /// exists to avoid.
+    private func loadComments() async {
+        commentsStreamTask?.cancel()
+        isLoadingComments = true
+
+        let relays = queryRelays()
+        let filter = NostrFilter(kinds: [Nip22.kindComment], authors: [pubkey], limit: 100)
+        let queries = relays.map { RelayQuery(relayUrl: $0, filter: filter) }
+
+        commentsStreamTask = Task { [weak self] in
+            guard let self else { return }
+            var seen = Set(self.comments.map(\.id))
+            for await (event, _) in RelayPool.stream(queries: queries, timeout: 12) {
+                if Task.isCancelled { return }
+                if SafetyFilter.shared.shouldDrop(event: event, context: .feed) { continue }
+                guard event.kind == Nip22.kindComment,
+                      Nip22.externalRoot(of: event) != nil,
+                      seen.insert(event.id).inserted else { continue }
+                self.enqueueComment(event)
+            }
+            self.flushCommentsPending()
+            self.isLoadingComments = false
+            self.commentsLoaded = true
+        }
+    }
+
+    private func enqueueComment(_ event: NostrEvent) {
+        commentsPending.append(event)
+        if isLoadingComments { isLoadingComments = false }
+        guard !commentsFlushScheduled else { return }
+        commentsFlushScheduled = true
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(Self.liveFlushDelayMs))
+            await self?.flushCommentsPending()
+        }
+    }
+
+    private func flushCommentsPending() {
+        commentsFlushScheduled = false
+        let batch = commentsPending
+        commentsPending.removeAll(keepingCapacity: true)
+        guard !batch.isEmpty else { return }
+        let sortedBatch = batch.sorted { $0.createdAt > $1.createdAt }
+        comments = FeedViewModel.mergeSortedDesc(comments, sortedBatch)
         Task { await EventPersistQueue.shared.enqueue(batch) }
     }
 
@@ -854,12 +950,15 @@ final class ProfileViewModel {
     private func isRootOrRepost(_ event: NostrEvent) -> Bool {
         guard event.pubkey == pubkey else { return false }
         if event.kind == 6 || [20, 21, 22, 30023].contains(event.kind) { return true }
-        return event.kind == 1 && !event.tags.contains { $0.first == "e" }
+        // A quote post carries an `e … mention` tag but is a top-level note,
+        // so it belongs in the Notes tab, not Replies. `hasThreadingETag`
+        // ignores mention markers.
+        return event.kind == 1 && !event.hasThreadingETag
     }
 
     private func isReply(_ event: NostrEvent) -> Bool {
         guard event.pubkey == pubkey, event.kind == 1 else { return false }
-        return event.tags.contains { $0.first == "e" }
+        return event.hasThreadingETag
     }
 
     private func persistKnownKinds(_ events: [NostrEvent]) async {

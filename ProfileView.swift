@@ -262,6 +262,13 @@ struct ProfileView: View {
                     onNoteTap: onNoteTap,
                     onHashtagTap: onHashtagTap
                 )
+            case .comments:
+                CommentsTabView(
+                    viewModel: viewModel,
+                    onProfileTap: onProfileTap,
+                    onNoteTap: onNoteTap,
+                    onHashtagTap: onHashtagTap
+                )
             case .gallery:
                 GalleryTabView(viewModel: viewModel, onNoteTap: onNoteTap)
             case .media:
@@ -437,7 +444,7 @@ private struct ProfileHeaderView: View {
                         Image(systemName: "checkmark.seal.fill")
                             .font(.caption)
                             .foregroundStyle(Color.wispPrimary)
-                        Text(nip)
+                        Text(nip.nip05DisplayString)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }

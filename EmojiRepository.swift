@@ -56,6 +56,13 @@ final class EmojiRepository {
     /// `30030:<pubkey>:<d>` strings from the user's kind-10030 `a` tags.
     private(set) var referencedPackAddrs: [String] = []
 
+    /// addr → relay hints, from the third slot of a kind-10030 `a` tag
+    /// (`["a", "<coord>", "<relay>"]`, as NIP-51 defines it) or from the `naddr`
+    /// the user pasted. A coordinate alone says nothing about where the event
+    /// lives, so without these a pack whose author's relay list is stale can
+    /// only be found by luck — see `packResolutionRelays`.
+    private(set) var packRelayHints: [String: [String]] = [:]
+
     /// addr → resolved pack (title + emojis), populated by fetching each kind-30030.
     private(set) var resolvedPacks: [String: ResolvedEmojiPack] = [:]
 
@@ -223,11 +230,27 @@ final class EmojiRepository {
         try await publishKind10030(directEmojis: next, packAddrs: referencedPackAddrs, keypair: keypair)
     }
 
-    func addPackReference(_ addr: String, keypair: Keypair) async throws {
+    /// `relayHints` come from the `naddr` the user pasted or shared. They're
+    /// recorded before publishing so they land in the kind-10030 `a` tag and
+    /// survive to the next cold launch, when the coordinate alone would
+    /// otherwise be all we have to find the pack with.
+    func addPackReference(_ addr: String, relayHints: [String] = [], keypair: Keypair) async throws {
         guard isValidPackAddress(addr) else { return }
+        if !relayHints.isEmpty {
+            let existing = packRelayHints[addr] ?? []
+            packRelayHints[addr] = existing + relayHints.filter { !existing.contains($0) }
+        }
         if referencedPackAddrs.contains(addr) { return }
         let next = referencedPackAddrs + [addr]
         try await publishKind10030(directEmojis: directEmojis, packAddrs: next, keypair: keypair)
+    }
+
+    /// Re-attempt resolution of a single pack that failed to load. Drops any
+    /// cached miss so the relay round-trip actually reruns.
+    func retryPack(_ addr: String) async {
+        resolvedPacks[addr] = nil
+        await fetchReferencedPacks()
+        recomputeResolved()
     }
 
     func removePackReference(_ addr: String, keypair: Keypair) async throws {
@@ -263,6 +286,7 @@ final class EmojiRepository {
 
         var direct: [CustomEmoji] = []
         var refs: [String] = []
+        var hints: [String: [String]] = [:]
         var seen = Set<String>()
         for tag in event.tags {
             if tag.count >= 3, tag[0] == "emoji" {
@@ -275,16 +299,34 @@ final class EmojiRepository {
                 if isValidPackAddress(value), !refs.contains(value) {
                     refs.append(value)
                 }
+                // NIP-51's optional relay hint. Kept even for an address we've
+                // already seen — a second tag may carry a hint the first lacked.
+                if tag.count >= 3 {
+                    let hint = tag[2].trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !hint.isEmpty, !(hints[value] ?? []).contains(hint) {
+                        hints[value, default: []].append(hint)
+                    }
+                }
             }
         }
         directEmojis = direct
         referencedPackAddrs = refs
+        // Merge rather than replace: hints learned from a pasted `naddr` aren't
+        // in the published event yet on the first pass through here.
+        for (addr, list) in hints {
+            let existing = packRelayHints[addr] ?? []
+            packRelayHints[addr] = existing + list.filter { !existing.contains($0) }
+        }
         userListCreatedAt = event.createdAt
     }
 
-    private func ingestEmojiSet(_ event: NostrEvent) {
-        guard event.kind == 30030 else { return }
-        guard let dTag = event.tags.first(where: { $0.count >= 2 && $0[0] == "d" })?[1] else { return }
+    /// Parse a kind-30030 event into a `ResolvedEmojiPack`. Pure — callers that
+    /// only want to *display* a pack (the discovery feed, an `naddr` card) use
+    /// this directly instead of `ingestEmojiSet`, so browsing hundreds of packs
+    /// never grows the repository's `resolvedPacks` cache.
+    static func parsePack(_ event: NostrEvent) -> ResolvedEmojiPack? {
+        guard event.kind == 30030 else { return nil }
+        guard let dTag = event.tags.first(where: { $0.count >= 2 && $0[0] == "d" })?[1] else { return nil }
         let title = event.tags.first(where: { $0.count >= 2 && $0[0] == "title" })?[1]
         var emojis: [CustomEmoji] = []
         var seen = Set<String>()
@@ -294,9 +336,8 @@ final class EmojiRepository {
             guard !sc.isEmpty, !url.isEmpty, seen.insert(sc).inserted else { continue }
             emojis.append(CustomEmoji(shortcode: sc, url: url))
         }
-        let addr = "30030:\(event.pubkey):\(dTag)"
-        resolvedPacks[addr] = ResolvedEmojiPack(
-            address: addr,
+        return ResolvedEmojiPack(
+            address: "30030:\(event.pubkey):\(dTag)",
             pubkey: event.pubkey,
             dTag: dTag,
             title: title,
@@ -304,10 +345,64 @@ final class EmojiRepository {
         )
     }
 
+    /// Insert an already-parsed pack into the resolution cache. Called just
+    /// before adding a pack the user picked out of the discovery feed or an
+    /// `naddr` card — `publishKind10030` then finds it already resolved and
+    /// skips the redundant relay round-trip in `fetchReferencedPacks`.
+    func primeResolvedPack(_ pack: ResolvedEmojiPack) {
+        resolvedPacks[pack.address] = pack
+    }
+
+    /// Whether the user's kind-10030 already references this pack address.
+    func isPackAdded(_ addr: String) -> Bool {
+        referencedPackAddrs.contains(addr)
+    }
+
+    private func ingestEmojiSet(_ event: NostrEvent) {
+        guard let pack = Self.parsePack(event) else { return }
+        resolvedPacks[pack.address] = pack
+    }
+
+    /// Relay set for resolving a kind-30030 by coordinate: the pack author's own
+    /// write relays, then any hints that travelled with an `naddr`, then the
+    /// built-in indexers.
+    ///
+    /// A **union**, deliberately. This used to fall back to the indexers only
+    /// when the author advertised no relays at all, which stranded any pack whose
+    /// author *does* publish a kind-10002 that omits the relay their pack
+    /// actually landed on — a real and not-rare case, since a pack is published
+    /// once and the relay list drifts afterwards. The coordinate in a kind-10030
+    /// `a` tag carries no relay of its own, so if the author's list is wrong
+    /// there is nothing else to go on.
+    ///
+    /// Order matters: author writes first (most likely and cheapest to hit),
+    /// hints next (whoever shared the link knew where it was), indexers last.
+    nonisolated static func packResolutionRelays(author: String, hints: [String] = []) async -> [String] {
+        let authorWrites = await RelayListRepository.shared.getWriteRelays(author)
+        return packResolutionRelays(authorWrites: authorWrites, hints: hints)
+    }
+
+    /// The ordering / dedupe policy, split from the relay-list lookup so it can
+    /// be tested without a network round-trip.
+    ///
+    /// Trailing slashes are stripped before comparing: a kind-10002 commonly
+    /// advertises `wss://nos.lol/` while `RelayDefaults.indexers` spells it
+    /// `wss://nos.lol`, and querying both spellings opens the same socket twice.
+    nonisolated static func packResolutionRelays(authorWrites: [String], hints: [String]) -> [String] {
+        var seen = Set<String>()
+        var out: [String] = []
+        for relay in Array(authorWrites.prefix(4)) + hints + RelayDefaults.indexers {
+            let trimmed = relay.trimmingCharacters(in: .whitespacesAndNewlines)
+            let normalized = trimmed.hasSuffix("/") ? String(trimmed.dropLast()) : trimmed
+            guard !normalized.isEmpty, seen.insert(normalized).inserted else { continue }
+            out.append(normalized)
+        }
+        return Array(out.prefix(8))
+    }
+
     private func fetchReferencedPacks() async {
-        // Group `a`-tag references by pack-author pubkey, then fetch their kind-30030 set
-        // from the author's write relays (falling back to the user's read relays / a small
-        // built-in indexer set if the author has no published relay list).
+        // Group `a`-tag references by pack-author pubkey, then fetch their
+        // kind-30030 set from `packResolutionRelays`.
         struct PendingRef { let addr: String; let pubkey: String; let dTag: String }
         var byAuthor: [String: [PendingRef]] = [:]
         for addr in referencedPackAddrs {
@@ -322,11 +417,9 @@ final class EmojiRepository {
         var fetched: [NostrEvent] = []
         await withTaskGroup(of: [NostrEvent].self) { group in
             for (author, refs) in byAuthor {
-                group.addTask { [author, refs] in
-                    let authorWrites = await RelayListRepository.shared.getWriteRelays(author)
-                    let relays = authorWrites.isEmpty
-                        ? ["wss://relay.damus.io", "wss://relay.primal.net", "wss://nos.lol"]
-                        : Array(authorWrites.prefix(5))
+                let hints = refs.flatMap { packRelayHints[$0.addr] ?? [] }
+                group.addTask { [author, refs, hints] in
+                    let relays = await Self.packResolutionRelays(author: author, hints: hints)
                     return await RelayPool.query(
                         relays: relays,
                         filter: NostrFilter(
@@ -444,7 +537,14 @@ final class EmojiRepository {
             tags.append(["emoji", ce.shortcode, ce.url])
         }
         for addr in packAddrs {
-            tags.append(["a", addr])
+            // NIP-51 allows one relay hint per `a` tag. Emitting it means other
+            // clients — and our own next cold launch — can find the pack even
+            // when the author's advertised relay list has drifted.
+            if let hint = packRelayHints[addr]?.first {
+                tags.append(["a", addr, hint])
+            } else {
+                tags.append(["a", addr])
+            }
         }
 
         let event = try NostrEvent.sign(

@@ -26,6 +26,16 @@
 				<string>com.googleusercontent.apps.410412439051-tj9a37iln81vlsmqtun5nfmo1k8h4qme</string>
 			</array>
 		</dict>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>barrydeen.wisp.share</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>wisp</string>
+			</array>
+		</dict>
 	</array>
 </dict>
 </plist>

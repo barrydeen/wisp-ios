@@ -22,6 +22,17 @@ struct MediaGridView: View {
     /// negative trailing padding) overshoots the nested container by
     /// the parent's own padding (~28pt) and bleeds past the screen edge.
     var nested: Bool = false
+    /// Total horizontal inset (both sides combined, in points) between the
+    /// screen edge and this gallery's nested container. Only used to seed
+    /// `tileHeightForNested` — the `.frame(height:)` that reserves scrollable
+    /// space for this view *before* its own `GeometryReader` has measured the
+    /// real width (see that property's doc for why the guess is needed at
+    /// all). Defaults to `QuotedNoteView`'s chrome (16pt card padding + 12pt
+    /// quoted-note padding, doubled); callers with different chrome — e.g.
+    /// `ComposerPreviewCard`'s 12pt outer + 12pt inner padding — must pass
+    /// their own total or the reserved height undershoots the real content
+    /// height, silently truncating the scrollable region around this view.
+    var nestedHorizontalInset: CGFloat = 56
     /// When set, tile taps fire this closure instead of presenting the
     /// pager themselves. Used by `RichContentView` so a single post-wide
     /// `FullScreenMediaPager` shows every image and video in the post,
@@ -130,10 +141,9 @@ struct MediaGridView: View {
     /// `GeometryReader`'s explicit height so the parent VStack reserves
     /// the right vertical space — `GeometryReader` itself is greedy.
     private var tileHeightForNested: CGFloat {
-        // Same formula as feedBody, but anchored to a typical nested
-        // container width (screen width minus the parent card's 16pt
-        // padding minus the QuotedNoteView's 12pt inner padding × 2).
-        let approxWidth = max(1, UIScreen.main.bounds.width - 56)
+        // Same formula as feedBody, but anchored to the caller-supplied
+        // nested container width (see `nestedHorizontalInset`'s doc).
+        let approxWidth = max(1, UIScreen.main.bounds.width - nestedHorizontalInset)
         return approxWidth * tileWidthFraction / tileAspect
     }
 
@@ -336,6 +346,8 @@ struct FullScreenMediaPager: View {
     /// Captured at gesture start so per-frame paging math doesn't have to
     /// re-read `geo.size.width` from inside the inner-driven callback.
     @State private var pageWidth: CGFloat = 0
+    @State private var showPhotosAlert = false
+    @State private var copiedToastVisible = false
 
     init(items: [MediaGridView.MediaItem], initialIndex: Int) {
         self.items = items
@@ -394,7 +406,97 @@ struct FullScreenMediaPager: View {
                         .padding(.bottom, 24)
                         .allowsHitTesting(false)
                 }
+
+                // Fixed toolbar — save / copy / close for the current page.
+                // Lives on the pager (not the inner image page) so it stays
+                // put while pages swipe beneath it; each action reads the
+                // live `items[index]`. Mirrors the Wisp Android gallery's
+                // download · copy · close row.
+                toolbar
+
+                if copiedToastVisible {
+                    Text("Image URL copied")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(.black.opacity(0.7), in: Capsule())
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .transition(.opacity)
+                        .allowsHitTesting(false)
+                }
             }
+            .alert("Photos Access Required", isPresented: $showPhotosAlert) {
+                Button("Open Settings") {
+                    if let url = URL(string: UIApplication.openSettingsURLString) {
+                        UIApplication.shared.open(url)
+                    }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Allow Wisp to add to Photos in Settings to save media.")
+            }
+        }
+    }
+
+    private var toolbar: some View {
+        VStack {
+            HStack(spacing: 12) {
+                Spacer()
+                Button {
+                    Task { await saveCurrent() }
+                } label: {
+                    toolbarIcon("square.and.arrow.down")
+                }
+                Button {
+                    copyCurrentURL()
+                } label: {
+                    toolbarIcon("doc.on.doc")
+                }
+                Button {
+                    dismiss()
+                } label: {
+                    toolbarIcon("xmark")
+                }
+            }
+            .padding(.top, 16)
+            .padding(.trailing, 16)
+            Spacer()
+        }
+    }
+
+    private func toolbarIcon(_ systemName: String) -> some View {
+        Image(systemName: systemName)
+            .font(.system(size: 16, weight: .medium))
+            .foregroundStyle(.white)
+            .padding(10)
+            .background(Color.black.opacity(0.55), in: Circle())
+    }
+
+    private func saveCurrent() async {
+        let item = items[index]
+        do {
+            if item.isVideo {
+                try await MediaSaveService.saveVideoToPhotos(url: item.url)
+                QuickFollowToast.shared.show("Saved to Photos")
+            } else {
+                try await MediaSaveService.saveImageToPhotos(url: item.url)
+                QuickFollowToast.shared.show("Saved to Photos")
+            }
+        } catch MediaSaveService.SaveError.denied {
+            showPhotosAlert = true
+        } catch {
+            QuickFollowToast.shared.show("Save failed")
+        }
+    }
+
+    private func copyCurrentURL() {
+        UIPasteboard.general.string = items[index].url
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        withAnimation(.easeInOut(duration: 0.2)) { copiedToastVisible = true }
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2.5))
+            withAnimation(.easeInOut(duration: 0.25)) { copiedToastVisible = false }
         }
     }
 

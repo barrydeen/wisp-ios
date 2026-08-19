@@ -20,8 +20,30 @@ nonisolated struct NostrEvent {
         self.sig = sig
     }
 
+    /// True when the event carries an `e` tag that denotes a threading
+    /// position (reply / root), i.e. it's part of a conversation. NIP-18
+    /// quote `mention` markers are excluded — a quote post carries an
+    /// `["e", id, "", "mention"]` tag but is still a standalone top-level
+    /// note, not a reply. Mirrors `Nip10.eTagsExcludingMentions`.
+    var hasThreadingETag: Bool {
+        tags.contains { tag in
+            guard tag.first == "e" else { return false }
+            if tag.count >= 4, tag[3] == "mention" { return false }
+            return true
+        }
+    }
+
     var isRootNote: Bool {
-        kind == 1 && !tags.contains { $0.first == "e" }
+        kind == 1 && !hasThreadingETag
+    }
+
+    /// Default threshold for the hellthread filter. Events with at least this
+    /// many distinct p-tags are considered hellthreads.
+    static let hellthreadThreshold = 25
+
+    func isHellthread(threshold: Int = NostrEvent.hellthreadThreshold) -> Bool {
+        let uniquePubkeys = Set(tags.compactMap { $0.count >= 2 && $0[0] == "p" ? $0[1] : nil })
+        return uniquePubkeys.count >= threshold
     }
 
     init?(json: [String: Any]) {
@@ -90,7 +112,7 @@ nonisolated struct NostrEvent {
                           tags: tags, content: content, sig: Hex.encode(sigData))
     }
 
-    /// Returns `["client", "Wisp"]` when the user has the Wisp client tag enabled in
+    /// Returns `["client", "Wisp iOS"]` when the user has the Wisp client tag enabled in
     /// settings (default ON), or nil to signal "do not append". Callers append it to
     /// their tag list before signing kind-1 notes, kind-9734 zap requests, etc.
     /// Never used for sealed DMs (NIP-17) or infrastructure events (NIP-42 auth, NIP-47 NWC).
@@ -99,7 +121,7 @@ nonisolated struct NostrEvent {
     static func clientTagIfEnabled() -> [String]? {
         let key = "wisp_settings_client_tag_enabled"
         let enabled = (UserDefaults.standard.object(forKey: key) as? Bool) ?? true
-        return enabled ? ["client", "Wisp"] : nil
+        return enabled ? ["client", "Wisp iOS"] : nil
     }
 
     /// Serialize this event as a single JSON object (e.g. for use as a NIP-44 plaintext payload).

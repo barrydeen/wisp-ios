@@ -88,3 +88,14 @@ struct ZapSheetRequest {
     var forcePrivate: Bool = false
     var onSuccess: ((Int64) -> Void)? = nil
 }
+
+/// Wraps a Share Extension hand-off so `MainView` can drive a
+/// `.sheet(item:)` off it. Exactly one of `providers` / `text` is populated —
+/// media shares attach via the photo-picker pipeline, text/link shares
+/// pre-fill the composer's text instead. See `PendingShareStore` /
+/// `wispApp.onOpenURL`.
+struct PendingShareItem: Identifiable {
+    let id = UUID()
+    var providers: [NSItemProvider] = []
+    var text: String? = nil
+}
