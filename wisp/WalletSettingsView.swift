@@ -91,9 +91,13 @@ struct WalletSettingsView: View {
     // Lightning address management state
     @State private var showAddressSheet = false
     @State private var addressError: String?
+    /// Set by the wallet dashboard's "set up your lightning address" prompt so
+    /// the address registration sheet opens itself on first appearance.
+    @State private var autoOpenAddressSheet: Bool = false
 
-    init(store: WalletStore) {
+    init(store: WalletStore, autoOpenAddressSheet: Bool = false) {
         self.store = store
+        self._autoOpenAddressSheet = State(initialValue: autoOpenAddressSheet)
         _balanceDisplayRaw = AppStorage(
             wrappedValue: WalletBalanceDisplayMode.sats.rawValue,
             WalletBalanceDisplayMode.storageKey(pubkey: store.keypair.pubkey))
@@ -125,7 +129,7 @@ struct WalletSettingsView: View {
                     nwcConnectionSection
                 }
                 displaySection
-                if store.mode == .spark {
+                if store.mode == .spark || store.nwcConnectionUri != nil {
                     securitySection
                 }
                 disclaimerCard
@@ -139,6 +143,12 @@ struct WalletSettingsView: View {
         .background(Color.wispBackground.ignoresSafeArea())
         .navigationTitle("Wallet Settings")
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            if autoOpenAddressSheet {
+                showAddressSheet = true
+                autoOpenAddressSheet = false
+            }
+        }
         .alert("Switch to a different wallet?", isPresented: $showDisconnectAlert) {
             Button("Switch", role: .destructive) {
                 store.resetToNoWallet()
@@ -503,9 +513,51 @@ struct WalletSettingsView: View {
         }
     }
 
-    // MARK: - Security (Spark only)
+    // MARK: - Security
 
+    /// Both wallet types get a Security section in the same slot: Spark
+    /// exports its recovery phrase, NWC exports its connection string. Each
+    /// is the secret that reconstitutes the wallet elsewhere, so they share
+    /// the placement and the reveal-then-copy screen shape.
+    @ViewBuilder
     private var securitySection: some View {
+        if store.mode == .nwc {
+            nwcSecuritySection
+        } else {
+            sparkSecuritySection
+        }
+    }
+
+    private var nwcSecuritySection: some View {
+        settingsGroup(header: "Security") {
+            NavigationLink(value: WalletRoute.nwcConnectionString) {
+                HStack(spacing: 12) {
+                    Image(systemName: "key.fill")
+                        .font(.system(size: 15))
+                        .foregroundStyle(Color.wispZapColor)
+                        .frame(width: 22)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Connection string")
+                            .font(.subheadline)
+                            .foregroundStyle(.primary)
+                        Text("View, copy, or scan to move this wallet to another app")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private var sparkSecuritySection: some View {
         settingsGroup(header: "Security") {
             // Recovery phrase
             NavigationLink(value: WalletRoute.recoveryPhrase) {

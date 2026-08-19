@@ -35,21 +35,35 @@ struct ComposeView: View {
     /// (which ignores `State(initialValue:)` when state already exists for this view identity).
     private let initialDraft: Nip37.Draft?
 
+    /// Media handed off from the Share Extension (see `PendingShareStore` /
+    /// `wispApp.onOpenURL`), loaded the same way as a `PhotosPicker`
+    /// selection once the view appears.
+    private let pendingAttachmentProviders: [NSItemProvider]
+
     private let previewAnchorID = "composer-preview-card"
 
     init(keypair: Keypair, mode: ComposeMode = .new) {
         self.initialDraft = nil
+        self.pendingAttachmentProviders = []
         _viewModel = State(initialValue: ComposeViewModel(keypair: keypair, mode: mode))
     }
 
     init(keypair: Keypair, draft: Nip37.Draft) {
         self.initialDraft = draft
+        self.pendingAttachmentProviders = []
         _viewModel = State(initialValue: ComposeViewModel(keypair: keypair, mode: .new))
     }
 
     init(keypair: Keypair, initialText: String) {
         self.initialDraft = nil
+        self.pendingAttachmentProviders = []
         _viewModel = State(initialValue: ComposeViewModel(keypair: keypair, initialText: initialText))
+    }
+
+    init(keypair: Keypair, pendingAttachmentProviders: [NSItemProvider]) {
+        self.initialDraft = nil
+        self.pendingAttachmentProviders = pendingAttachmentProviders
+        _viewModel = State(initialValue: ComposeViewModel(keypair: keypair, mode: .new))
     }
 
     var body: some View {
@@ -226,6 +240,9 @@ struct ComposeView: View {
             // Drafts / reply prefills land before the view observes
             // `content`, so warm their links once on open too.
             viewModel.prefetchSocialPreviews()
+            if !pendingAttachmentProviders.isEmpty {
+                await viewModel.addMediaProviders(pendingAttachmentProviders)
+            }
         }
         .interactiveDismissDisabled(
             viewModel.isPublishing
@@ -464,7 +481,7 @@ struct ComposeView: View {
             source = raw
         }
         let collapsed = collapseMediaUrls(source)
-        let resolved = resolveNostrMentions(collapsed)
+        let resolved = Self.resolveNostrMentions(collapsed)
         return String(resolved.prefix(max))
     }
 
@@ -491,8 +508,16 @@ struct ComposeView: View {
         return out
     }
 
-    private func resolveNostrMentions(_ content: String) -> String {
-        let pattern = #"nostr:(?:npub1|nprofile1)[a-z0-9]+|(?<!\w)(?:npub1|nprofile1)[a-z0-9]{50,}(?!\w)"#
+    /// Internal (not private) so `ComposeMentionTests` can exercise the URL
+    /// guard directly — rendering the preview needs a full editor instance.
+    static func resolveNostrMentions(_ content: String) -> String {
+        // The bare-npub alternative carries the same `.[a-zA-Z]` exclusion as
+        // ContentParser's npub pattern: an npub followed by a dot + letters is
+        // a subdomain (e.g. a Blossom server `npub1….blossom.band`), never a
+        // mention. NSDataDetector can't back us up here — it doesn't detect
+        // scheme-less domains as links, so the URL guard below is blind to
+        // exactly the bare-URL shapes that need it.
+        let pattern = #"nostr:(?:npub1|nprofile1)[a-z0-9]+|(?<!\w)(?:npub1|nprofile1)[a-z0-9]{50,}(?!\w|\.[a-zA-Z])"#
         guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return content }
         let ns = content as NSString
         let fullRange = NSRange(location: 0, length: ns.length)

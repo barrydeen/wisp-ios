@@ -22,7 +22,7 @@ struct SocialGraphNodeDetailSheet: View {
                 Text(profile?.displayString ?? truncated(node.pubkey))
                     .font(.headline)
                 if let nip05 = profile?.nip05, !nip05.isEmpty {
-                    Text(nip05)
+                    Text(nip05.nip05DisplayString)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

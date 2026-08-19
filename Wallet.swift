@@ -27,6 +27,14 @@ protocol Wallet: AnyObject {
     func listTransactions(limit: Int, offset: Int) async -> Result<[WalletTransaction], WalletError>
 }
 
+/// Settlement state of a transaction. Mirrors Android's `TransactionStatus`
+/// so the two platforms describe the same payment the same way.
+enum TransactionStatus: String, Codable {
+    case pending
+    case completed
+    case failed
+}
+
 struct WalletTransaction: Identifiable, Codable {
     /// Composite of paymentHash + direction. A self-payment produces an
     /// (incoming, outgoing) pair that share a paymentHash; SwiftUI's
@@ -41,6 +49,35 @@ struct WalletTransaction: Identifiable, Codable {
     let createdAt: Int64
     let settledAt: Int64?
     let counterpartyPubkey: String?
+    /// Settlement state as reported by the backing wallet. Optional because
+    /// NWC (NIP-47) doesn't carry an explicit status, and because rows cached
+    /// before status tracking existed must still decode — read it through
+    /// `resolvedStatus`, never directly.
+    var status: TransactionStatus?
+
+    /// The transaction's settlement state, with a fallback for sources that
+    /// don't report one. NIP-47 only sets `settled_at` once a payment has
+    /// settled, so its absence means the payment is still in flight — which
+    /// is also the right reading for legacy cached rows.
+    var resolvedStatus: TransactionStatus {
+        if let status { return status }
+        return settledAt != nil ? .completed : .pending
+    }
+
+    /// True when the payment has not yet settled (on-chain confirmations pending or
+    /// Lightning HTLC in flight).
+    var pending: Bool { resolvedStatus == .pending }
+    /// Real Bitcoin txid for on-chain deposits/withdrawals. Set from
+    /// `PaymentDetails.deposit(txId:)` / `.withdraw(txId:)` in listTransactions.
+    var bitcoinTxId: String?
+
+    /// Spark surfaces on-chain transactions with a UUID-formatted ID (contains hyphens)
+    /// while Lightning payment hashes are always 64-char hex. Also true when a
+    /// real Bitcoin txid was extracted from the payment details.
+    var isOnchain: Bool {
+        if bitcoinTxId != nil { return true }
+        return paymentHash.contains("-")
+    }
 
     enum TransactionType: String, Codable {
         case incoming

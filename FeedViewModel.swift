@@ -196,6 +196,11 @@ final class FeedViewModel {
     nonisolated static func isFeedRenderable(_ event: NostrEvent, includeReplies: Bool) -> Bool {
         if event.isRootNote { return true }
         if includeReplies && event.kind == 1 { return true }
+        // NIP-22 comments are deliberately absent here: they surface on the
+        // profile Comments tab, not the timeline. A comment on a blog post is
+        // conversation about that article, not a broadcast to the author's
+        // followers. A dedicated follows-wide Comments feed is planned
+        // separately.
         switch event.kind {
         case 6, 20, Nip88.kindPoll, Nip69.kindZapPoll: return true
         default: return false
@@ -217,12 +222,22 @@ final class FeedViewModel {
             forName: .nostrEventPublished, object: nil, queue: .main
         ) { [weak self] note in
             guard let event = note.userInfo?["event"] as? NostrEvent else { return }
-            Task { @MainActor [weak self] in
+            // Synchronous main-actor call instead of `Task { @MainActor in }`
+            // so this observer and `PendingPostStore`'s observer run in the
+            // same runloop tick — SwiftUI batches both writes (events insert
+            // + pending clear) into a single render pass. Without this, the
+            // dimmed pending row could sit visible under the real card for a
+            // beat before the deferred clear committed.
+            MainActor.assumeIsolated {
                 guard let self else { return }
                 guard event.pubkey == self.keypair.pubkey else { return }
                 guard self.currentKind == .follows else { return }
                 guard Self.isFeedRenderable(event, includeReplies: AppSettings.shared.includeRepliesInFeed) else { return }
                 guard self.seenIds.insert(event.id).inserted else { return }
+                // Clear the optimistic placeholder atomically with the real
+                // insert. PendingPostStore's own observer is also listening;
+                // this just guarantees the swap regardless of observer order.
+                PendingPostStore.shared.clearIfMatches(realEvent: event)
                 self.events = self.windowTrimmed(Self.consolidateReposts(
                     Self.mergeSortedDesc(self.events, [event])
                 ))
@@ -303,6 +318,13 @@ final class FeedViewModel {
         registerSweepSource()
         let kp = keypair
         Task { await RelaySetRepository.shared.bootstrap(keypair: kp) }
+
+        // 0. Re-seed the deletion tracker from persisted kind-5 events so
+        //    deleted notes are hidden from the very first frame — without this
+        //    they'd flash from cache until the live subscription delivers the
+        //    kind-5 again.
+        let deletionEvents = await eventStore.loadDeletionEvents()
+        DeletionTracker.shared.ingestBatch(deletionEvents)
 
         // 1. Seed from local storage for instant display.
         //    Filter + sort run off the MainActor so the first frame isn't blocked.
@@ -686,11 +708,16 @@ final class FeedViewModel {
         guard hold != holdNewPosts else { return }
         holdNewPosts = hold
         if !hold {
-            // Apply anything that accumulated while held. Re-uses the same
-            // flush pathway so persistence / profile hydration paths stay
-            // identical between the held-then-applied and at-top-merge
-            // cases.
-            flushPendingInserts()
+            // Apply anything that accumulated while held — but defer to the
+            // next runloop tick. This is called from the view's
+            // `onScrollGeometryChange` action, and reassigning `events`
+            // synchronously inside that callback can corrupt SwiftUI's
+            // scroll-offset bookkeeping for the pass in flight, which
+            // manifests as the feed becoming unable to scroll to the top.
+            // The flag flips immediately; only the mutation is deferred.
+            Task { @MainActor in
+                flushPendingInserts()
+            }
         }
     }
 
@@ -853,6 +880,11 @@ final class FeedViewModel {
             for await (event, _) in sub.events {
                 guard let self else { return }
                 if Task.isCancelled { return }
+                // Intercept deletion requests before any other processing.
+                if event.kind == Nip09.kindDeletion {
+                    DeletionTracker.shared.ingest(event)
+                    continue
+                }
                 if SafetyFilter.shared.shouldDrop(event: event, context: .feed) { continue }
                 self.markActivityIfFollowed(event)
                 guard Self.relayFeedKinds.contains(event.kind) else { continue }
@@ -1064,6 +1096,28 @@ final class FeedViewModel {
             userProfile = updated
             profiles[pubkey] = updated
         }
+
+        // Reconcile the local follow set with the freshest kind-3 on relays.
+        // `FollowsCache` is otherwise only written at onboarding and on in-app
+        // follow/unfollow, so a follow list changed in another client (e.g.
+        // trimmed via an external tool) never lands locally — and the next
+        // in-app edit republishes the stale set, undoing the change.
+        // `reconcile` adopts the relay copy only when its `created_at` is
+        // newer than the set we already hold, so it can't clobber a fresher
+        // local edit.
+        let contactResults = await RelayPool.query(
+            relays: Self.indexerRelays,
+            filter: NostrFilter(kinds: [3], authors: [pubkey], limit: 1),
+            waitForAllRelays: true
+        )
+        if let bestContacts = contactResults.filter({ $0.kind == 3 }).max(by: { $0.createdAt < $1.createdAt }) {
+            let followPubkeys = bestContacts.tags.compactMap { tag -> String? in
+                tag.count >= 2 && tag[0] == "p" ? tag[1] : nil
+            }
+            if FollowsCache.shared.reconcile(pubkey: pubkey, follows: followPubkeys, createdAt: bestContacts.createdAt) {
+                reloadFollowsCache()
+            }
+        }
     }
 
     /// Number of (score-sorted) relays the live follows feed connects to. With
@@ -1119,7 +1173,7 @@ final class FeedViewModel {
         }
 
         // 4. Build one REQ per relay (multi-filter when authors > 200) — at most one socket per host.
-        let kinds = [1, 6, 20, Nip88.kindPoll, Nip69.kindZapPoll]
+        let kinds = [1, 6, 20, Nip88.kindPoll, Nip69.kindZapPoll, Nip09.kindDeletion]
         var queries: [RelayQuery] = []
         for (relayUrl, authors) in relayToAuthors {
             let chunks = Array(authors).chunked(into: Self.maxAuthorsPerFilter)
@@ -1153,6 +1207,15 @@ final class FeedViewModel {
                 // was the one live path that skipped it.
                 if SafetyFilter.shared.shouldDrop(event: event, context: .feed) { continue }
                 self.markActivityIfFollowed(event)
+                // Kind 5 is a deletion request, not feed content — feed it to
+                // the tracker and drop it before it can reach the render path.
+                // This runs AFTER shouldDrop so the tracker has already learned
+                // about the deletion from the `shouldDrop` call above for any
+                // matching event id; this ingestion is for future events.
+                if event.kind == Nip09.kindDeletion {
+                    DeletionTracker.shared.ingest(event)
+                    continue
+                }
                 guard Self.isFeedRenderable(event, includeReplies: AppSettings.shared.includeRepliesInFeed) else { continue }
                 guard self.seenIds.insert(event.id).inserted else { continue }
                 self.enqueueLiveEvent(event)

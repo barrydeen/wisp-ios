@@ -18,7 +18,7 @@ struct MentionCandidateRow: View {
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
                 if let nip = candidate.nip05, !nip.isEmpty {
-                    Text(nip)
+                    Text(nip.nip05DisplayString)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)

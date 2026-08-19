@@ -57,9 +57,36 @@ enum GifBlossomUploader {
                 servers: servers,
                 keypair: keypair
             )
-            return Outcome(url: result.url, didRehost: true)
+            // Blossom servers return a content-addressed URL that is often a
+            // bare SHA-256 with no file extension (valid per BUD-02). Wisp's
+            // kind-1 notes carry no imeta, so the renderer infers media type
+            // from the URL extension — without one, an animated GIF is
+            // detected only as a generic image and shows a static first frame.
+            // Append the mime-appropriate extension (the server serves the same
+            // blob at `<hash>.gif`) so every client animates it.
+            let url = Self.urlWithExtension(result.url, mime: result.mime)
+            return Outcome(url: url, didRehost: true)
         } catch {
             return Outcome(url: giphyURL, didRehost: false)
         }
+    }
+
+    /// Appends a file extension derived from `mime` to a bare Blossom URL when
+    /// it doesn't already end in an animated-image extension. Leaves the URL
+    /// untouched when the server already included a usable extension or the
+    /// mime isn't a recognized animated type.
+    static func urlWithExtension(_ url: String, mime: String) -> String {
+        let ext: String
+        switch mime.lowercased() {
+        case let m where m.hasPrefix("image/gif"):  ext = "gif"
+        case let m where m.hasPrefix("image/webp"): ext = "webp"
+        case let m where m.hasPrefix("image/apng"): ext = "apng"
+        default: return url
+        }
+        // Extension check against the path only, ignoring any query string.
+        let path = url.split(separator: "?", maxSplits: 1).first.map(String.init) ?? url
+        let lastComponent = path.split(separator: "/").last.map(String.init) ?? path
+        if lastComponent.lowercased().hasSuffix(".\(ext)") { return url }
+        return "\(url).\(ext)"
     }
 }

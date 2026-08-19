@@ -5,6 +5,16 @@ import os
 
 nonisolated private let nip05Log = Logger(subsystem: "wisp", category: "nip05")
 
+extension String {
+    /// Display form of a NIP-05 identifier. The spec reserves the local part
+    /// `_` for "this domain is the whole identity", so `_@sidecar.top` reads
+    /// as the bare handle `@sidecar.top`. Verification still uses the raw
+    /// identifier — this is presentation only.
+    var nip05DisplayString: String {
+        hasPrefix("_@") ? String(dropFirst()) : self
+    }
+}
+
 enum Nip05Status: Sendable {
     case unknown
     case checking

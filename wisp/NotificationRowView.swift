@@ -16,9 +16,13 @@ struct NotificationRowView: View {
     private let repo = NotificationRepository.shared
     private let profileRepo = ProfileRepository.shared
 
-    /// Single source of truth lives on the view model so only one row is open
-    /// at a time (accordion). See `NotificationsViewModel.expandedItemId`.
-    private var expanded: Bool { viewModel.expandedItemId == item.id }
+    /// Single source of truth lives on the view model, which resolves the
+    /// per-row state against the current list style — expanded-by-default, or
+    /// the one-row-at-a-time accordion. See `NotificationsViewModel.isRowExpanded`.
+    /// DM rows never expand in either style: tapping one opens the conversation.
+    private var expanded: Bool {
+        item.kind != .dm && viewModel.isRowExpanded(item.id)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -75,7 +79,10 @@ struct NotificationRowView: View {
                         mergedZapsBadge
                     }
                 }
-                if let snippet = referencedSnippet {
+                // Preview only while the row is shut — the expansion renders
+                // the same note in full right below, so keeping both just
+                // prints the opening line twice.
+                if !expanded, let snippet = referencedSnippet {
                     Text(snippet)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -212,6 +219,14 @@ struct NotificationRowView: View {
     /// being indented under the avatar like caption snippets.
     private static let composerSidePadding: CGFloat = 2
 
+    /// Total horizontal inset from the screen edge to a `QuotedNoteView`
+    /// placed below via `captionLeadingIndent` (leading) + 12pt (trailing),
+    /// plus that view's own 12pt internal padding (doubled). Passed as
+    /// `nestedHorizontalInset` so its attached gallery reserves the correct
+    /// height instead of undershooting it with the view's feed-embedded
+    /// default (56, tuned for a much narrower PostCardView-edge context).
+    private static let quotedNoteHorizontalInset: CGFloat = captionLeadingIndent + 12 + 24
+
     @ViewBuilder
     private var replyExpansion: some View {
         if !item.referencedEventId.isEmpty {
@@ -224,7 +239,8 @@ struct NotificationRowView: View {
                     relayHints: [],
                     profiles: profiles,
                     onProfileTap: onPeerTap,
-                    onNoteTap: { id in onNoteTap?(id, nil) }
+                    onNoteTap: { id in onNoteTap?(id, nil) },
+                    nestedHorizontalInset: Self.quotedNoteHorizontalInset
                 )
             }
             .padding(.leading, Self.captionLeadingIndent)
@@ -277,7 +293,8 @@ struct NotificationRowView: View {
                     relayHints: item.relayHints,
                     profiles: profiles,
                     onProfileTap: onPeerTap,
-                    onNoteTap: { id in onNoteTap?(id, nil) }
+                    onNoteTap: { id in onNoteTap?(id, nil) },
+                    nestedHorizontalInset: Self.quotedNoteHorizontalInset
                 )
             }
             .padding(.leading, Self.captionLeadingIndent)
@@ -324,7 +341,8 @@ struct NotificationRowView: View {
                 relayHints: [],
                 profiles: profiles,
                 onProfileTap: onPeerTap,
-                onNoteTap: { id in onNoteTap?(id, nil) }
+                onNoteTap: { id in onNoteTap?(id, nil) },
+                nestedHorizontalInset: Self.quotedNoteHorizontalInset
             )
             .padding(.leading, Self.captionLeadingIndent)
             .padding(.trailing, 12)
@@ -362,7 +380,8 @@ struct NotificationRowView: View {
                     relayHints: [],
                     profiles: profiles,
                     onProfileTap: onPeerTap,
-                    onNoteTap: { id in onNoteTap?(id, nil) }
+                    onNoteTap: { id in onNoteTap?(id, nil) },
+                    nestedHorizontalInset: Self.quotedNoteHorizontalInset
                 )
             }
             if item.mergedZaps.isEmpty {
@@ -435,9 +454,12 @@ struct NotificationRowView: View {
 
     // MARK: - Helpers
 
+    /// The open-row tint marks *the* row the user picked out of a collapsed
+    /// list, so it only applies in the compact style — painting every row in
+    /// the expanded feed would just be a flat wash.
     private var rowBackground: some View {
         Group {
-            if expanded {
+            if expanded, viewModel.feedStyle == .compact {
                 Color.wispSurfaceVariant.opacity(0.25)
             } else {
                 Color.clear
@@ -543,7 +565,7 @@ struct NotificationRowView: View {
             return
         }
         withAnimation(.easeInOut(duration: 0.18)) {
-            viewModel.expandedItemId = (viewModel.expandedItemId == item.id) ? nil : item.id
+            viewModel.toggleRowExpansion(item.id)
         }
     }
 
