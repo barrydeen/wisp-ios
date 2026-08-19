@@ -11,7 +11,8 @@ actor EventStore {
     // 30023 is NIP-23 long-form articles.
     // 5 is NIP-09 deletion requests, persisted so the DeletionTracker can
     // re-seed from disk on launch.
-    private static let persistedKinds: Set<Int> = [0, 1, 5, 6, 7, 9735, 10002, 10012, 10030, 20, 21, 22, 30000, 30002, 30003, 30023, 30030, 1068, 1018, 6969]
+    // 1111 is NIP-22 comments (replies scoped to an external item or event).
+    private static let persistedKinds: Set<Int> = [0, 1, 5, 6, 7, 9735, 10002, 10012, 10030, 20, 21, 22, 30000, 30002, 30003, 30023, 30030, 1068, 1018, 6969, 1111]
 
     /// Kinds retained on disk *even for a blocked author* so the block-list
     /// settings UI, name/avatar resolution, and installed emoji packs keep
@@ -117,6 +118,7 @@ actor EventStore {
             let query = try box.query {
                 EventEntity.kind == 1 || EventEntity.kind == 6 || EventEntity.kind == 20
                     || EventEntity.kind == Nip88.kindPoll || EventEntity.kind == Nip69.kindZapPoll
+                    || EventEntity.kind == Nip22.kindComment
             }
             .ordered(by: EventEntity.createdAt, flags: .descending)
             .build()
@@ -138,7 +140,8 @@ actor EventStore {
         do {
             let query = try box.query {
                 (EventEntity.kind == 1 || EventEntity.kind == 6 || EventEntity.kind == 20
-                    || EventEntity.kind == Nip88.kindPoll || EventEntity.kind == Nip69.kindZapPoll)
+                    || EventEntity.kind == Nip88.kindPoll || EventEntity.kind == Nip69.kindZapPoll
+                    || EventEntity.kind == Nip22.kindComment)
                     && EventEntity.createdAt < before
             }
             .ordered(by: EventEntity.createdAt, flags: .descending)
@@ -162,7 +165,8 @@ actor EventStore {
             if let exclude = excludingPubkey {
                 let query = try box.query {
                     (EventEntity.kind == 1 || EventEntity.kind == 6 || EventEntity.kind == 20
-                        || EventEntity.kind == Nip88.kindPoll || EventEntity.kind == Nip69.kindZapPoll)
+                        || EventEntity.kind == Nip88.kindPoll || EventEntity.kind == Nip69.kindZapPoll
+                        || EventEntity.kind == Nip22.kindComment)
                         && EventEntity.pubkey != exclude
                 }
                 .ordered(by: EventEntity.createdAt, flags: .descending)
@@ -172,6 +176,7 @@ actor EventStore {
             let query = try box.query {
                 EventEntity.kind == 1 || EventEntity.kind == 6 || EventEntity.kind == 20
                     || EventEntity.kind == Nip88.kindPoll || EventEntity.kind == Nip69.kindZapPoll
+                    || EventEntity.kind == Nip22.kindComment
             }
             .ordered(by: EventEntity.createdAt, flags: .descending)
             .build()
@@ -308,7 +313,8 @@ actor EventStore {
         guard let box = ensureBox() else { return [] }
         do {
             let query = try box.query {
-                EventEntity.kind == 1 && EventEntity.tags.contains(rootId)
+                (EventEntity.kind == 1 || EventEntity.kind == Nip22.kindComment)
+                    && EventEntity.tags.contains(rootId)
             }.build()
             let entities = try query.find(offset: 0, limit: 5000)
             var results = entities.compactMap { $0.toNostrEvent() }

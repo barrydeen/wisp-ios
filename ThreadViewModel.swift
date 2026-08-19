@@ -283,14 +283,14 @@ final class ThreadViewModel {
     /// broadcast originated from `PrivateReplyPublisher` — the event is then a synthetic
     /// rumor (empty sig) and `PrivateInteractionStore` has already marked it.
     private func handleExternalPublish(_ event: NostrEvent, isPrivate: Bool = false) {
-        guard event.kind == 1 || event.kind == 6 else { return }
+        guard event.kind == 1 || event.kind == 6 || event.kind == Nip22.kindComment else { return }
         let etags = event.tags.compactMap { tag -> String? in
             guard tag.count >= 2, tag[0] == "e" else { return nil }
             return tag[1]
         }
         let known = etags.contains(where: { events.keys.contains($0) || $0 == rootId })
         guard known else { return }
-        if event.kind == 1 {
+        if event.kind == 1 || event.kind == Nip22.kindComment {
             // The router/publisher already calls `markPrivate`; this is a
             // belt-and-suspenders defence so a synthetic event ingested via
             // the broadcast path never renders without the lock chip even if
@@ -538,14 +538,25 @@ final class ThreadViewModel {
         }
 
         let createdAt = NostrClock.now()
-        var tags = Nip10.buildReplyTags(replyTo: parent, relayHint: "")
+        // NIP-22 forbids replying to a comment with a kind-1 — the thread has
+        // to stay in kind-1111 so it remains attached to the external root
+        // (the web page), which a kind-1 `e` tag can't express.
+        let replyKind: Int
+        var tags: [[String]]
+        if let commentTags = Nip22.buildReplyTags(to: parent, relayHint: "") {
+            replyKind = Nip22.kindComment
+            tags = commentTags
+        } else {
+            replyKind = 1
+            tags = Nip10.buildReplyTags(replyTo: parent, relayHint: "")
+        }
         if let clientTag = NostrEvent.clientTagIfEnabled() { tags.append(clientTag) }
 
         let signed: NostrEvent
         do {
             signed = try await Signer.sign(
                 keypair: keypair,
-                kind: 1,
+                kind: replyKind,
                 tags: tags,
                 content: trimmed,
                 createdAt: createdAt
@@ -945,7 +956,11 @@ final class ThreadViewModel {
         // Kind 5 rides the same subscription — a deletion request e-tags the
         // deleted event, so it matches the same `#e` filter as replies. No
         // extra round-trip; the relay returns deletions alongside replies.
-        let filter = NostrFilter(kinds: [1, Nip09.kindDeletion], eTags: eTagTargets, limit: 500)
+        //
+        // Kind 1111 rides along for the same reason: replies to a NIP-22
+        // comment must themselves be comments, so a kind-1-only subscription
+        // would show the thread as having no replies.
+        let filter = NostrFilter(kinds: [1, Nip09.kindDeletion, Nip22.kindComment], eTags: eTagTargets, limit: 500)
         let subId = "thread-replies-\(UUID().uuidString.prefix(6))"
         let sub = RelayPool.subscribe(relays: relays, filter: filter, id: subId)
 
@@ -958,7 +973,7 @@ final class ThreadViewModel {
                     DeletionTracker.shared.ingest(event)
                     continue
                 }
-                guard event.kind == 1 else { continue }
+                guard event.kind == 1 || event.kind == Nip22.kindComment else { continue }
                 // Accept any event tagging the root or the focal — both
                 // are valid for the current screen.
                 guard event.tags.contains(where: { tag in
@@ -1268,7 +1283,8 @@ final class ThreadViewModel {
         // `effectiveReplyCount` as `max(local, remote)` in ThreadView, so the
         // narrowing is benign and arguably more consistent with the relay count.
         var childrenByParent: [String: [NostrEvent]] = [:]
-        for event in events.values where event.kind == 1 && event.id != renderRootId {
+        for event in events.values
+        where (event.kind == 1 || event.kind == Nip22.kindComment) && event.id != renderRootId {
             guard let parentId = parent(of: event) else { continue }
             childrenByParent[parentId, default: []].append(event)
         }
