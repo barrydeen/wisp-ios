@@ -80,7 +80,7 @@ enum ContentParser {
             // or a deeper subdomain segment isn't matched as a standalone URL
             // and rendered as a link-preview card.
             + #"|(?<![\w@.])((?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+(?:\#(tlds))(?:\/\S*)?)(?!\w)"#
-            + #"|(?<!\w)#([a-zA-Z0-9_][a-zA-Z0-9_-]*)"#
+            + #"|(?<!\w)#([\p{L}0-9_][\p{L}0-9_-]*)"#
             + #"|(?<!\w)((?:note1|nevent1|nprofile1|naddr1)(?-i:[a-z0-9]{10,}))(?!\w)"#
         return try! NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
     }()
