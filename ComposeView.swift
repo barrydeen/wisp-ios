@@ -481,7 +481,7 @@ struct ComposeView: View {
             source = raw
         }
         let collapsed = collapseMediaUrls(source)
-        let resolved = resolveNostrMentions(collapsed)
+        let resolved = Self.resolveNostrMentions(collapsed)
         return String(resolved.prefix(max))
     }
 
@@ -508,8 +508,16 @@ struct ComposeView: View {
         return out
     }
 
-    private func resolveNostrMentions(_ content: String) -> String {
-        let pattern = #"nostr:(?:npub1|nprofile1)[a-z0-9]+|(?<!\w)(?:npub1|nprofile1)[a-z0-9]{50,}(?!\w)"#
+    /// Internal (not private) so `ComposeMentionTests` can exercise the URL
+    /// guard directly — rendering the preview needs a full editor instance.
+    static func resolveNostrMentions(_ content: String) -> String {
+        // The bare-npub alternative carries the same `.[a-zA-Z]` exclusion as
+        // ContentParser's npub pattern: an npub followed by a dot + letters is
+        // a subdomain (e.g. a Blossom server `npub1….blossom.band`), never a
+        // mention. NSDataDetector can't back us up here — it doesn't detect
+        // scheme-less domains as links, so the URL guard below is blind to
+        // exactly the bare-URL shapes that need it.
+        let pattern = #"nostr:(?:npub1|nprofile1)[a-z0-9]+|(?<!\w)(?:npub1|nprofile1)[a-z0-9]{50,}(?!\w|\.[a-zA-Z])"#
         guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return content }
         let ns = content as NSString
         let fullRange = NSRange(location: 0, length: ns.length)

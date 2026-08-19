@@ -11,7 +11,7 @@ struct Nip05Badge: View {
         let status = verifier.status(for: pubkey)
         HStack(spacing: 4) {
             if showHandle {
-                Text(displayString)
+                Text(nip05.nip05DisplayString)
                     .font(.caption)
                     .foregroundStyle(textColor(for: status))
                     .lineLimit(1)
@@ -42,12 +42,6 @@ struct Nip05Badge: View {
         .onAppear {
             verifier.checkOrFetch(pubkey: pubkey, nip05: nip05)
         }
-    }
-
-    private var displayString: String {
-        // Strip leading "_@" — common convention where the local part is "_"
-        if nip05.hasPrefix("_@") { return String(nip05.dropFirst(2)) }
-        return nip05
     }
 
     private func textColor(for status: Nip05Status) -> Color {

@@ -478,6 +478,14 @@ struct PostCardView: View {
                 articleBody(displayEvent)
             } else {
             VStack(alignment: .leading, spacing: 8) {
+                // NIP-22 comment scoped to a web page (or other external
+                // identifier). Sits above the comment text: the page is what's
+                // being discussed, so it reads as the subject the remark
+                // answers rather than a link trailing off the end of it.
+                if let external = Nip22.externalRoot(of: displayEvent) {
+                    externalContentCard(external)
+                }
+
                 if !displayEvent.content.isEmpty || !displayEvent.tags.isEmpty {
                     let cap = Self.longPostCollapsedHeight
                     let pixelLong = naturalTextHeight > cap + Self.longPostMinOverflow
@@ -886,8 +894,11 @@ struct PostCardView: View {
     /// avatars with a count-aware label.
     @ViewBuilder
     private func replyingToRow(for displayEvent: NostrEvent) -> some View {
+        // Web-scoped NIP-22 comments have no `e` reply target, so admit them
+        // explicitly — their context comes from the `I` tag instead.
         if !ancestorCompact,
-           Nip10.replyTarget(of: displayEvent) != nil,
+           Nip10.replyTarget(of: displayEvent) != nil
+             || Nip22.externalRoot(of: displayEvent) != nil,
            let label = replyToLabelOverride ?? replyingToLabel(for: displayEvent) {
             HStack(spacing: 4) {
                 Image(systemName: "arrowshape.turn.up.left.fill")
@@ -905,6 +916,12 @@ struct PostCardView: View {
     }
 
     private func replyingToLabel(for displayEvent: NostrEvent) -> String? {
+        // A comment scoped to a web page carries no `p` tags to name, so fall
+        // back to the source itself — otherwise the row renders blank and the
+        // comment looks like it's replying to nobody.
+        if let external = Nip22.externalRoot(of: displayEvent) {
+            return "Commenting on \(external.displayHost ?? externalKindLabel(external.kind))"
+        }
         var seen = Set<String>()
         let unique = displayEvent.tags
             .filter { $0.count >= 2 && $0[0] == "p" && $0[1] != displayEvent.pubkey }
@@ -1053,6 +1070,59 @@ struct PostCardView: View {
         .padding(.horizontal, 16)
         .padding(.top, 14)
         .padding(.bottom, 12)
+    }
+
+    // MARK: - External content (NIP-22)
+
+    /// The web page (or other NIP-73 identifier) a kind-1111 comment is
+    /// scoped to, rendered *above* the comment text so the subject reads
+    /// before the remark answering it.
+    ///
+    /// Web roots reuse `LinkPreviewView`, which already handles OpenGraph
+    /// fetch, caching, and the no-metadata fallback. Identifiers with no
+    /// openable URL (a bare podcast GUID, an ISBN) get a plain labelled row
+    /// instead of a dead preview card.
+    @ViewBuilder
+    private func externalContentCard(_ ref: Nip22.ExternalRef) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 4) {
+                Image(systemName: "link")
+                    .font(.caption2)
+                Text(ref.displayHost ?? externalKindLabel(ref.kind))
+                    .font(.caption)
+                    .lineLimit(1)
+            }
+            .foregroundStyle(.secondary)
+
+            if let url = ref.openableURL {
+                LinkPreviewView(url: url.absoluteString)
+            } else {
+                Text(ref.value)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.wispSurfaceVariant.opacity(0.3),
+                                in: RoundedRectangle(cornerRadius: 12))
+            }
+        }
+        .padding(.horizontal, 16)
+    }
+
+    /// Human label for a NIP-73 identifier type, used when there's no host to
+    /// show (`podcast:item:guid` → "Podcast episode").
+    private func externalKindLabel(_ kind: String) -> String {
+        switch kind {
+        case "web": return "Web page"
+        case "isbn": return "Book"
+        case "geo": return "Location"
+        case "doi": return "Paper"
+        default:
+            if kind.hasPrefix("podcast:") { return "Podcast" }
+            return "External content"
+        }
     }
 
     // MARK: - Action Bar
@@ -2201,8 +2271,12 @@ private struct TopZapperPill: View {
                     .font(.system(size: 11))
                 Text(CurrencyFormatter.short(sats: zapper.sats))
                     .font(.caption2.weight(.semibold))
-                if !zapper.message.isEmpty {
-                    Text(zapper.message)
+                // The pill is one line, so an image comment shows as an
+                // `[image]` marker rather than a truncated URL. The image
+                // itself renders in the details panel's zap row.
+                let message = ContentParser.compactImageMarkers(zapper.message)
+                if !message.isEmpty {
+                    Text(message)
                         .font(.caption2)
                         .lineLimit(1)
                         .truncationMode(.tail)
@@ -2244,6 +2318,17 @@ private struct NoteDetailsPanel: View {
     @State private var tallyRepo = PollTallyRepository.shared
 
     private static let relayChipLimit = 6
+    /// Aligns an image comment with the zap row's text column (30pt avatar +
+    /// 8pt spacing) instead of the panel edge.
+    private static let zapCommentIndent: CGFloat = 38
+    /// Keeps an image comment secondary to the zap row itself — the panel is a
+    /// details list, not a media surface, so the image renders narrower than
+    /// the full width a feed image gets. Tap opens it full screen. Bounding the
+    /// width alone (rather than the height too) is deliberate: `InlineImageView`
+    /// always claims the width it's offered, so a height bound would center a
+    /// portrait image inside an over-wide slot and leave its rounded corners
+    /// outside the drawn image.
+    private static let zapImageMaxWidth: CGFloat = 240
 
     private var clientName: String? {
         guard let tag = tags.first(where: { $0.count >= 2 && $0[0] == "client" }) else { return nil }
@@ -2484,34 +2569,53 @@ private struct NoteDetailsPanel: View {
         VStack(alignment: .leading, spacing: 6) {
             ForEach(groupedZappers) { group in
                 let zapProfile = profiles[group.pubkey] ?? ProfileRepository.shared.get(group.pubkey)
-                Button {
-                    onProfileTap?(group.pubkey)
-                } label: {
-                    HStack(spacing: 8) {
-                        CachedAvatarView(url: zapProfile?.picture, size: 30)
-                        VStack(alignment: .leading, spacing: 1) {
-                            let baseLabel = group.primaryMessage.isEmpty
-                                ? (zapProfile?.displayString ?? short(group.pubkey))
-                                : group.primaryMessage
-                            let label = group.count > 1
-                                ? "\(baseLabel) (×\(group.count))"
-                                : baseLabel
-                            Text(label)
-                                .font(.caption)
-                                .foregroundStyle(.primary)
-                                .lineLimit(2)
+                // Image URLs in the comment render as images below the row, so
+                // the label carries only what's left of the text. A comment
+                // that was nothing but an image falls back to the sender's
+                // name, which is what the row would show for a bare zap.
+                let comment = ContentParser.splitImages(from: group.primaryMessage)
+                VStack(alignment: .leading, spacing: 6) {
+                    Button {
+                        onProfileTap?(group.pubkey)
+                    } label: {
+                        HStack(spacing: 8) {
+                            CachedAvatarView(url: zapProfile?.picture, size: 30)
+                            VStack(alignment: .leading, spacing: 1) {
+                                let baseLabel = comment.text.isEmpty
+                                    ? (zapProfile?.displayString ?? short(group.pubkey))
+                                    : comment.text
+                                let label = group.count > 1
+                                    ? "\(baseLabel) (×\(group.count))"
+                                    : baseLabel
+                                Text(label)
+                                    .font(.caption)
+                                    .foregroundStyle(.primary)
+                                    .lineLimit(2)
+                            }
+                            Spacer(minLength: 0)
+                            HStack(spacing: 3) {
+                                Image(systemName: "bolt.fill")
+                                    .font(.system(size: 11))
+                                Text(CurrencyFormatter.short(sats: group.totalSats))
+                                    .font(.caption.weight(.semibold))
+                            }
+                            .foregroundStyle(Color.wispZapColor)
                         }
-                        Spacer(minLength: 0)
-                        HStack(spacing: 3) {
-                            Image(systemName: "bolt.fill")
-                                .font(.system(size: 11))
-                            Text(CurrencyFormatter.short(sats: group.totalSats))
-                                .font(.caption.weight(.semibold))
+                    }
+                    .buttonStyle(.plain)
+
+                    // Outside the profile Button so the image keeps its own
+                    // tap (full screen) and long-press (copy / save) gestures.
+                    if !comment.images.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(comment.images, id: \.url) { meta in
+                                InlineImageView(meta: meta)
+                                    .frame(maxWidth: Self.zapImageMaxWidth)
+                            }
                         }
-                        .foregroundStyle(Color.wispZapColor)
+                        .padding(.leading, Self.zapCommentIndent)
                     }
                 }
-                .buttonStyle(.plain)
             }
         }
     }

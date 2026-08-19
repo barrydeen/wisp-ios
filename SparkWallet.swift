@@ -372,7 +372,23 @@ final class SparkWallet: Wallet {
             ))
             emit("Sending payment…")
             let response = try await sdk.lnurlPay(request: LnurlPayRequest(prepareResponse: prepare))
-            return .success(response.payment.id)
+            // lnurlPay returns a payment whose status may be FAILED without
+            // throwing. Returning .success for it told the user their sats had
+            // been sent when they had not.
+            switch response.payment.status {
+            case .completed:
+                emit("Payment completed")
+                return .success(response.payment.id)
+            case .pending:
+                // Accepted but not settled. Reported as success so the caller
+                // doesn't show a failure for a payment that may still land —
+                // see the note in the PR about surfacing pending distinctly.
+                emit("Payment pending")
+                return .success(response.payment.id)
+            default:
+                emit("Payment failed (\(response.payment.status))")
+                return .failure(.other("Payment failed — your sats were not sent"))
+            }
         } catch {
             let friendly = Self.friendlyPayError(error)
             emit("Payment failed: \(friendly)")
@@ -401,7 +417,25 @@ final class SparkWallet: Wallet {
                     idempotencyKey: nil
                 )
             )
-            return .success(response.payment.id)
+            // sendPayment waits up to completionTimeoutSecs and then returns
+            // whatever status it has — a FAILED payment comes back WITHOUT
+            // throwing, so it never reaches the catch below. Returning
+            // .success for it told the user their sats had been sent when
+            // they had not.
+            switch response.payment.status {
+            case .completed:
+                emit("Payment completed")
+                return .success(response.payment.id)
+            case .pending:
+                // Accepted but not settled. Reported as success so the caller
+                // doesn't show a failure for a payment that may still land —
+                // see the note in the PR about surfacing pending distinctly.
+                emit("Payment pending")
+                return .success(response.payment.id)
+            default:
+                emit("Payment failed (\(response.payment.status))")
+                return .failure(.other("Payment failed — your sats were not sent"))
+            }
         } catch {
             let friendly = Self.friendlyPayError(error)
             emit("Payment failed: \(friendly)")
@@ -487,6 +521,27 @@ final class SparkWallet: Wallet {
                 }
 
                 let isOnchain = bitcoinTxId != nil
+                // Settlement state straight from the SDK. `settledAt` used to be
+                // stamped with the payment timestamp unconditionally, and the
+                // detail sheet derived "Completed" from it being non-nil — so a
+                // FAILED payment (and the duplicate a user sends after one) was
+                // listed as Completed. Anything that isn't completed or pending
+                // is a failure: the sats did not leave.
+                let status: TransactionStatus
+                switch payment.status {
+                case .completed:
+                    status = .completed
+                case .pending:
+                    // On-chain payments made outside this app instance (another
+                    // wallet on the same seed) aren't tracked by this SDK session,
+                    // so PaymentStatus can stay stuck at .pending long after the
+                    // underlying transaction is confirmed. Wisp doesn't initiate
+                    // on-chain send/receive itself, so don't trust that flag for
+                    // on-chain rows.
+                    status = isOnchain ? .completed : .pending
+                default:
+                    status = .failed
+                }
                 var tx = WalletTransaction(
                     type: payment.paymentType == .send ? .outgoing : .incoming,
                     description: description,
@@ -494,15 +549,12 @@ final class SparkWallet: Wallet {
                     amountMsats: amountSats * 1000,
                     feeMsats: feeSats * 1000,
                     createdAt: Int64(payment.timestamp),
-                    settledAt: Int64(payment.timestamp),
+                    // Only a settled payment has a settlement time. Unsettled and
+                    // failed rows fall back to `createdAt` for display / sorting.
+                    settledAt: status == .completed ? Int64(payment.timestamp) : nil,
                     counterpartyPubkey: nil
                 )
-                // On-chain payments made outside this app instance (another wallet on
-                // the same seed) aren't tracked by this SDK session, so PaymentStatus
-                // can stay stuck at .pending long after the underlying transaction is
-                // confirmed. Wisp doesn't initiate on-chain send/receive itself, so
-                // don't trust that flag for on-chain rows.
-                tx.pending = !isOnchain && payment.status == .pending
+                tx.status = status
                 tx.bitcoinTxId = bitcoinTxId
                 return tx
             }

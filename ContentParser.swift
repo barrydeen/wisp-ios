@@ -42,6 +42,7 @@ enum ContentSegment: Hashable {
     /// A lightning address (`user@domain.tld`) found inline in text — rendered
     /// as a tappable "Zap" pill that opens an LNURL-pay flow.
     case lightningAddress(String)
+    case lnurlPayable(encoded: String)
 }
 
 enum ContentParser {
@@ -86,6 +87,11 @@ enum ContentParser {
 
     private static let bolt11Regex = try! NSRegularExpression(
         pattern: #"(lightning:)?(lnbc|lntb|lnbcrt)[0-9a-z]{50,}"#,
+        options: [.caseInsensitive]
+    )
+
+    private static let lnurlRegex = try! NSRegularExpression(
+        pattern: #"(?<!\w)(lnurl1[a-z0-9]{30,})(?!\w)"#,
         options: [.caseInsensitive]
     )
 
@@ -322,28 +328,64 @@ enum ContentParser {
             return [seg]
         }
 
-        // Pass 4: trim blank lines preceding block segments
+        // Pass 4: detect bech32-encoded LNURLs in text segments
+        segments = segments.flatMap { seg -> [ContentSegment] in
+            if case .text(let text) = seg {
+                return splitTextForLnurls(text)
+            }
+            return [seg]
+        }
+
+        // Pass 5: trim blank lines adjacent to block segments.
+        //
+        // Block segments (image, video, quoted note, invoice, link preview…)
+        // render as their own card in RichContentView's 8pt-spaced VStack.
+        // Blank lines around them used to survive as (possibly empty) text
+        // rows — each one a full line of height inside the UITextView plus
+        // VStack spacing on both sides — which read as a large gap between
+        // e.g. a paragraph and a lightning invoice. Trim newline runs on both
+        // sides of the adjacency, and drop the text segment entirely when
+        // nothing but whitespace remains.
         if trimBlankLines, segments.count > 1 {
-            for i in 0..<(segments.count - 1) {
-                let next = segments[i + 1]
-                let isBlock: Bool
-                switch next {
+            func isBlock(_ seg: ContentSegment) -> Bool {
+                switch seg {
                 // .nostrProfile (npub @mention) is rendered inline by
-                // RichInlineTextView, not as a card — leave preceding blank
+                // RichInlineTextView, not as a card — leave surrounding blank
                 // lines alone so a bio that puts a mention on its own line,
                 // or after a paragraph break, keeps the line break the user
                 // typed.
-                case .text, .inlineLink, .customEmoji, .hashtag, .nostrProfile: isBlock = false
-                case .link: isBlock = !linksAreInline
-                default: isBlock = true
-                }
-                if isBlock, case .text(let text) = segments[i] {
-                    let trimmed = trimTrailingNewlines(text)
-                    if trimmed != text {
-                        segments[i] = .text(trimmed.isEmpty ? "" : trimmed + "\n")
-                    }
+                case .text, .inlineLink, .customEmoji, .hashtag, .nostrProfile: return false
+                case .link: return !linksAreInline
+                default: return true
                 }
             }
+            var pruned: [ContentSegment] = []
+            pruned.reserveCapacity(segments.count)
+            for (i, seg) in segments.enumerated() {
+                guard case .text(let text) = seg else {
+                    pruned.append(seg)
+                    continue
+                }
+                let prevIsBlock = i > 0 && isBlock(segments[i - 1])
+                let nextIsBlock = i + 1 < segments.count && isBlock(segments[i + 1])
+                // Only block-adjacent text is eligible: a whitespace-only run
+                // between two inline segments is a joiner (e.g. the single
+                // space between two custom-emoji URLs) and must survive.
+                guard prevIsBlock || nextIsBlock else {
+                    pruned.append(seg)
+                    continue
+                }
+                var t = text
+                if prevIsBlock {
+                    while t.first == "\n" { t.removeFirst() }
+                }
+                if nextIsBlock {
+                    while t.last == "\n" { t.removeLast() }
+                }
+                if t.allSatisfy({ $0 == " " || $0 == "\n" || $0 == "\t" || $0 == "\r" }) { continue }
+                pruned.append(.text(t))
+            }
+            segments = pruned
         }
 
         return segments
@@ -589,6 +631,84 @@ enum ContentParser {
             result.append(.text(ns.substring(from: lastEnd)))
         }
         return result
+    }
+
+    private static func splitTextForLnurls(_ text: String) -> [ContentSegment] {
+        let ns = text as NSString
+        let matches = lnurlRegex.matches(in: text, range: NSRange(location: 0, length: ns.length))
+        if matches.isEmpty { return [.text(text)] }
+
+        var result: [ContentSegment] = []
+        var lastEnd = 0
+        var anyFound = false
+        for match in matches {
+            let raw = ns.substring(with: match.range)
+            let encoded = raw.lowercased()
+            guard let (hrp, _) = Bech32.decode(encoded), hrp == "lnurl" else { continue }
+            anyFound = true
+            let r = match.range
+            if r.location > lastEnd {
+                result.append(.text(ns.substring(with: NSRange(location: lastEnd, length: r.location - lastEnd))))
+            }
+            result.append(.lnurlPayable(encoded: encoded))
+            lastEnd = r.location + r.length
+        }
+        if !anyFound { return [.text(text)] }
+        if lastEnd < ns.length {
+            result.append(.text(ns.substring(from: lastEnd)))
+        }
+        return result
+    }
+
+    // MARK: - Image split (short free-form text)
+
+    /// Splits short free-form text — a zap comment, say — into the images it
+    /// references and whatever text is left once those URLs are stripped out.
+    /// Surfaces that only have a plain string to work with (no event, no imeta
+    /// tags) use this to render an image comment as an actual image instead of
+    /// a raw URL.
+    ///
+    /// Whitespace in the leftover text is collapsed to single spaces so a
+    /// comment written as "nice one\n\nhttps://…/x.jpg" doesn't leave a
+    /// trailing blank line behind in a one- or two-line label.
+    ///
+    /// `.unknownMedia` (an extension-less Blossom URL, where the file type is
+    /// only knowable from an imeta tag the plain string doesn't carry) counts as
+    /// an image here, matching how `RichContentView` renders that segment.
+    static func splitImages(from content: String) -> (text: String, images: [MediaMeta]) {
+        guard !content.isEmpty else { return ("", []) }
+        var images: [MediaMeta] = []
+        var seen = Set<String>()
+        for seg in parse(content: content) {
+            let meta: MediaMeta
+            switch seg {
+            case .image(let m), .unknownMedia(let m): meta = m
+            default: continue
+            }
+            guard seen.insert(meta.url).inserted else { continue }
+            images.append(meta)
+        }
+        guard !images.isEmpty else {
+            return (content.trimmingCharacters(in: .whitespacesAndNewlines), images)
+        }
+        var text = content
+        for meta in images {
+            text = text.replacingOccurrences(of: meta.url, with: " ")
+        }
+        let collapsed = text
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
+        return (collapsed, images)
+    }
+
+    /// One-line rendering of free-form text for chips and pills, where there's
+    /// no room to lay an image out: each image URL collapses to an `[image]`
+    /// marker so a URL-only comment doesn't render as a long truncated link.
+    static func compactImageMarkers(_ content: String) -> String {
+        let (text, images) = splitImages(from: content)
+        guard !images.isEmpty else { return text }
+        let markers = Array(repeating: "[image]", count: images.count).joined(separator: " ")
+        return text.isEmpty ? markers : "\(text) \(markers)"
     }
 
     // MARK: - Custom emoji tags (NIP-30)

@@ -6,7 +6,7 @@ import Foundation
 /// its own tmp directory as soon as it receives that URL. Compiled into both
 /// the `wisp` and `ShareExtension` targets.
 enum PendingShareStore {
-    static let appGroupIdentifier = "group.barrydeen.wisp.share"
+    static let appGroupIdentifier = "group.barrydeen.wisp"
     private static let subdirectoryName = "PendingShare"
 
     private static var containerDirectory: URL? {

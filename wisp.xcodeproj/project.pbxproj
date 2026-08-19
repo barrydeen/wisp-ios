@@ -35,16 +35,15 @@
 		4CABCD010000000000F30001 /* PrivateInteractionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30001 /* PrivateInteractionStore.swift */; };
 		4CABCD010000000000F30002 /* PrivateInteractionRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30002 /* PrivateInteractionRouter.swift */; };
 		4CABCD010000000000F30003 /* PeerRelayResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30003 /* PeerRelayResolver.swift */; };
-		4CABCD030000000000F30010 /* DmGiftWrapIngestor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD020000000000F30010 /* DmGiftWrapIngestor.swift */; };
-		4CABCD030000000000F30030 /* NsecIdentityPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD020000000000F30030 /* NsecIdentityPreview.swift */; };
-		4CABCD030000000000F30020 /* PendingPostStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD020000000000F30020 /* PendingPostStore.swift */; };
-		4CABCD030000000000F30021 /* PendingPostRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD020000000000F30021 /* PendingPostRow.swift */; };
 		4CABCD010000000000F30004 /* PrivateReplyPublisher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30004 /* PrivateReplyPublisher.swift */; };
 		4CABCD010000000000F30005 /* PrivateReactionPublisher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30005 /* PrivateReactionPublisher.swift */; };
 		4CABCD010000000000F30006 /* Dip03.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30006 /* Dip03.swift */; };
 		4CABCD010000000000F30050 /* WispTopHeader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30050 /* WispTopHeader.swift */; };
 		4CABCD010000000000F30051 /* AccountSwitcherSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD000000000000F30051 /* AccountSwitcherSheet.swift */; };
 		4CABCD030000000000F30010 /* DmGiftWrapIngestor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD020000000000F30010 /* DmGiftWrapIngestor.swift */; };
+		4CABCD030000000000F30020 /* PendingPostStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD020000000000F30020 /* PendingPostStore.swift */; };
+		4CABCD030000000000F30021 /* PendingPostRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD020000000000F30021 /* PendingPostRow.swift */; };
+		4CABCD030000000000F30030 /* NsecIdentityPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD020000000000F30030 /* NsecIdentityPreview.swift */; };
 		4CABCD030000000000F30040 /* CldrEmojiKeywords.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD020000000000F30040 /* CldrEmojiKeywords.swift */; };
 		4CABCD040000000000F30041 /* cldr-emoji-keywords-en.json in Resources */ = {isa = PBXBuildFile; fileRef = 4CABCD020000000000F30041 /* cldr-emoji-keywords-en.json */; };
 		4CABCE0100000000000F4607 /* Signer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCE0000000000000F4607 /* Signer.swift */; };
@@ -134,6 +133,7 @@
 		4CFF011300000000000000AA /* InlineImageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF011200000000000000AA /* InlineImageView.swift */; };
 		4CFF011500000000000000AB /* AnimatedImageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF011400000000000000AB /* AnimatedImageView.swift */; };
 		4CFF011700000000000000AC /* MediaAudioSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF011600000000000000AC /* MediaAudioSession.swift */; };
+		4CFF011900000000000000AD /* LnurlPayableView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF011800000000000000AD /* LnurlPayableView.swift */; };
 		4CFF020100000000000000A8 /* VideoPiPCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF020000000000000000A8 /* VideoPiPCoordinator.swift */; };
 		4CFF020100000000000000B1 /* ProfileRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF020000000000000000B1 /* ProfileRoute.swift */; };
 		4CFF020300000000000000A8 /* PiPPlayerViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF020200000000000000A8 /* PiPPlayerViewController.swift */; };
@@ -303,9 +303,11 @@
 		4CFFFA01000000000000F001 /* PowPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFFFA00000000000000F001 /* PowPreferences.swift */; };
 		4CFFFA01000000000000F002 /* ProofOfWorkSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFFFA00000000000000F002 /* ProofOfWorkSettingsView.swift */; };
 		4CFFFB010000000000000F10 /* BlurHash.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFFFB000000000000000F10 /* BlurHash.swift */; };
+		8692D90F33201F73DBEF8F0A /* Nip22.swift in Sources */ = {isa = PBXBuildFile; fileRef = E52D6BE71D8CFC1D8162E733 /* Nip22.swift */; };
 		8C3D92E0FCDBF00AFDF20671 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 741E8309A7019FA697D18D53 /* Foundation.framework */; };
 		9399A5358082EE4084A6797A /* PendingShareStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A85D99D72ADD7AFCEFF789A6 /* PendingShareStore.swift */; };
 		B0NWCBACKUP00000000000001 /* NwcBackup.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0NWCBACKUP00000000000002 /* NwcBackup.swift */; };
+		CFB7EF5B4C80F43ABDB8DFC8 /* DeletionTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C12B572C3ABAA62935E4C87 /* DeletionTracker.swift */; };
 		DA5814B32D1A4ED8AF800C72 /* MediaSaveService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07C633F5326A411B9E8DF5A8 /* MediaSaveService.swift */; };
 		DC407BFDBCE95E3D50EF82C4 /* ShareExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 80A6403E9108C21F17DDE95D /* ShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeaderOnCopy, ); }; };
 		E9D598B63D0971EF0CEAF715 /* PendingShareStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A85D99D72ADD7AFCEFF789A6 /* PendingShareStore.swift */; };
@@ -353,6 +355,7 @@
 /* Begin PBXFileReference section */
 		07C633F5326A411B9E8DF5A8 /* MediaSaveService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaSaveService.swift; sourceTree = "<group>"; };
 		1C51B88C4BCC0FBAFD394BE8 /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		2C12B572C3ABAA62935E4C87 /* DeletionTracker.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DeletionTracker.swift; sourceTree = "<group>"; };
 		4CAA00020002000000A1BA01 /* AudioTrack.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioTrack.swift; sourceTree = "<group>"; };
 		4CAA00040002000000A1BA01 /* AudioPlayerStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioPlayerStore.swift; sourceTree = "<group>"; };
 		4CAA770100000000000000B1 /* ArticleRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArticleRoute.swift; sourceTree = "<group>"; };
@@ -381,16 +384,15 @@
 		4CABCD000000000000F30001 /* PrivateInteractionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateInteractionStore.swift; sourceTree = "<group>"; };
 		4CABCD000000000000F30002 /* PrivateInteractionRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateInteractionRouter.swift; sourceTree = "<group>"; };
 		4CABCD000000000000F30003 /* PeerRelayResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeerRelayResolver.swift; sourceTree = "<group>"; };
-		4CABCD020000000000F30010 /* DmGiftWrapIngestor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DmGiftWrapIngestor.swift; sourceTree = "<group>"; };
-		4CABCD020000000000F30030 /* NsecIdentityPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NsecIdentityPreview.swift; sourceTree = "<group>"; };
-		4CABCD020000000000F30020 /* PendingPostStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingPostStore.swift; sourceTree = "<group>"; };
-		4CABCD020000000000F30021 /* PendingPostRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingPostRow.swift; sourceTree = "<group>"; };
 		4CABCD000000000000F30004 /* PrivateReplyPublisher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateReplyPublisher.swift; sourceTree = "<group>"; };
 		4CABCD000000000000F30005 /* PrivateReactionPublisher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateReactionPublisher.swift; sourceTree = "<group>"; };
 		4CABCD000000000000F30006 /* Dip03.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Dip03.swift; sourceTree = "<group>"; };
 		4CABCD000000000000F30050 /* WispTopHeader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WispTopHeader.swift; sourceTree = "<group>"; };
 		4CABCD000000000000F30051 /* AccountSwitcherSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountSwitcherSheet.swift; sourceTree = "<group>"; };
 		4CABCD020000000000F30010 /* DmGiftWrapIngestor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DmGiftWrapIngestor.swift; sourceTree = "<group>"; };
+		4CABCD020000000000F30020 /* PendingPostStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingPostStore.swift; sourceTree = "<group>"; };
+		4CABCD020000000000F30021 /* PendingPostRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingPostRow.swift; sourceTree = "<group>"; };
+		4CABCD020000000000F30030 /* NsecIdentityPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NsecIdentityPreview.swift; sourceTree = "<group>"; };
 		4CABCD020000000000F30040 /* CldrEmojiKeywords.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CldrEmojiKeywords.swift; sourceTree = "<group>"; };
 		4CABCD020000000000F30041 /* cldr-emoji-keywords-en.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "cldr-emoji-keywords-en.json"; sourceTree = "<group>"; };
 		4CABCE0000000000000F4607 /* Signer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Signer.swift; sourceTree = "<group>"; };
@@ -452,6 +454,7 @@
 		4CDFAB0000000000000DF007 /* PollsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PollsViewModel.swift; sourceTree = "<group>"; };
 		4CDFAB0000000000000DF009 /* PollsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PollsView.swift; sourceTree = "<group>"; };
 		4CDFAB0000000000000DF201 /* Nip38.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Nip38.swift; sourceTree = "<group>"; };
+		4CECCBFD3018FFE100EFB672 /* ShareExtensionRelease.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = ShareExtensionRelease.entitlements; sourceTree = "<group>"; };
 		4CFA00020001000000A1BA01 /* RelayDefaults.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayDefaults.swift; sourceTree = "<group>"; };
 		4CFA00040001000000A1BA01 /* FollowsCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowsCache.swift; sourceTree = "<group>"; };
 		4CFA00060001000000A1BA01 /* EventPersistQueue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventPersistQueue.swift; sourceTree = "<group>"; };
@@ -480,6 +483,7 @@
 		4CFF011200000000000000AA /* InlineImageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InlineImageView.swift; sourceTree = "<group>"; };
 		4CFF011400000000000000AB /* AnimatedImageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnimatedImageView.swift; sourceTree = "<group>"; };
 		4CFF011600000000000000AC /* MediaAudioSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaAudioSession.swift; sourceTree = "<group>"; };
+		4CFF011800000000000000AD /* LnurlPayableView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LnurlPayableView.swift; sourceTree = "<group>"; };
 		4CFF020000000000000000A8 /* VideoPiPCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoPiPCoordinator.swift; sourceTree = "<group>"; };
 		4CFF020000000000000000B1 /* ProfileRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileRoute.swift; sourceTree = "<group>"; };
 		4CFF020200000000000000A8 /* PiPPlayerViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiPPlayerViewController.swift; sourceTree = "<group>"; };
@@ -655,6 +659,7 @@
 		A85D99D72ADD7AFCEFF789A6 /* PendingShareStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PendingShareStore.swift; sourceTree = "<group>"; };
 		B0NWCBACKUP00000000000002 /* NwcBackup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NwcBackup.swift; sourceTree = "<group>"; };
 		C21B5D026207FD4CF0931588 /* ShareViewController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ShareViewController.swift; sourceTree = "<group>"; };
+		E52D6BE71D8CFC1D8162E733 /* Nip22.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Nip22.swift; sourceTree = "<group>"; };
 		F8CCD16A2BD383B0A6B0F4DF /* LnurlResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LnurlResolver.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -790,6 +795,7 @@
 				4CFF010800000000000000A5 /* LinkPreviewView.swift */,
 				4CFF010A00000000000000A6 /* LightningInvoiceView.swift */,
 				4CFF0A0000000000000000B1 /* LightningPaySheet.swift */,
+				4CFF011800000000000000AD /* LnurlPayableView.swift */,
 				4CFF010C00000000000000A7 /* QuotedNoteView.swift */,
 				4CAA770100000000000000B1 /* ArticleRoute.swift */,
 				4CAA770300000000000000B2 /* ArticleCache.swift */,
@@ -1033,6 +1039,8 @@
 				98E664502F89AB4B1A0D93CD /* ShareExtension */,
 				A85D99D72ADD7AFCEFF789A6 /* PendingShareStore.swift */,
 				A78518B540AA47061D0E80AC /* ThreadReplyFolder.swift */,
+				2C12B572C3ABAA62935E4C87 /* DeletionTracker.swift */,
+				E52D6BE71D8CFC1D8162E733 /* Nip22.swift */,
 			);
 			sourceTree = "<group>";
 		};
@@ -1050,11 +1058,11 @@
 		98E664502F89AB4B1A0D93CD /* ShareExtension */ = {
 			isa = PBXGroup;
 			children = (
+				4CECCBFD3018FFE100EFB672 /* ShareExtensionRelease.entitlements */,
 				C21B5D026207FD4CF0931588 /* ShareViewController.swift */,
 				1C51B88C4BCC0FBAFD394BE8 /* Info.plist */,
 				9DADF962DB484ADC87FF23E5 /* ShareExtension.entitlements */,
 			);
-			name = ShareExtension;
 			path = ShareExtension;
 			sourceTree = "<group>";
 		};
@@ -1300,6 +1308,7 @@
 				4CFF010900000000000000A5 /* LinkPreviewView.swift in Sources */,
 				4CFF010B00000000000000A6 /* LightningInvoiceView.swift in Sources */,
 				4CFF0A0100000000000000B1 /* LightningPaySheet.swift in Sources */,
+				4CFF011900000000000000AD /* LnurlPayableView.swift in Sources */,
 				4CFF010D00000000000000A7 /* QuotedNoteView.swift in Sources */,
 				4CAA770200000000000000B1 /* ArticleRoute.swift in Sources */,
 				4CAA770400000000000000B2 /* ArticleCache.swift in Sources */,
@@ -1538,6 +1547,8 @@
 				4CABCE0100000000000F4607 /* Signer.swift in Sources */,
 				9399A5358082EE4084A6797A /* PendingShareStore.swift in Sources */,
 				347CAC4DB369991D001F8634 /* ThreadReplyFolder.swift in Sources */,
+				CFB7EF5B4C80F43ABDB8DFC8 /* DeletionTracker.swift in Sources */,
+				8692D90F33201F73DBEF8F0A /* Nip22.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1591,7 +1602,7 @@
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CLANG_ENABLE_OBJC_WEAK = YES;
-				CODE_SIGN_ENTITLEMENTS = ShareExtension/ShareExtension.entitlements;
+				CODE_SIGN_ENTITLEMENTS = ShareExtension/ShareExtensionRelease.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = G738XL8P49;
@@ -1815,7 +1826,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = wisp.entitlements;
+				CODE_SIGN_ENTITLEMENTS = wisp/wispRelease.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = G738XL8P49;

@@ -385,7 +385,7 @@ final class ComposeViewModel {
     /// Called from the SwiftUI text-field binding. Re-derives mention/emoji/hashtag state.
     func updateContent(_ new: String) {
         // Auto-prefix bare bech32 (`nevent1...`, `note1...`, `nprofile1...`, `npub1...`) with `nostr:`.
-        let prefixed = autoPrefixBareBech32(new)
+        let prefixed = Self.autoPrefixBareBech32(new)
         if prefixed != content {
             content = prefixed
         } else {
@@ -1210,6 +1210,7 @@ final class ComposeViewModel {
         // Normal post: hand off to PostPublisher so the sheet can dismiss
         // immediately while mining + broadcasting run in the background.
         let createdAt = NostrClock.now()
+        let relayTargets = await resolvePublishRelays()
         let draft = PreparedDraft(
             kind: kind,
             tags: tags,
@@ -1218,7 +1219,7 @@ final class ComposeViewModel {
             signingKeypair: signingKeypair,
             powEnabled: powEnabled,
             powDifficulty: powDifficulty,
-            relays: topWriteRelays(),
+            relays: relayTargets,
             autosaveKeyToClear: autosaveKey,
             draftIdToClear: currentDraftId
         )
@@ -1695,8 +1696,16 @@ final class ComposeViewModel {
         hashtags = out
     }
 
-    private func autoPrefixBareBech32(_ s: String) -> String {
-        let pattern = "(?<![a-z0-9:./])(?<!nostr:)(nevent1|note1|nprofile1|naddr1|npub1)([a-z0-9]{20,})"
+    /// Internal (not private) so `ComposeMentionTests` can exercise the URL
+    /// guard directly — publishing a note needs a full signing round-trip.
+    static func autoPrefixBareBech32(_ s: String) -> String {
+        // The trailing `(?!\.[a-zA-Z])` mirrors ContentParser's npub pattern:
+        // a bech32 token followed by a dot + letters is a subdomain (a Blossom
+        // server like `npub1….blossom.band`), and prefixing it with `nostr:`
+        // would corrupt the URL. NSDataDetector can't catch this — it doesn't
+        // detect scheme-less domains as links, so the URL skip below is blind
+        // to exactly the bare-URL shapes that need the exclusion.
+        let pattern = "(?<![a-z0-9:./])(?<!nostr:)(nevent1|note1|nprofile1|naddr1|npub1)([a-z0-9]{20,})(?!\\.[a-zA-Z])"
         guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return s }
         let nsRange = NSRange(s.startIndex..<s.endIndex, in: s)
         let matches = regex.matches(in: s, range: nsRange)
@@ -1790,8 +1799,30 @@ final class ComposeViewModel {
         return cleaned.isEmpty ? "user" : cleaned
     }
 
+    private func resolvePublishRelays() async -> [String] {
+        var relays = Set(await RelayListRepository.shared.getWriteRelays(signingKeypair.pubkey))
+
+        switch mode {
+        case .new:
+            break
+        case .reply(let parent, _):
+            let authorReads = await RelayListRepository.shared.getReadRelays(parent.pubkey)
+            relays.formUnion(authorReads)
+        case .quote(let q):
+            let authorReads = await RelayListRepository.shared.getReadRelays(q.pubkey)
+            relays.formUnion(authorReads)
+        }
+
+        if !relays.isEmpty { return Array(relays) }
+        return topWriteRelays()
+    }
+
     private func topWriteRelays() -> [String] {
-        RelayRouting.topWriteRelays(for: signingKeypair.pubkey)
+        if let board = RelayScoreBoard.load(pubkey: signingKeypair.pubkey) {
+            let top = board.scoredRelays.map(\.url)
+            if !top.isEmpty { return top }
+        }
+        return ["wss://relay.damus.io", "wss://relay.primal.net", "wss://nos.lol"]
     }
 }
 
