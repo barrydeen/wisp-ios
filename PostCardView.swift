@@ -482,7 +482,15 @@ struct PostCardView: View {
                 // identifier). Sits above the comment text: the page is what's
                 // being discussed, so it reads as the subject the remark
                 // answers rather than a link trailing off the end of it.
-                if let external = Nip22.externalRoot(of: displayEvent) {
+                //
+                // `externalParent`, not `externalRoot`: only a TOP-LEVEL
+                // comment gets the card. Every reply in the thread carries the
+                // same `I`/`K` root scope forward (NIP-22 requires it), so
+                // keying off the root would repeat the source card on each
+                // reply — the subject is already established by the comment
+                // being replied to, and the "Replying to X" row above gives
+                // the local context.
+                if let external = Nip22.externalParent(of: displayEvent) {
                     externalContentCard(external)
                 }
 
@@ -916,10 +924,12 @@ struct PostCardView: View {
     }
 
     private func replyingToLabel(for displayEvent: NostrEvent) -> String? {
-        // A comment scoped to a web page carries no `p` tags to name, so fall
-        // back to the source itself — otherwise the row renders blank and the
-        // comment looks like it's replying to nobody.
-        if let external = Nip22.externalRoot(of: displayEvent) {
+        // A top-level comment scoped to a web page carries no `p` tags to name,
+        // so fall back to the source itself — otherwise the row renders blank
+        // and the comment looks like it's replying to nobody. Scoped to
+        // `externalParent` so a REPLY to a comment names the person it answers
+        // (it has `p` tags to use) rather than the article.
+        if let external = Nip22.externalParent(of: displayEvent) {
             return "Commenting on \(external.displayHost ?? externalKindLabel(external.kind))"
         }
         var seen = Set<String>()

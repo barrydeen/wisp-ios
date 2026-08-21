@@ -112,3 +112,42 @@ struct ComposeReplyKindTests {
         #expect(vm.determineKind() != Nip22.kindComment)
     }
 }
+
+/// Where the source card and "Commenting on …" label may appear. A reply
+/// carries the same `I`/`K` root scope forward (NIP-22 requires it), so the
+/// distinction has to come from the lowercase side: only a top-level comment
+/// has the external item as its immediate parent.
+@Suite struct Nip22TopLevelVsReplyTests {
+
+    private static let article = "https://arstechnica.com/tech-policy/2026/07/artist-sues"
+
+    /// Top-level comment on a page: uppercase root AND lowercase `i`/`k`.
+    private var topLevel: NostrEvent {
+        NostrEvent(id: "top", pubkey: "author", kind: Nip22.kindComment, createdAt: 0,
+                   tags: [["I", Self.article], ["K", "web"],
+                          ["i", Self.article], ["k", "web"]],
+                   content: "good piece", sig: "")
+    }
+
+    /// Reply to that comment, exactly as the composer now builds it: same
+    /// uppercase root, lowercase side pointing at the parent event.
+    private var replyToComment: NostrEvent {
+        NostrEvent(id: "reply", pubkey: "author", kind: Nip22.kindComment, createdAt: 0,
+                   tags: [["I", Self.article], ["K", "web"],
+                          ["e", "top", "", "author"], ["k", "1111"], ["p", "author"]],
+                   content: "agreed", sig: "")
+    }
+
+    @Test func bothCarryTheRootScope() {
+        // The tags are correct on both — the card must not be driven off this.
+        #expect(Nip22.externalRoot(of: topLevel)?.value == Self.article)
+        #expect(Nip22.externalRoot(of: replyToComment)?.value == Self.article)
+    }
+
+    @Test func onlyTopLevelHasAnExternalParent() {
+        // …so `externalParent` is what gates the source card and the
+        // "Commenting on <host>" label.
+        #expect(Nip22.externalParent(of: topLevel)?.value == Self.article)
+        #expect(Nip22.externalParent(of: replyToComment) == nil)
+    }
+}
