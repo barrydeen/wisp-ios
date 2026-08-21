@@ -430,6 +430,14 @@ final class ThreadViewModel {
     /// false — the default).
     /// While the countdown is running, callers can `publishReplyNow()` to skip
     /// the timer or `cancelReply()` to drop the pending send.
+    ///
+    /// - Warning: UNUSED. Nothing calls this (or `publishReplyNow` /
+    ///   `cancelReply` / `runReplyPublishPipeline`) — every reply in the app is
+    ///   published by `ComposeViewModel`, which `ThreadView` presents as a
+    ///   `ComposeView(mode: .reply(...))`. Its NIP-22 branch below is therefore
+    ///   NOT the live one; reading it as proof that comment replies stay
+    ///   kind-1111 is how they shipped as kind-1. Change `ComposeViewModel`,
+    ///   not this. Candidate for deletion.
     func publishReply(content: String, parentId: String? = nil) {
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
