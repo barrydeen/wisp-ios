@@ -197,24 +197,34 @@ final class ProfileViewModel {
             group.addTask { [weak self] in await self?.loadDeletions() }
         }
 
-        // Retry contacts once the target's own write relays are known.
-        //
-        // `loadContacts` races `loadTargetWriteRelays` in the group above, so
-        // its `queryRelays()` set is built before `targetWriteRelays` is
-        // populated — for a profile whose kind-3 lives only on its author's
-        // write relays, the first attempt searches the wrong servers and
-        // finds nothing. Nothing else re-runs it (`start()` is one-shot via
-        // `hasStarted`, and there's no pull-to-refresh on the header), so the
-        // count stayed at 0 for the life of the screen rather than briefly.
-        if followingPubkeys.isEmpty && !targetWriteRelays.isEmpty {
-            await loadContacts()
-        }
-
-        // Now that we know the target's write relays, load notes/replies in parallel
+        // Now that we know the target's write relays, load notes/replies in
+        // parallel — with the contacts retry riding alongside rather than
+        // ahead of them, since it only feeds the header stat.
         await withTaskGroup(of: Void.self) { group in
             group.addTask { [weak self] in await self?.loadInitialNotes() }
             group.addTask { [weak self] in await self?.loadInitialReplies() }
+            group.addTask { [weak self] in await self?.retryContactsIfNeeded() }
         }
+    }
+
+    /// Retry contacts once the target's own write relays are known.
+    ///
+    /// `loadContacts` races `loadTargetWriteRelays` in the first group, so
+    /// its `queryRelays()` set is built before `targetWriteRelays` is
+    /// populated — for a profile whose kind-3 lives only on its author's
+    /// write relays, the first attempt searches the wrong servers and finds
+    /// nothing. Nothing else re-runs it (`start()` is one-shot via
+    /// `hasStarted`, and there's no pull-to-refresh on the header), so the
+    /// count stayed at 0 for the life of the screen rather than briefly.
+    ///
+    /// Runs concurrently with the notes load, never before it: this is a
+    /// second full relay round-trip, and blocking on it held the first note
+    /// back by seconds on every profile the first pass missed — including
+    /// ones with a genuinely empty contact list, where it can never succeed
+    /// and always pays the full timeout.
+    private func retryContactsIfNeeded() async {
+        guard followingPubkeys.isEmpty, !targetWriteRelays.isEmpty else { return }
+        await loadContacts()
     }
 
     func loadTab(_ tab: ProfileTab) async {
