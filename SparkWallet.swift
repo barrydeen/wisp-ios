@@ -402,7 +402,7 @@ final class SparkWallet: Wallet {
             emit("Preparing payment…")
             let prepare = try await sdk.prepareSendPayment(
                 request: PrepareSendPaymentRequest(
-                    paymentRequest: bolt11,
+                    paymentRequest: .input(input: bolt11),
                     amount: nil,
                     tokenIdentifier: nil,
                     conversionOptions: nil,
@@ -475,7 +475,8 @@ final class SparkWallet: Wallet {
                         description: description.isEmpty ? "Wisp wallet" : description,
                         amountSats: amountSats,
                         expirySecs: UInt32(min(expirySecs, Int64(UInt32.max))),
-                        paymentHash: nil
+                        paymentHash: nil,
+                        receiverIdentityPublicKey: nil
                     )
                 )
             )
@@ -504,14 +505,14 @@ final class SparkWallet: Wallet {
 
                 if let details = payment.details {
                     switch details {
-                    case .lightning(let desc, let invoice, _, _, _, _, _):
+                    case .lightning(let desc, let invoice, _, _, _, _, _, _):
                         if let decoded = Bolt11.decode(invoice) {
                             paymentHash = decoded.paymentHash ?? payment.id
                             description = desc ?? decoded.description
                         } else {
                             description = desc
                         }
-                    case .deposit(let txId):
+                    case .deposit(let txId, _):
                         bitcoinTxId = txId
                     case .withdraw(let txId):
                         bitcoinTxId = txId
@@ -576,4 +577,3 @@ private final class SparkEventBridge: EventListener {
     init(onEvent: @escaping (SdkEvent) -> Void) { self.onEvent = onEvent }
     func onEvent(event: SdkEvent) async { onEvent(event) }
 }
-
