@@ -1277,7 +1277,7 @@ final class ComposeViewModel {
     /// surfaces pick up the rumor via `PrivateInteractionRouter` (on echo) and
     /// via the `.nostrEventPublished` broadcast the publisher emits.
     private func runPrivateReplyPipeline(parent: NostrEvent, root: NostrEvent?) async {
-        let materialized = materializeMentions(content)
+        let materialized = Self.trimTrailingBlankLines(materializeMentions(content))
         let body = appendQuoteUri(to: appendAttachmentUrls(to: materialized))
 
         // Build the rumor's extra tag set: mentions, pubkey refs from inline
@@ -1348,12 +1348,31 @@ final class ComposeViewModel {
     /// spliced onto the end (in `attachments` order). For gallery events the body
     /// is just the caption — upload URLs ride in `imeta` tags instead.
     private func bodyForPublish(kind: Int, materialized: String) -> String {
+        let trimmed = Self.trimTrailingBlankLines(materialized)
         switch kind {
         case Nip68.kindPicture, Nip71.kindVideoHorizontal, Nip71.kindVideoVertical:
-            return materialized
+            return trimmed
         default:
-            return appendQuoteUri(to: appendAttachmentUrls(to: materialized))
+            return appendQuoteUri(to: appendAttachmentUrls(to: trimmed))
         }
+    }
+
+    /// Drop blank lines left at the end of the buffer before the note goes
+    /// out. `ContentParser` collapses these when rendering, but that only
+    /// helps readers on Wisp — every other client shows the padding as real
+    /// empty lines, so it shouldn't leave here in the first place.
+    ///
+    /// Trailing only. Spacing *between* paragraphs is the author's to choose,
+    /// and rewriting the middle of someone's post on publish is a different
+    /// thing entirely from tidying its end. Drafts are also left alone: that
+    /// buffer is still being typed in.
+    nonisolated static func trimTrailingBlankLines(_ s: String) -> String {
+        var out = s
+        while let last = out.last,
+              last == "\n" || last == "\r" || last == " " || last == "\t" {
+            out.removeLast()
+        }
+        return out
     }
 
     private func appendAttachmentUrls(to body: String) -> String {

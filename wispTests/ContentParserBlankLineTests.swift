@@ -100,3 +100,32 @@ struct ContentParserBlankLineTests {
         #expect(t == "gm\n\n\n\nbye\n\n")
     }
 }
+
+/// The other half: Wisp shouldn't *emit* the padding in the first place.
+/// `ContentParser` pass 6 only tidies what a Wisp reader sees — a note
+/// published with trailing newlines still renders with real empty lines in
+/// every other client.
+struct ComposeTrailingBlankLineTests {
+
+    @Test func trailingNewlinesAreTrimmedBeforePublish() {
+        #expect(ComposeViewModel.trimTrailingBlankLines("gm\n\n\n") == "gm")
+        #expect(ComposeViewModel.trimTrailingBlankLines("gm\n  \n\t") == "gm")
+    }
+
+    @Test func interiorSpacingIsTheAuthorsToKeep() {
+        // Only the tail is tidied — the middle of a post is never rewritten.
+        #expect(
+            ComposeViewModel.trimTrailingBlankLines("one\n\n\n\ntwo\n\n")
+                == "one\n\n\n\ntwo"
+        )
+    }
+
+    @Test func postWithoutPaddingIsUnchanged() {
+        #expect(ComposeViewModel.trimTrailingBlankLines("gm") == "gm")
+        #expect(ComposeViewModel.trimTrailingBlankLines("one\ntwo") == "one\ntwo")
+    }
+
+    @Test func allWhitespaceCollapsesToEmpty() {
+        #expect(ComposeViewModel.trimTrailingBlankLines("\n\n  \n").isEmpty)
+    }
+}
