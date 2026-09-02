@@ -15,6 +15,10 @@ enum ThreadReplyFolder {
     enum DisplayItem: Identifiable {
         case single(NestedReplyRow, midAir: Bool)
         case wotGroup(count: Int, depth: Int, id: String)
+        /// Consecutive same-depth rows from muted authors, collapsed to one
+        /// counted row. Only produced when the display mode offers no
+        /// per-post reveal — with a Show link each row has to stand alone.
+        case mutedGroup(count: Int, depth: Int, id: String)
         /// A folded subtree under `anchor`, expandable inline. `depth` is
         /// the anchor's depth + 1 (one level deeper).
         case collapsedReplies(anchor: NestedReplyRow, depth: Int, hiddenCount: Int)
@@ -23,6 +27,7 @@ enum ThreadReplyFolder {
             switch self {
             case .single(let r, _): return r.id
             case .wotGroup(_, _, let gid): return "wot-\(gid)"
+            case .mutedGroup(_, _, let gid): return "muted-\(gid)"
             case .collapsedReplies(let anchor, _, _): return "collapsed-\(anchor.id)"
             }
         }
@@ -32,7 +37,12 @@ enum ThreadReplyFolder {
         items: [NestedReplyRow],
         expandedBranchIds: Set<String>,
         exemptTargetId: String?,
-        depthCap: Int = depthCap
+        depthCap: Int = depthCap,
+        /// Collapse runs of muted-author rows into one counted row. Off by
+        /// default: only the placeholder-without-reveal mode wants it, since
+        /// N identical unactionable rows are pure noise, while a mode with a
+        /// per-row Show link needs each row addressable.
+        groupMuted: Bool = false
     ) -> [DisplayItem] {
         let exempt = ancestorChain(to: exemptTargetId, in: items)
 
@@ -95,6 +105,27 @@ enum ThreadReplyFolder {
                 // still walks into `items` one level deeper) — preserve
                 // reachability of anything folded under the last grouped
                 // placeholder instead of silently dropping it.
+                let lastGrouped = folded[j - 1]
+                if let hiddenCount = collapsedAfter[lastGrouped.id] {
+                    result.append(.collapsedReplies(anchor: lastGrouped, depth: lastGrouped.depth + 1, hiddenCount: hiddenCount))
+                }
+                k = j
+                continue
+            }
+            if groupMuted, item.row.isBlocked {
+                let groupDepth = item.depth
+                let groupId = item.id
+                var count = 1
+                var j = k + 1
+                while j < folded.count && folded[j].row.isBlocked && folded[j].depth == groupDepth {
+                    count += 1
+                    j += 1
+                }
+                result.append(.mutedGroup(count: count, depth: groupDepth, id: groupId))
+                prevPostDepth = groupDepth
+                // Same reachability guard as the WoT group: a muted row can be
+                // a fold anchor, and anything folded beneath the last grouped
+                // row must stay expandable rather than vanish.
                 let lastGrouped = folded[j - 1]
                 if let hiddenCount = collapsedAfter[lastGrouped.id] {
                     result.append(.collapsedReplies(anchor: lastGrouped, depth: lastGrouped.depth + 1, hiddenCount: hiddenCount))

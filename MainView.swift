@@ -295,6 +295,9 @@ struct MainView: View {
                 keypair: keypair
             )
             SafetyPreferences.shared.bind(activePubkey: keypair.pubkey)
+            // Reveals are per-session and per-account: a post unhidden under
+            // one identity must not stay unhidden after a switch.
+            MutedRevealStore.shared.clear()
             PrivateInteractionStore.shared.bind(activePubkey: keypair.pubkey)
             await ExtendedNetworkRepository.shared.bind(activePubkey: keypair.pubkey)
             await SafetyFilter.shared.rebuildSnapshot()
