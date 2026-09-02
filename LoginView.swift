@@ -109,16 +109,21 @@ struct LoginView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color.wispBackground)
             .ignoresSafeArea(.keyboard, edges: .bottom)
-            .overlay(alignment: .bottom) {
+            // Pinned to the top-leading corner so it stays clear of the
+            // Log In button and of the keyboard. At .bottom with a fixed
+            // 120pt inset it overlapped the action buttons, and
+            // white-on-15%-white read as scenery rather than a button.
+            .overlay(alignment: .topLeading) {
                 Button(action: { dismiss() }) {
                     Text("Cancel")
                         .font(.callout.weight(.medium))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 28)
-                        .padding(.vertical, 12)
-                        .background(.white.opacity(0.15), in: Capsule())
+                        .foregroundStyle(.black)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 8)
+                        .background(.white.opacity(0.92), in: Capsule())
                 }
-                .padding(.bottom, 120)
+                .padding(.leading, 16)
+                .padding(.top, 16)
             }
             .fullScreenCover(isPresented: $showQRScanner) {
                 QRCodeScannerView(
