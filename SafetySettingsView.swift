@@ -147,6 +147,41 @@ struct SafetySettingsView: View {
                 }
             }
 
+            section(title: "Muted content") {
+                Text("Where a muted author's post would break the structure around it — a reply chain, or a quote inside someone else's post — this decides what stands in its place. Your feed never shows muted authors either way.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(theme.palette.onSurfaceVariant)
+                    .padding(.bottom, 2)
+
+                ForEach(MutedContentDisplay.allCases, id: \.self) { option in
+                    Button {
+                        prefs.mutedContentDisplay = option
+                    } label: {
+                        HStack(alignment: .top, spacing: 10) {
+                            Image(systemName: prefs.mutedContentDisplay == option
+                                  ? "largecircle.fill.circle" : "circle")
+                                .foregroundStyle(prefs.mutedContentDisplay == option
+                                                 ? theme.primary : theme.palette.onSurfaceVariant)
+                                .font(.system(size: 16))
+                                .padding(.top, 1)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(option.label)
+                                    .font(.system(size: 15))
+                                    .foregroundStyle(theme.palette.onSurface)
+                                Text(option.detail)
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(theme.palette.onSurfaceVariant)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.vertical, 4)
+                }
+            }
+
             section(title: "Network") {
                 wotStatusRow
                 Button {

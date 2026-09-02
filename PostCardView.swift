@@ -928,8 +928,13 @@ struct PostCardView: View {
             .map { $0[1] }
             .filter { seen.insert($0).inserted }
         guard !unique.isEmpty else { return nil }
-        let shown = unique.prefix(2).map { pk in
-            profiles[pk]?.displayString
+        // Muted participants are never named, whatever the placeholder setting
+        // — naming them here would leak the identity the mute exists to remove
+        // (and is the only trace left when placeholders are off).
+        let blocked = SafetyFilter.shared.snapshot.blockedPubkeys
+        let shown = unique.prefix(2).map { pk -> String in
+            if blocked.contains(pk) { return "a muted user" }
+            return profiles[pk]?.displayString
                 ?? ProfileRepository.shared.get(pk)?.displayString
                 ?? npubShort(pk)
         }

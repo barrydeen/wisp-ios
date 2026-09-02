@@ -16,8 +16,8 @@ struct ThreadReplyFolderTests {
         NostrEvent(id: id, pubkey: "pub-\(id)", kind: 1, createdAt: 0, tags: [], content: "", sig: "")
     }
 
-    private func row(_ id: String, depth: Int, wotHidden: Bool = false) -> NestedReplyRow {
-        NestedReplyRow(row: ThreadRow(event: event(id), isWotHidden: wotHidden), depth: depth)
+    private func row(_ id: String, depth: Int, wotHidden: Bool = false, blocked: Bool = false) -> NestedReplyRow {
+        NestedReplyRow(row: ThreadRow(event: event(id), isBlocked: blocked, isWotHidden: wotHidden), depth: depth)
     }
 
     private func singleIds(_ result: [ThreadReplyFolder.DisplayItem]) -> [String] {
@@ -147,6 +147,114 @@ struct ThreadReplyFolderTests {
         #expect(anchor.id == "w2")
         #expect(foldDepth == 4)
         #expect(hiddenCount == 2)
+    }
+
+    // MARK: - Muted-author grouping
+
+    /// With no per-post reveal there's nothing to do with an individual muted
+    /// row, so a run of them collapses to one counted row rather than stacking
+    /// identical placeholders.
+    @Test func consecutiveMutedRowsCollapseIntoOneCountedRow() {
+        let items = [
+            row("a", depth: 0),
+            row("m1", depth: 0, blocked: true),
+            row("m2", depth: 0, blocked: true),
+            row("m3", depth: 0, blocked: true),
+            row("b", depth: 0),
+        ]
+        let result = ThreadReplyFolder.fold(
+            items: items, expandedBranchIds: [], exemptTargetId: nil, groupMuted: true
+        )
+        #expect(result.count == 3)
+        guard case .mutedGroup(let count, let depth, _) = result[1] else {
+            Issue.record("expected a muted group, got \(result)")
+            return
+        }
+        #expect(count == 3)
+        #expect(depth == 0)
+        #expect(singleIds(result) == ["a", "b"])
+    }
+
+    /// The reveal mode needs each row addressable for its own Show link.
+    @Test func mutedRowsStaySeparateWhenGroupingIsOff() {
+        let items = [
+            row("m1", depth: 0, blocked: true),
+            row("m2", depth: 0, blocked: true),
+        ]
+        let result = ThreadReplyFolder.fold(
+            items: items, expandedBranchIds: [], exemptTargetId: nil, groupMuted: false
+        )
+        #expect(result.count == 2)
+        #expect(singleIds(result) == ["m1", "m2"])
+    }
+
+    /// Grouping is per-depth: rows at different depths are different points in
+    /// the conversation and must not merge into one count.
+    @Test func mutedRowsAtDifferentDepthsDoNotMerge() {
+        let items = [
+            row("m1", depth: 0, blocked: true),
+            row("m2", depth: 1, blocked: true),
+        ]
+        let result = ThreadReplyFolder.fold(
+            items: items, expandedBranchIds: [], exemptTargetId: nil, groupMuted: true
+        )
+        #expect(result.count == 2)
+        for item in result {
+            guard case .mutedGroup(let count, _, _) = item else {
+                Issue.record("expected two muted groups, got \(result)")
+                return
+            }
+            #expect(count == 1)
+        }
+    }
+
+    /// A muted run must not swallow an unmuted reply that sits between two
+    /// muted ones — that would hide a visible author's post.
+    @Test func anUnmutedReplyBreaksTheRun() {
+        let items = [
+            row("m1", depth: 0, blocked: true),
+            row("visible", depth: 0),
+            row("m2", depth: 0, blocked: true),
+        ]
+        let result = ThreadReplyFolder.fold(
+            items: items, expandedBranchIds: [], exemptTargetId: nil, groupMuted: true
+        )
+        #expect(result.count == 3)
+        #expect(singleIds(result) == ["visible"])
+    }
+
+    /// WoT-hidden and muted are distinct states with distinct copy; a run of
+    /// one must not absorb the other.
+    @Test func mutedAndWotRunsGroupSeparately() {
+        let items = [
+            row("w1", depth: 0, wotHidden: true),
+            row("m1", depth: 0, blocked: true),
+        ]
+        let result = ThreadReplyFolder.fold(
+            items: items, expandedBranchIds: [], exemptTargetId: nil, groupMuted: true
+        )
+        #expect(result.count == 2)
+        guard case .wotGroup = result[0] else { Issue.record("expected WoT group first"); return }
+        guard case .mutedGroup = result[1] else { Issue.record("expected muted group second"); return }
+    }
+
+    /// A muted row can be a fold anchor. Anything folded beneath the last row
+    /// of a collapsed run has to stay reachable rather than vanish.
+    @Test func subtreeFoldedUnderAMutedRunStaysExpandable() {
+        let items = [
+            row("m1", depth: 3, blocked: true),
+            row("child", depth: 4),
+            row("grandchild", depth: 5),
+        ]
+        let result = ThreadReplyFolder.fold(
+            items: items, expandedBranchIds: [], exemptTargetId: nil, groupMuted: true
+        )
+        guard case .mutedGroup = result.first else {
+            Issue.record("expected the muted row to group, got \(result)")
+            return
+        }
+        let hasCollapsed = result.contains { if case .collapsedReplies = $0 { return true } else { return false } }
+        #expect(hasCollapsed)
     }
 }
 
