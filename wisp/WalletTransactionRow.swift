@@ -34,10 +34,13 @@ struct WalletTransactionRow: View {
         let hidden = displayMode == .hidden
         // `walletFiat` returns nil until the rate cache has loaded, so the
         // two-Text sats layout stays intact while the rate is in flight.
-        let fiatAmount: String? = displayMode == .fiat
+        // A token row has no sats value, so there is nothing to convert — the
+        // fiat rate is sats-to-currency. Falls through to the asset branch of
+        // the amount display below.
+        let fiatAmount: String? = (displayMode == .fiat && !tx.isTokenTransfer)
             ? CurrencyFormatter.walletFiat(sats: sats)
             : nil
-        let fiatFee: String? = (displayMode == .fiat && feeSats > 0)
+        let fiatFee: String? = (displayMode == .fiat && !tx.isTokenTransfer && feeSats > 0)
             ? CurrencyFormatter.walletFiat(sats: feeSats)
             : nil
 
@@ -90,6 +93,15 @@ struct WalletTransactionRow: View {
                         Text("\(sign)\(fiatAmount)")
                             .font(.subheadline.weight(.semibold).monospacedDigit())
                             .foregroundStyle(amountColor)
+                    } else if let assetTicker = tx.assetTicker {
+                        HStack(alignment: .firstTextBaseline, spacing: 3) {
+                            Text("\(sign)\(tx.assetAmountCompact ?? "?")")
+                                .font(.subheadline.weight(.semibold).monospacedDigit())
+                                .foregroundStyle(amountColor)
+                            Text(assetTicker)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
                     } else {
                         HStack(alignment: .firstTextBaseline, spacing: 3) {
                             Text("\(sign)\(CurrencyFormatter.formatNumber(sats))")
@@ -100,7 +112,11 @@ struct WalletTransactionRow: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
-                    if !hidden, !isIncoming, feeSats > 0 {
+                    if !hidden, !isIncoming, let assetFee = tx.assetFee, let ticker = tx.assetTicker {
+                        Text("Fee: \(WalletTransaction.compactTokenAmount(assetFee)) \(ticker)")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    } else if !hidden, !isIncoming, feeSats > 0 {
                         if let fiatFee {
                             Text("Fee: \(fiatFee)")
                                 .font(.caption2)
@@ -165,6 +181,11 @@ private struct TransactionDetailPanel: View {
 
     /// Mirror of the Android note filter — drop blank values, the literal
     /// string "null", and JSON blobs (zap-request payloads start with `{`).
+    private var typeLabel: String {
+        if let ticker = tx.assetTicker { return "\(ticker) transfer" }
+        return tx.isOnchain ? "On-chain" : "Lightning"
+    }
+
     private var note: String? {
         guard let d = tx.description?.trimmingCharacters(in: .whitespacesAndNewlines),
               !d.isEmpty, d != "null", !d.hasPrefix("{") else { return nil }
@@ -177,10 +198,17 @@ private struct TransactionDetailPanel: View {
 
         VStack(alignment: .leading, spacing: 10) {
             TxDetailRow(label: "Status", value: Self.statusLabel(for: tx))
-            TxDetailRow(label: "Type", value: tx.isOnchain ? "On-chain" : "Lightning")
-            TxDetailRow(label: "Amount", value: "\(CurrencyFormatter.formatNumber(sats)) sats")
-            if feeSats > 0 {
-                TxDetailRow(label: "Network fee", value: "\(CurrencyFormatter.formatNumber(feeSats)) sats")
+            TxDetailRow(label: "Type", value: typeLabel)
+            if let ticker = tx.assetTicker {
+                TxDetailRow(label: "Amount", value: "\(tx.assetAmount ?? "?") \(ticker)")
+                if let assetFee = tx.assetFee {
+                    TxDetailRow(label: "Fee", value: "\(assetFee) \(ticker)")
+                }
+            } else {
+                TxDetailRow(label: "Amount", value: "\(CurrencyFormatter.formatNumber(sats)) sats")
+                if feeSats > 0 {
+                    TxDetailRow(label: "Network fee", value: "\(CurrencyFormatter.formatNumber(feeSats)) sats")
+                }
             }
             TxDetailRow(label: "Date", value: fullDate)
             if let note {
