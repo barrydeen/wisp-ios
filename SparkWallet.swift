@@ -497,11 +497,15 @@ final class SparkWallet: Wallet {
                 )
             )
             let txs: [WalletTransaction] = response.payments.map { payment in
-                let amountSats = Int64(payment.amount.description) ?? 0
-                let feeSats = Int64(payment.fees.description) ?? 0
                 var paymentHash = payment.id
                 var description: String? = nil
                 var bitcoinTxId: String? = nil
+                // Non-bitcoin assets. `Payment.amount` is documented as
+                // "satoshis OR token base units", so a token payment's amount
+                // must never reach the sats fields — see below.
+                var assetTicker: String? = nil
+                var assetAmount: String? = nil
+                var assetFee: String? = nil
 
                 if let details = payment.details {
                     switch details {
@@ -516,10 +520,52 @@ final class SparkWallet: Wallet {
                         bitcoinTxId = txId
                     case .withdraw(let txId):
                         bitcoinTxId = txId
+                    case .token(let metadata, let txHash, _, _, _):
+                        paymentHash = txHash
+                        assetTicker = metadata.ticker
+                        assetAmount = WalletTransaction.scaleTokenAmount(
+                            baseUnits: payment.amount.description,
+                            decimals: metadata.decimals
+                        )
+                        let rawFee = payment.fees.description
+                        if rawFee != "0" {
+                            assetFee = WalletTransaction.scaleTokenAmount(
+                                baseUnits: rawFee,
+                                decimals: metadata.decimals
+                            )
+                        }
                     default:
                         break
                     }
                 }
+
+                // `method` is the fallback discriminator — the SDK notes the
+                // details can be empty. Without metadata there are no decimals
+                // to scale by, so show the base units under a neutral label
+                // rather than passing them off as sats.
+                if assetTicker == nil, payment.method == .token {
+                    assetTicker = "tokens"
+                    assetAmount = payment.amount.description
+                    if payment.fees.description != "0" {
+                        assetFee = payment.fees.description
+                    }
+                }
+
+                // One leg of a conversion. The step list is ordered
+                // [cross-chain, AMM] for receives and [AMM, cross-chain] for
+                // sends, so the FIRST step's source is the true origin asset
+                // in both directions.
+                let conversionFromAsset = payment.conversionDetails?
+                    .conversions.first?.from.asset.ticker
+
+                let isToken = assetTicker != nil
+                // Zero for token rows: there is no honest sats value for a
+                // token transfer, and leaving these unset stops anything
+                // sats-denominated — including fiat conversion — deriving a
+                // number from it. `Int64(_:)` on the U128 description also
+                // returns nil above Int64.max, which silently became 0.
+                let amountSats = isToken ? 0 : (Int64(payment.amount.description) ?? 0)
+                let feeSats = isToken ? 0 : (Int64(payment.fees.description) ?? 0)
 
                 let isOnchain = bitcoinTxId != nil
                 // Settlement state straight from the SDK. `settledAt` used to be
@@ -557,6 +603,10 @@ final class SparkWallet: Wallet {
                 )
                 tx.status = status
                 tx.bitcoinTxId = bitcoinTxId
+                tx.assetTicker = assetTicker
+                tx.assetAmount = assetAmount
+                tx.assetFee = assetFee
+                tx.conversionFromAsset = conversionFromAsset
                 return tx
             }
             return .success(txs)

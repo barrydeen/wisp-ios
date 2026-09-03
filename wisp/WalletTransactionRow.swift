@@ -27,17 +27,26 @@ struct WalletTransactionRow: View {
                 ? ZapSender.sender(forPaymentHash: tx.paymentHash)
                 : ZapSender.recipient(forPaymentHash: tx.paymentHash))
         let profile = counterpartyPubkey.flatMap { ProfileRepository.shared.get($0) }
-        let amountColor: Color = isIncoming ? Color.wispRepostColor : .red.opacity(0.85)
+        // Green means money arrived and red means it left. A conversion is
+        // neither — nothing entered or left the wallet, it changed shape
+        // inside it — so it gets the neutral label color. The +/- sign still
+        // shows which leg of the swap this row is.
+        let amountColor: Color = tx.isConversion
+            ? .primary
+            : (isIncoming ? Color.wispRepostColor : .red.opacity(0.85))
         let sats = abs(tx.amountMsats) / 1000
         let feeSats = tx.feeMsats / 1000
         let sign = isIncoming ? "+" : "-"
         let hidden = displayMode == .hidden
         // `walletFiat` returns nil until the rate cache has loaded, so the
         // two-Text sats layout stays intact while the rate is in flight.
-        let fiatAmount: String? = displayMode == .fiat
+        // A token row has no sats value, so there is nothing to convert — the
+        // fiat rate is sats-to-currency. Falls through to the asset branch of
+        // the amount display below.
+        let fiatAmount: String? = (displayMode == .fiat && !tx.isTokenTransfer)
             ? CurrencyFormatter.walletFiat(sats: sats)
             : nil
-        let fiatFee: String? = (displayMode == .fiat && feeSats > 0)
+        let fiatFee: String? = (displayMode == .fiat && !tx.isTokenTransfer && feeSats > 0)
             ? CurrencyFormatter.walletFiat(sats: feeSats)
             : nil
 
@@ -46,6 +55,16 @@ struct WalletTransactionRow: View {
                 ZStack {
                     if let profile {
                         CachedAvatarView(url: profile.picture, size: 40)
+                    } else if tx.isConversion {
+                        // Swap glyph in the wallet accent, not a green
+                        // down-arrow: nothing entered the wallet, it changed
+                        // shape inside it.
+                        Circle()
+                            .fill(Color.wispPrimary.opacity(0.18))
+                            .frame(width: 40, height: 40)
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(Color.wispPrimary)
                     } else {
                         Circle()
                             .fill((isIncoming ? Color.wispRepostColor : Color.red).opacity(0.18))
@@ -56,7 +75,14 @@ struct WalletTransactionRow: View {
                     }
                 }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(profile?.displayString ?? (tx.description?.isEmpty == false ? tx.description! : (isIncoming ? "Received" : "Sent")))
+                    // A conversion has no counterparty and rarely a
+                    // description, so its label sits where "Received" /
+                    // "Sent" would — which is exactly what read as money
+                    // arriving from someone.
+                    Text(profile?.displayString
+                         ?? (tx.description?.isEmpty == false ? tx.description! : nil)
+                         ?? tx.conversionLabel
+                         ?? (isIncoming ? "Received" : "Sent"))
                         .font(.subheadline.weight(profile != nil ? .semibold : .regular))
                         .lineLimit(1)
                     HStack(spacing: 4) {
@@ -90,6 +116,15 @@ struct WalletTransactionRow: View {
                         Text("\(sign)\(fiatAmount)")
                             .font(.subheadline.weight(.semibold).monospacedDigit())
                             .foregroundStyle(amountColor)
+                    } else if let assetTicker = tx.assetTicker {
+                        HStack(alignment: .firstTextBaseline, spacing: 3) {
+                            Text("\(sign)\(tx.assetAmountCompact ?? "?")")
+                                .font(.subheadline.weight(.semibold).monospacedDigit())
+                                .foregroundStyle(amountColor)
+                            Text(assetTicker)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
                     } else {
                         HStack(alignment: .firstTextBaseline, spacing: 3) {
                             Text("\(sign)\(CurrencyFormatter.formatNumber(sats))")
@@ -100,7 +135,11 @@ struct WalletTransactionRow: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
-                    if !hidden, !isIncoming, feeSats > 0 {
+                    if !hidden, !isIncoming, let assetFee = tx.assetFee, let ticker = tx.assetTicker {
+                        Text("Fee: \(WalletTransaction.compactTokenAmount(assetFee)) \(ticker)")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    } else if !hidden, !isIncoming, feeSats > 0 {
                         if let fiatFee {
                             Text("Fee: \(fiatFee)")
                                 .font(.caption2)
@@ -165,6 +204,17 @@ private struct TransactionDetailPanel: View {
 
     /// Mirror of the Android note filter — drop blank values, the literal
     /// string "null", and JSON blobs (zap-request payloads start with `{`).
+    private var typeLabel: String {
+        if let from = tx.conversionFromAsset, let to = tx.assetTicker {
+            return "Conversion · \(from) → \(to)"
+        }
+        if let from = tx.conversionFromAsset {
+            return "Conversion · \(from) → sats"
+        }
+        if let ticker = tx.assetTicker { return "\(ticker) transfer" }
+        return tx.isOnchain ? "On-chain" : "Lightning"
+    }
+
     private var note: String? {
         guard let d = tx.description?.trimmingCharacters(in: .whitespacesAndNewlines),
               !d.isEmpty, d != "null", !d.hasPrefix("{") else { return nil }
@@ -177,10 +227,17 @@ private struct TransactionDetailPanel: View {
 
         VStack(alignment: .leading, spacing: 10) {
             TxDetailRow(label: "Status", value: Self.statusLabel(for: tx))
-            TxDetailRow(label: "Type", value: tx.isOnchain ? "On-chain" : "Lightning")
-            TxDetailRow(label: "Amount", value: "\(CurrencyFormatter.formatNumber(sats)) sats")
-            if feeSats > 0 {
-                TxDetailRow(label: "Network fee", value: "\(CurrencyFormatter.formatNumber(feeSats)) sats")
+            TxDetailRow(label: "Type", value: typeLabel)
+            if let ticker = tx.assetTicker {
+                TxDetailRow(label: "Amount", value: "\(tx.assetAmount ?? "?") \(ticker)")
+                if let assetFee = tx.assetFee {
+                    TxDetailRow(label: "Fee", value: "\(assetFee) \(ticker)")
+                }
+            } else {
+                TxDetailRow(label: "Amount", value: "\(CurrencyFormatter.formatNumber(sats)) sats")
+                if feeSats > 0 {
+                    TxDetailRow(label: "Network fee", value: "\(CurrencyFormatter.formatNumber(feeSats)) sats")
+                }
             }
             TxDetailRow(label: "Date", value: fullDate)
             if let note {
