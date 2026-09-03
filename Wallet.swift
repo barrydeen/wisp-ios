@@ -105,6 +105,26 @@ struct WalletTransaction: Identifiable, Codable {
     /// True when this row moved something other than bitcoin.
     var isTokenTransfer: Bool { assetTicker != nil }
 
+    /// Ticker of the asset this payment was converted *from*, when it was one
+    /// leg of a conversion — "BTC" for sats into a stablecoin, "USDB" for the
+    /// way back. Nil for an ordinary payment.
+    ///
+    /// A conversion is not income or a spend: nothing entered or left the
+    /// wallet, it changed shape inside it. Labelling one "Received" is what
+    /// the bare row did before, and it reads as money arriving from someone.
+    var conversionFromAsset: String?
+
+    var isConversion: Bool { conversionFromAsset != nil }
+
+    /// Row label for a conversion. Bitcoin reads lowercase — in this sentence
+    /// it's the asset, not a ticker symbol.
+    var conversionLabel: String? {
+        guard let from = conversionFromAsset else { return nil }
+        let upper = from.uppercased()
+        let name = (upper == "BTC" || upper == "SATS" || upper == "SAT") ? "bitcoin" : from
+        return "Converted from \(name)"
+    }
+
     /// Spark surfaces on-chain transactions with a UUID-formatted ID (contains hyphens)
     /// while Lightning payment hashes are always 64-char hex. Also true when a
     /// real Bitcoin txid was extracted from the payment details.

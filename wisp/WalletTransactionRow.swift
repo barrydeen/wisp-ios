@@ -27,7 +27,13 @@ struct WalletTransactionRow: View {
                 ? ZapSender.sender(forPaymentHash: tx.paymentHash)
                 : ZapSender.recipient(forPaymentHash: tx.paymentHash))
         let profile = counterpartyPubkey.flatMap { ProfileRepository.shared.get($0) }
-        let amountColor: Color = isIncoming ? Color.wispRepostColor : .red.opacity(0.85)
+        // Green means money arrived and red means it left. A conversion is
+        // neither — nothing entered or left the wallet, it changed shape
+        // inside it — so it gets the neutral label color. The +/- sign still
+        // shows which leg of the swap this row is.
+        let amountColor: Color = tx.isConversion
+            ? .primary
+            : (isIncoming ? Color.wispRepostColor : .red.opacity(0.85))
         let sats = abs(tx.amountMsats) / 1000
         let feeSats = tx.feeMsats / 1000
         let sign = isIncoming ? "+" : "-"
@@ -49,6 +55,16 @@ struct WalletTransactionRow: View {
                 ZStack {
                     if let profile {
                         CachedAvatarView(url: profile.picture, size: 40)
+                    } else if tx.isConversion {
+                        // Swap glyph in the wallet accent, not a green
+                        // down-arrow: nothing entered the wallet, it changed
+                        // shape inside it.
+                        Circle()
+                            .fill(Color.wispPrimary.opacity(0.18))
+                            .frame(width: 40, height: 40)
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(Color.wispPrimary)
                     } else {
                         Circle()
                             .fill((isIncoming ? Color.wispRepostColor : Color.red).opacity(0.18))
@@ -59,7 +75,14 @@ struct WalletTransactionRow: View {
                     }
                 }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(profile?.displayString ?? (tx.description?.isEmpty == false ? tx.description! : (isIncoming ? "Received" : "Sent")))
+                    // A conversion has no counterparty and rarely a
+                    // description, so its label sits where "Received" /
+                    // "Sent" would — which is exactly what read as money
+                    // arriving from someone.
+                    Text(profile?.displayString
+                         ?? (tx.description?.isEmpty == false ? tx.description! : nil)
+                         ?? tx.conversionLabel
+                         ?? (isIncoming ? "Received" : "Sent"))
                         .font(.subheadline.weight(profile != nil ? .semibold : .regular))
                         .lineLimit(1)
                     HStack(spacing: 4) {
@@ -182,6 +205,12 @@ private struct TransactionDetailPanel: View {
     /// Mirror of the Android note filter — drop blank values, the literal
     /// string "null", and JSON blobs (zap-request payloads start with `{`).
     private var typeLabel: String {
+        if let from = tx.conversionFromAsset, let to = tx.assetTicker {
+            return "Conversion · \(from) → \(to)"
+        }
+        if let from = tx.conversionFromAsset {
+            return "Conversion · \(from) → sats"
+        }
         if let ticker = tx.assetTicker { return "\(ticker) transfer" }
         return tx.isOnchain ? "On-chain" : "Lightning"
     }

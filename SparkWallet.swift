@@ -551,6 +551,13 @@ final class SparkWallet: Wallet {
                     }
                 }
 
+                // One leg of a conversion. The step list is ordered
+                // [cross-chain, AMM] for receives and [AMM, cross-chain] for
+                // sends, so the FIRST step's source is the true origin asset
+                // in both directions.
+                let conversionFromAsset = payment.conversionDetails?
+                    .conversions.first?.from.asset.ticker
+
                 let isToken = assetTicker != nil
                 // Zero for token rows: there is no honest sats value for a
                 // token transfer, and leaving these unset stops anything
@@ -599,6 +606,7 @@ final class SparkWallet: Wallet {
                 tx.assetTicker = assetTicker
                 tx.assetAmount = assetAmount
                 tx.assetFee = assetFee
+                tx.conversionFromAsset = conversionFromAsset
                 return tx
             }
             return .success(txs)
