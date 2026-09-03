@@ -176,6 +176,22 @@ private struct FollowStep: View {
                 .opacity(didLongPress ? 1 : 0.4)
                 .disabled(!didLongPress)
 
+            // Only while Continue is gated. Without it the step is a dead
+            // end for anyone whose long-press doesn't register — Touch
+            // Accommodations / AssistiveTouch, a motor impairment, or a
+            // press the recognizer just misses — and there is nothing to
+            // lose by skipping, since the gesture works app-wide whether or
+            // not it was rehearsed here. Once the press lands, Continue is
+            // enabled and this would just be a second way to do the same
+            // thing, so it goes away with the "Try it" hint.
+            if !didLongPress {
+                Button("Skip", action: onNext)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 4)
+                    .accessibilityHint("Continues without trying the long-press gesture")
+            }
+
             Spacer().frame(height: 48)
         }
         .onAppear {
