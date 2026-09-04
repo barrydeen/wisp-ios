@@ -51,11 +51,15 @@ final class ArticleViewModel {
                 isLoading = false
             }
         }
-        guard article != nil else { return }
+        guard let loaded = article else { return }
         if profiles[author] == nil {
             let got = await ProfileRepository.shared.ensure([author])
             profiles.merge(got) { _, new in new }
         }
+        // Mentions in the body are raw bech32 inside markdown, so nothing
+        // else asks for these profiles — the renderer would fall back to a
+        // short npub for every one of them.
+        hydrateProfiles(for: MarkdownBlocks.profileMentions(in: loaded.content))
     }
 
     private func parseAndEmit(_ event: NostrEvent) {

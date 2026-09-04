@@ -44,9 +44,47 @@ nonisolated enum MarkdownBlocks {
         pattern: #":([a-zA-Z0-9_-]+):"#
     )
 
+    /// The pubkey an inline entity refers to, when it refers to a person.
+    /// Nil for note / event / address refs.
+    ///
+    /// Article bodies carry mentions as raw bech32 inside markdown text, not
+    /// as parsed segments the way note content does, so resolving a name
+    /// starts by decoding the entity here.
+    static func profilePubkey(from entity: String) -> String? {
+        var bare = entity
+        for prefix in ["nostr:", "NOSTR:"] where bare.hasPrefix(prefix) {
+            bare = String(bare.dropFirst(prefix.count))
+        }
+        let lower = bare.lowercased()
+        guard lower.hasPrefix("npub1") || lower.hasPrefix("nprofile1") else { return nil }
+        guard case .profileRef(let pubkey, _)? = Nip19.decodeNostrUri(lower) else { return nil }
+        return pubkey
+    }
+
+    /// Every pubkey mentioned in an article body, so the profiles behind them
+    /// can be fetched. Without this the renderer has nothing to resolve
+    /// against and every mention falls back to a short npub.
+    static func profileMentions(in content: String) -> [String] {
+        let ns = content as NSString
+        let matches = nostrInlineRegex.matches(
+            in: content, range: NSRange(location: 0, length: ns.length)
+        )
+        var seen = Set<String>()
+        var pubkeys: [String] = []
+        for m in matches {
+            guard let pubkey = profilePubkey(from: ns.substring(with: m.range)) else { continue }
+            if seen.insert(pubkey).inserted { pubkeys.append(pubkey) }
+        }
+        return pubkeys
+    }
+
     /// Shorten a nostr bech32 entity for inline display — `@npub1xxxx…` for
     /// profile refs, `nevent1xxxx…` for the rest. Port of Android's
     /// `shortenNostrEntity`.
+    ///
+    /// Only a last resort for a person: a mention resolves to a display name
+    /// via `profilePubkey(from:)` first, and reaches this truncated bech32
+    /// only when the entity doesn't decode.
     static func shortenNostrEntity(_ entity: String) -> String {
         var bare = entity
         for prefix in ["nostr:", "NOSTR:"] where bare.hasPrefix(prefix) {
