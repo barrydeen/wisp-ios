@@ -16,6 +16,10 @@ final class WalletStore {
     private(set) var isConnected: Bool = false
     private(set) var lastStatus: String?
     private(set) var transactions: [WalletTransaction] = []
+    /// On-chain deposits waiting to be claimed (Spark only). Surfaced on the
+    /// receive screen so a deposit the automatic claimer can't settle —
+    /// network fees above the claim cap, mostly — isn't silently stuck.
+    private(set) var onchainDeposits: OnchainDepositSummary?
 
     /// Backup search/publish progress for the Spark relay-backup flow.
     private(set) var relayBackupSearchState: BackupSearchState = .idle
@@ -34,6 +38,7 @@ final class WalletStore {
     private var statusTask: Task<Void, Never>?
     private var paymentTask: Task<Void, Never>?
     private var balanceTask: Task<Void, Never>?
+    private var depositTask: Task<Void, Never>?
 
     enum BackupSearchState: Equatable {
         case idle
@@ -136,6 +141,7 @@ final class WalletStore {
         lightningAddress = nil
         nwcNodeAlias = nil
         nwcMethods = []
+        onchainDeposits = nil
         relayBackupSearchState = .idle
         relayBackupPublishState = .idle
     }
@@ -379,12 +385,14 @@ final class WalletStore {
         lightningAddress = nil
         nwcNodeAlias = nil
         nwcMethods = []
+        onchainDeposits = nil
     }
 
     func disconnect() {
         statusTask?.cancel(); statusTask = nil
         paymentTask?.cancel(); paymentTask = nil
         balanceTask?.cancel(); balanceTask = nil
+        depositTask?.cancel(); depositTask = nil
         wallet?.disconnect()
         wallet = nil
         isConnected = false
@@ -407,6 +415,20 @@ final class WalletStore {
                 guard let self else { return }
                 self.balanceMsats = msats
                 WalletCache.saveBalance(msats, for: self.keypair.pubkey)
+            }
+        }
+        // On-chain deposits arrive with no user action and take confirmations
+        // to mature, so nothing on screen prompts a refresh at the moment one
+        // lands. Watching from the store rather than a view means the wallet
+        // knows about a pending deposit wherever the user happens to be —
+        // waiting on the receive screen must not be the price of finding out
+        // that money arrived.
+        if wallet is SparkWallet {
+            depositTask = Task { [weak self] in
+                while !Task.isCancelled {
+                    await self?.refreshOnchainDeposits()
+                    try? await Task.sleep(for: .seconds(30))
+                }
             }
         }
     }
@@ -473,6 +495,74 @@ final class WalletStore {
     func makeInvoice(amountSats: Int64, description: String, expirySecs: Int64 = 3600) async -> Result<String, WalletError> {
         guard let wallet else { return .failure(.notConnected) }
         return await wallet.makeInvoice(amountMsats: amountSats * 1000, description: description, expirySecs: expirySecs)
+    }
+
+    // MARK: - On-chain send (Spark only)
+
+    /// Whether this wallet can send on-chain at all. NWC has no such method,
+    /// so the send screen shouldn't accept a Bitcoin address on one.
+    var supportsOnchainSend: Bool { wallet is SparkWallet }
+
+    func prepareSendOnchain(
+        address: String,
+        amountSats: Int64,
+        speed: OnchainSendSpeed,
+        drainAll: Bool = false
+    ) async -> Result<OnchainSendQuote, WalletError> {
+        guard let spark = wallet as? SparkWallet else {
+            return .failure(.other("This wallet can't send Bitcoin on-chain."))
+        }
+        return await spark.prepareSendOnchain(
+            address: address,
+            amountSats: amountSats,
+            speed: speed,
+            drainAll: drainAll
+        )
+    }
+
+    func executeSendOnchain(quote: OnchainSendQuote) async -> Result<String, WalletError> {
+        guard let spark = wallet as? SparkWallet else {
+            return .failure(.other("This wallet can't send Bitcoin on-chain."))
+        }
+        let result = await spark.executeSendOnchain(quote: quote)
+        if case .success = result {
+            await refreshTransactions()
+            _ = await fetchBalance()
+        }
+        return result
+    }
+
+    // MARK: - On-chain receive (Spark only)
+
+    /// Current (or a fresh) Bitcoin deposit address.
+    func receiveOnchainAddress(newAddress: Bool = false) async -> Result<String, WalletError> {
+        guard let spark = wallet as? SparkWallet else { return .failure(.notConnected) }
+        return await spark.receiveOnchainAddress(newAddress: newAddress)
+    }
+
+    /// Refresh the list of deposits waiting to be claimed.
+    func refreshOnchainDeposits() async {
+        guard let spark = wallet as? SparkWallet else {
+            onchainDeposits = nil
+            return
+        }
+        onchainDeposits = await spark.listOnchainDeposits()
+    }
+
+    /// Claim a deposit the automatic claimer couldn't settle. `feeSats` nil
+    /// retries at the automatic cap; a value claims at exactly that cap after
+    /// the user confirmed the cost. Refreshes the deposit list either way —
+    /// success removes the row, failure updates its error — plus history.
+    func claimOnchainDeposit(_ deposit: OnchainDeposit, feeSats: Int64?) async -> Result<Void, WalletError> {
+        guard let spark = wallet as? SparkWallet else { return .failure(.notConnected) }
+        let result = await spark.claimOnchainDeposit(
+            txid: deposit.txid,
+            vout: deposit.vout,
+            feeSats: feeSats.map(UInt64.init)
+        )
+        await refreshOnchainDeposits()
+        await refreshTransactions()
+        return result
     }
 
     private(set) var hasMoreTransactions: Bool = false

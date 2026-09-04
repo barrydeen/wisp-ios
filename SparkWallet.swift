@@ -264,6 +264,246 @@ final class SparkWallet: Wallet {
         }
     }
 
+    // MARK: - On-chain send
+
+    /// Quote held between the user seeing a fee and confirming it, so the send
+    /// that goes out is the one that was signed off.
+    private var preparedOnchainSend: (quote: OnchainSendQuote, prepared: PrepareSendPaymentResponse)?
+
+    /// Quote sending `amountSats` to a Bitcoin address. Fees are added on top,
+    /// so the recipient receives exactly the amount and the wallet spends the
+    /// quote's total.
+    /// `drainAll` empties the wallet: the amount becomes the whole spendable
+    /// balance and the fee comes out of it rather than on top. Sending the
+    /// full balance any other way can never succeed, because there's nothing
+    /// left to pay the fee with.
+    func prepareSendOnchain(
+        address: String,
+        amountSats: Int64,
+        speed: OnchainSendSpeed,
+        drainAll: Bool = false
+    ) async -> Result<OnchainSendQuote, WalletError> {
+        guard let sdk else { return .failure(.notConnected) }
+        do {
+            let requestedSats: Int64
+            var strandsTokens = false
+            if drainAll {
+                // Quote against a synced balance — a stale cached figure
+                // produces a fee for an amount that no longer exists.
+                let info = try await sdk.getInfo(request: GetInfoRequest(ensureSynced: true))
+                requestedSats = Int64(info.balanceSats)
+                guard requestedSats > 0 else {
+                    return .failure(.other("This wallet has no spendable balance."))
+                }
+                // Draining moves bitcoin only. A wallet imported from an app
+                // that deals in stablecoins can hold a token balance this send
+                // won't carry, and Wisp has no way to convert it.
+                strandsTokens = info.tokenBalances.values.contains { $0.balance > 0 }
+            } else {
+                guard amountSats > 0 else { return .failure(.other("Enter an amount to send.")) }
+                requestedSats = amountSats
+            }
+
+            let prepared = try await sdk.prepareSendPayment(
+                request: PrepareSendPaymentRequest(
+                    paymentRequest: .input(input: address),
+                    amount: BInt(requestedSats),
+                    tokenIdentifier: nil,
+                    conversionOptions: nil,
+                    feePolicy: drainAll ? .feesIncluded : .feesExcluded
+                )
+            )
+
+            guard case .bitcoinAddress(_, let feeQuote) = prepared.paymentMethod else {
+                // The input parsed as something else — a Lightning invoice or
+                // Spark address in the address field. Refuse rather than
+                // silently sending somewhere the user didn't intend.
+                return .failure(.other("That isn't a Bitcoin address."))
+            }
+
+            let tier: SendOnchainSpeedFeeQuote
+            switch speed {
+            case .slow: tier = feeQuote.speedSlow
+            case .medium: tier = feeQuote.speedMedium
+            case .fast: tier = feeQuote.speedFast
+            }
+            let feeSats = Int64(tier.userFeeSat) + Int64(tier.l1BroadcastFeeSat)
+
+            // `amountSats` on the quote is always what lands at the
+            // destination. Draining spends the balance and the fee comes out
+            // of it, so what arrives is the balance minus the fee; otherwise
+            // the recipient gets exactly what was asked for.
+            let deliveredSats = drainAll ? max(0, requestedSats - feeSats) : requestedSats
+            guard deliveredSats > 0 else {
+                return .failure(.other("The fee is larger than the balance. Nothing would arrive."))
+            }
+
+            let quote = OnchainSendQuote(
+                address: address,
+                amountSats: deliveredSats,
+                feeSats: feeSats,
+                speed: speed,
+                leavesTokensBehind: strandsTokens
+            )
+            preparedOnchainSend = (quote, prepared)
+            return .success(quote)
+        } catch {
+            let friendly = Self.friendlyPayError(error)
+            emit("Quote failed: \(friendly)")
+            return .failure(.other(friendly))
+        }
+    }
+
+    /// Send the quote the user confirmed. Refuses anything else.
+    func executeSendOnchain(quote: OnchainSendQuote) async -> Result<String, WalletError> {
+        guard let sdk else { return .failure(.notConnected) }
+        // Only ever send the quote that was actually signed off. A mismatch
+        // means the screen drifted from what the user agreed to — re-quote
+        // rather than send a different amount or destination.
+        guard let held = preparedOnchainSend, held.quote == quote else {
+            return .failure(.other("This quote expired. Check the amount and try again."))
+        }
+
+        let sdkSpeed: OnchainConfirmationSpeed
+        switch quote.speed {
+        case .slow: sdkSpeed = .slow
+        case .medium: sdkSpeed = .medium
+        case .fast: sdkSpeed = .fast
+        }
+
+        do {
+            emit("Sending on-chain…")
+            let response = try await sdk.sendPayment(
+                request: SendPaymentRequest(
+                    prepareResponse: held.prepared,
+                    options: .bitcoinAddress(confirmationSpeed: sdkSpeed),
+                    idempotencyKey: nil
+                )
+            )
+            preparedOnchainSend = nil
+            // A failed payment comes back WITHOUT throwing, so the status has
+            // to be inspected rather than trusted — same shape as payInvoice.
+            if case .failed = response.payment.status {
+                emit("On-chain send failed")
+                return .failure(.other("The send failed — your sats were not sent."))
+            }
+            await refreshBalance()
+            return .success(response.payment.id)
+        } catch {
+            let friendly = Self.friendlyPayError(error)
+            emit("On-chain send failed: \(friendly)")
+            return .failure(.other(friendly))
+        }
+    }
+
+    // MARK: - On-chain receive address
+
+    /// Get the Bitcoin deposit address, or rotate to a fresh one. Funds sent
+    /// to it confirm on-chain and are then claimed into the spendable balance
+    /// by `claimDeposits` above. Rotation never invalidates the previous
+    /// address — the SDK keeps old ones working for future deposits.
+    func receiveOnchainAddress(newAddress: Bool = false) async -> Result<String, WalletError> {
+        guard let sdk else { return .failure(.notConnected) }
+        do {
+            let response = try await sdk.receivePayment(
+                request: ReceivePaymentRequest(
+                    paymentMethod: .bitcoinAddress(newAddress: newAddress ? true : nil)
+                )
+            )
+            return .success(response.paymentRequest)
+        } catch {
+            return .failure(.other(error.localizedDescription))
+        }
+    }
+
+    /// Snapshot of deposits waiting to be claimed, for the receive screen.
+    /// The auto-claimer handles the routine cases; this surfaces the ones it
+    /// can't settle (mostly network fees above the claim cap) so a deposit
+    /// is never silently stuck.
+    func listOnchainDeposits() async -> OnchainDepositSummary {
+        guard let sdk else { return OnchainDepositSummary(deposits: []) }
+        do {
+            let response = try await sdk.listUnclaimedDeposits(request: ListUnclaimedDepositsRequest())
+            return OnchainDepositSummary(deposits: response.deposits.map(Self.onchainDeposit))
+        } catch {
+            emit("Failed to list deposits: \(error.localizedDescription)")
+            return OnchainDepositSummary(deposits: [])
+        }
+    }
+
+    /// Maps the SDK's deposit type onto the UI model. Kept here so
+    /// `OnchainDeposit` stays SDK-free and unit-testable.
+    private static func onchainDeposit(_ deposit: DepositInfo) -> OnchainDeposit {
+        let failure: OnchainDeposit.Failure?
+        if let claimError = deposit.claimError {
+            switch claimError {
+            case .maxDepositClaimFeeExceeded(_, _, _, let requiredFeeSats, _):
+                failure = .feeExceeded(requiredSats: Int64(requiredFeeSats))
+            case .missingUtxo:
+                failure = .missingUtxo
+            case .generic(let message):
+                failure = .other(message)
+            default:
+                failure = .other(String(describing: claimError))
+            }
+        } else {
+            failure = nil
+        }
+        let instantClaim: OnchainDeposit.InstantClaim?
+        switch deposit.instantClaimStatus {
+        case .submitted:
+            instantClaim = .submitted
+        case .declined(let reason):
+            switch reason {
+            case .noPlan:
+                instantClaim = .declined(.noPlan)
+            case .feeExceeded(_, let quotedBps, let quotedSats):
+                instantClaim = .declined(.feeExceeded(
+                    quotedSats: Int64(quotedSats),
+                    quotedBps: Int(quotedBps)
+                ))
+            case .submissionFailed:
+                instantClaim = .declined(.submissionFailed)
+            }
+        case .none:
+            instantClaim = nil
+        }
+        return OnchainDeposit(
+            txid: deposit.txid,
+            vout: deposit.vout,
+            amountSats: Int64(deposit.amountSats),
+            isMature: deposit.isMature,
+            instantClaim: instantClaim,
+            failure: failure
+        )
+    }
+
+    /// Re-claim a deposit the automatic claimer couldn't settle. `feeSats`
+    /// caps the claim fee: pass the SDK-required fee surfaced from
+    /// `claimError` to accept a cost above the automatic limit — the UI
+    /// confirms that with the user first, so paying more is a deliberate
+    /// choice. `nil` retries at the same cap the automatic claimer uses.
+    func claimOnchainDeposit(txid: String, vout: UInt32, feeSats: UInt64?) async -> Result<Void, WalletError> {
+        guard let sdk else { return .failure(.notConnected) }
+        let maxFee: MaxFee
+        if let feeSats {
+            maxFee = .fixed(amount: feeSats)
+        } else {
+            maxFee = .networkRecommended(leewaySatPerVbyte: 5)
+        }
+        do {
+            _ = try await sdk.claimDeposit(
+                request: ClaimDepositRequest(txid: txid, vout: vout, maxFee: maxFee)
+            )
+            emit("Claimed on-chain deposit")
+            await refreshBalance()
+            return .success(())
+        } catch {
+            emit("Failed to claim deposit: \(error.localizedDescription)")
+            return .failure(.other(error.localizedDescription))
+        }
+    }
+
     // MARK: - Lightning address
 
     func fetchLightningAddress() async -> String? {
@@ -342,6 +582,26 @@ final class SparkWallet: Wallet {
                 maxSats: Int64(pr.maxSendable / 1000),
                 label: pr.address ?? pr.domain
             ))
+        case .bitcoinAddress(let d):
+            return .bitcoinAddress(address: d.address, amountSats: nil)
+        case .bip21(let d):
+            // A BIP-21 URI can carry several payment methods. Prefer a
+            // Lightning invoice when one is offered — it settles instantly and
+            // costs less — and fall back to the on-chain address.
+            for method in d.paymentMethods {
+                if case .bolt11Invoice(let inv) = method {
+                    return .bolt11(amountSats: inv.amountMsat.map { Int64($0 / 1000) })
+                }
+            }
+            for method in d.paymentMethods {
+                if case .bitcoinAddress(let addr) = method {
+                    return .bitcoinAddress(
+                        address: addr.address,
+                        amountSats: d.amountSat.map(Int64.init)
+                    )
+                }
+            }
+            return .unknown
         default:
             return .unknown
         }

@@ -18,13 +18,25 @@ enum WalletInputType {
     case sparkLnurl(info: ResolvedLnurlInfo)
     /// NWC (or fallback) path: resolve LNURL manually from the address string.
     case lightningAddressNeedsResolve(String, info: ResolvedLnurlInfo?)
+    /// A Bitcoin address, or a BIP-21 URI carrying one. `amountSats` is set
+    /// only when the URI specified an amount; a bare address never does, so
+    /// the user is asked for one.
+    case bitcoinAddress(address: String, amountSats: Int64?)
 
     var needsAmountEntry: Bool {
         switch self {
         case .bolt11(let amt): return amt == nil
         case .sparkLnurl, .lightningAddressNeedsResolve: return true
+        case .bitcoinAddress(_, let amt): return amt == nil
         case .unknown: return false
         }
+    }
+
+    /// On-chain sends need a fee quote and a confirmation speed, which no
+    /// other payment type does.
+    var isOnchain: Bool {
+        if case .bitcoinAddress = self { return true }
+        return false
     }
 
     var isPayable: Bool {
