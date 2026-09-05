@@ -853,7 +853,11 @@ struct PostCardView: View {
             }
             Button("Cancel", role: .cancel) { muteCandidate = nil }
         } message: {
-            Text("Their posts will be hidden from your feed and replaced with a placeholder in threads.")
+            // Was a sentence describing feed and thread behavior specifically.
+            // It had drifted — muting also clears them from notifications and
+            // publishes to the NIP-51 mute list — and the detail wasn't worth
+            // the reading on a dialog whose title already says what it does.
+            Text("Their posts will be hidden.")
         }
         .confirmationDialog(
             settings.fiatModeEnabled ? "Set up a wallet to send money" : "Set up a wallet to send zaps",
