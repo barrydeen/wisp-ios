@@ -62,6 +62,7 @@ A built-in non-custodial Lightning wallet powered by [Breez SDK (Spark)](https:/
 - **Transaction history** with counterparty resolution from zap receipts
 - **Fiat conversion** — sats ⇄ fiat display with cached exchange rates
 - **QR scanning** for invoices and addresses
+- **Payment targets** (NIP-A3, kind 10133) — publish `payto:` addresses for other chains and payment apps (Bitcoin, Monero, Ethereum, Cash App, …) from Settings, and pay anyone else's from their profile or the zap sheet
 
 ### Safety & Content Filtering
 
@@ -232,6 +233,7 @@ wisp.xcodeproj
 | [78](https://github.com/nostr-protocol/nips/blob/master/78.md) | App-specific data (wallet backup) | ✅ |
 | [88](https://github.com/nostr-protocol/nips/blob/master/88.md) | Polls | ✅ |
 | 92 | Inline media metadata (imeta) | ✅ |
+| A3 | `payto:` payment targets (kind 10133) | ✅ |
 
 Also: **Blossom** media servers, **NWC** transport, and **bolt11** invoice parsing.
 
@@ -371,6 +373,8 @@ Contributions are welcome. Wisp is open source and community help makes it bette
 ## License
 
 Wisp is released under the [MIT License](LICENSE).
+
+Payment-target coin marks (`Pt*.imageset` in `wisp/Assets.xcassets`) are derived from [spothq/cryptocurrency-icons](https://github.com/spothq/cryptocurrency-icons), released under CC0-1.0.
 
 ```
 MIT License

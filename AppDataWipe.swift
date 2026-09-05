@@ -27,6 +27,7 @@ enum AppDataWipe {
         EngagementRepository.shared.clear()
         PollTallyRepository.shared.clear()
         EmojiRepository.shared.clear()
+        PaymentTargetRepository.shared.clear()
         NoteSourceTracker.shared.clear()
         LiveStreamRepository.shared.clear()
         LivePlayerStore.shared.releaseAll()

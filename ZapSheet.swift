@@ -56,6 +56,11 @@ struct ZapSheet: View {
     /// amountSats follows to 0 — disabling the Zap button.
     @State private var hasTypedAmount = false
     @State private var showLargeZapConfirm = false
+    /// Recipient's NIP-A3 payment targets (kind 10133), fetched on appear. Shown
+    /// as an "Other ways to pay" row so a recipient who takes monero/on-chain
+    /// isn't a dead end when zapping is unavailable — or simply unwanted.
+    @State private var paymentTargets: [NipA3.PaymentTarget] = []
+    @State private var selectedPaymentTarget: NipA3.PaymentTarget?
     /// Local "copied" pill so we don't poke the shared `SuccessToast.shared`
     /// — that store also drives the MainView overlay sitting behind this
     /// sheet, and firing it produces two pills: one peeking behind the
@@ -153,6 +158,13 @@ struct ZapSheet: View {
             && store.activeWallet != nil
             && amountSats > 0
             && amountSats <= Self.maxZapSats
+    }
+
+    /// Whether a lightning zap is possible at all for this recipient — the
+    /// amount-independent half of `canZap`. Drives where the NIP-A3 payment
+    /// targets are placed in the sheet.
+    private var canZapRecipient: Bool {
+        recipientLud16 != nil && store.activeWallet != nil
     }
 
     private var exceedsMax: Bool {
@@ -256,6 +268,14 @@ struct ZapSheet: View {
                     VStack(spacing: 16) {
                         recipientRow
 
+                        // When zapping isn't possible here — no wallet, or the
+                        // recipient publishes no lightning address — the payment
+                        // targets ARE the answer, so they lead rather than sit
+                        // below a disabled amount field.
+                        if !canZapRecipient {
+                            paymentTargetsSection
+                        }
+
                         amountHero
 
                         presetStrip
@@ -276,6 +296,10 @@ struct ZapSheet: View {
                         privacyRow
 
                         instantZapRow
+
+                        if canZapRecipient {
+                            paymentTargetsSection
+                        }
                     }
                     .padding(.horizontal, 20)
                     .padding(.top, 8)
@@ -339,6 +363,12 @@ struct ZapSheet: View {
             .sheet(isPresented: $showEditPresets) {
                 EditPresetsSheet(presetsRaw: $presetsRaw, settings: settings)
             }
+            .sheet(item: $selectedPaymentTarget) { target in
+                PaymentTargetSheet(target: target)
+            }
+            .task {
+                paymentTargets = await PaymentTargetRepository.shared.fetch(pubkey: recipientPubkey)
+            }
             .confirmationDialog(
                 settings.fiatModeEnabled
                     ? "Send \(CurrencyFormatter.short(sats: amountSats))?"
@@ -394,6 +424,29 @@ struct ZapSheet: View {
                     amountFocused = true
                 }
             }
+        }
+    }
+
+    // MARK: - Other ways to pay (NIP-A3)
+
+    /// Chips for the recipient's published payment targets. Tapping one opens its
+    /// QR / copy / open-in-wallet sheet. Sits below the zap controls when the
+    /// recipient can be zapped, and directly under the recipient row when they
+    /// can't — see the placement note in `body`.
+    @ViewBuilder
+    private var paymentTargetsSection: some View {
+        if !paymentTargets.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Other ways to pay")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                PaymentTargetChipFlow(targets: paymentTargets) { target in
+                    selectedPaymentTarget = target
+                }
+            }
+            .padding(.top, 4)
         }
     }
 

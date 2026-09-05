@@ -11,6 +11,19 @@
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>lightning</string>
+		<!-- NIP-A3 payment targets: `canOpenURL` only answers truthfully for
+		     schemes declared here, so the "Open in wallet" button in
+		     PaymentTargetSheet needs each native scheme NipA3 can emit. -->
+		<string>bitcoin</string>
+		<string>bitcoincash</string>
+		<string>dash</string>
+		<string>ethereum</string>
+		<string>litecoin</string>
+		<string>monero</string>
+		<string>nano</string>
+		<string>solana</string>
+		<string>zcash</string>
+		<string>payto</string>
 	</array>
 	<key>GIDClientID</key>
 	<string>410412439051-tj9a37iln81vlsmqtun5nfmo1k8h4qme.apps.googleusercontent.com</string>

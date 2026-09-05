@@ -176,6 +176,11 @@
 		4CFF090100000000000000FE /* DrawerRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF090000000000000000FE /* DrawerRow.swift */; };
 		4CFF090300000000000000FF /* SidebarDrawerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF090200000000000000FF /* SidebarDrawerView.swift */; };
 		4CFF0A0100000000000000B1 /* LightningPaySheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF0A0000000000000000B1 /* LightningPaySheet.swift */; };
+		4CFFA3010000000000000A31 /* NipA3.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFFA3000000000000000A31 /* NipA3.swift */; };
+		4CFFA3010000000000000A32 /* PaymentTargetRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFFA3000000000000000A32 /* PaymentTargetRepository.swift */; };
+		4CFFA3010000000000000A33 /* PaymentTargetGlyph.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFFA3000000000000000A33 /* PaymentTargetGlyph.swift */; };
+		4CFFA3010000000000000A34 /* PaymentTargetSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFFA3000000000000000A34 /* PaymentTargetSheet.swift */; };
+		4CFFA3010000000000000A35 /* PaymentTargetsSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFFA3000000000000000A35 /* PaymentTargetsSettingsView.swift */; };
 		4CFF0A0100000000000000F0 /* SearchViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF0A0000000000000000F0 /* SearchViewModel.swift */; };
 		4CFF0A0300000000000000F1 /* SearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF0A0200000000000000F1 /* SearchView.swift */; };
 		4CFF0B0100000000000000B1 /* ArticleFeedPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF0B0000000000000000B1 /* ArticleFeedPreview.swift */; };
@@ -526,6 +531,11 @@
 		4CFF090000000000000000FE /* DrawerRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DrawerRow.swift; sourceTree = "<group>"; };
 		4CFF090200000000000000FF /* SidebarDrawerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarDrawerView.swift; sourceTree = "<group>"; };
 		4CFF0A0000000000000000B1 /* LightningPaySheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LightningPaySheet.swift; sourceTree = "<group>"; };
+		4CFFA3000000000000000A31 /* NipA3.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NipA3.swift; sourceTree = "<group>"; };
+		4CFFA3000000000000000A32 /* PaymentTargetRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaymentTargetRepository.swift; sourceTree = "<group>"; };
+		4CFFA3000000000000000A33 /* PaymentTargetGlyph.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaymentTargetGlyph.swift; sourceTree = "<group>"; };
+		4CFFA3000000000000000A34 /* PaymentTargetSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaymentTargetSheet.swift; sourceTree = "<group>"; };
+		4CFFA3000000000000000A35 /* PaymentTargetsSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaymentTargetsSettingsView.swift; sourceTree = "<group>"; };
 		4CFF0A0000000000000000F0 /* SearchViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchViewModel.swift; sourceTree = "<group>"; };
 		4CFF0A0200000000000000F1 /* SearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchView.swift; sourceTree = "<group>"; };
 		4CFF0B0000000000000000B1 /* ArticleFeedPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArticleFeedPreview.swift; sourceTree = "<group>"; };
@@ -796,6 +806,11 @@
 				4CFF010A00000000000000A6 /* LightningInvoiceView.swift */,
 				4CFF0A0000000000000000B1 /* LightningPaySheet.swift */,
 				4CFF011800000000000000AD /* LnurlPayableView.swift */,
+				4CFFA3000000000000000A31 /* NipA3.swift */,
+				4CFFA3000000000000000A32 /* PaymentTargetRepository.swift */,
+				4CFFA3000000000000000A33 /* PaymentTargetGlyph.swift */,
+				4CFFA3000000000000000A34 /* PaymentTargetSheet.swift */,
+				4CFFA3000000000000000A35 /* PaymentTargetsSettingsView.swift */,
 				4CFF010C00000000000000A7 /* QuotedNoteView.swift */,
 				4CAA770100000000000000B1 /* ArticleRoute.swift */,
 				4CAA770300000000000000B2 /* ArticleCache.swift */,
@@ -1309,6 +1324,11 @@
 				4CFF010B00000000000000A6 /* LightningInvoiceView.swift in Sources */,
 				4CFF0A0100000000000000B1 /* LightningPaySheet.swift in Sources */,
 				4CFF011900000000000000AD /* LnurlPayableView.swift in Sources */,
+				4CFFA3010000000000000A31 /* NipA3.swift in Sources */,
+				4CFFA3010000000000000A32 /* PaymentTargetRepository.swift in Sources */,
+				4CFFA3010000000000000A33 /* PaymentTargetGlyph.swift in Sources */,
+				4CFFA3010000000000000A34 /* PaymentTargetSheet.swift in Sources */,
+				4CFFA3010000000000000A35 /* PaymentTargetsSettingsView.swift in Sources */,
 				4CFF010D00000000000000A7 /* QuotedNoteView.swift in Sources */,
 				4CAA770200000000000000B1 /* ArticleRoute.swift in Sources */,
 				4CAA770400000000000000B2 /* ArticleCache.swift in Sources */,

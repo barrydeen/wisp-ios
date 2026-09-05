@@ -17,6 +17,7 @@ struct SidebarDrawerView: View {
     var onOpenKeys: () -> Void = {}
     var onOpenDraftsScheduled: () -> Void = {}
     var onOpenCustomEmojis: () -> Void = {}
+    var onOpenPaymentTargets: () -> Void = {}
     var onOpenLists: () -> Void = {}
     var onOpenPolls: () -> Void = {}
     var onOpenHashtagSets: () -> Void = {}
@@ -374,6 +375,12 @@ struct SidebarDrawerView: View {
             DrawerRow(icon: "point.3.connected.trianglepath.dotted", label: "Social Graph", indented: true) { onOpenSocialGraph() }
             DrawerRow(icon: "face.smiling", label: "Custom Emojis", indented: true) {
                 onOpenCustomEmojis()
+            }
+            // A target, matching Dark Wisp's `Icons.Outlined.TrackChanges`.
+            // `creditcard` was already the Wallet row's icon a few lines up,
+            // so the two read as the same destination.
+            DrawerRow(icon: "target", label: "Payment Targets", indented: true) {
+                onOpenPaymentTargets()
             }
             // DrawerRow(icon: "heart", label: "Relay Health", indented: true) { onClose() }
             // DrawerRow(icon: "ladybug", label: "Console", indented: true) { onClose() }

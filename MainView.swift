@@ -39,6 +39,7 @@ struct MainView: View {
     @State private var showInterfaceSettings = false
     @State private var showKeys = false
     @State private var showCustomEmojis = false
+    @State private var showPaymentTargets = false
     @State private var showHashtagSets = false
     @State private var showLists = false
     @State private var showPolls = false
@@ -188,6 +189,10 @@ struct MainView: View {
                 onOpenCustomEmojis: {
                     closeDrawer()
                     showCustomEmojis = true
+                },
+                onOpenPaymentTargets: {
+                    closeDrawer()
+                    showPaymentTargets = true
                 },
                 onOpenLists: {
                     closeDrawer()
@@ -380,6 +385,11 @@ struct MainView: View {
         .sheet(isPresented: $showCustomEmojis) {
             NavigationStack {
                 CustomEmojiSettingsView(keypair: keypair)
+            }
+        }
+        .sheet(isPresented: $showPaymentTargets) {
+            NavigationStack {
+                PaymentTargetsSettingsView(keypair: keypair)
             }
         }
         .sheet(isPresented: $showLists) {

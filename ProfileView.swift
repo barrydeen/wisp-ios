@@ -352,6 +352,8 @@ private struct ProfileHeaderView: View {
     /// Own profile: shows the receive QR for the user's own lightning
     /// address (you can't zap yourself).
     @State private var showLightningReceive = false
+    /// NIP-A3 payment target whose QR / copy sheet is open, if any.
+    @State private var selectedPaymentTarget: NipA3.PaymentTarget?
     /// Whether the bio is currently shown in full or capped to the
     /// collapsed height. Long bios start collapsed so the lightning
     /// address, follow stats, and tab bar stay above the fold; the
@@ -467,6 +469,8 @@ private struct ProfileHeaderView: View {
                     .onTapGesture { handleLightningTap(lud16) }
                 }
 
+                paymentTargetRows
+
                 statRow
                     .padding(.top, 6)
             }
@@ -510,6 +514,77 @@ private struct ProfileHeaderView: View {
                     allowOpenInWallet: false
                 )
             }
+        }
+        .sheet(item: $selectedPaymentTarget) { target in
+            PaymentTargetSheet(target: target)
+        }
+    }
+
+    // MARK: - NIP-A3 payment targets
+
+    /// The profile's kind-10133 payment targets. Tapping one opens its QR / copy /
+    /// open-in-wallet sheet — the same affordance as the no-wallet lightning row
+    /// above.
+    ///
+    /// Lightning keeps a full-width row so its address can be shown inline: it's
+    /// short and human-readable, unlike a 95-character Monero string. Everything
+    /// else goes in a three-column grid of mark + name, with the raw address
+    /// shown (and copyable) in the sheet that opens on tap.
+    @ViewBuilder
+    private var paymentTargetRows: some View {
+        let targets = viewModel.paymentTargets
+        if !targets.isEmpty {
+            let lightning = targets.filter { $0.type == "lightning" }
+            let grid = targets.filter { $0.type != "lightning" }
+
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(lightning) { target in
+                    Button {
+                        selectedPaymentTarget = target
+                    } label: {
+                        HStack(spacing: 6) {
+                            PaymentTargetGlyph(type: target.type, size: 14, tint: Color.wispZapColor)
+                            Text(NipA3.displayName(target.type))
+                                .font(.caption)
+                                .foregroundStyle(.primary)
+                            Text(target.authority)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                if !grid.isEmpty {
+                    LazyVGrid(
+                        columns: Array(repeating: GridItem(.flexible(), alignment: .leading), count: 3),
+                        alignment: .leading,
+                        spacing: 8
+                    ) {
+                        ForEach(grid) { target in
+                            Button {
+                                selectedPaymentTarget = target
+                            } label: {
+                                HStack(spacing: 5) {
+                                    PaymentTargetGlyph(type: target.type, size: 14, tint: Color.wispZapColor)
+                                    Text(NipA3.displayName(target.type))
+                                        .font(.caption)
+                                        .foregroundStyle(.primary)
+                                        .lineLimit(1)
+                                        .truncationMode(.tail)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+            .padding(.top, 2)
         }
     }
 

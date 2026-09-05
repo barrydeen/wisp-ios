@@ -60,6 +60,10 @@ final class ProfileViewModel {
     var isLoadingGroups: Bool = false
     var groupsLoaded: Bool = false
 
+    /// NIP-A3 payment targets (kind 10133) published by this profile. Empty until
+    /// the on-demand fetch lands — the header renders what it has and grows.
+    var paymentTargets: [NipA3.PaymentTarget] = []
+
     var relayList: [RelayConfigEntry] = []
     var isLoadingRelays: Bool = false
     var relaysLoaded: Bool = false
@@ -195,6 +199,7 @@ final class ProfileViewModel {
             group.addTask { [weak self] in await self?.loadTargetWriteRelays() }
             group.addTask { [weak self] in await self?.loadFollowerCount() }
             group.addTask { [weak self] in await self?.loadDeletions() }
+            group.addTask { [weak self] in await self?.loadPaymentTargets() }
         }
 
         // Now that we know the target's write relays, load notes/replies in
@@ -340,6 +345,16 @@ final class ProfileViewModel {
             return nil
         }
         targetWriteRelays = writes
+    }
+
+    /// NIP-A3 payment targets for this profile. Seeded synchronously from the
+    /// repository cache so a revisit paints them immediately, then refreshed
+    /// from the author's write relays + indexers.
+    private func loadPaymentTargets() async {
+        if let cached = PaymentTargetRepository.shared.targets(for: pubkey) {
+            paymentTargets = cached
+        }
+        paymentTargets = await PaymentTargetRepository.shared.fetch(pubkey: pubkey)
     }
 
     // MARK: - Notes (recency)

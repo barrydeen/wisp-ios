@@ -106,9 +106,6 @@ struct PostCardView: View {
     /// anchored-popup feel without animating the launching icon.
     @State private var showRepostMenu = false
     @State private var showOverflowMenu = false
-    /// True when the user tapped Zap but no wallet is configured. Surfaces a
-    /// confirmation prompt that can launch the Wallet tab to set one up.
-    @State private var showWalletSetupPrompt = false
     /// Cached pubkey + display name of the user about to be muted, captured
     /// when the menu item is tapped so the confirmation dialog has stable
     /// values to render and act on regardless of whether the underlying
@@ -134,6 +131,9 @@ struct PostCardView: View {
         case quoteCompose
         case replyCompose
         case emojiLibrary
+        /// No wallet configured: offer the author's NIP-A3 payment targets
+        /// instead of dead-ending, with the wallet-setup call to action inside.
+        case paymentTargets
 
         var id: Int {
             switch self {
@@ -142,6 +142,7 @@ struct PostCardView: View {
             case .quoteCompose: return 2
             case .replyCompose: return 3
             case .emojiLibrary: return 4
+            case .paymentTargets: return 5
             }
         }
     }
@@ -826,6 +827,12 @@ struct PostCardView: View {
                     activeSheet = nil
                     sendReaction(picked)
                 })
+            case .paymentTargets:
+                let resolved = resolveRepost()
+                PaymentTargetsOnlySheet(
+                    recipientPubkey: resolved.event.pubkey,
+                    recipientName: resolved.profile?.displayString
+                )
             }
         }
         .confirmationDialog(
@@ -854,20 +861,6 @@ struct PostCardView: View {
             Button("Cancel", role: .cancel) { muteCandidate = nil }
         } message: {
             Text("Their posts will be hidden from your feed and replaced with a placeholder in threads.")
-        }
-        .confirmationDialog(
-            settings.fiatModeEnabled ? "Set up a wallet to send money" : "Set up a wallet to send zaps",
-            isPresented: $showWalletSetupPrompt,
-            titleVisibility: .visible
-        ) {
-            Button("Set Up Wallet") {
-                NotificationCenter.default.post(name: .openWalletTab, object: nil)
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text(settings.fiatModeEnabled
-                 ? "Connect a Lightning wallet (Spark or NWC) from the Wallet tab to send money."
-                 : "Connect a Lightning wallet (Spark or NWC) from the Wallet tab to send zaps.")
         }
         .alert(item: $actionAlert) { alert in
             Alert(title: Text(alert.title), message: Text(alert.message), dismissButton: .default(Text("OK")))
@@ -2198,7 +2191,10 @@ struct PostCardView: View {
         let resolved = resolveRepost()
         let target = resolved.event
         guard let store = walletStore, store.mode != nil else {
-            showWalletSetupPrompt = true
+            // No wallet — but the author may publish NIP-A3 payment targets,
+            // which are payable without one. The sheet lists those and carries
+            // the wallet-setup call to action for when they publish none.
+            activeSheet = .paymentTargets
             return
         }
         if let composePresenter {

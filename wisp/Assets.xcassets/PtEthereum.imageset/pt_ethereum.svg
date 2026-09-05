@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+<!-- cryptocurrency-icons (spothq), CC0-1.0. Glyph only, no disc; tinted at the call site via template rendering. -->
+  <path fill="#000000" fill-rule="evenodd" fill-opacity="0.602" d="M 16.498 4 v 8.87 l 7.497 3.35 z"/>
+  <path fill="#000000" fill-rule="evenodd" d="M 16.498 4 L 9 16.22 l 7.498 -3.35 z"/>
+  <path fill="#000000" fill-rule="evenodd" fill-opacity="0.602" d="M 16.498 21.968 v 6.027 L 24 17.616 z"/>
+  <path fill="#000000" fill-rule="evenodd" d="M 16.498 27.995 v -6.028 L 9 17.616 z"/>
+  <path fill="#000000" fill-rule="evenodd" fill-opacity="0.2" d="M 16.498 20.573 l 7.497 -4.353 l -7.497 -3.348 z"/>
+  <path fill="#000000" fill-rule="evenodd" fill-opacity="0.602" d="M 9 16.22 l 7.498 4.353 v -7.701 z"/>
+</svg>
