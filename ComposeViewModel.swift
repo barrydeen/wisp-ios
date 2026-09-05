@@ -1329,10 +1329,28 @@ final class ComposeViewModel {
         }
     }
 
-    private func determineKind() -> Int {
+    /// NIP-22 tag set for this compose session, or nil when the reply isn't
+    /// answering an externally-rooted comment. Computed once and consulted by
+    /// both `determineKind` and `buildBaseTags` so the kind and the tags can
+    /// never disagree — a kind-1111 carrying NIP-10 `e`/`p` tags (or a kind-1
+    /// carrying `I`/`K`) would be malformed either way.
+    private var nip22ReplyTags: [[String]]? {
+        guard !pollEnabled, !galleryMode else { return nil }
+        guard case .reply(let parent, _) = mode else { return nil }
+        return Nip22.buildReplyTags(to: parent, relayHint: "")
+    }
+
+    /// Internal (not private) so `ComposeReplyKindTests` can assert the
+    /// published kind directly — the alternative is a full signing +
+    /// broadcast round-trip.
+    func determineKind() -> Int {
         if pollEnabled {
             return isZapPoll ? Nip69.kindZapPoll : Nip88.kindPoll
         }
+        // NIP-22 forbids answering a comment with a kind-1: the reply has to
+        // stay kind-1111 to remain attached to the external root (the web
+        // page), which a NIP-10 `e` tag can't express.
+        if nip22ReplyTags != nil { return Nip22.kindComment }
         guard galleryMode else { return 1 }
         if attachments.contains(where: { $0.isVideo }) {
             // Pick orientation from the first video.
@@ -1581,7 +1599,9 @@ final class ComposeViewModel {
         return out
     }
 
-    private func buildBaseTags(kind: Int, materializedContent: String) -> [[String]] {
+    /// Internal (not private) for the same reason as `determineKind`: the
+    /// reply tag set is worth asserting without publishing.
+    func buildBaseTags(kind: Int, materializedContent: String) -> [[String]] {
         var tags: [[String]] = []
 
         // Reply / quote contextual tags.
@@ -1589,6 +1609,14 @@ final class ComposeViewModel {
         case .new:
             break
         case .reply(let parent, let root):
+            // Replying to a NIP-22 comment: emit its `I`/`K` root scope plus
+            // lowercase `e`/`k`/`p` at the parent, instead of NIP-10 threading.
+            // NIP-10 tags here would detach the reply from the web page the
+            // thread is about.
+            if let commentTags = nip22ReplyTags {
+                tags.append(contentsOf: commentTags)
+                break
+            }
             if let root {
                 tags.append(["e", root.id, "", "root"])
                 if root.id != parent.id {
