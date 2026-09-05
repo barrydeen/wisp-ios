@@ -6,6 +6,7 @@ import UIKit
 /// hashtags), custom markdown block rendering, engagement action bar, and a
 /// threaded comments section rendered with `PostCardView` rows.
 struct ArticleView: View {
+    @State private var showOverflowMenu = false
     let route: ArticleRoute
     let keypair: Keypair
     @Binding var path: NavigationPath
@@ -55,6 +56,9 @@ struct ArticleView: View {
                 .foregroundStyle(Color.wispOnSurface)
                 .lineLimit(1)
             Spacer(minLength: 0)
+            if let article = viewModel.article {
+                overflowMenu(article)
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
@@ -137,9 +141,28 @@ struct ArticleView: View {
                 text: viewModel.title ?? "Untitled",
                 emojiMap: emojiMap,
                 profiles: viewModel.profiles,
+                onProfileTap: { path.append(ProfileRoute(pubkey: $0)) },
+                onHashtagTap: { path.append(HashtagFeedRoute(tag: $0)) },
                 font: scaledUIFont(28, .semibold),
                 color: UIColor(Color.wispOnSurface)
             )
+
+            // The author's own standfirst. Feeds already show it on the
+            // article card, so a reader who tapped in from one arrived at a
+            // page that had dropped the line that made them tap.
+            if let summary = viewModel.summary?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !summary.isEmpty {
+                Spacer().frame(height: 10)
+                ArticleInlineText(
+                    text: summary,
+                    emojiMap: emojiMap,
+                    profiles: viewModel.profiles,
+                    onProfileTap: { path.append(ProfileRoute(pubkey: $0)) },
+                    onHashtagTap: { path.append(HashtagFeedRoute(tag: $0)) },
+                    font: scaledUIFont(17, .regular),
+                    color: UIColor(Color.wispOnSurfaceVariant)
+                )
+            }
 
             Spacer().frame(height: 12)
 
@@ -166,6 +189,20 @@ struct ArticleView: View {
                 }
             }
             .buttonStyle(.plain)
+
+            // The action bar sits below the whole body, which on a long read
+            // is several screens down — easy to finish an article and never
+            // see that zapping was an option. Its own row rather than beside
+            // the byline: overlaid on that row it collided with any display
+            // name long enough to reach it.
+            if !activeUserIsWatchOnly {
+                Spacer().frame(height: 12)
+                ArticleZapRow(
+                    article: article,
+                    keypair: keypair,
+                    authorProfile: viewModel.profiles[article.pubkey]
+                )
+            }
 
             if !viewModel.hashtags.isEmpty {
                 Spacer().frame(height: 12)
@@ -204,6 +241,99 @@ struct ArticleView: View {
         return formatter.string(from: Date(timeIntervalSince1970: TimeInterval(epoch)))
     }
 
+    // MARK: - Overflow menu
+
+    /// Share / copy actions for the article.
+    ///
+    /// An article is addressable, so its identifier is an `naddr` rather than
+    /// the `nevent` a note would use: an `naddr` keeps pointing at the article
+    /// after the author edits it, where an event id names one specific
+    /// revision that editing leaves behind.
+    @ViewBuilder
+    private func overflowMenu(_ article: NostrEvent) -> some View {
+        Button {
+            showOverflowMenu = true
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(Color.wispOnSurfaceVariant)
+                .frame(width: 32, height: 32)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: $showOverflowMenu) {
+            VStack(spacing: 0) {
+                articleMenuItem(title: "Share", systemImage: "square.and.arrow.up") {
+                    showOverflowMenu = false
+                    if let link = articleShareURL(article) {
+                        ShareSheetPresenter.present(url: link)
+                    }
+                }
+                Divider()
+                articleMenuItem(title: "Copy Link", systemImage: "link") {
+                    showOverflowMenu = false
+                    guard let link = articleShareURL(article) else { return }
+                    UIPasteboard.general.string = link
+                    QuickFollowToast.shared.show("Link copied")
+                }
+                Divider()
+                articleMenuItem(title: "Copy Article ID", systemImage: "lanyardcard") {
+                    showOverflowMenu = false
+                    guard let naddr = articleNaddr(article) else { return }
+                    UIPasteboard.general.string = naddr
+                    QuickFollowToast.shared.show("Article ID copied")
+                }
+                Divider()
+                articleMenuItem(title: "Copy Author npub", systemImage: "person.text.rectangle") {
+                    showOverflowMenu = false
+                    guard let bytes = Hex.decode(article.pubkey),
+                          let npub = Nip19.npubEncode(pubkey: Array(bytes)) else { return }
+                    UIPasteboard.general.string = npub
+                    QuickFollowToast.shared.show("npub copied")
+                }
+            }
+            .frame(minWidth: 240)
+            .presentationCompactAdaptation(.popover)
+        }
+    }
+
+    private func articleMenuItem(
+        title: String,
+        systemImage: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Text(title)
+                Spacer(minLength: 0)
+                Image(systemName: systemImage)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// `naddr` for the article, with up to two relay hints so a recipient's
+    /// client can find it.
+    private func articleNaddr(_ article: NostrEvent) -> String? {
+        let dTag = article.tags.first(where: { $0.count >= 2 && $0[0] == "d" })?[1] ?? ""
+        guard let pubkeyBytes = Hex.decode(article.pubkey) else { return nil }
+        let relays = Array(NoteSourceTracker.shared.relays(for: article.id).prefix(2))
+        return Nip19.naddrEncode(
+            kind: article.kind,
+            pubkey32: Array(pubkeyBytes),
+            dTag: dTag,
+            relays: relays
+        )
+    }
+
+    private func articleShareURL(_ article: NostrEvent) -> String? {
+        guard let naddr = articleNaddr(article) else { return nil }
+        return "https://wisp.talk/thread/\(naddr)"
+    }
+
     // MARK: - Markdown blocks
 
     @ViewBuilder
@@ -214,6 +344,8 @@ struct ArticleView: View {
                 text: text,
                 emojiMap: emojiMap,
                 profiles: viewModel.profiles,
+                onProfileTap: { path.append(ProfileRoute(pubkey: $0)) },
+                onHashtagTap: { path.append(HashtagFeedRoute(tag: $0)) },
                 font: headingUIFont(level),
                 color: UIColor(Color.wispOnSurface)
             )
@@ -225,6 +357,8 @@ struct ArticleView: View {
                 text: text,
                 emojiMap: emojiMap,
                 profiles: viewModel.profiles,
+                onProfileTap: { path.append(ProfileRoute(pubkey: $0)) },
+                onHashtagTap: { path.append(HashtagFeedRoute(tag: $0)) },
                 font: scaledUIFont(15, .regular),
                 color: UIColor(Color.wispOnSurface)
             )
@@ -287,6 +421,8 @@ struct ArticleView: View {
                     text: text,
                     emojiMap: emojiMap,
                     profiles: viewModel.profiles,
+                    onProfileTap: { path.append(ProfileRoute(pubkey: $0)) },
+                    onHashtagTap: { path.append(HashtagFeedRoute(tag: $0)) },
                     font: scaledUIFont(15, .regular),
                     color: UIColor(Color.wispOnSurfaceVariant),
                     italic: true
@@ -380,6 +516,90 @@ struct ArticleView: View {
 }
 
 // MARK: - Action bar
+
+/// Zap total and a zap action, on their own row under the byline.
+///
+/// Deliberately duplicates what `ArticleActionBar` already offers: that bar is
+/// below the article body, so on a long-form post it can be several screens
+/// past where a reader decides they liked something. Sharing
+/// `EngagementRepository` means the count here and the count at the bottom are
+/// the same number, not two tallies that can disagree.
+private struct ArticleZapRow: View {
+    let article: NostrEvent
+    let keypair: Keypair
+    let authorProfile: ProfileData?
+
+    @Environment(WalletStore.self) private var walletStore: WalletStore?
+    @State private var engagementRepo = EngagementRepository.shared
+    @State private var showZapSheet = false
+
+    private var box: EngagementBox { engagementRepo.box(for: article.id) }
+    private var iZapped: Bool { box.counts.zappers.contains { $0.pubkey == keypair.pubkey } }
+
+    var body: some View {
+        let sats = box.counts.zapSats
+        HStack(spacing: 12) {
+            // No total until there is one — "0 sats" under a byline reads as
+            // a verdict on the article rather than an invitation.
+            if sats > 0 {
+                HStack(spacing: 5) {
+                    Image(systemName: "bolt.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Color.wispZapColor)
+                    // `full` carries its own unit — "21,000 sats" or "$12.34"
+                    // in fiat mode. Appending "sats" to it printed "$0.973
+                    // sats", which is two currencies in one number.
+                    Text(CurrencyFormatter.full(sats: sats))
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.wispOnSurface)
+                    Text("zapped")
+                        .font(.caption)
+                        .foregroundStyle(Color.wispOnSurfaceVariant)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("\(CurrencyFormatter.full(sats: sats)) zapped")
+            }
+
+            Spacer(minLength: 0)
+
+            Button {
+                showZapSheet = true
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "bolt.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                    Text(iZapped ? "Zap again" : "Zap this article")
+                        .font(.caption.weight(.semibold))
+                }
+                .foregroundStyle(iZapped ? Color.wispZapColor : Color.wispPrimary)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(
+                    Capsule().fill(
+                        (iZapped ? Color.wispZapColor : Color.wispPrimary).opacity(0.12)
+                    )
+                )
+            }
+            .buttonStyle(.plain)
+        }
+        .frame(maxWidth: .infinity)
+        .sheet(isPresented: $showZapSheet) {
+            if let store = walletStore {
+                ZapSheet(
+                    store: store,
+                    recipientPubkey: article.pubkey,
+                    recipientLud16: authorProfile?.lud16,
+                    recipientName: authorProfile?.displayString,
+                    eventId: article.id,
+                    extraTags: [],
+                    forcePrivate: false,
+                    onSuccess: { _ in },
+                    dismiss: { showZapSheet = false }
+                )
+            }
+        }
+    }
+}
 
 /// Slim engagement bar for the article event: reply / react / repost / zap /
 /// bookmark with counts. Mirrors `PostCardView.actionBar`'s wiring through
@@ -566,6 +786,8 @@ private struct ArticleInlineText: View {
     /// the representable re-renders when a mentioned profile arrives — the
     /// same reason `emojiVersion` exists.
     var profiles: [String: ProfileData] = [:]
+    var onProfileTap: ((String) -> Void)? = nil
+    var onHashtagTap: ((String) -> Void)? = nil
     let font: UIFont
     let color: UIColor
     var italic: Bool = false
@@ -581,7 +803,9 @@ private struct ArticleInlineText: View {
             color: color,
             linkColor: UIColor(Color.wispPrimary),
             codeBackground: UIColor(Color.wispSurfaceVariant),
-            emojiVersion: emojiCache.version
+            emojiVersion: emojiCache.version,
+            onProfileTap: onProfileTap,
+            onHashtagTap: onHashtagTap
         )
     }
 }
@@ -596,6 +820,8 @@ private struct ArticleInlineTextRepresentable: UIViewRepresentable {
     let codeBackground: UIColor
     /// Forces SwiftUI to re-evaluate when the emoji cache picks up a new image.
     let emojiVersion: Int
+    var onProfileTap: ((String) -> Void)? = nil
+    var onHashtagTap: ((String) -> Void)? = nil
 
     func makeUIView(context: Context) -> UITextView {
         // Explicit TextKit 1 stack (NSLayoutManager-backed container). iOS 16+
@@ -612,10 +838,14 @@ private struct ArticleInlineTextRepresentable: UIViewRepresentable {
         container.lineFragmentPadding = 0
         layout.addTextContainer(container)
 
-        let tv = UITextView(frame: .zero, textContainer: container)
+        // `ContentSizingTextView` rather than a bare UITextView so internal
+        // links can be intercepted. UIKit's default `.link` handling opens a
+        // URL externally, which is right for a markdown link to the web and
+        // useless for `wisp-profile://` or `wisp-hashtag://` — those have no
+        // system handler, so a tap on a mention or tag did nothing at all.
+        let tv = ContentSizingTextView(frame: .zero, textContainer: container)
         tv.backgroundColor = .clear
         tv.isEditable = false
-        // Selectable so `.link` runs respond to taps; editing stays off.
         tv.isSelectable = true
         tv.isScrollEnabled = false
         tv.textContainerInset = .zero
@@ -623,6 +853,7 @@ private struct ArticleInlineTextRepresentable: UIViewRepresentable {
         // Keep the attributed string's own link styling (wispPrimary +
         // underline) instead of the tint-colored UIKit default.
         tv.linkTextAttributes = [:]
+        tv.linksEnabled = true
         return tv
     }
 
@@ -655,6 +886,21 @@ private struct ArticleInlineTextRepresentable: UIViewRepresentable {
                 if let url = emojiMap[shortcode] {
                     EmojiImageCache.shared.ensureLoaded(url)
                 }
+            }
+        }
+        (uiView as? ContentSizingTextView)?.onLinkTap = { url in
+            switch url.scheme?.lowercased() {
+            case "wisp-profile":
+                let pubkey = url.host
+                    ?? url.absoluteString.replacingOccurrences(of: "wisp-profile://", with: "")
+                onProfileTap?(pubkey)
+            case "wisp-hashtag":
+                let raw = url.host
+                    ?? url.absoluteString.replacingOccurrences(of: "wisp-hashtag://", with: "")
+                onHashtagTap?(raw.removingPercentEncoding ?? raw)
+            default:
+                // Ordinary markdown links keep opening externally.
+                UIApplication.shared.open(url)
             }
         }
         uiView.attributedText = ArticleInlineFormatter.build(
@@ -769,6 +1015,23 @@ private enum ArticleInlineFormatter {
     // MARK: Inline scan (port of the Android char-by-char formatter)
 
     private static let nostrPrefixes = ["nostr:", "nevent1", "nprofile1", "naddr1", "npub1", "note1"]
+
+    /// A hashtag body: letters, digits, or underscore. Matches what the
+    /// composer will accept, and stops `#` in ordinary prose ("C# is",
+    /// "issue #4 — ") from being painted as a tag.
+    private static func hashtagLength(in ns: NSString, from idx: Int) -> Int {
+        var end = idx + 1
+        while end < ns.length {
+            let c = ns.character(at: end)
+            let scalar = UnicodeScalar(c)
+            let isWord = scalar.map {
+                CharacterSet.alphanumerics.contains($0) || $0 == "_"
+            } ?? false
+            if !isWord { break }
+            end += 1
+        }
+        return end - (idx + 1)
+    }
 
     private static func appendFormatted(
         _ text: String,
@@ -913,6 +1176,22 @@ private enum ArticleInlineFormatter {
                 } else {
                     appendChar()
                 }
+            } else if c == 0x23 /* # */, hashtagLength(in: ns, from: i) > 0,
+                      // Only at a word boundary — "C#" and "issue#4" aren't tags.
+                      i == 0 || !CharacterSet.alphanumerics.contains(
+                          UnicodeScalar(ns.character(at: i - 1)) ?? UnicodeScalar(32)
+                      ) {
+                let length = hashtagLength(in: ns, from: i)
+                let tag = ns.substring(with: NSRange(location: i + 1, length: length))
+                flushPlain()
+                var attrs = baseAttrs
+                attrs[.foregroundColor] = linkColor
+                let encoded = tag.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? tag
+                if let url = URL(string: "wisp-hashtag://\(encoded)") {
+                    attrs[.link] = url
+                }
+                out.append(NSAttributedString(string: "#\(tag)", attributes: attrs))
+                i += 1 + length
             } else if hasNostrPrefix(at: i) {
                 let searchRange = NSRange(location: i, length: len - i)
                 if let m = MarkdownBlocks.nostrInlineRegex.firstMatch(in: text, range: searchRange),
@@ -935,7 +1214,11 @@ private enum ArticleInlineFormatter {
                         // collide with the space after the mention.
                         let name = (resolved?.displayString ?? Nip19.shortNpub(hex: pubkey))
                             .replacingOccurrences(of: "\\s+$", with: "", options: .regularExpression)
-                        out.append(NSAttributedString(string: "@\(name)", attributes: attrs))
+                        var mentionAttrs = attrs
+                        if let url = URL(string: "wisp-profile://\(pubkey)") {
+                            mentionAttrs[.link] = url
+                        }
+                        out.append(NSAttributedString(string: "@\(name)", attributes: mentionAttrs))
                     } else {
                         out.append(NSAttributedString(
                             string: MarkdownBlocks.shortenNostrEntity(entity),
