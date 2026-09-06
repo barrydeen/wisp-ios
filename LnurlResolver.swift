@@ -12,7 +12,10 @@ struct ResolvedLnurlInfo {
 
 enum WalletInputType {
     case unknown
-    case bolt11(amountSats: Int64?)
+    /// `invoice` carries the bolt11 string when it arrived inside something
+    /// else — a BIP-21 URI that offers both an address and an invoice. Paying
+    /// needs the invoice itself, not the URI it was wrapped in.
+    case bolt11(amountSats: Int64?, invoice: String? = nil)
     /// Spark SDK has already parsed this — payRequest is an opaque box that
     /// WalletStore unpacks when calling the SDK.
     case sparkLnurl(info: ResolvedLnurlInfo)
@@ -25,7 +28,7 @@ enum WalletInputType {
 
     var needsAmountEntry: Bool {
         switch self {
-        case .bolt11(let amt): return amt == nil
+        case .bolt11(let amt, _): return amt == nil
         case .sparkLnurl, .lightningAddressNeedsResolve: return true
         case .bitcoinAddress(_, let amt): return amt == nil
         case .unknown: return false
@@ -41,7 +44,7 @@ enum WalletInputType {
 
     var isPayable: Bool {
         switch self {
-        case .bolt11(let amt): return amt != nil
+        case .bolt11(let amt, _): return amt != nil
         default: return false
         }
     }

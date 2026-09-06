@@ -90,6 +90,38 @@ struct OnchainSendTests {
         #expect(quote(leavesTokensBehind: true) != quote(leavesTokensBehind: false))
     }
 
+    // MARK: - Paying a BIP-21 that carries an invoice
+
+    /// A BIP-21 URI can offer an address and a Lightning invoice. Taking the
+    /// invoice means paying *the invoice*, not the URI it arrived in — the
+    /// URI doesn't decode, so dropping the string broke every such paste.
+    @Test func bolt11CarriesTheInvoiceWhenItCameFromBip21() {
+        let type = WalletInputType.bolt11(amountSats: 1_000, invoice: "lnbc10n1pexample")
+        guard case .bolt11(let amount, let invoice) = type else {
+            Issue.record("expected bolt11, got \(type)")
+            return
+        }
+        #expect(amount == 1_000)
+        #expect(invoice == "lnbc10n1pexample")
+    }
+
+    /// A directly pasted invoice has nothing to carry — the input itself is
+    /// the invoice.
+    @Test func directlyPastedInvoiceCarriesNothing() {
+        guard case .bolt11(_, let invoice) = WalletInputType.bolt11(amountSats: nil) else {
+            Issue.record("expected bolt11")
+            return
+        }
+        #expect(invoice == nil)
+    }
+
+    /// An amountless invoice still needs an amount from the user, carried or
+    /// not — the gate is the amount, not where the invoice came from.
+    @Test func carriedInvoiceStillNeedsAnAmountWhenTheInvoiceOmitsOne() {
+        #expect(WalletInputType.bolt11(amountSats: nil, invoice: "lnbc1p").needsAmountEntry)
+        #expect(!WalletInputType.bolt11(amountSats: 500, invoice: "lnbc1p").needsAmountEntry)
+    }
+
     // MARK: - Speed tiers
 
     @Test func everySpeedIsLabeled() {

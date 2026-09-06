@@ -80,8 +80,6 @@ struct OnchainReceiveTests {
         #expect(!deposit().isClaimInFlight)
     }
 
-    /// The ceiling we pay without asking stays well under a percent — above
-    /// it the user is asked rather than charged.
     // MARK: - Failure messages
 
     @Test func feeExceededMessageShowsRequiredFee() {
@@ -113,7 +111,6 @@ struct OnchainReceiveTests {
         #expect(!summary.isEmpty)
         #expect(summary.pendingSats == 150_000)
         #expect(summary.claimable.map(\.vout) == [0, 2])
-        #expect(summary.awaitingConfirmations.map(\.vout) == [1])
     }
 
     @Test func emptySummary() {
@@ -121,6 +118,5 @@ struct OnchainReceiveTests {
         #expect(summary.isEmpty)
         #expect(summary.pendingSats == 0)
         #expect(summary.claimable.isEmpty)
-        #expect(summary.awaitingConfirmations.isEmpty)
     }
 }

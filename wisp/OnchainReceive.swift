@@ -105,8 +105,5 @@ struct OnchainDepositSummary: Equatable, Sendable {
     /// Deposits that can be claimed right now.
     var claimable: [OnchainDeposit] { deposits.filter(\.isClaimable) }
 
-    /// Confirmed but not yet claimable, so the screen can say "waiting for
-    /// confirmations" rather than showing a dead button.
-    var awaitingConfirmations: [OnchainDeposit] { deposits.filter { !$0.isMature } }
 }
 

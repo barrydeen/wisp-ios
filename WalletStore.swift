@@ -558,7 +558,10 @@ final class WalletStore {
         let result = await spark.claimOnchainDeposit(
             txid: deposit.txid,
             vout: deposit.vout,
-            feeSats: feeSats.map(UInt64.init)
+            // `UInt64.init` traps on a negative. The SDK can't produce one,
+            // but the conversion is the only place a bad value would crash
+            // rather than fail.
+            feeSats: feeSats.map { UInt64(max($0, 0)) }
         )
         await refreshOnchainDeposits()
         await refreshTransactions()

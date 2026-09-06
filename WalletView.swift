@@ -800,7 +800,7 @@ struct SendInvoiceSheet: View {
     private var canProceed: Bool {
         if trimmedInvoice.isEmpty { return false }
         switch inputType {
-        case .bolt11(let amt): return amt != nil
+        case .bolt11(let amt, _): return amt != nil
         case .sparkLnurl, .lightningAddressNeedsResolve: return amountSats != nil
         case .bitcoinAddress(_, let uriAmount):
             // Nothing is sent on-chain until a fee has been quoted and shown,
@@ -814,7 +814,7 @@ struct SendInvoiceSheet: View {
     private var needsAmountField: Bool {
         switch inputType {
         case .sparkLnurl, .lightningAddressNeedsResolve: return true
-        case .bolt11(let amt): return amt == nil
+        case .bolt11(let amt, _): return amt == nil
         case .bitcoinAddress(_, let amt): return amt == nil && !sendMax
         default: return false
         }
@@ -822,7 +822,7 @@ struct SendInvoiceSheet: View {
 
     private var buttonLabel: String {
         switch inputType {
-        case .bolt11(let amt): return amt != nil ? "Pay" : "Next"
+        case .bolt11(let amt, _): return amt != nil ? "Pay" : "Next"
         case .sparkLnurl, .lightningAddressNeedsResolve: return amountSats != nil ? "Pay" : "Next"
         // On-chain is two steps: quote the fee, then send what was quoted.
         case .bitcoinAddress: return onchainQuote == nil ? "Get fee quote" : "Send on-chain"
@@ -1046,7 +1046,7 @@ struct SendInvoiceSheet: View {
                 }
 
                 // On-chain: destination, speed, and the quoted fee
-                if case .bitcoinAddress(let address, _) = inputType {
+                if case .bitcoinAddress(let address, _) = inputType, store.supportsOnchainSend {
                     onchainSendSection(address: address)
                 }
 
@@ -1271,6 +1271,9 @@ struct SendInvoiceSheet: View {
     }
 
     private func pay() async {
+        // `.disabled(inFlight)` on the button only takes effect after a
+        // re-render, so a second tap in the same frame reaches here.
+        guard !inFlight else { return }
         inFlight = true; defer { inFlight = false }
         status = nil
         let input = trimmedInvoice
@@ -1282,8 +1285,10 @@ struct SendInvoiceSheet: View {
             guard sendMax || sats != nil else { return }
             await sendOnchain(address: address, sats: sats ?? 0)
             return
-        case .bolt11:
-            result = await store.payInvoice(normalizeInvoice(input))
+        case .bolt11(_, let carried):
+            // A BIP-21 that offered an invoice hands it over here; `input` is
+            // the URI, which `payInvoice` can't decode.
+            result = await store.payInvoice(carried ?? normalizeInvoice(input))
         case .sparkLnurl, .lightningAddressNeedsResolve:
             guard let sats = amountSats else { return }
             result = await store.payLightningAddress(input, amountSats: sats)
@@ -1438,10 +1443,9 @@ struct ReceiveInvoiceSheet: View {
             if onchainAddress == nil {
                 await loadOnchainAddress(newAddress: false)
             }
-            while !Task.isCancelled {
-                await store.refreshOnchainDeposits()
-                try? await Task.sleep(for: .seconds(15))
-            }
+            // One refresh on open; `WalletStore` polls from here on, so a
+            // second loop in the view would just double the traffic.
+            await store.refreshOnchainDeposits()
         }
         .alert(
             "Claim deposit?",
@@ -1450,7 +1454,7 @@ struct ReceiveInvoiceSheet: View {
                 set: { if !$0 { depositPendingFeeConfirmation = nil } }
             )
         ) {
-            Button("Claim", role: .destructive) {
+            Button("Claim") {
                 if let deposit = depositPendingFeeConfirmation,
                    case .feeExceeded(let sats) = deposit.failure {
                     Task { await claim(deposit, feeSats: sats) }

@@ -266,9 +266,18 @@ final class SparkWallet: Wallet {
 
     // MARK: - On-chain send
 
+    /// How long a quoted fee stays good for. On-chain fee rates move, and a
+    /// quote left open on screen shouldn't execute at yesterday's rate.
+    private static let quoteValiditySecs: TimeInterval = 600
+
     /// Quote held between the user seeing a fee and confirming it, so the send
     /// that goes out is the one that was signed off.
-    private var preparedOnchainSend: (quote: OnchainSendQuote, prepared: PrepareSendPaymentResponse)?
+    private var preparedOnchainSend: (
+        quote: OnchainSendQuote,
+        prepared: PrepareSendPaymentResponse,
+        idempotencyKey: String,
+        quotedAt: Date
+    )?
 
     /// Quote sending `amountSats` to a Bitcoin address. Fees are added on top,
     /// so the recipient receives exactly the amount and the wallet spends the
@@ -345,7 +354,7 @@ final class SparkWallet: Wallet {
                 speed: speed,
                 leavesTokensBehind: strandsTokens
             )
-            preparedOnchainSend = (quote, prepared)
+            preparedOnchainSend = (quote, prepared, UUID().uuidString, Date())
             return .success(quote)
         } catch {
             let friendly = Self.friendlyPayError(error)
@@ -363,6 +372,21 @@ final class SparkWallet: Wallet {
         guard let held = preparedOnchainSend, held.quote == quote else {
             return .failure(.other("This quote expired. Check the amount and try again."))
         }
+        // A fee quoted long enough ago is not the fee this send will pay —
+        // execute it and the user either overpays or watches a transaction
+        // sit unconfirmed at a rate the mempool has moved past.
+        guard Date().timeIntervalSince(held.quotedAt) < Self.quoteValiditySecs else {
+            preparedOnchainSend = nil
+            return .failure(.other("This quote is out of date. Check the fee and try again."))
+        }
+        // Consume before the first suspension. Two taps landing in the same
+        // frame both reach here — the button's `.disabled` only applies after
+        // a re-render — and with the quote cleared only after `sendPayment`
+        // returned, both passed the equality check above and both broadcast.
+        // A Lightning double-send fails closed because the SDK rejects an
+        // already-paid invoice; an address plus an amount has no such
+        // protection, so both succeed and the user pays twice.
+        preparedOnchainSend = nil
 
         let sdkSpeed: OnchainConfirmationSpeed
         switch quote.speed {
@@ -377,10 +401,11 @@ final class SparkWallet: Wallet {
                 request: SendPaymentRequest(
                     prepareResponse: held.prepared,
                     options: .bitcoinAddress(confirmationSpeed: sdkSpeed),
-                    idempotencyKey: nil
+                    // The SDK executes a given key exactly once, so even if a
+                    // send is somehow retried the SSP won't broadcast twice.
+                    idempotencyKey: held.idempotencyKey
                 )
             )
-            preparedOnchainSend = nil
             // A failed payment comes back WITHOUT throwing, so the status has
             // to be inspected rather than trusted — same shape as payInvoice.
             if case .failed = response.payment.status {
@@ -421,15 +446,24 @@ final class SparkWallet: Wallet {
     /// can't settle (mostly network fees above the claim cap) so a deposit
     /// is never silently stuck.
     func listOnchainDeposits() async -> OnchainDepositSummary {
-        guard let sdk else { return OnchainDepositSummary(deposits: []) }
+        guard let sdk else { return lastKnownDeposits }
         do {
             let response = try await sdk.listUnclaimedDeposits(request: ListUnclaimedDepositsRequest())
-            return OnchainDepositSummary(deposits: response.deposits.map(Self.onchainDeposit))
+            let summary = OnchainDepositSummary(deposits: response.deposits.map(Self.onchainDeposit))
+            lastKnownDeposits = summary
+            return summary
         } catch {
+            // Returning empty here made a pending deposit vanish from the
+            // banner on any transient relay hiccup — the one moment a user is
+            // watching for it. Keep the last known state instead.
             emit("Failed to list deposits: \(error.localizedDescription)")
-            return OnchainDepositSummary(deposits: [])
+            return lastKnownDeposits
         }
     }
+
+    /// Last successful deposit snapshot, so a failed refresh doesn't erase
+    /// money the user is waiting on.
+    private var lastKnownDeposits = OnchainDepositSummary(deposits: [])
 
     /// Maps the SDK's deposit type onto the UI model. Kept here so
     /// `OnchainDeposit` stays SDK-free and unit-testable.
@@ -590,7 +624,12 @@ final class SparkWallet: Wallet {
             // costs less — and fall back to the on-chain address.
             for method in d.paymentMethods {
                 if case .bolt11Invoice(let inv) = method {
-                    return .bolt11(amountSats: inv.amountMsat.map { Int64($0 / 1000) })
+                    // Carry the invoice itself — the caller is holding a
+                    // BIP-21 URI, which `payInvoice` can't decode.
+                    return .bolt11(
+                        amountSats: inv.amountMsat.map { Int64($0 / 1000) },
+                        invoice: inv.invoice.bolt11
+                    )
                 }
             }
             for method in d.paymentMethods {
