@@ -19,6 +19,9 @@ struct WalletView: View {
     @State private var setupMode: WalletMode? = nil
     @State private var showSend = false
     @State private var showReceive = false
+    /// Which tab the receive sheet opens on — the pending-deposit banner
+    /// sends the user straight to Bitcoin.
+    @State private var receiveInitialMethod: ReceiveInvoiceSheet.ReceiveMethod = .lightning
     @State private var showAllTransactions = false
     @AppStorage private var balanceDisplayRaw: String
     @AppStorage("walletBalanceUnit") private var balanceUnitRaw: String = WalletBalanceUnit.sats.rawValue
@@ -83,8 +86,16 @@ struct WalletView: View {
         }
         .sheet(isPresented: $showReceive) {
             NavigationStack {
-                ReceiveInvoiceSheet(store: store, dismiss: { showReceive = false })
+                ReceiveInvoiceSheet(
+                    store: store,
+                    dismiss: { showReceive = false },
+                    initialMethod: receiveInitialMethod
+                )
             }
+        }
+        .onChange(of: showReceive) { _, shown in
+            // Reset so the next plain tap on Receive opens on Lightning.
+            if !shown { receiveInitialMethod = .lightning }
         }
         .sheet(isPresented: $showAllTransactions) {
             NavigationStack {
@@ -126,6 +137,15 @@ struct WalletView: View {
                     // Seed backup warning (Spark + unacknowledged only)
                     if store.mode == .spark && !store.seedBackupAcknowledged {
                         seedBackupBanner
+                            .padding(.horizontal, 16)
+                            .padding(.bottom, 12)
+                    }
+
+                    // Pending on-chain deposits — money that has arrived but
+                    // isn't spendable yet. Sits directly under the seed banner
+                    // so it's the first thing read after the balance.
+                    if let summary = store.onchainDeposits, !summary.isEmpty {
+                        pendingDepositBanner(summary)
                             .padding(.horizontal, 16)
                             .padding(.bottom, 12)
                     }
@@ -302,6 +322,61 @@ struct WalletView: View {
             .background(Color.wispZapColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
         }
         .buttonStyle(.plain)
+    }
+
+    // MARK: - Pending deposits
+
+    /// Tapping opens the receive sheet already on the Bitcoin tab, where the
+    /// deposit can be inspected or claimed.
+    private func pendingDepositBanner(_ summary: OnchainDepositSummary) -> some View {
+        Button {
+            receiveInitialMethod = .onchain
+            showReceive = true
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "clock.arrow.circlepath")
+                    .foregroundStyle(Color.wispZapColor)
+                    .font(.system(size: 16))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(pendingDepositTitle(summary))
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                    Text(pendingDepositSubtitle(summary))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.wispZapColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func pendingDepositTitle(_ summary: OnchainDepositSummary) -> String {
+        let count = summary.deposits.count
+        let amount = CurrencyFormatter.formatNumber(summary.pendingSats)
+        return count == 1
+            ? "\(amount) sats on the way"
+            : "\(amount) sats on the way · \(count) deposits"
+    }
+
+    private func pendingDepositSubtitle(_ summary: OnchainDepositSummary) -> String {
+        if summary.deposits.contains(where: \.isClaimInFlight) {
+            return "Claiming now — settling"
+        }
+        if !summary.claimable.isEmpty {
+            return "Ready to claim"
+        }
+        if let failed = summary.deposits.first(where: { $0.failure != nil }) {
+            return failed.failure?.message ?? "Needs attention"
+        }
+        return "Waiting for confirmations"
     }
 
     // MARK: - Balance
@@ -714,9 +789,31 @@ struct SendInvoiceSheet: View {
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var galleryError: String?
     @State private var detectTask: Task<Void, Never>?
+    // On-chain send: fees are quoted before anything is signed, so the amount
+    // and speed feed a quote the user confirms rather than a blind send.
+    @State private var onchainSpeed: OnchainSendSpeed = .medium
+    @State private var onchainQuote: OnchainSendQuote?
+    @State private var isQuoting = false
+    /// Empty the wallet. Quoted with the fee coming out of the balance rather
+    /// than added to it, since a send of the full balance can't pay a fee on top.
+    @State private var sendMax = false
 
     private var decoded: Bolt11.DecodedInvoice? { Bolt11.decode(invoice) }
     private var trimmedInvoice: String { invoice.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    /// Spendable balance in sats. Shown on this screen because the amount a
+    /// user can send is the one fact they need here and would otherwise have
+    /// to leave and come back for — and on-chain it isn't even the amount
+    /// they typed, since the fee is added on top of it.
+    private var availableSats: Int64? { store.balanceMsats.map { $0 / 1000 } }
+
+    /// A quoted on-chain send that costs more than the wallet holds. Draining
+    /// can't overspend by construction, so this only catches a typed amount
+    /// whose fee pushes the total past the balance.
+    private var quoteExceedsBalance: Bool {
+        guard let quote = onchainQuote, let available = availableSats, !sendMax else { return false }
+        return quote.totalSats > available
+    }
 
     private var amountSats: Int64? {
         guard let v = Int64(amountText.filter { $0.isNumber }), v > 0 else { return nil }
@@ -726,8 +823,13 @@ struct SendInvoiceSheet: View {
     private var canProceed: Bool {
         if trimmedInvoice.isEmpty { return false }
         switch inputType {
-        case .bolt11(let amt): return amt != nil
+        case .bolt11(let amt, _): return amt != nil
         case .sparkLnurl, .lightningAddressNeedsResolve: return amountSats != nil
+        case .bitcoinAddress(_, let uriAmount):
+            // Nothing is sent on-chain until a fee has been quoted and shown,
+            // and never a quote the balance can't cover.
+            if quoteExceedsBalance { return false }
+            return sendMax || (uriAmount ?? amountSats) != nil
         case .unknown: return false
         }
     }
@@ -735,15 +837,18 @@ struct SendInvoiceSheet: View {
     private var needsAmountField: Bool {
         switch inputType {
         case .sparkLnurl, .lightningAddressNeedsResolve: return true
-        case .bolt11(let amt): return amt == nil
+        case .bolt11(let amt, _): return amt == nil
+        case .bitcoinAddress(_, let amt): return amt == nil && !sendMax
         default: return false
         }
     }
 
     private var buttonLabel: String {
         switch inputType {
-        case .bolt11(let amt): return amt != nil ? "Pay" : "Next"
+        case .bolt11(let amt, _): return amt != nil ? "Pay" : "Next"
         case .sparkLnurl, .lightningAddressNeedsResolve: return amountSats != nil ? "Pay" : "Next"
+        // On-chain is two steps: quote the fee, then send what was quoted.
+        case .bitcoinAddress: return onchainQuote == nil ? "Get fee quote" : "Send on-chain"
         case .unknown: return "Next"
         }
     }
@@ -781,12 +886,27 @@ struct SendInvoiceSheet: View {
     private var inputView: some View {
         ScrollView {
             VStack(spacing: 20) {
+                if let available = availableSats {
+                    HStack {
+                        Text("Available")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Text("\(CurrencyFormatter.formatNumber(available)) sats")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(Color.wispSurfaceVariant.opacity(0.3), in: RoundedRectangle(cornerRadius: 12))
+                }
+
                 // Input card
                 VStack(alignment: .leading, spacing: 0) {
                     // TextEditor with placeholder overlay
                     ZStack(alignment: .topLeading) {
                         if invoice.isEmpty {
-                            Text("Lightning address or invoice")
+                            Text("Lightning or Bitcoin address, or invoice")
                                 .font(.system(.footnote, design: .monospaced))
                                 .foregroundStyle(.tertiary)
                                 .padding(.horizontal, 18)
@@ -844,7 +964,11 @@ struct SendInvoiceSheet: View {
                     }
                 }
                 .background(Color.wispSurfaceVariant.opacity(0.4), in: RoundedRectangle(cornerRadius: 14))
-                .onChange(of: invoice) { _, _ in scheduleDetect() }
+                .onChange(of: invoice) { _, _ in
+                    onchainQuote = nil
+                    scheduleDetect()
+                }
+                .onChange(of: amountText) { _, _ in onchainQuote = nil }
                 .onChange(of: selectedPhoto) { _, item in
                     guard let item else { return }
                     Task { await decodeQRFromPhoto(item) }
@@ -944,6 +1068,11 @@ struct SendInvoiceSheet: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
+                // On-chain: destination, speed, and the quoted fee
+                if case .bitcoinAddress(let address, _) = inputType, store.supportsOnchainSend {
+                    onchainSendSection(address: address)
+                }
+
                 // Status
                 if let status {
                     HStack(spacing: 8) {
@@ -980,6 +1109,176 @@ struct SendInvoiceSheet: View {
         }
     }
 
+    @ViewBuilder
+    private func onchainSendSection(address: String) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
+                Image(systemName: "bitcoinsign.circle.fill")
+                    .foregroundStyle(Color.wispZapColor)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Bitcoin address")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(address)
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                }
+                Spacer(minLength: 0)
+            }
+
+            Button {
+                sendMax.toggle()
+                // Draining and sending an amount quote against opposite fee
+                // policies, so the held quote can't survive the switch.
+                onchainQuote = nil
+                if sendMax { amountText = "" }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: sendMax ? "checkmark.circle.fill" : "circle")
+                        .foregroundStyle(sendMax ? Color.wispZapColor : .secondary)
+                    Text("Send all funds")
+                        .font(.subheadline)
+                        .foregroundStyle(.primary)
+                    Spacer(minLength: 0)
+                }
+            }
+            .buttonStyle(.plain)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Confirmation speed")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .textCase(.uppercase)
+                    .tracking(0.5)
+                HStack(spacing: 8) {
+                    ForEach(OnchainSendSpeed.allCases, id: \.rawValue) { speed in
+                        Button {
+                            guard onchainSpeed != speed else { return }
+                            onchainSpeed = speed
+                            // The fee is tier-specific, so a quote for the old
+                            // tier would misstate what this send costs.
+                            onchainQuote = nil
+                        } label: {
+                            Text(speed.label)
+                                .font(.caption.weight(.medium))
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                                .background(
+                                    onchainSpeed == speed ? Color.wispZapColor : Color.wispSurfaceVariant.opacity(0.5),
+                                    in: Capsule()
+                                )
+                                .foregroundStyle(onchainSpeed == speed ? .white : .primary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    Spacer(minLength: 0)
+                }
+                Text(onchainSpeed.detail)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+
+            if isQuoting {
+                HStack(spacing: 8) {
+                    ProgressView().scaleEffect(0.75)
+                    Text("Quoting fee…").font(.caption).foregroundStyle(.secondary)
+                }
+            } else if let quote = onchainQuote {
+                VStack(spacing: 6) {
+                    quoteRow("Amount", "\(CurrencyFormatter.formatNumber(quote.amountSats)) sats")
+                    quoteRow("Network fee", "\(CurrencyFormatter.formatNumber(quote.feeSats)) sats")
+                    Divider().opacity(0.25)
+                    quoteRow("Total", "\(CurrencyFormatter.formatNumber(quote.totalSats)) sats", emphasized: true)
+                    if quoteExceedsBalance {
+                        HStack(alignment: .top, spacing: 6) {
+                            Image(systemName: "exclamationmark.circle.fill")
+                                .foregroundStyle(.red)
+                                .font(.caption)
+                            Text("That's more than you have. The fee is added on top of the amount, so you need \(CurrencyFormatter.formatNumber(quote.totalSats)) sats in total.")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.top, 2)
+                    }
+                    if quote.leavesTokensBehind {
+                        HStack(alignment: .top, spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                                .font(.caption)
+                            Text("This sends bitcoin only. Other token balances in this wallet stay behind — Wisp can't move them.")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.top, 2)
+                    }
+                    if quote.isFeeDisproportionate {
+                        // On-chain fees don't scale with the amount, so a small
+                        // send can cost a large share of itself. Say so before
+                        // it's signed rather than after it's spent.
+                        HStack(alignment: .top, spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                                .font(.caption)
+                            Text("The fee is \(Int((quote.feeShare * 100).rounded()))% of what you're sending. A Lightning payment would cost far less.")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.top, 2)
+                    }
+                }
+                .padding(12)
+                .background(Color.wispSurfaceVariant.opacity(0.3), in: RoundedRectangle(cornerRadius: 12))
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.wispSurfaceVariant.opacity(0.25), in: RoundedRectangle(cornerRadius: 14))
+    }
+
+    private func quoteRow(_ label: String, _ value: String, emphasized: Bool = false) -> some View {
+        HStack {
+            Text(label)
+                .font(emphasized ? .subheadline.weight(.semibold) : .caption)
+                .foregroundStyle(emphasized ? .primary : .secondary)
+            Spacer()
+            Text(value)
+                .font(emphasized ? .subheadline.weight(.semibold) : .caption)
+                .foregroundStyle(.primary)
+        }
+    }
+
+    /// Quote, then send. Splitting them means the fee is always seen before
+    /// it's paid — an on-chain fee can be a large share of a small send.
+    private func sendOnchain(address: String, sats: Int64) async {
+        if let quote = onchainQuote {
+            inFlight = true
+            defer { inFlight = false }
+            switch await store.executeSendOnchain(quote: quote) {
+            case .success: dismiss()
+            case .failure(let err):
+                status = err.localizedDescription
+                // The held quote is spent or stale either way; make the user
+                // re-quote rather than retry against a number that may have moved.
+                onchainQuote = nil
+            }
+            return
+        }
+        isQuoting = true
+        defer { isQuoting = false }
+        status = nil
+        switch await store.prepareSendOnchain(
+            address: address,
+            amountSats: sats,
+            speed: onchainSpeed,
+            drainAll: sendMax
+        ) {
+        case .success(let quote): onchainQuote = quote
+        case .failure(let err): status = err.localizedDescription
+        }
+    }
+
     private func scheduleDetect() {
         detectTask?.cancel()
         let input = trimmedInvoice
@@ -995,14 +1294,24 @@ struct SendInvoiceSheet: View {
     }
 
     private func pay() async {
+        // `.disabled(inFlight)` on the button only takes effect after a
+        // re-render, so a second tap in the same frame reaches here.
+        guard !inFlight else { return }
         inFlight = true; defer { inFlight = false }
         status = nil
         let input = trimmedInvoice
         let result: Result<String, WalletError>
 
         switch inputType {
-        case .bolt11:
-            result = await store.payInvoice(normalizeInvoice(input))
+        case .bitcoinAddress(let address, let uriAmount):
+            let sats = uriAmount ?? amountSats
+            guard sendMax || sats != nil else { return }
+            await sendOnchain(address: address, sats: sats ?? 0)
+            return
+        case .bolt11(_, let carried):
+            // A BIP-21 that offered an invoice hands it over here; `input` is
+            // the URI, which `payInvoice` can't decode.
+            result = await store.payInvoice(carried ?? normalizeInvoice(input))
         case .sparkLnurl, .lightningAddressNeedsResolve:
             guard let sats = amountSats else { return }
             result = await store.payLightningAddress(input, amountSats: sats)
@@ -1057,6 +1366,9 @@ struct ReceiveInvoiceSheet: View {
     @Bindable var store: WalletStore
     @Environment(AppSettings.self) private var settings
     var dismiss: () -> Void
+    /// Tab to open on. The wallet dashboard's pending-deposit banner opens
+    /// straight to Bitcoin; everything else starts on Lightning.
+    var initialMethod: ReceiveMethod = .lightning
     @State private var amount: String = ""
     @State private var description: String = ""
     @State private var invoice: String?
@@ -1067,6 +1379,26 @@ struct ReceiveInvoiceSheet: View {
     @State private var showCompose = false
     @State private var expiryPreset: ExpiryPreset = .oneHour
     @State private var customExpiryMinutes: String = ""
+    // On-chain (Bitcoin) tab
+    @State private var method: ReceiveMethod = .lightning
+    /// Guards the one-time adoption of `initialMethod` so a user who switches
+    /// tabs isn't yanked back on the next body evaluation.
+    @State private var didApplyInitialMethod = false
+    @State private var onchainAddress: String?
+    @State private var onchainStatus: String?
+    @State private var onchainInFlight = false
+    @State private var onchainCopied = false
+    /// Deposit held for the "claims at the required fee" confirmation.
+    @State private var depositPendingFeeConfirmation: OnchainDeposit?
+    /// Deposit currently being claimed, so only one claim runs at a time.
+    @State private var claimingDeposit: OnchainDeposit?
+
+    /// Receive rails for Spark wallets: a Lightning invoice, or the static
+    /// Bitcoin deposit address for on-chain sends.
+    enum ReceiveMethod: String, CaseIterable {
+        case lightning = "Lightning"
+        case onchain = "Bitcoin"
+    }
 
     enum ExpiryPreset: String, CaseIterable {
         case oneHour    = "1h"
@@ -1086,10 +1418,24 @@ struct ReceiveInvoiceSheet: View {
         ScrollViewReader { proxy in
         ScrollView {
             VStack(spacing: 20) {
-                if let inv = invoice {
-                    invoiceDisplay(inv)
-                } else {
-                    lightningForm(proxy: proxy)
+                if store.mode == .spark {
+                    Picker("Method", selection: $method) {
+                        ForEach(ReceiveMethod.allCases, id: \.self) { m in
+                            Text(m.rawValue).tag(m)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                }
+
+                switch method {
+                case .lightning:
+                    if let inv = invoice {
+                        invoiceDisplay(inv)
+                    } else {
+                        lightningForm(proxy: proxy)
+                    }
+                case .onchain:
+                    onchainForm
                 }
             }
             .padding(.horizontal, 20)
@@ -1101,6 +1447,49 @@ struct ReceiveInvoiceSheet: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) { Button("Close", action: dismiss) }
+        }
+        .task {
+            if !didApplyInitialMethod {
+                didApplyInitialMethod = true
+                if method != initialMethod { method = initialMethod }
+            }
+        }
+        .task(id: method) {
+            // First switch to the Bitcoin tab: fetch the address, then keep
+            // the deposit list current. Deposits land without any user
+            // action — someone watching this screen for their transaction to
+            // confirm has nothing to tap to make it show up, so a one-shot
+            // load would read as "my bitcoin never arrived". SwiftUI cancels
+            // this task when the tab changes or the sheet closes, so the
+            // poll only runs while the section is actually on screen.
+            guard method == .onchain, store.mode == .spark else { return }
+            if onchainAddress == nil {
+                await loadOnchainAddress(newAddress: false)
+            }
+            // One refresh on open; `WalletStore` polls from here on, so a
+            // second loop in the view would just double the traffic.
+            await store.refreshOnchainDeposits()
+        }
+        .alert(
+            "Claim deposit?",
+            isPresented: Binding(
+                get: { depositPendingFeeConfirmation != nil },
+                set: { if !$0 { depositPendingFeeConfirmation = nil } }
+            )
+        ) {
+            Button("Claim") {
+                if let deposit = depositPendingFeeConfirmation,
+                   case .feeExceeded(let sats) = deposit.failure {
+                    Task { await claim(deposit, feeSats: sats) }
+                }
+                depositPendingFeeConfirmation = nil
+            }
+            Button("Cancel", role: .cancel) { depositPendingFeeConfirmation = nil }
+        } message: {
+            if let deposit = depositPendingFeeConfirmation,
+               case .feeExceeded(let sats) = deposit.failure {
+                Text("On-chain fees are high right now. Claiming your \(CurrencyFormatter.formatNumber(deposit.amountSats)) sats will pay about \(CurrencyFormatter.formatNumber(sats)) sats in fees.")
+            }
         }
         .sheet(isPresented: $showCompose) {
             if let bolt11 = invoice {
@@ -1196,6 +1585,223 @@ struct ReceiveInvoiceSheet: View {
                     .background(Color.wispSurfaceVariant.opacity(0.35), in: RoundedRectangle(cornerRadius: 14))
                 }
             }
+        }
+    }
+
+    // MARK: On-chain (Bitcoin) tab
+
+    private func loadOnchainAddress(newAddress: Bool) async {
+        onchainInFlight = true
+        onchainStatus = nil
+        defer { onchainInFlight = false }
+        switch await store.receiveOnchainAddress(newAddress: newAddress) {
+        case .success(let address): onchainAddress = address
+        case .failure(let err): onchainStatus = err.localizedDescription
+        }
+    }
+
+    @ViewBuilder
+    private var onchainForm: some View {
+        if let address = onchainAddress {
+            VStack(spacing: 20) {
+                VStack(spacing: 10) {
+                    QRCodeImage(payload: address, sideLength: 260)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                    Text("Send Bitcoin on-chain to this address")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(20)
+                .frame(maxWidth: .infinity)
+                .background(Color.wispSurfaceVariant.opacity(0.35), in: RoundedRectangle(cornerRadius: 16))
+
+                VStack(spacing: 0) {
+                    Text(address)
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(3)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                        .padding(14)
+
+                    Divider().opacity(0.25)
+
+                    HStack(spacing: 0) {
+                        Button {
+                            UIPasteboard.general.string = address
+                            withAnimation { onchainCopied = true }
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                                withAnimation { onchainCopied = false }
+                            }
+                        } label: {
+                            Label(onchainCopied ? "Copied ✓" : "Copy", systemImage: onchainCopied ? "checkmark" : "doc.on.doc")
+                                .font(.subheadline.weight(.medium))
+                                .foregroundStyle(Color.wispZapColor)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 12)
+                        }
+                        .buttonStyle(.plain)
+                        .animation(.easeInOut(duration: 0.15), value: onchainCopied)
+
+                        Divider().frame(height: 24)
+
+                        ShareLink(item: address) {
+                            Label("Share", systemImage: "square.and.arrow.up")
+                                .font(.subheadline.weight(.medium))
+                                .foregroundStyle(Color.wispZapColor)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 12)
+                        }
+
+                        Divider().frame(height: 24)
+
+                        Button {
+                            Task { await loadOnchainAddress(newAddress: true) }
+                        } label: {
+                            Label("New", systemImage: "arrow.triangle.2.circlepath")
+                                .font(.subheadline.weight(.medium))
+                                .foregroundStyle(Color.wispZapColor)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 12)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .background(Color.wispSurfaceVariant.opacity(0.4), in: RoundedRectangle(cornerRadius: 14))
+
+                Text("Funds arrive after the transaction confirms. Older addresses keep working — they stay valid for future deposits.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .multilineTextAlignment(.center)
+            }
+        } else if onchainInFlight {
+            ProgressView()
+                .padding(.vertical, 40)
+        }
+
+        pendingDepositsSection
+
+        if let onchainStatus {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.red)
+                Text(onchainStatus).font(.subheadline).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// Deposits sent to the wallet's addresses that haven't been claimed into
+    /// the spendable balance yet. The automatic claimer handles the routine
+    /// cases — this surfaces the ones it can't, so a deposit is never
+    /// silently stuck.
+    @ViewBuilder
+    private var pendingDepositsSection: some View {
+        if let summary = store.onchainDeposits, !summary.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Pending deposits")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .textCase(.uppercase)
+                    .tracking(0.5)
+
+                VStack(spacing: 0) {
+                    ForEach(Array(summary.deposits.enumerated()), id: \.element.id) { index, deposit in
+                        depositRow(deposit)
+                        if index < summary.deposits.count - 1 {
+                            Divider().opacity(0.25).padding(.leading, 16)
+                        }
+                    }
+                }
+                .background(Color.wispSurfaceVariant.opacity(0.4), in: RoundedRectangle(cornerRadius: 14))
+            }
+        }
+    }
+
+    private func depositRow(_ deposit: OnchainDeposit) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "link.circle")
+                .font(.system(size: 15))
+                .foregroundStyle(Color.wispZapColor)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("\(CurrencyFormatter.formatNumber(deposit.amountSats)) sats")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                Text(depositStatus(deposit))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                // The wallet can't say how far along a confirmation is, so
+                // give the user the transaction itself — the explorer is the
+                // authoritative answer to "where are my sats".
+                HStack(spacing: 14) {
+                    Button {
+                        UIPasteboard.general.string = deposit.txid
+                        QuickFollowToast.shared.show("Transaction ID copied")
+                    } label: {
+                        Label("Copy ID", systemImage: "doc.on.doc")
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(Color.wispZapColor)
+                    }
+                    .buttonStyle(.plain)
+
+                    if let url = URL(string: "https://mempool.space/tx/\(deposit.txid)") {
+                        Link(destination: url) {
+                            Label("Explorer", systemImage: "arrow.up.right.square")
+                                .font(.caption2.weight(.medium))
+                                .foregroundStyle(Color.wispZapColor)
+                        }
+                    }
+                }
+                .padding(.top, 2)
+            }
+            Spacer()
+            if let failure = deposit.failure, case .feeExceeded = failure, deposit.isClaimable {
+                Button("Claim…") {
+                    depositPendingFeeConfirmation = deposit
+                }
+                .font(.footnote.weight(.medium))
+                .foregroundStyle(Color.wispZapColor)
+                .buttonStyle(.plain)
+            } else if deposit.isClaimable {
+                Button {
+                    Task { await claim(deposit, feeSats: nil) }
+                } label: {
+                    if claimingDeposit == deposit {
+                        ProgressView()
+                    } else {
+                        Text("Claim")
+                            .font(.footnote.weight(.medium))
+                            .foregroundStyle(Color.wispZapColor)
+                    }
+                }
+                .buttonStyle(.plain)
+                .disabled(claimingDeposit != nil)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+    }
+
+    private func depositStatus(_ deposit: OnchainDeposit) -> String {
+        if deposit.isClaimInFlight { return "Claiming now — settling…" }
+        if let failure = deposit.failure { return failure.message }
+        // Same line whether or not it has matured. A confirmed deposit is
+        // claimed automatically and the row disappears when it lands, so
+        // announcing that stage tells the user about bookkeeping they can't
+        // act on.
+        return "Waiting for confirmations"
+    }
+
+    private func claim(_ deposit: OnchainDeposit, feeSats: Int64?) async {
+        claimingDeposit = deposit
+        defer { claimingDeposit = nil }
+        switch await store.claimOnchainDeposit(deposit, feeSats: feeSats) {
+        case .success:
+            onchainStatus = nil
+        case .failure(let err):
+            onchainStatus = err.localizedDescription
         }
     }
 
