@@ -502,6 +502,164 @@ final class SparkWallet: Wallet {
         }
     }
 
+    // MARK: - Withdraw on-chain
+
+    /// The most recent quote and its signed-off SDK request. Execution reuses
+    /// this so the amount and destination the user confirmed are exactly what
+    /// gets sent, and so the SDK request type never leaves this file.
+    private var preparedWithdrawal: (quote: WithdrawOnchainQuote, prepared: PrepareSendPaymentResponse)?
+
+
+    /// Quote draining the entire spendable balance to a Bitcoin address.
+    ///
+    /// Uses `FeePolicy.feesIncluded` with `amount = balance`, which the SDK
+    /// documents as the way to drain: the wallet spends exactly the balance
+    /// and the fee comes out of it. The default `feesExcluded` would add the
+    /// fee on top, so a send of the full balance could never succeed.
+    ///
+    /// Nothing is signed or broadcast here — this exists so the confirmation
+    /// screen can show a real fee from the SDK rather than an estimate.
+    func prepareWithdrawOnchain(
+        address: String,
+        speed: WithdrawOnchainSpeed
+    ) async -> Result<WithdrawOnchainQuote, WalletError> {
+        guard let sdk else { return .failure(.notConnected) }
+        do {
+            // Read the balance the SDK will actually spend from, synced —
+            // quoting against a stale cached figure produces a fee for an
+            // amount that no longer exists.
+            let info = try await sdk.getInfo(request: GetInfoRequest(ensureSynced: true))
+            let balanceSats = Int64(info.balanceSats)
+            guard balanceSats > 0 else {
+                return .failure(.other("This wallet has no spendable balance."))
+            }
+
+            emit("Quoting withdrawal…")
+            let prepared = try await sdk.prepareSendPayment(
+                request: PrepareSendPaymentRequest(
+                    paymentRequest: .input(input: address),
+                    amount: BInt(balanceSats),
+                    tokenIdentifier: nil,
+                    conversionOptions: nil,
+                    feePolicy: .feesIncluded
+                )
+            )
+
+            guard case .bitcoinAddress(_, let feeQuote) = prepared.paymentMethod else {
+                // The address parsed as something else — a Lightning invoice
+                // or Spark address pasted into the field. Refuse rather than
+                // silently sending somewhere the user didn't intend.
+                return .failure(.other("That isn't a Bitcoin address."))
+            }
+
+            let tier: SendOnchainSpeedFeeQuote
+            switch speed {
+            case .slow: tier = feeQuote.speedSlow
+            case .medium: tier = feeQuote.speedMedium
+            case .fast: tier = feeQuote.speedFast
+            }
+            // Both components are real cost to the user: the service fee and
+            // the L1 broadcast fee.
+            let feeSats = Int64(tier.userFeeSat) + Int64(tier.l1BroadcastFeeSat)
+
+            let quote = WithdrawOnchainQuote(
+                address: address,
+                spendSats: balanceSats,
+                feeSats: feeSats,
+                speed: speed
+            )
+            // Held here rather than handed back, so the SDK's request type
+            // stays out of WalletStore and the view layer.
+            preparedWithdrawal = (quote, prepared)
+            return .success(quote)
+        } catch {
+            return .failure(.other(Self.friendlyPayError(error)))
+        }
+    }
+
+    /// Broadcast a quoted withdrawal. Returns the payment id.
+    ///
+    /// Retries once through `optimizeLeaves` on an insufficient-funds error:
+    /// Spark spends from individual leaves, so a nominally sufficient balance
+    /// can still fail leaf selection — most often right after a conversion
+    /// credits many small leaves. Consolidating and retrying is what makes a
+    /// full drain land instead of failing on arithmetic that looks correct.
+    func executeWithdrawOnchain(quote: WithdrawOnchainQuote) async -> Result<String, WalletError> {
+        guard let sdk else { return .failure(.notConnected) }
+        // Only ever send the quote the user actually confirmed. If the held
+        // quote doesn't match, the screen has drifted from what was signed
+        // off — re-quote rather than send a different amount or destination.
+        guard let held = preparedWithdrawal, held.quote == quote else {
+            return .failure(.other("This quote expired. Check the amount and try again."))
+        }
+        let prepared = held.prepared
+
+        let sdkSpeed: OnchainConfirmationSpeed
+        switch quote.speed {
+        case .slow: sdkSpeed = .slow
+        case .medium: sdkSpeed = .medium
+        case .fast: sdkSpeed = .fast
+        }
+
+        func send(_ request: PrepareSendPaymentResponse) async throws -> SendPaymentResponse {
+            try await sdk.sendPayment(
+                request: SendPaymentRequest(
+                    prepareResponse: request,
+                    options: .bitcoinAddress(confirmationSpeed: sdkSpeed),
+                    idempotencyKey: nil
+                )
+            )
+        }
+
+        do {
+            emit("Sending on-chain…")
+            let response = try await send(prepared)
+
+            if case .failed = response.payment.status {
+                // Same shape as payInvoice: a failed payment comes back
+                // WITHOUT throwing, so it has to be inspected rather than
+                // trusted.
+                emit("Withdrawal failed")
+                return .failure(.other("The withdrawal failed — your funds were not sent."))
+            }
+            return .success(response.payment.id)
+        } catch {
+            let message = String(describing: error).lowercased()
+            guard message.contains("insufficient funds") else {
+                let friendly = Self.friendlyPayError(error)
+                emit("Withdrawal failed: \(friendly)")
+                return .failure(.other(friendly))
+            }
+
+            emit("Consolidating leaves…")
+            _ = try? await sdk.optimizeLeaves(request: OptimizeLeavesRequest(mode: OptimizationMode.full))
+
+            // Re-quote after consolidation: the spendable balance can differ,
+            // and the old prepare response references leaves that no longer
+            // exist in that arrangement.
+            switch await prepareWithdrawOnchain(address: quote.address, speed: quote.speed) {
+            case .failure(let error):
+                return .failure(error)
+            case .success:
+                guard let requoted = preparedWithdrawal?.prepared else {
+                    return .failure(.other("Couldn't re-quote the withdrawal after consolidating."))
+                }
+                do {
+                    emit("Retrying on-chain send…")
+                    let response = try await send(requoted)
+                    if case .failed = response.payment.status {
+                        return .failure(.other("The withdrawal failed — your funds were not sent."))
+                    }
+                    return .success(response.payment.id)
+                } catch {
+                    let friendly = Self.friendlyPayError(error)
+                    emit("Withdrawal failed: \(friendly)")
+                    return .failure(.other(friendly))
+                }
+            }
+        }
+    }
+
     func listTransactions(limit: Int, offset: Int) async -> Result<[WalletTransaction], WalletError> {
         guard let sdk else { return .failure(.notConnected) }
         do {

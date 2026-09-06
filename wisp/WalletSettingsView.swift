@@ -194,6 +194,10 @@ struct WalletSettingsView: View {
         .sheet(isPresented: $showAddressSheet) {
             LightningAddressSetupSheet(store: store)
         }
+        .sheet(isPresented: $showWithdrawOnchain) {
+            WithdrawOnchainSheet()
+                .environment(store)
+        }
     }
 
     // MARK: - Transactions (both modes)
@@ -681,6 +685,8 @@ struct WalletSettingsView: View {
 
     // MARK: - Danger zone
 
+    @State private var showWithdrawOnchain = false
+
     private var dangerSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(dangerSectionHeader)
@@ -689,6 +695,35 @@ struct WalletSettingsView: View {
                 .padding(.horizontal, 4)
 
             VStack(spacing: 0) {
+                // Spark only — NWC has no on-chain send command, so the
+                // affordance must not appear for those wallets at all.
+                if store.supportsWithdrawOnchain {
+                    Button {
+                        showWithdrawOnchain = true
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "arrow.up.forward.square")
+                                .font(.system(size: 15))
+                                .foregroundStyle(.red)
+                                .frame(width: 22)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Withdraw on-chain")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.red)
+                                Text("Send everything to a Bitcoin address")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 14)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    Divider().overlay(Color.wispSurfaceVariant.opacity(0.4))
+                }
+
                 if store.mode == .nwc {
                     // Matches the Breez/Spark "Switch to a different
                     // wallet" affordance below — same icon, label, and
