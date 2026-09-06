@@ -44,9 +44,47 @@ nonisolated enum MarkdownBlocks {
         pattern: #":([a-zA-Z0-9_-]+):"#
     )
 
+    /// The pubkey an inline entity refers to, when it refers to a person.
+    /// Nil for note / event / address refs.
+    ///
+    /// Article bodies carry mentions as raw bech32 inside markdown text, not
+    /// as parsed segments the way note content does, so resolving a name
+    /// starts by decoding the entity here.
+    static func profilePubkey(from entity: String) -> String? {
+        var bare = entity
+        for prefix in ["nostr:", "NOSTR:"] where bare.hasPrefix(prefix) {
+            bare = String(bare.dropFirst(prefix.count))
+        }
+        let lower = bare.lowercased()
+        guard lower.hasPrefix("npub1") || lower.hasPrefix("nprofile1") else { return nil }
+        guard case .profileRef(let pubkey, _)? = Nip19.decodeNostrUri(lower) else { return nil }
+        return pubkey
+    }
+
+    /// Every pubkey mentioned in an article body, so the profiles behind them
+    /// can be fetched. Without this the renderer has nothing to resolve
+    /// against and every mention falls back to a short npub.
+    static func profileMentions(in content: String) -> [String] {
+        let ns = content as NSString
+        let matches = nostrInlineRegex.matches(
+            in: content, range: NSRange(location: 0, length: ns.length)
+        )
+        var seen = Set<String>()
+        var pubkeys: [String] = []
+        for m in matches {
+            guard let pubkey = profilePubkey(from: ns.substring(with: m.range)) else { continue }
+            if seen.insert(pubkey).inserted { pubkeys.append(pubkey) }
+        }
+        return pubkeys
+    }
+
     /// Shorten a nostr bech32 entity for inline display — `@npub1xxxx…` for
     /// profile refs, `nevent1xxxx…` for the rest. Port of Android's
     /// `shortenNostrEntity`.
+    ///
+    /// Only a last resort for a person: a mention resolves to a display name
+    /// via `profilePubkey(from:)` first, and reaches this truncated bech32
+    /// only when the entity doesn't decode.
     static func shortenNostrEntity(_ entity: String) -> String {
         var bare = entity
         for prefix in ["nostr:", "NOSTR:"] where bare.hasPrefix(prefix) {
@@ -57,6 +95,25 @@ nonisolated enum MarkdownBlocks {
             return "@\(bare.prefix(10))..."
         }
         return "\(bare.prefix(12))..."
+    }
+
+    /// An ATX heading: one to six `#` followed by whitespace, or a line of
+    /// `#` alone. Returns the level and the heading text.
+    ///
+    /// The trailing-space rule is what separates a heading from a hashtag.
+    /// CommonMark requires it, and long-form authors routinely end a post
+    /// with a line of tags — `#nostr` was being rendered as a level-1
+    /// headline, which on the tag line at the foot of an article is louder
+    /// than the article's own title.
+    static func atxHeading(_ trimmed: String) -> (level: Int, text: String)? {
+        guard trimmed.hasPrefix("#") else { return nil }
+        let hashes = trimmed.prefix(while: { $0 == "#" }).count
+        let rest = trimmed.dropFirst(hashes)
+        guard rest.isEmpty || rest.first == " " || rest.first == "\t" else { return nil }
+        // Surplus '#' beyond six stays in the text, matching Android.
+        let level = min(hashes, 6)
+        let text = String(trimmed.dropFirst(level)).trimmingLeadingWhitespace()
+        return (level, text)
     }
 
     static func parse(_ content: String) -> [MdBlock] {
@@ -83,13 +140,8 @@ nonisolated enum MarkdownBlocks {
                 }
                 if i < lines.count { i += 1 }  // skip closing ```
                 blocks.append(.codeBlock(code: codeLines.joined(separator: "\n"), language: language))
-            } else if trimmed.hasPrefix("#") {
-                // Heading. Note: only `level` (≤6) marker chars are dropped —
-                // surplus '#' beyond six stays in the text, matching Android.
-                let level = min(trimmed.prefix(while: { $0 == "#" }).count, 6)
-                let text = String(trimmed.dropFirst(level))
-                    .trimmingLeadingWhitespace()
-                blocks.append(.heading(level: level, text: text))
+            } else if let heading = atxHeading(trimmed) {
+                blocks.append(.heading(level: heading.level, text: heading.text))
                 i += 1
             } else if fullMatch(horizontalRuleRegex, trimmed) {
                 blocks.append(.horizontalRule)
@@ -123,7 +175,7 @@ nonisolated enum MarkdownBlocks {
                 var paraLines: [String] = []
                 while i < lines.count {
                     let l = lines[i].trimmingCharacters(in: .whitespaces)
-                    if l.isEmpty || l.hasPrefix("#") || l.hasPrefix("```")
+                    if l.isEmpty || atxHeading(l) != nil || l.hasPrefix("```")
                         || l.hasPrefix(">") || fullMatch(horizontalRuleRegex, l) {
                         break
                     }

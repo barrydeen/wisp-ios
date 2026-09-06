@@ -189,6 +189,12 @@ struct NostrFilter {
     var tTags: [String]?
     var dTags: [String]?
     var aTags: [String]?
+    /// NIP-22 root scope. Uppercase tags name the *root* an event belongs to,
+    /// lowercase its immediate parent — so `#A` returns a whole comment
+    /// thread, including replies to replies, where `#a` returns only the
+    /// comments attached directly to the root.
+    var capitalATags: [String]?
+    var capitalETags: [String]?
     var limit: Int?
     var since: Int?
     var until: Int?
@@ -206,6 +212,8 @@ struct NostrFilter {
         if let tTags { dict["#t"] = tTags }
         if let dTags { dict["#d"] = dTags }
         if let aTags { dict["#a"] = aTags }
+        if let capitalATags { dict["#A"] = capitalATags }
+        if let capitalETags { dict["#E"] = capitalETags }
         if let limit { dict["limit"] = limit }
         if let since { dict["since"] = since }
         if let until { dict["until"] = until }
