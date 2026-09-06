@@ -15,6 +15,9 @@ final class SparkWallet: Wallet {
 
     private(set) var balanceMsats: Int64?
     private(set) var isConnected: Bool = false
+    /// Whether a full sync has landed this session. Until it has, a zero from
+    /// the SDK means "nothing loaded yet", not "no funds".
+    private var hasSyncedOnce = false
 
     let statusLog: AsyncStream<String>
     let paymentReceived: AsyncStream<Int64>
@@ -189,6 +192,7 @@ final class SparkWallet: Wallet {
         switch event {
         case .synced:
             emit("Synced")
+            hasSyncedOnce = true
             Task { await self.refreshBalance() }
         case .paymentSucceeded(let payment):
             emit("Payment succeeded")
@@ -215,6 +219,15 @@ final class SparkWallet: Wallet {
             // Fresh data arrives via `.synced` events which trigger another call here.
             let info = try await sdk.getInfo(request: GetInfoRequest(ensureSynced: false))
             let msats = Int64(info.balanceSats) * 1000
+            // Before the first sync completes the SDK reports local state,
+            // which on a fresh install is zero — and `GetInfoResponse` has no
+            // flag distinguishing that from a genuinely empty wallet. Passing
+            // it on turns "not known yet" into a stated zero: the dashboard
+            // shows a confident 0 sats over a funded wallet, and `WalletStore`
+            // caches it so the next cold launch repeats the lie. A non-zero
+            // balance is trustworthy whenever it arrives; a zero has to wait
+            // for `.synced` to confirm it.
+            guard msats != 0 || hasSyncedOnce else { return }
             balanceMsats = msats
             balanceContinuation.yield(msats)
         } catch {
@@ -307,6 +320,9 @@ final class SparkWallet: Wallet {
             // still uses `ensureSynced: false` since by definition that
             // path runs *after* a sync has already landed.
             let info = try await sdk.getInfo(request: GetInfoRequest(ensureSynced: true))
+            // This call waits for the initial full sync, so whatever it
+            // returns — zero included — is a real balance.
+            hasSyncedOnce = true
             let msats = Int64(info.balanceSats) * 1000
             balanceMsats = msats
             balanceContinuation.yield(msats)
