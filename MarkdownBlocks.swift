@@ -97,6 +97,25 @@ nonisolated enum MarkdownBlocks {
         return "\(bare.prefix(12))..."
     }
 
+    /// An ATX heading: one to six `#` followed by whitespace, or a line of
+    /// `#` alone. Returns the level and the heading text.
+    ///
+    /// The trailing-space rule is what separates a heading from a hashtag.
+    /// CommonMark requires it, and long-form authors routinely end a post
+    /// with a line of tags — `#nostr` was being rendered as a level-1
+    /// headline, which on the tag line at the foot of an article is louder
+    /// than the article's own title.
+    static func atxHeading(_ trimmed: String) -> (level: Int, text: String)? {
+        guard trimmed.hasPrefix("#") else { return nil }
+        let hashes = trimmed.prefix(while: { $0 == "#" }).count
+        let rest = trimmed.dropFirst(hashes)
+        guard rest.isEmpty || rest.first == " " || rest.first == "\t" else { return nil }
+        // Surplus '#' beyond six stays in the text, matching Android.
+        let level = min(hashes, 6)
+        let text = String(trimmed.dropFirst(level)).trimmingLeadingWhitespace()
+        return (level, text)
+    }
+
     static func parse(_ content: String) -> [MdBlock] {
         var blocks: [MdBlock] = []
         let lines = content.components(separatedBy: "\n")
@@ -121,13 +140,8 @@ nonisolated enum MarkdownBlocks {
                 }
                 if i < lines.count { i += 1 }  // skip closing ```
                 blocks.append(.codeBlock(code: codeLines.joined(separator: "\n"), language: language))
-            } else if trimmed.hasPrefix("#") {
-                // Heading. Note: only `level` (≤6) marker chars are dropped —
-                // surplus '#' beyond six stays in the text, matching Android.
-                let level = min(trimmed.prefix(while: { $0 == "#" }).count, 6)
-                let text = String(trimmed.dropFirst(level))
-                    .trimmingLeadingWhitespace()
-                blocks.append(.heading(level: level, text: text))
+            } else if let heading = atxHeading(trimmed) {
+                blocks.append(.heading(level: heading.level, text: heading.text))
                 i += 1
             } else if fullMatch(horizontalRuleRegex, trimmed) {
                 blocks.append(.horizontalRule)
@@ -161,7 +175,7 @@ nonisolated enum MarkdownBlocks {
                 var paraLines: [String] = []
                 while i < lines.count {
                     let l = lines[i].trimmingCharacters(in: .whitespaces)
-                    if l.isEmpty || l.hasPrefix("#") || l.hasPrefix("```")
+                    if l.isEmpty || atxHeading(l) != nil || l.hasPrefix("```")
                         || l.hasPrefix(">") || fullMatch(horizontalRuleRegex, l) {
                         break
                     }
