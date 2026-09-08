@@ -336,6 +336,15 @@ struct QuotedNoteView: View {
 
                 if event.kind == 9735 {
                     zapReceiptBody(event)
+                } else if event.kind == 30023 {
+                    // A long-form article quoted by event id lands here, and
+                    // its content is markdown — rendering it as note text
+                    // spills raw `[label](url)` syntax and a wall of body
+                    // copy into the card. The same article linked as a
+                    // `nostr:naddr1…` already gets a proper card via
+                    // `ArticleCardView`; this gives the id-based path the
+                    // equivalent, using the event already in hand.
+                    ArticleFeedPreview(event: event, relayHints: relayHints)
                 } else {
                     // "Long" for an embedded preview is text past the threshold OR
                     // ANY inline media (NIP-92 imeta image / video). Without the

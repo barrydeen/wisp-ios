@@ -31,8 +31,10 @@ enum FeedKind: Equatable, Hashable {
 nonisolated enum FeedContentFilter: String, CaseIterable {
     /// No filter — every kind the feed surfaces is shown.
     case all
-    /// Plain text notes, reposts, and long-form articles.
+    /// Plain text notes and reposts.
     case notes
+    /// NIP-23 long-form articles.
+    case articles
     /// NIP-68 / NIP-71 gallery posts.
     case gallery
     /// NIP-88 polls.
@@ -43,8 +45,9 @@ nonisolated enum FeedContentFilter: String, CaseIterable {
     /// hints at the content type they isolate.
     var iconName: String {
         switch self {
-        case .all:     return "rectangle.grid.2x2"
-        case .notes:   return "doc.text"
+        case .all:      return "rectangle.grid.2x2"
+        case .notes:    return "doc.text"
+        case .articles: return "newspaper"
         case .gallery: return "photo"
         case .polls:   return "checklist"
         }
@@ -53,8 +56,9 @@ nonisolated enum FeedContentFilter: String, CaseIterable {
     /// The next filter in the cycle. `polls` wraps back to `all`.
     var next: FeedContentFilter {
         switch self {
-        case .all:     return .notes
-        case .notes:   return .gallery
+        case .all:      return .notes
+        case .notes:    return .articles
+        case .articles: return .gallery
         case .gallery: return .polls
         case .polls:   return .all
         }
@@ -65,6 +69,7 @@ nonisolated enum FeedContentFilter: String, CaseIterable {
         switch self {
         case .all:     return "No posts in your feed yet"
         case .notes:   return "No notes in your feed yet"
+        case .articles: return "No articles in your feed yet"
         case .gallery: return "No gallery posts in your feed yet"
         case .polls:   return "No polls in your feed yet"
         }
@@ -79,7 +84,11 @@ nonisolated enum FeedContentFilter: String, CaseIterable {
         case .all:
             return true
         case .notes:
-            return kind == 1 || kind == 6 || kind == 30023
+            // Articles have their own filter now, so leaving them here too
+            // would make two of the four options overlap.
+            return kind == 1 || kind == 6
+        case .articles:
+            return kind == 30023
         case .gallery:
             return kind == 20 || kind == 21 || kind == 22
         case .polls:
@@ -202,7 +211,13 @@ final class FeedViewModel {
         // followers. A dedicated follows-wide Comments feed is planned
         // separately.
         switch event.kind {
-        case 6, 20, Nip88.kindPoll, Nip69.kindZapPoll: return true
+        // 30023 is long-form. `PostCardView` already has a renderer for it
+        // (`articleBody` → `ArticleFeedPreview`), but the gate dropped it
+        // before it could be reached, so articles never appeared in the feed.
+        //
+        // 21 / 22 (video / audio gallery) stay out on purpose: there is no
+        // card for them, so admitting them would add rows nothing can draw.
+        case 6, 20, 30023, Nip88.kindPoll, Nip69.kindZapPoll: return true
         default: return false
         }
     }
@@ -1173,12 +1188,27 @@ final class FeedViewModel {
         }
 
         // 4. Build one REQ per relay (multi-filter when authors > 200) — at most one socket per host.
-        let kinds = [1, 6, 20, Nip88.kindPoll, Nip69.kindZapPoll, Nip09.kindDeletion]
+        // Long-form was missing here while `relayFeedKinds` has carried it all
+        // along, so the follows feed never asked for articles at all.
+        let kinds = [1, 6, 20, 30023, Nip88.kindPoll, Nip69.kindZapPoll, Nip09.kindDeletion]
         var queries: [RelayQuery] = []
         for (relayUrl, authors) in relayToAuthors {
             let chunks = Array(authors).chunked(into: Self.maxAuthorsPerFilter)
-            let filters = chunks.map { chunk in
+            var filters = chunks.map { chunk in
                 NostrFilter(kinds: kinds, authors: chunk, limit: 100, since: since)
+            }
+            // Articles get their own filter rather than sharing the 100 above.
+            // People post many more notes than articles, so in a single mixed
+            // filter the relay's newest-100 is almost entirely notes and the
+            // long-form a follow published last week never comes back — the
+            // Articles view looked empty for feeds that had plenty.
+            //
+            // No `since` either: an article is worth reading a month after it
+            // was posted, where a note usually isn't. They still sort into the
+            // timeline by their own timestamp, so an older one simply sits
+            // lower rather than jumping the feed.
+            filters += chunks.map { chunk in
+                NostrFilter(kinds: [30023], authors: chunk, limit: 30)
             }
             queries.append(RelayQuery(relayUrl: relayUrl, filters: filters))
         }

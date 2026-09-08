@@ -12,6 +12,9 @@ final class ArticleViewModel {
     private(set) var article: NostrEvent?
     private(set) var isLoading = true
     private(set) var title: String?
+    /// NIP-23's optional `summary` tag. Already shown on the article cards in
+    /// feeds; the reader itself never read it.
+    private(set) var summary: String?
     private(set) var coverImage: String?
     private(set) var publishedAt: Int?
     private(set) var hashtags: [String] = []
@@ -51,16 +54,21 @@ final class ArticleViewModel {
                 isLoading = false
             }
         }
-        guard article != nil else { return }
+        guard let loaded = article else { return }
         if profiles[author] == nil {
             let got = await ProfileRepository.shared.ensure([author])
             profiles.merge(got) { _, new in new }
         }
+        // Mentions in the body are raw bech32 inside markdown, so nothing
+        // else asks for these profiles — the renderer would fall back to a
+        // short npub for every one of them.
+        hydrateProfiles(for: MarkdownBlocks.profileMentions(in: loaded.content))
     }
 
     private func parseAndEmit(_ event: NostrEvent) {
         article = event
         title = firstTag(event, "title")
+        summary = firstTag(event, "summary")
         coverImage = firstTag(event, "image")
         publishedAt = firstTag(event, "published_at").flatMap { Int($0) }
         hashtags = event.tags.filter { $0.count >= 2 && $0[0] == "t" }.map { $0[1] }
@@ -76,7 +84,7 @@ final class ArticleViewModel {
 
     // MARK: - Comments
 
-    /// Subscribe for kind-1 comments via the `a`-tag coordinate AND the
+    /// Subscribe for comments via the `a`-tag coordinate AND the
     /// article's event id — many clients reply with plain e-tags pointing at
     /// the article event rather than the NIP-23 coordinate. Mirrors Android's
     /// two-phase `loadComments`.
@@ -98,19 +106,41 @@ final class ArticleViewModel {
                 return
             }
 
+            // NIP-22 requires replies to a long-form article to be kind
+            // 1111, which is what other clients publish — and what Wisp
+            // publishes itself. Subscribing to kind 1 alone showed an article
+            // as having almost no comments while the web showed a full
+            // thread.
+            let commentKinds = [1, Nip22.kindComment]
+            // Uppercase tags name the root scope, lowercase the immediate
+            // parent, so `#A` returns the whole thread and `#a` only the
+            // comments attached directly to the article. Both are asked for:
+            // a reply to a comment carries the article in `A` but another
+            // comment in `a`, so a lowercase-only filter loses every nested
+            // reply.
             var aFilter = NostrFilter()
-            aFilter.kinds = [1]
+            aFilter.kinds = commentKinds
             aFilter.aTags = [coordinate]
+            var rootAFilter = NostrFilter()
+            rootAFilter.kinds = commentKinds
+            rootAFilter.capitalATags = [coordinate]
             var eFilter = NostrFilter()
-            eFilter.kinds = [1]
+            eFilter.kinds = commentKinds
             eFilter.eTags = [articleEvent.id]
+            var rootEFilter = NostrFilter()
+            rootEFilter.kinds = commentKinds
+            rootEFilter.capitalETags = [articleEvent.id]
 
             let suffix = String(articleEvent.id.prefix(8))
             let aSub = RelayPool.subscribe(relays: relays, filter: aFilter, id: "article-cmt-a-\(suffix)")
+            let rootASub = RelayPool.subscribe(relays: relays, filter: rootAFilter, id: "article-cmt-ra-\(suffix)")
             let eSub = RelayPool.subscribe(relays: relays, filter: eFilter, id: "article-cmt-e-\(suffix)")
-            self.subs = [aSub, eSub]
+            let rootESub = RelayPool.subscribe(relays: relays, filter: rootEFilter, id: "article-cmt-re-\(suffix)")
+            self.subs = [aSub, rootASub, eSub, rootESub]
             self.consume(aSub)
+            self.consume(rootASub)
             self.consume(eSub)
+            self.consume(rootESub)
 
             // No per-sub EOSE plumbing on the persistent pool — a fixed
             // settle window stands in for Android's awaitEoseWithTimeout(5s).
@@ -152,7 +182,7 @@ final class ArticleViewModel {
     }
 
     private func ingest(_ event: NostrEvent) {
-        guard event.kind == 1 else { return }
+        guard event.kind == 1 || event.kind == Nip22.kindComment else { return }
         guard commentEvents[event.id] == nil else { return }
         // The e-tag sub also matches the article author's own quote-posts and
         // unrelated references; both are still "comments" in the Android port.
