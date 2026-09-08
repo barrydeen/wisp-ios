@@ -13,6 +13,8 @@ struct ThreadView: View {
     @State private var suppressNextDisappearChainRemoval: Bool = false
     /// Anchors whose depth-capped subtree the user expanded inline.
     @State private var expandedBranchIds: Set<String> = []
+    @State private var prefs = SafetyPreferences.shared
+    @State private var revealStore = MutedRevealStore.shared
     @Environment(\.dismiss) private var dismiss
 
     /// The active tab's NavigationStack path. Mutated directly by smart-pop so a
@@ -84,6 +86,8 @@ struct ThreadView: View {
                                     .id(row.id)
                             case .wotGroup(let count, let depth, _):
                                 nestedWotGroupRow(count: count, depth: depth)
+                            case .mutedGroup(let count, let depth, _):
+                                nestedMutedGroupRow(count: count, depth: depth)
                             case .collapsedReplies(let anchor, let depth, let hiddenCount):
                                 collapsedRepliesRow(anchorId: anchor.id, depth: depth, hiddenCount: hiddenCount)
                             }
@@ -162,6 +166,12 @@ struct ThreadView: View {
         }
         .onDisappear {
             viewModel.stop()
+            // Revealing is scoped to the visit: reopening this thread starts
+            // from hidden again. Scoped to the ids this thread holds so a
+            // reveal on another surface (a quoted note in the feed) survives.
+            // This also fires when pushing deeper, which re-hides on the way
+            // back — the safe direction for a filter the user opted into.
+            MutedRevealStore.shared.hide(viewModel.heldEventIds)
             if suppressNextDisappearChainRemoval {
                 suppressNextDisappearChainRemoval = false
                 return
@@ -273,10 +283,26 @@ struct ThreadView: View {
 
     // MARK: - Rows
 
+    /// Thin wrapper so a revealed muted post carries its "Hide" strip. The
+    /// real branching lives in `ancestorRowContent` — wrapping here rather
+    /// than threading the banner through each branch keeps the card bodies
+    /// (and their gesture / `.equatable()` handling) untouched.
     @ViewBuilder
     private func ancestorRow(_ row: ThreadRow) -> some View {
-        if row.isBlocked {
-            blockedPlaceholder
+        VStack(alignment: .leading, spacing: 0) {
+            if row.isBlocked, isRevealed(row.event.id) {
+                revealedBanner(for: row.event.id)
+            }
+            ancestorRowContent(row)
+        }
+    }
+
+    @ViewBuilder
+    private func ancestorRowContent(_ row: ThreadRow) -> some View {
+        if row.isBlocked, !isRevealed(row.event.id) {
+            if prefs.mutedContentDisplay.showsPlaceholder {
+                blockedPlaceholder(for: row.event.id)
+            }
         } else if row.isWotHidden {
             wotHiddenPlaceholder
         } else {
@@ -319,8 +345,13 @@ struct ThreadView: View {
     private func focalRow(_ row: ThreadRow) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
-            if row.isBlocked {
-                blockedPlaceholder
+            if row.isBlocked, isRevealed(row.event.id) {
+                revealedBanner(for: row.event.id)
+            }
+            if row.isBlocked, !isRevealed(row.event.id) {
+                if prefs.mutedContentDisplay.showsPlaceholder {
+                    blockedPlaceholder(for: row.event.id)
+                }
             } else if row.isWotHidden {
                 wotHiddenPlaceholder
             } else {
@@ -385,21 +416,31 @@ struct ThreadView: View {
     }
 
     @ViewBuilder
+    /// Collapsed stand-in for a run of muted-author replies at one depth.
+    /// Built from `hiddenContentRow`, so it lines up with the single-post
+    /// placeholder and the Web-of-Trust rows it stacks against.
+    private func nestedMutedGroupRow(count: Int, depth: Int) -> some View {
+        ZStack(alignment: .leading) {
+            connector(depth: depth, dashedTop: false)
+            hiddenContentRow(
+                icon: "nosign",
+                text: count == 1
+                    ? "Post from muted user"
+                    : "\(count) posts from muted users"
+            )
+            .padding(.leading, indentationWidth(for: depth))
+        }
+    }
+
     private func nestedWotGroupRow(count: Int, depth: Int) -> some View {
         ZStack(alignment: .leading) {
             connector(depth: depth, dashedTop: false)
-            HStack(spacing: 8) {
-                Image(systemName: "eye.slash")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.tertiary)
-                Text(count == 1 ? "Post hidden by WoT filter" : "\(count) posts hidden by WoT filter")
-                    .font(.subheadline)
-                    .foregroundStyle(.tertiary)
-                Spacer()
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            hiddenContentRow(
+                icon: "eye.slash",
+                text: count == 1
+                    ? "Post hidden by Web of Trust filter"
+                    : "\(count) posts hidden by Web of Trust filter"
+            )
             .padding(.leading, indentationWidth(for: depth))
         }
     }
@@ -447,10 +488,36 @@ struct ThreadView: View {
     /// coverage instead of living inline in this View).
     private var groupedNestedReplies: [NestedReplyDisplayItem] {
         ThreadReplyFolder.fold(
-            items: viewModel.nestedReplies,
+            items: visibleNestedReplies,
             expandedBranchIds: expandedBranchIds,
-            exemptTargetId: viewModel.foldExemptTargetId ?? viewModel.highlightId
+            exemptTargetId: viewModel.foldExemptTargetId ?? viewModel.highlightId,
+            // With no per-post reveal there is nothing to do with an
+            // individual muted row, so a run of them collapses to one counted
+            // row instead of stacking identical placeholders. The reveal mode
+            // keeps them separate — each needs its own Show link.
+            groupMuted: !prefs.mutedContentDisplay.allowsReveal
         )
+    }
+
+    /// Reply tree with muted authors' rows removed entirely when the user has
+    /// asked for no placeholders.
+    ///
+    /// Filtering here rather than returning an empty view from `replyRow` is
+    /// deliberate: `nestedReplyRow` draws the connector rail in a `ZStack`
+    /// *around* the row, so an empty row would still paint a dangling rail
+    /// segment — a placeholder by another name. Dropping the item means the
+    /// thread genuinely closes over the gap.
+    ///
+    /// Descendants of a hidden reply are kept. They're the "commenters whose
+    /// context you lose" case — visible posts by unmuted authors, captioned
+    /// "Replying to a muted user" so they don't read as non sequiturs.
+    private var visibleNestedReplies: [NestedReplyRow] {
+        guard !prefs.mutedContentDisplay.showsPlaceholder else {
+            return viewModel.nestedReplies
+        }
+        return viewModel.nestedReplies.filter {
+            !$0.row.isBlocked || isRevealed($0.row.event.id)
+        }
     }
 
     /// Direct-parent event for every rendered reply, keyed by reply id —
@@ -461,16 +528,35 @@ struct ThreadView: View {
     }
 
     private func replyToLabel(target: NostrEvent) -> String {
+        // A muted author is never named. This is the only breadcrumb left when
+        // placeholders are off — without it, a reply to a hidden post reads as
+        // a non sequitur with no hint that anything was filtered.
+        if SafetyFilter.shared.snapshot.blockedPubkeys.contains(target.pubkey) {
+            return "Replying to a muted user"
+        }
         let name = viewModel.profiles[target.pubkey]?.displayString
             ?? ProfileRepository.shared.get(target.pubkey)?.displayString
             ?? Nip19.shortNpub(hex: target.pubkey)
         return "Replying to \(name)"
     }
 
+    /// See `ancestorRow` — same wrapper, same reason.
     @ViewBuilder
     private func replyRow(_ row: ThreadRow, replyingTo: NostrEvent?) -> some View {
-        if row.isBlocked {
-            blockedPlaceholder
+        VStack(alignment: .leading, spacing: 0) {
+            if row.isBlocked, isRevealed(row.event.id) {
+                revealedBanner(for: row.event.id)
+            }
+            replyRowContent(row, replyingTo: replyingTo)
+        }
+    }
+
+    @ViewBuilder
+    private func replyRowContent(_ row: ThreadRow, replyingTo: NostrEvent?) -> some View {
+        if row.isBlocked, !isRevealed(row.event.id) {
+            if prefs.mutedContentDisplay.showsPlaceholder {
+                blockedPlaceholder(for: row.event.id)
+            }
         } else if row.isWotHidden {
             // Replies normally drop outright before reaching a row; this only
             // renders if a WoT-hidden id slips into a slice (belt-and-
@@ -582,19 +668,103 @@ struct ThreadView: View {
         return counts
     }
 
-    private var blockedPlaceholder: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "nosign")
-                .font(.system(size: 13))
-                .foregroundStyle(.tertiary)
-            Text("Post from blocked user")
-                .font(.subheadline)
-                .foregroundStyle(.tertiary)
-            Spacer()
+    /// Stand-in for a post whose author the user has muted.
+    ///
+    /// Honors `SafetyPreferences.mutedContentDisplay`: `.hidden` renders
+    /// nothing at all (callers gate on `showsPlaceholder` before laying out a
+    /// row, so the thread closes over the gap rather than leaving a blank),
+    /// and `.placeholderWithReveal` adds the Show link.
+    /// Typography shared by every "something is hidden here" row — muted
+    /// author, Web-of-Trust filter, their collapsed counted variants, and the
+    /// revealed-post strip.
+    ///
+    /// Pinned in one place because these rows stack directly on top of each
+    /// other in a thread: any difference in font size or icon metrics reads as
+    /// the list being misaligned, and the muted pair also swap places when
+    /// Show / Hide is tapped, where a mismatch reads as the row jumping.
+    private static let hiddenRowFont: Font = .caption
+    private static let hiddenRowIconSize: CGFloat = 11
+    private static let hiddenRowSpacing: CGFloat = 6
+    /// Fixed icon column. SF Symbols have different glyph widths (`eye.slash`
+    /// is visibly wider than `nosign`), so without a reserved column the text
+    /// after each icon starts at a different x and the stacked rows look ragged.
+    private static let hiddenRowIconWidth: CGFloat = 16
+
+    /// Single source of chrome for the hidden-content rows. `trailing` carries
+    /// the optional Show link; everything else is identical by construction.
+    private func hiddenContentRow<Trailing: View>(
+        icon: String,
+        text: String,
+        @ViewBuilder trailing: () -> Trailing = { EmptyView() }
+    ) -> some View {
+        HStack(spacing: Self.hiddenRowSpacing) {
+            Image(systemName: icon)
+                .font(.system(size: Self.hiddenRowIconSize))
+                .frame(width: Self.hiddenRowIconWidth, alignment: .center)
+            Text(text)
+                .font(Self.hiddenRowFont)
+            Spacer(minLength: 0)
+            trailing()
         }
+        .foregroundStyle(.tertiary)
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func blockedPlaceholder(for eventId: String) -> some View {
+        // Whole row, link included, sits at `.tertiary` (from
+        // `hiddenContentRow`): a muted post's row shouldn't pull the eye
+        // harder than the real posts around it.
+        hiddenContentRow(icon: "nosign", text: "Post from muted user") {
+            if prefs.mutedContentDisplay.allowsReveal {
+                Button {
+                    MutedRevealStore.shared.reveal(eventId)
+                } label: {
+                    Text("Show")
+                        .font(Self.hiddenRowFont)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Show this muted post")
+            }
+        }
+    }
+
+    /// Header strip on a revealed post. Keeps the reveal honest — the card
+    /// below is a muted author's, and it says so — and gives the user the way
+    /// back that a one-way Show link wouldn't.
+    private func revealedBanner(for eventId: String) -> some View {
+        HStack(spacing: Self.hiddenRowSpacing) {
+            Image(systemName: "eye")
+                .font(.system(size: Self.hiddenRowIconSize))
+                .frame(width: Self.hiddenRowIconWidth, alignment: .center)
+            Text("Muted user")
+                .font(Self.hiddenRowFont)
+            Spacer(minLength: 0)
+            Button {
+                MutedRevealStore.shared.hide([eventId])
+            } label: {
+                Text("Hide")
+                    .font(Self.hiddenRowFont)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Hide this muted post again")
+        }
+        .foregroundStyle(.tertiary)
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+    }
+
+    /// True when a muted row should render its real card: the user asked for
+    /// reveals AND tapped Show on this particular post.
+    private func isRevealed(_ eventId: String) -> Bool {
+        prefs.mutedContentDisplay.allowsReveal && revealStore.isRevealed(eventId)
     }
 
     /// Structural stand-in for a root/focal/ancestor the Web-of-Trust filter
@@ -603,18 +773,7 @@ struct ThreadView: View {
     /// potentially graphic content, so the placeholder only preserves the
     /// thread's shape.
     private var wotHiddenPlaceholder: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "eye.slash")
-                .font(.system(size: 13))
-                .foregroundStyle(.tertiary)
-            Text("Hidden by Web of Trust filter")
-                .font(.subheadline)
-                .foregroundStyle(.tertiary)
-            Spacer()
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        hiddenContentRow(icon: "eye.slash", text: "Post hidden by Web of Trust filter")
     }
 
     private var searchingAncestorRow: some View {

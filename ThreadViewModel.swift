@@ -96,6 +96,11 @@ final class ThreadViewModel {
     @ObservationIgnored private var replyCountdownTask: Task<Void, Never>?
 
     @ObservationIgnored private var events: [String: NostrEvent] = [:]
+
+    /// Ids of every event this thread holds. Used by the view to drop its
+    /// muted-post reveals on the way out, so a revealed post is hidden again
+    /// the next time the thread is opened.
+    var heldEventIds: Set<String> { Set(events.keys) }
     @ObservationIgnored private var loadedOnce = false
     @ObservationIgnored private var streamTasks: [Task<Void, Never>] = []
     @ObservationIgnored private var profileUpdatesTask: Task<Void, Never>?

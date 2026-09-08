@@ -150,6 +150,8 @@ struct QuotedNoteView: View {
     @State private var profile: ProfileData?
     @State private var contentExpanded = false
     @State private var attempt: Int = 0
+    @State private var prefs = SafetyPreferences.shared
+    @State private var revealStore = MutedRevealStore.shared
 
     /// Mirror PostCardView's long-post threshold so a quoted long note collapses
     /// to the same height with a "Show more" toggle instead of pushing the
@@ -172,8 +174,13 @@ struct QuotedNoteView: View {
 
     var body: some View {
         Group {
-            if blocked {
-                blockedCard
+            if blocked, !isRevealed {
+                // `.hidden` renders nothing at all: an embedded quote from a
+                // muted author disappears along with its frame, rather than
+                // leaving an empty stub in the middle of the host post.
+                if prefs.mutedContentDisplay.showsPlaceholder {
+                    blockedCard
+                }
             } else if safetyHidden {
                 safetyHiddenCard
             } else if let event {
@@ -236,13 +243,30 @@ struct QuotedNoteView: View {
     /// Shown when the quoted note's author is blocked. Their content is never
     /// rendered; a neutral stub keeps the surrounding card from looking broken
     /// (or showing a misleading "Quoted note not found").
+    private var isRevealed: Bool {
+        prefs.mutedContentDisplay.allowsReveal && revealStore.isRevealed(eventId)
+    }
+
     private var blockedCard: some View {
         HStack(spacing: 8) {
             Image(systemName: "nosign")
                 .foregroundStyle(.secondary)
-            Text("Note from a blocked user")
+            Text("Note from a muted user")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            if prefs.mutedContentDisplay.allowsReveal {
+                Spacer(minLength: 8)
+                Button {
+                    MutedRevealStore.shared.reveal(eventId)
+                } label: {
+                    Text("Show")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Show this muted note")
+            }
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -252,7 +276,7 @@ struct QuotedNoteView: View {
             RoundedRectangle(cornerRadius: 12)
                 .stroke(Color.wispSurfaceVariant, lineWidth: 1)
         )
-        .accessibilityLabel("Note from a blocked user")
+        .accessibilityLabel("Note from a muted user")
     }
 
     /// Shown when the safety filter (Web of Trust, muted word) hides the
