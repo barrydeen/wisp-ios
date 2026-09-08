@@ -37,30 +37,30 @@ final class QuotedNoteCache {
     /// ObjectBox event store (kinds 1/6/20 are persisted on the home feed, so
     /// a quoted note the user has already scrolled past is free to retrieve),
     /// and finally fans out to the embedded hint + default relays.
-    func fetch(eventId: String, relayHints: [String]) async -> NostrEvent? {
+    func fetch(eventId: String, relayHints: [String], author: String? = nil) async -> NostrEvent? {
         if let cached = cache[eventId] { return cached }
         if let stored = await EventStore.shared.eventsByIds([eventId]).first {
             cache[eventId] = stored
             return stored
         }
         if let existing = inflight[eventId] { return await existing.value }
-        return await runFetch(eventId: eventId, relayHints: relayHints, attempt: 0)
+        return await runFetch(eventId: eventId, relayHints: relayHints, author: author, attempt: 0)
     }
 
     /// Forced retry — bumps the attempt counter and widens the relay set with
     /// the user's outbox-scored relays plus an extra fallback list. Used by
     /// the tap-to-retry affordance on the "Quoted note not found" card and by
     /// the view's one automatic redundancy retry.
-    func refetch(eventId: String, relayHints: [String], attempt: Int) async -> NostrEvent? {
+    func refetch(eventId: String, relayHints: [String], author: String? = nil, attempt: Int) async -> NostrEvent? {
         if let cached = cache[eventId] { return cached }
         if let existing = inflight[eventId] { return await existing.value }
-        return await runFetch(eventId: eventId, relayHints: relayHints, attempt: attempt)
+        return await runFetch(eventId: eventId, relayHints: relayHints, author: author, attempt: attempt)
     }
 
-    private func runFetch(eventId: String, relayHints: [String], attempt: Int) async -> NostrEvent? {
+    private func runFetch(eventId: String, relayHints: [String], author: String?, attempt: Int) async -> NostrEvent? {
         let task = Task<NostrEvent?, Never> { [weak self] in
             guard let self else { return nil }
-            let relays = self.relayList(hints: relayHints, attempt: attempt)
+            let relays = await self.relayList(hints: relayHints, author: author, attempt: attempt)
             // Retries get a longer window — broader relay sets contain slower
             // peers (.onion, regional, archive) that need extra time.
             let timeout: TimeInterval = attempt == 0 ? 6 : 10
@@ -96,7 +96,7 @@ final class QuotedNoteCache {
     /// relays of people they follow — likely to mirror notes the author
     /// reposted or interacted with) and an extra fallback list, widening the
     /// cap to 12 relays.
-    private func relayList(hints: [String], attempt: Int) -> [String] {
+    private func relayList(hints: [String], author: String?, attempt: Int) async -> [String] {
         var seen = Set<String>()
         var out: [String] = []
 
@@ -106,6 +106,16 @@ final class QuotedNoteCache {
         }
 
         for r in hints { append(r) }
+        // The author's own NIP-65 write relays — the outbox model, and the
+        // one place a note is actually guaranteed to have been published.
+        // Ahead of the generic defaults: a hint that misses used to fall
+        // straight to a fixed list that has no particular reason to hold this
+        // author's notes, which is why quotes from outside the usual relays
+        // showed as "not found" while the note was sitting where its author
+        // put it.
+        if let author {
+            for r in await RelayListRepository.shared.getWriteRelays(author) { append(r) }
+        }
         for r in Self.defaultRelays { append(r) }
 
         if attempt > 0 {
@@ -116,7 +126,9 @@ final class QuotedNoteCache {
             for r in Self.extraRelays { append(r) }
         }
 
-        let cap = attempt == 0 ? 6 : 12
+        // A little wider on attempt 0 than before, so the author's relays
+        // don't push the defaults out of the first try.
+        let cap = attempt == 0 ? 8 : 14
         return Array(out.prefix(cap))
     }
 
@@ -131,6 +143,9 @@ final class QuotedNoteCache {
 struct QuotedNoteView: View {
     let eventId: String
     let relayHints: [String]
+    /// Author of the quoted note, from the quoting note's NIP-18 `q` tag.
+    /// Enables an outbox lookup when relay hints don't resolve the event.
+    var authorHint: String? = nil
     let profiles: [String: ProfileData]
     var onProfileTap: ((String) -> Void)? = nil
     var onNoteTap: ((String) -> Void)? = nil
@@ -513,7 +528,7 @@ struct QuotedNoteView: View {
 
         let result: NostrEvent?
         if attempt == 0 {
-            result = await QuotedNoteCache.shared.fetch(eventId: eventId, relayHints: relayHints)
+            result = await QuotedNoteCache.shared.fetch(eventId: eventId, relayHints: relayHints, author: authorHint)
         } else {
             // Brief backoff before broader retries so a flaky relay isn't
             // pounded inside the same second. Capped so manual taps still
@@ -524,6 +539,7 @@ struct QuotedNoteView: View {
             result = await QuotedNoteCache.shared.refetch(
                 eventId: eventId,
                 relayHints: relayHints,
+                author: authorHint,
                 attempt: attempt
             )
         }
