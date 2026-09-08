@@ -418,6 +418,14 @@ struct RichContentView: View {
                 fallbackLink(url)
             }
         case .nostrNote(let eventId, let relayHints):
+            // NIP-18 requires a quote to carry `["q", <id>, <relay>, <pubkey>]`,
+            // so the note doing the quoting already names the author of the
+            // note being quoted. That's the only attribution available when
+            // the quoted event itself can't be fetched — and it's what makes
+            // an outbox lookup possible.
+            let quotedAuthor = tags.first {
+                $0.count >= 4 && $0[0] == "q" && $0[1] == eventId && !$0[3].isEmpty
+            }?[3]
             // Forward this view's own inset rather than QuotedNoteView's
             // narrower feed-tuned default (56) — an inline `nostr:nevent…`
             // quote embedded in a wider host (e.g. NotificationRowView's
@@ -427,6 +435,7 @@ struct RichContentView: View {
             QuotedNoteView(
                 eventId: eventId,
                 relayHints: relayHints,
+                authorHint: quotedAuthor,
                 profiles: profiles,
                 onProfileTap: onProfileTap,
                 onNoteTap: onNoteTap,
