@@ -645,8 +645,15 @@ final class ProfileViewModel {
             for await (event, _) in RelayPool.stream(queries: queries, timeout: 12) {
                 if Task.isCancelled { return }
                 if SafetyFilter.shared.shouldDrop(event: event, context: .feed) { continue }
+                // `externalParent`, not `externalRoot`: list only TOP-LEVEL
+                // comments. A reply to a comment carries the same root scope
+                // forward, so keying off the root pulled replies in here too —
+                // and a reply renders no subject card (that belongs to the
+                // comment it answers), so it would read as one of the
+                // context-free rows this tab exists to fix. Replies remain
+                // reachable in the thread.
                 guard event.kind == Nip22.kindComment,
-                      Nip22.externalRoot(of: event) != nil,
+                      Nip22.externalParent(of: event) != nil,
                       seen.insert(event.id).inserted else { continue }
                 self.enqueueComment(event)
             }
