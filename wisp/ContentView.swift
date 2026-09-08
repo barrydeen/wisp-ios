@@ -24,85 +24,94 @@ struct ContentView: View {
     /// second key (which would leave the backed-up key abandoned).
     @State private var signUpExistingKeypair: Keypair?
 
+    /// The single place an account is chosen — cold launch and add-account
+    /// both. Previously add-account had its own `LoginView`, which had
+    /// drifted: it took nsec only (no watch-only npub), offered neither
+    /// Apple nor Google, and didn't trim pasted input. Sharing one view
+    /// means those can't diverge again.
+    @ViewBuilder
+    private func loginEntry(mode: SplashView.Mode) -> some View {
+        SplashView(
+            mode: mode,
+            onContinueWithNostr: { showNostrSheet = true },
+            onContinueWithGoogle: { showGoogleAuth = true },
+            onContinueWithApple: { showAppleAuth = true },
+            onCancel: { showAddAccount = false }
+        )
+        .sheet(isPresented: $showNostrSheet) {
+            NostrLoginSheet(
+                onLogin: { kp in
+                    showNostrSheet = false
+                    // Watch-only accounts skip onboarding
+                    // (`markOnboardingComplete` runs inside NostrLoginSheet
+                    // before this fires).
+                    finishLogin(kp, mode: mode)
+                },
+                onCreateAccount: {
+                    showNostrSheet = false
+                    if mode == .addAccount { showAddAccount = false }
+                    currentScreen = .signUp
+                }
+            )
+        }
+        .fullScreenCover(isPresented: $showGoogleAuth) {
+            GoogleAuthView(
+                onCancel: { showGoogleAuth = false },
+                onDone: { _, kp in
+                    showGoogleAuth = false
+                    // Both new and restored Google accounts run the
+                    // outbox-builder onboarding so the feed has
+                    // relays-per-author before MainView mounts.
+                    finishLogin(kp, mode: mode)
+                }
+            )
+        }
+        .fullScreenCover(isPresented: $showAppleAuth) {
+            AppleAuthView(
+                onCancel: { showAppleAuth = false },
+                onDone: { isNewAccount, kp in
+                    showAppleAuth = false
+                    guard !isNewAccount else {
+                        // Brand-new account: run the same profile / follows /
+                        // hashtags / intro-note wizard as a "Create new
+                        // account" tap, passing the already-generated,
+                        // already-backed-up key so the wizard doesn't mint a
+                        // second one.
+                        keypair = kp
+                        signUpExistingKeypair = kp
+                        if mode == .addAccount { showAddAccount = false }
+                        currentScreen = .signUp
+                        return
+                    }
+                    finishLogin(kp, mode: mode)
+                }
+            )
+        }
+    }
+
+    /// Shared post-login routing. The only differences between the two entry
+    /// points are dismissing the add-account cover and the shorter loading
+    /// delay an account *switch* gets.
+    private func finishLogin(_ kp: Keypair, mode: SplashView.Mode) {
+        keypair = kp
+        if mode == .addAccount { showAddAccount = false }
+        // First time this pubkey is seen on the device, run onboarding so the
+        // outbox builder fetches kind-3 contacts and kind-10002 relay lists —
+        // without those the feed has no follows to query and shows only the
+        // user's own posts.
+        guard NostrKey.isOnboardingComplete(pubkey: kp.pubkey) else {
+            currentScreen = .onboarding
+            return
+        }
+        if mode == .addAccount { accountSwitchInProgress = true }
+        currentScreen = .loading
+    }
+
     var body: some View {
         Group {
             switch currentScreen {
             case .splash:
-                SplashView(
-                    onContinueWithNostr: {
-                        showNostrSheet = true
-                    },
-                    onContinueWithGoogle: {
-                        showGoogleAuth = true
-                    },
-                    onContinueWithApple: {
-                        showAppleAuth = true
-                    }
-                )
-                .sheet(isPresented: $showNostrSheet) {
-                    NostrLoginSheet(
-                        onLogin: { kp in
-                            keypair = kp
-                            showNostrSheet = false
-                            // Watch-only accounts skip onboarding (markOnboardingComplete
-                            // is called in NostrLoginSheet before this closure fires).
-                            if NostrKey.isOnboardingComplete(pubkey: kp.pubkey) {
-                                currentScreen = .loading
-                            } else {
-                                currentScreen = .onboarding
-                            }
-                        },
-                        onCreateAccount: {
-                            showNostrSheet = false
-                            currentScreen = .signUp
-                        }
-                    )
-                }
-                .fullScreenCover(isPresented: $showGoogleAuth) {
-                    GoogleAuthView(
-                        onCancel: { showGoogleAuth = false },
-                        onDone: { _, kp in
-                            keypair = kp
-                            showGoogleAuth = false
-                            // Both new and restored Google accounts run the
-                            // outbox-builder onboarding so the feed has
-                            // relays-per-author before MainView mounts.
-                            // `OnboardingView`'s watch-only fast path is
-                            // skipped because we always have a privkey here.
-                            if NostrKey.isOnboardingComplete(pubkey: kp.pubkey) {
-                                currentScreen = .loading
-                            } else {
-                                currentScreen = .onboarding
-                            }
-                        }
-                    )
-                }
-                .fullScreenCover(isPresented: $showAppleAuth) {
-                    AppleAuthView(
-                        onCancel: { showAppleAuth = false },
-                        onDone: { isNewAccount, kp in
-                            keypair = kp
-                            showAppleAuth = false
-                            if isNewAccount {
-                                // Brand-new account: run the same profile /
-                                // follows / hashtags / intro-note wizard as
-                                // a "Create new account" tap, passing the
-                                // already-generated, already-backed-up key
-                                // so the wizard doesn't mint a second one.
-                                signUpExistingKeypair = kp
-                                currentScreen = .signUp
-                            } else if NostrKey.isOnboardingComplete(pubkey: kp.pubkey) {
-                                currentScreen = .loading
-                            } else {
-                                // Restored account: outbox-builder fetches
-                                // kind-3 / kind-10002 from relays so the
-                                // feed has follows + per-author write
-                                // relays before MainView mounts.
-                                currentScreen = .onboarding
-                            }
-                        }
-                    )
-                }
+                loginEntry(mode: .firstRun)
 
             case .signUp:
                 SignUpFlowView(existingKeypair: signUpExistingKeypair) { kp in
@@ -142,23 +151,8 @@ struct ContentView: View {
             }
         }
         .fullScreenCover(isPresented: $showAddAccount) {
-            LoginView { newKeypair in
-                showAddAccount = false
-                self.keypair = newKeypair
-                // First time we see this pubkey on the device, run onboarding
-                // so the outbox builder fetches kind-3 contacts and kind-10002
-                // relay lists — without that the feed has no follows to query
-                // and falls back to showing only the user's own posts. Already-
-                // onboarded accounts (the user re-adding a previously-used
-                // pubkey) skip straight to the loading splash.
-                if NostrKey.isOnboardingComplete(pubkey: newKeypair.pubkey) {
-                    accountSwitchInProgress = true
-                    currentScreen = .loading
-                } else {
-                    currentScreen = .onboarding
-                }
-            }
-            .interactiveDismissDisabled()
+            loginEntry(mode: .addAccount)
+                .interactiveDismissDisabled()
         }
         .onAppear {
             guard !checkedSavedAccount else { return }

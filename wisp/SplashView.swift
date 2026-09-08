@@ -4,6 +4,14 @@ private let avatarSize: CGFloat = 44
 private let avatarGap: CGFloat = 4
 
 struct SplashView: View {
+    /// Which entry point is showing this screen. Cold launch has nothing to
+    /// cancel back to and has to wait out the launch animation; presented
+    /// over a running app to add a second account, neither applies.
+    enum Mode {
+        case firstRun
+        case addAccount
+    }
+
     @State private var viewModel = SplashViewModel()
     /// The bottom action buttons fade in after the splash has had a moment
     /// to settle. Without the delay the layout visibly twitches while the
@@ -17,9 +25,13 @@ struct SplashView: View {
     /// safe-area inset changes — the cause of the buttons jumping during
     /// launch and sheet animations.
     @State private var lockedHeight: CGFloat?
+    var mode: Mode = .firstRun
     var onContinueWithNostr: () -> Void = {}
     var onContinueWithGoogle: () -> Void = {}
     var onContinueWithApple: () -> Void = {}
+    /// Only called in `.addAccount`. The cover is presented with
+    /// `interactiveDismissDisabled()`, so this is the only way out.
+    var onCancel: () -> Void = {}
 
     var body: some View {
         GeometryReader { geo in
@@ -131,11 +143,35 @@ struct SplashView: View {
         }
         .background(Color.wispBackground)
         .ignoresSafeArea()
+        .overlay(alignment: .topLeading) {
+            // Pinned to the top-leading corner so it stays clear of the
+            // action buttons and of the keyboard once the Nostr sheet is up.
+            if mode == .addAccount {
+                Button(action: onCancel) {
+                    Text("Cancel")
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(.black)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 8)
+                        .background(.white.opacity(0.92), in: Capsule())
+                }
+                .padding(.leading, 16)
+                .padding(.top, 16)
+            }
+        }
         .task {
             // Hold the bottom stack hidden until the screen has fully
             // settled. 1.8s covers the launch animation, the home
             // indicator inset stabilising, and any subsequent safe-area
             // transitions — every shift happens behind a 0-opacity curtain.
+            //
+            // None of that applies to a cover presented over a running app:
+            // the safe area is already stable, so the wait would just be
+            // 1.8s of blank screen after tapping Add account.
+            guard mode == .firstRun else {
+                actionsVisible = true
+                return
+            }
             try? await Task.sleep(for: .milliseconds(1800))
             withAnimation(.easeOut(duration: 0.35)) { actionsVisible = true }
         }

@@ -55,7 +55,6 @@
 		4CDA87E42F9C54980079A1BA /* RelayPool.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA87E32F9C54980079A1BA /* RelayPool.swift */; };
 		4CDA87E62F9C54990079A1BA /* RelayScoreBoard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA87E52F9C54990079A1BA /* RelayScoreBoard.swift */; };
 		4CDA87E72F9C549A0079A1BA /* RelayUrlValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA87E82F9C549A0079A1BA /* RelayUrlValidator.swift */; };
-		4CDA87E82F9C54B70079A1BA /* LoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA87E72F9C54B70079A1BA /* LoginView.swift */; };
 		4CDA87EA2F9C54B80079A1BA /* OnboardingViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA87E92F9C54B80079A1BA /* OnboardingViewModel.swift */; };
 		4CDA87EC2F9C54DE0079A1BA /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA87EB2F9C54DE0079A1BA /* OnboardingView.swift */; };
 		4CDA87EE2F9C5CC50079A1BA /* ProfileData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA87ED2F9C5CC50079A1BA /* ProfileData.swift */; };
@@ -406,7 +405,6 @@
 		4CDA87E12F9C54970079A1BA /* NostrKey.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NostrKey.swift; sourceTree = "<group>"; };
 		4CDA87E32F9C54980079A1BA /* RelayPool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayPool.swift; sourceTree = "<group>"; };
 		4CDA87E52F9C54990079A1BA /* RelayScoreBoard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayScoreBoard.swift; sourceTree = "<group>"; };
-		4CDA87E72F9C54B70079A1BA /* LoginView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginView.swift; sourceTree = "<group>"; };
 		4CDA87E82F9C549A0079A1BA /* RelayUrlValidator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayUrlValidator.swift; sourceTree = "<group>"; };
 		4CDA87E92F9C54B80079A1BA /* OnboardingViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingViewModel.swift; sourceTree = "<group>"; };
 		4CDA87EB2F9C54DE0079A1BA /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
@@ -773,7 +771,6 @@
 				4CDA88FA2F9C540000000005 /* SignUpFlowView.swift */,
 				4CDA88FA2F9C540000000006 /* SignUpViewModel.swift */,
 				4CDA88FA2F9C540000001100 /* OnboardingComponents.swift */,
-				4CDA87E72F9C54B70079A1BA /* LoginView.swift */,
 				4CDA87E92F9C54B80079A1BA /* OnboardingViewModel.swift */,
 				4CDA87EB2F9C54DE0079A1BA /* OnboardingView.swift */,
 				4CDA87ED2F9C5CC50079A1BA /* ProfileData.swift */,
@@ -1290,7 +1287,6 @@
 				4CAA00030002000000A1BA01 /* AudioPlayerStore.swift in Sources */,
 				4CDA87E02F9C54960079A1BA /* NostrEvent.swift in Sources */,
 				4CDA87EA2F9C54B80079A1BA /* OnboardingViewModel.swift in Sources */,
-				4CDA87E82F9C54B70079A1BA /* LoginView.swift in Sources */,
 				4CDA87F82F9C63FA0079A1BA /* EventStore.swift in Sources */,
 				4CDA87F22F9C5CC60079A1BA /* RichContentView.swift in Sources */,
 				4CDA87FC2F9C69E70079A1BA /* ProfileRepository.swift in Sources */,
