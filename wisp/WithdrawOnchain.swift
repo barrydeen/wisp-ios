@@ -1,8 +1,11 @@
 import Foundation
 
-/// Confirmation speed for an on-chain withdrawal, mapped to the SDK's three fee
+/// Confirmation speed for an on-chain send, mapped to the SDK's three fee
 /// tiers. Kept SDK-free so the view layer and tests don't import the SDK.
-enum WithdrawOnchainSpeed: String, CaseIterable, Sendable {
+///
+/// Shared by the whole-balance withdraw and a send to a chosen address —
+/// the fee tiers are the same question either way.
+enum OnchainSpeed: String, CaseIterable, Sendable {
     case slow
     case medium
     case fast
@@ -35,7 +38,7 @@ struct WithdrawOnchainQuote: Equatable, Sendable {
     let address: String
     let spendSats: Int64
     let feeSats: Int64
-    let speed: WithdrawOnchainSpeed
+    let speed: OnchainSpeed
 
     var netSats: Int64 { max(0, spendSats - feeSats) }
 
