@@ -51,6 +51,10 @@ final class DeletionSender {
 
         let succeeded = await RelayPool.publish(event: event, to: Array(set), timeout: 8)
         if succeeded.isEmpty { throw SendError.publishFailed }
+        // Record locally too: a quoted-note card elsewhere in the app should
+        // read "deleted by its author" immediately, not after some relay
+        // happens to answer a kind-5 query.
+        DeletionTracker.shared.ingest(event)
     }
 
     /// Publish a kind-5 referencing `targetEvent.id`. The caller MUST verify `targetEvent.pubkey
@@ -88,5 +92,6 @@ final class DeletionSender {
 
         let succeeded = await RelayPool.publish(event: event, to: Array(set), timeout: 8)
         if succeeded.isEmpty { throw SendError.publishFailed }
+        DeletionTracker.shared.ingest(event)
     }
 }
