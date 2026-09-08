@@ -134,6 +134,7 @@
 		4CFF011500000000000000AB /* AnimatedImageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF011400000000000000AB /* AnimatedImageView.swift */; };
 		4CFF011700000000000000AC /* MediaAudioSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF011600000000000000AC /* MediaAudioSession.swift */; };
 		4CFF011900000000000000AD /* LnurlPayableView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF011800000000000000AD /* LnurlPayableView.swift */; };
+		4CFFQG010000000000000A51 /* QuoteGraph.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFFQG000000000000000A51 /* QuoteGraph.swift */; };
 		4CFF020100000000000000A8 /* VideoPiPCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF020000000000000000A8 /* VideoPiPCoordinator.swift */; };
 		4CFF020100000000000000B1 /* ProfileRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF020000000000000000B1 /* ProfileRoute.swift */; };
 		4CFF020300000000000000A8 /* PiPPlayerViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF020200000000000000A8 /* PiPPlayerViewController.swift */; };
@@ -484,6 +485,7 @@
 		4CFF011400000000000000AB /* AnimatedImageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnimatedImageView.swift; sourceTree = "<group>"; };
 		4CFF011600000000000000AC /* MediaAudioSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaAudioSession.swift; sourceTree = "<group>"; };
 		4CFF011800000000000000AD /* LnurlPayableView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LnurlPayableView.swift; sourceTree = "<group>"; };
+		4CFFQG000000000000000A51 /* QuoteGraph.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuoteGraph.swift; sourceTree = "<group>"; };
 		4CFF020000000000000000A8 /* VideoPiPCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoPiPCoordinator.swift; sourceTree = "<group>"; };
 		4CFF020000000000000000B1 /* ProfileRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileRoute.swift; sourceTree = "<group>"; };
 		4CFF020200000000000000A8 /* PiPPlayerViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiPPlayerViewController.swift; sourceTree = "<group>"; };
@@ -796,6 +798,7 @@
 				4CFF010A00000000000000A6 /* LightningInvoiceView.swift */,
 				4CFF0A0000000000000000B1 /* LightningPaySheet.swift */,
 				4CFF011800000000000000AD /* LnurlPayableView.swift */,
+				4CFFQG000000000000000A51 /* QuoteGraph.swift */,
 				4CFF010C00000000000000A7 /* QuotedNoteView.swift */,
 				4CAA770100000000000000B1 /* ArticleRoute.swift */,
 				4CAA770300000000000000B2 /* ArticleCache.swift */,
@@ -1309,6 +1312,7 @@
 				4CFF010B00000000000000A6 /* LightningInvoiceView.swift in Sources */,
 				4CFF0A0100000000000000B1 /* LightningPaySheet.swift in Sources */,
 				4CFF011900000000000000AD /* LnurlPayableView.swift in Sources */,
+				4CFFQG010000000000000A51 /* QuoteGraph.swift in Sources */,
 				4CFF010D00000000000000A7 /* QuotedNoteView.swift in Sources */,
 				4CAA770200000000000000B1 /* ArticleRoute.swift in Sources */,
 				4CAA770400000000000000B2 /* ArticleCache.swift in Sources */,
