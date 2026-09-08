@@ -113,7 +113,7 @@ final class WalletStore {
     /// `SparkWallet.prepareWithdrawOnchain`.
     func prepareWithdrawOnchain(
         address: String,
-        speed: WithdrawOnchainSpeed
+        speed: OnchainSpeed
     ) async -> Result<WithdrawOnchainQuote, WalletError> {
         guard let spark = wallet as? SparkWallet else { return .failure(.notConnected) }
         return await spark.prepareWithdrawOnchain(address: address, speed: speed)
@@ -535,7 +535,7 @@ final class WalletStore {
     func prepareSendOnchain(
         address: String,
         amountSats: Int64,
-        speed: OnchainSendSpeed,
+        speed: OnchainSpeed,
         drainAll: Bool = false
     ) async -> Result<OnchainSendQuote, WalletError> {
         guard let spark = wallet as? SparkWallet else {

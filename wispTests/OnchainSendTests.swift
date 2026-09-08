@@ -12,7 +12,7 @@ struct OnchainSendTests {
     private func quote(
         amountSats: Int64 = 100_000,
         feeSats: Int64 = 500,
-        speed: OnchainSendSpeed = .medium,
+        speed: OnchainSpeed = .medium,
         leavesTokensBehind: Bool = false
     ) -> OnchainSendQuote {
         OnchainSendQuote(
@@ -125,10 +125,10 @@ struct OnchainSendTests {
     // MARK: - Speed tiers
 
     @Test func everySpeedIsLabeled() {
-        for speed in OnchainSendSpeed.allCases {
+        for speed in OnchainSpeed.allCases {
             #expect(!speed.label.isEmpty)
             #expect(!speed.detail.isEmpty)
         }
-        #expect(OnchainSendSpeed.allCases.count == 3)
+        #expect(OnchainSpeed.allCases.count == 3)
     }
 }

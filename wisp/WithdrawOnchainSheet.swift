@@ -11,7 +11,7 @@ struct WithdrawOnchainSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var address = ""
-    @State private var speed: WithdrawOnchainSpeed = .medium
+    @State private var speed: OnchainSpeed = .medium
     @State private var quote: WithdrawOnchainQuote?
     @State private var isQuoting = false
     @State private var isSending = false
@@ -143,7 +143,7 @@ struct WithdrawOnchainSheet: View {
             Text("Confirmation speed")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
-            ForEach(WithdrawOnchainSpeed.allCases, id: \.self) { option in
+            ForEach(OnchainSpeed.allCases, id: \.self) { option in
                 Button {
                     speed = option
                     quote = nil

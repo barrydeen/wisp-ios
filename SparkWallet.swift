@@ -302,7 +302,7 @@ final class SparkWallet: Wallet {
     func prepareSendOnchain(
         address: String,
         amountSats: Int64,
-        speed: OnchainSendSpeed,
+        speed: OnchainSpeed,
         drainAll: Bool = false
     ) async -> Result<OnchainSendQuote, WalletError> {
         guard let sdk else { return .failure(.notConnected) }
@@ -820,7 +820,7 @@ final class SparkWallet: Wallet {
     /// screen can show a real fee from the SDK rather than an estimate.
     func prepareWithdrawOnchain(
         address: String,
-        speed: WithdrawOnchainSpeed
+        speed: OnchainSpeed
     ) async -> Result<WithdrawOnchainQuote, WalletError> {
         guard let sdk else { return .failure(.notConnected) }
         do {

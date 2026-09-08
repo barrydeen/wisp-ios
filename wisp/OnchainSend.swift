@@ -1,34 +1,5 @@
 import Foundation
 
-/// Confirmation speed for an on-chain send, mapped to the SDK's three fee
-/// tiers. Kept SDK-free so the view layer and tests don't import the SDK.
-///
-/// Deliberately separate from `WithdrawOnchainSpeed`: draining the wallet and
-/// sending a chosen amount quote against opposite fee policies, and the two
-/// features are in flight on different branches. Worth collapsing into one
-/// type once both have landed.
-enum OnchainSendSpeed: String, CaseIterable, Sendable {
-    case slow
-    case medium
-    case fast
-
-    var label: String {
-        switch self {
-        case .slow: return "Economy"
-        case .medium: return "Standard"
-        case .fast: return "Priority"
-        }
-    }
-
-    var detail: String {
-        switch self {
-        case .slow: return "Cheapest. May take hours to confirm."
-        case .medium: return "Balanced fee and confirmation time."
-        case .fast: return "Highest fee. Confirms soonest."
-        }
-    }
-}
-
 /// What an on-chain send would cost, quoted before anything is signed.
 ///
 /// Fees are added on top of the amount — the SDK's default `feesExcluded` — so
@@ -41,7 +12,7 @@ struct OnchainSendQuote: Equatable, Sendable {
     let amountSats: Int64
     /// Service fee plus the L1 broadcast fee, both real cost to the user.
     let feeSats: Int64
-    let speed: OnchainSendSpeed
+    let speed: OnchainSpeed
     /// Set when emptying the wallet would leave a token balance behind.
     ///
     /// `balanceSats` is bitcoin only — tokens sit in a separate balance the

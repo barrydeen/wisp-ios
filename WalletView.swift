@@ -791,7 +791,7 @@ struct SendInvoiceSheet: View {
     @State private var detectTask: Task<Void, Never>?
     // On-chain send: fees are quoted before anything is signed, so the amount
     // and speed feed a quote the user confirms rather than a blind send.
-    @State private var onchainSpeed: OnchainSendSpeed = .medium
+    @State private var onchainSpeed: OnchainSpeed = .medium
     @State private var onchainQuote: OnchainSendQuote?
     @State private var isQuoting = false
     /// Empty the wallet. Quoted with the fee coming out of the balance rather
@@ -1153,7 +1153,7 @@ struct SendInvoiceSheet: View {
                     .textCase(.uppercase)
                     .tracking(0.5)
                 HStack(spacing: 8) {
-                    ForEach(OnchainSendSpeed.allCases, id: \.rawValue) { speed in
+                    ForEach(OnchainSpeed.allCases, id: \.rawValue) { speed in
                         Button {
                             guard onchainSpeed != speed else { return }
                             onchainSpeed = speed
