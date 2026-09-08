@@ -1,19 +1,57 @@
 import SwiftUI
 
+/// Duration presets for the poll end-date chip row.
+enum PollDurationPreset: CaseIterable, Identifiable {
+    case oneHour, sixHours, twelveHours, oneDay, threeDays, sevenDays
+
+    var id: Self { self }
+
+    var label: String {
+        switch self {
+        case .oneHour:     return "1h"
+        case .sixHours:    return "6h"
+        case .twelveHours: return "12h"
+        case .oneDay:      return "1d"
+        case .threeDays:   return "3d"
+        case .sevenDays:   return "7d"
+        }
+    }
+
+    var seconds: TimeInterval {
+        switch self {
+        case .oneHour:     return 3_600
+        case .sixHours:    return 6 * 3_600
+        case .twelveHours: return 12 * 3_600
+        case .oneDay:      return 24 * 3_600
+        case .threeDays:   return 3 * 24 * 3_600
+        case .sevenDays:   return 7 * 24 * 3_600
+        }
+    }
+}
+
 /// Inline composer block shown when `pollEnabled` is true. Lets the user pick
 /// Standard vs Zap, edit 2–10 option labels, toggle single/multi-choice (standard
-/// only), and set min/max sats (zap only). Optionally pick an end date.
+/// only), and set min/max sats (zap only). Duration is chosen via a preset chip
+/// row that defaults to 1 day; ∞ removes the end date; Custom reveals a DatePicker.
 struct PollOptionsEditor: View {
     @Bindable var viewModel: ComposeViewModel
 
     @State private var minSatsText: String = ""
     @State private var maxSatsText: String = ""
-    @State private var showEndDatePicker = false
-    @State private var endDate: Date = Date().addingTimeInterval(7 * 24 * 3600)
+    /// Active preset, or nil when ∞ / Custom is selected.
+    @State private var selectedPreset: PollDurationPreset? = .oneDay
+    @State private var isCustom = false
+    @State private var customDate: Date = Date().addingTimeInterval(24 * 3_600)
+
+    private static let endDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .medium
+        f.timeStyle = .short
+        return f
+    }()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            // Type picker — Standard vs Zap.
             Picker("Poll type", selection: Binding(
                 get: { viewModel.isZapPoll },
                 set: { newValue in
@@ -25,7 +63,6 @@ struct PollOptionsEditor: View {
             }
             .pickerStyle(.segmented)
 
-            // Option fields.
             VStack(spacing: 8) {
                 ForEach(viewModel.pollOptions.indices, id: \.self) { idx in
                     HStack(spacing: 8) {
@@ -57,18 +94,20 @@ struct PollOptionsEditor: View {
                 }
             }
 
-            // Mode-specific controls.
             if viewModel.isZapPoll {
                 zapControls
             } else {
                 standardControls
             }
 
-            endDateControl
+            durationRow
         }
         .padding(12)
         .background(Color.wispSurfaceVariant.opacity(0.3),
                     in: RoundedRectangle(cornerRadius: 12))
+        .onAppear {
+            applyPreset(.oneDay)
+        }
     }
 
     private var standardControls: some View {
@@ -103,39 +142,83 @@ struct PollOptionsEditor: View {
         }
     }
 
-    private var endDateControl: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Toggle(isOn: Binding(
-                    get: { viewModel.pollEndsAt != nil },
-                    set: { on in
-                        if on {
-                            viewModel.setPollEndsAt(Int(endDate.timeIntervalSince1970))
-                        } else {
-                            viewModel.setPollEndsAt(nil)
+    private var durationRow: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Duration")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(PollDurationPreset.allCases) { preset in
+                        chip(label: preset.label, selected: selectedPreset == preset && !isCustom) {
+                            isCustom = false
+                            applyPreset(preset)
                         }
                     }
-                )) {
-                    Text("Set end date").font(.subheadline)
+                    chip(label: "∞", selected: selectedPreset == nil && !isCustom) {
+                        isCustom = false
+                        selectedPreset = nil
+                        viewModel.setPollEndsAt(nil)
+                    }
                 }
-                .tint(Color.wispPrimary)
+                .padding(.vertical, 2)
             }
-            if viewModel.pollEndsAt != nil {
+
+            Toggle(isOn: $isCustom) {
+                Text("Custom end date")
+                    .font(.subheadline)
+            }
+            .tint(Color.wispPrimary)
+            .onChange(of: isCustom) { _, custom in
+                if custom {
+                    selectedPreset = nil
+                    viewModel.setPollEndsAt(Int(customDate.timeIntervalSince1970))
+                } else {
+                    applyPreset(.oneDay)
+                }
+            }
+
+            if isCustom {
                 DatePicker(
-                    "Ends at",
-                    selection: Binding(
-                        get: { endDate },
-                        set: { d in
-                            endDate = d
-                            viewModel.setPollEndsAt(Int(d.timeIntervalSince1970))
-                        }
-                    ),
+                    "",
+                    selection: $customDate,
                     in: Date()...,
                     displayedComponents: [.date, .hourAndMinute]
                 )
-                .font(.subheadline)
-                .datePickerStyle(.compact)
+                .labelsHidden()
+                .onChange(of: customDate) { _, new in
+                    viewModel.setPollEndsAt(Int(new.timeIntervalSince1970))
+                }
+            }
+
+            if let endsAt = viewModel.pollEndsAt {
+                let endDate = Date(timeIntervalSince1970: TimeInterval(endsAt))
+                Text("Ends \(Self.endDateFormatter.string(from: endDate))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
+    }
+
+    private func chip(label: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(selected ? Color.white : Color.wispPrimary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(
+                    selected ? Color.wispPrimary : Color.wispPrimary.opacity(0.12),
+                    in: Capsule()
+                )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func applyPreset(_ preset: PollDurationPreset) {
+        selectedPreset = preset
+        let ts = Int(Date().addingTimeInterval(preset.seconds).timeIntervalSince1970)
+        viewModel.setPollEndsAt(ts)
     }
 }
