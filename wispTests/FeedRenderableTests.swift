@@ -42,7 +42,9 @@ import Testing
     /// Kinds the follows feed never surfaces as rows (e.g. video, reaction)
     /// stay excluded regardless of the replies setting.
     @Test func nonFeedKindsStayExcluded() {
-        for kind in [7, 21, 22, 30023] {
+        // 30023 moved out of this list: long-form now renders as a card in
+        // the feed. 21 / 22 stay — there is no card for video / audio yet.
+        for kind in [7, 21, 22] {
             let e = event(kind: kind)
             #expect(!FeedViewModel.isFeedRenderable(e, includeReplies: false))
             #expect(!FeedViewModel.isFeedRenderable(e, includeReplies: true))

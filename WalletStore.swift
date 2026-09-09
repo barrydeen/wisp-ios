@@ -99,6 +99,35 @@ final class WalletStore {
         return spark.isDefaultWallet(privkey: privkey)
     }
 
+    /// Whether this wallet can drain itself to a Bitcoin address. Spark only:
+    /// NWC (NIP-47) has no on-chain send command, so the affordance must not
+    /// appear for those wallets at all.
+    var supportsWithdrawOnchain: Bool { wallet is SparkWallet }
+
+    /// Quote draining the whole balance to `address`. See
+    /// `SparkWallet.prepareWithdrawOnchain`.
+    func prepareWithdrawOnchain(
+        address: String,
+        speed: WithdrawOnchainSpeed
+    ) async -> Result<WithdrawOnchainQuote, WalletError> {
+        guard let spark = wallet as? SparkWallet else { return .failure(.notConnected) }
+        return await spark.prepareWithdrawOnchain(address: address, speed: speed)
+    }
+
+    /// Broadcast a quoted withdrawal, then refresh so the emptied balance and the
+    /// new transaction are reflected without waiting for the next poll.
+    func executeWithdrawOnchain(quote: WithdrawOnchainQuote) async -> Result<String, WalletError> {
+        guard let spark = wallet as? SparkWallet else { return .failure(.notConnected) }
+        let result = await spark.executeWithdrawOnchain(quote: quote)
+        if case .success = result {
+            // Reflect the emptied balance and the new row without waiting
+            // for the next poll — the user just moved everything.
+            _ = await fetchBalance()
+            await refreshTransactions()
+        }
+        return result
+    }
+
     /// Mnemonic for the active Spark wallet, nil for NWC or nsec-derived.
     var sparkMnemonic: String? {
         (wallet as? SparkWallet)?.loadMnemonic()

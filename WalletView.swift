@@ -307,6 +307,8 @@ struct WalletView: View {
     // MARK: - Balance
 
     private var balanceCard: some View {
+        // The `?? 0` is a layout fallback, not a known balance — see
+        // `awaitingBalance`, which stops it being rendered as a figure.
         let sats = store.balanceMsats.map { $0 / 1000 } ?? 0
         let unit = WalletBalanceUnit(rawValue: balanceUnitRaw) ?? .sats
         let mode = balanceDisplay
@@ -323,6 +325,17 @@ struct WalletView: View {
         // steady "0 sats" through the SDK's initial network sync).
         let syncing = store.mode != nil
             && (!store.isConnected || store.balanceMsats == nil)
+        // No balance has ever landed — not from the network, not from the
+        // on-disk cache — so there is no number to show. `balanceMsats` is
+        // optional precisely so "unknown" is representable, and the `?? 0`
+        // above throws that away: an unknown balance became a stated zero.
+        //
+        // The pulse alone didn't cover this. It faded a confident "0 sats" in
+        // and out, which reads as an emptied wallet rather than one still
+        // counting — alarming in exactly the moment a user is least sure
+        // their funds arrived. A cached balance from a previous session is a
+        // real figure and keeps rendering (pulsing) while the fresh one loads.
+        let awaitingBalance = store.mode != nil && store.balanceMsats == nil
         return VStack(spacing: 14) {
             Button {
                 withAnimation(.easeInOut(duration: 0.15)) {
@@ -330,7 +343,15 @@ struct WalletView: View {
                 }
             } label: {
                 VStack(spacing: 6) {
-                    if mode == .hidden {
+                    if awaitingBalance && mode != .hidden {
+                        // Fixed to the height of the 52pt balance line so the
+                        // address pill and the Send / Receive row don't jump
+                        // when the real number arrives.
+                        Text("Loading balance…")
+                            .font(.system(size: 22, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.secondary)
+                            .frame(height: 62)
+                    } else if mode == .hidden {
                         Text("* * * * *")
                             .font(.system(size: 52, weight: .semibold, design: .rounded))
                             .foregroundStyle(.primary)
@@ -362,7 +383,9 @@ struct WalletView: View {
                     // always-reserved slot, switching out of sats mode
                     // shifts the entire dashboard up by a `callout`'s
                     // worth of line height and back when re-entered.
+                    // No "sats" caption under a loading label.
                     let showUnitLabel = mode != .hidden
+                        && !awaitingBalance
                         && fiatBalance == nil
                         && !unit.unitLabel.isEmpty
                     Text(showUnitLabel ? unit.unitLabel : " ")
