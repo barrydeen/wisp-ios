@@ -5,6 +5,10 @@ import Foundation
 /// Covers the read side of NIP-09 that the "Note deleted by its author" card
 /// depends on: pulling targets out of a kind-5, and the author hint that lets a
 /// deletion be attributed when the note itself can't be fetched.
+/// Serialized: these exercise `DeletionTracker.shared`, a process-global
+/// singleton, and one of them clears it. Run in parallel, that clear wipes
+/// another test's data out from under it.
+@Suite(.serialized)
 struct DeletionTests {
 
     private let alice = String(repeating: "a", count: 64)
