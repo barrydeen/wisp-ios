@@ -33,7 +33,10 @@ enum ContentSegment: Hashable {
     case unknownMedia(MediaMeta)
     case link(String)            // standalone URL → preview card
     case inlineLink(String)      // inline URL → tap text
-    case nostrNote(eventId: String, relayHints: [String])
+    /// `author` is the pubkey hint carried by an `nevent1…` (absent for a bare
+    /// `note1…`). Needed to attribute a NIP-09 deletion request to the quoted
+    /// note's own author when the note itself can't be fetched.
+    case nostrNote(eventId: String, relayHints: [String], author: String?)
     case nostrProfile(pubkey: String, relayHints: [String])
     case nostrAddressable(dTag: String, relays: [String], author: String?, kind: Int?)
     case customEmoji(shortcode: String, url: String)
@@ -502,8 +505,8 @@ enum ContentParser {
 
     private static func segment(from decoded: NostrUriData) -> ContentSegment {
         switch decoded {
-        case .noteRef(let eventId, let relays, _):
-            return .nostrNote(eventId: eventId, relayHints: relays)
+        case .noteRef(let eventId, let relays, let author):
+            return .nostrNote(eventId: eventId, relayHints: relays, author: author)
         case .profileRef(let pubkey, let relays):
             return .nostrProfile(pubkey: pubkey, relayHints: relays)
         case .addressRef(let dTag, let relays, let author, let kind):

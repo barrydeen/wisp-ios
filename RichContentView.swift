@@ -417,7 +417,7 @@ struct RichContentView: View {
             } else {
                 fallbackLink(url)
             }
-        case .nostrNote(let eventId, let relayHints):
+        case .nostrNote(let eventId, let relayHints, let author):
             // Forward this view's own inset rather than QuotedNoteView's
             // narrower feed-tuned default (56) — an inline `nostr:nevent…`
             // quote embedded in a wider host (e.g. NotificationRowView's
@@ -427,6 +427,7 @@ struct RichContentView: View {
             QuotedNoteView(
                 eventId: eventId,
                 relayHints: relayHints,
+                authorHint: author,
                 profiles: profiles,
                 onProfileTap: onProfileTap,
                 onNoteTap: onNoteTap,
