@@ -1838,7 +1838,18 @@ final class ComposeViewModel {
 
     private func topWriteRelays() -> [String] {
         if let board = RelayScoreBoard.load(pubkey: signingKeypair.pubkey) {
-            let top = board.scoredRelays.map(\.url)
+            // The scoreboard holds every relay any follow writes to — hundreds of
+            // them, junk from other people's relay lists included. Uncapped, this
+            // published drafts to all of them and stamped all of them into a
+            // poll's `relay` tags: one such poll went out at 21.5 KB with 480
+            // tags, among them `.onion` addresses, malformed URLs and a couple of
+            // wallet-connect endpoints someone had put in their NIP-65 list.
+            // Same filter-then-cap the feed pool uses; `DraftsViewModel` already
+            // caps its copy of this helper at 5.
+            let top = board.scoredRelays
+                .filter { RelayUrlValidator.isConnectable($0.url) }
+                .prefix(5)
+                .map(\.url)
             if !top.isEmpty { return top }
         }
         return ["wss://relay.damus.io", "wss://relay.primal.net", "wss://nos.lol"]
