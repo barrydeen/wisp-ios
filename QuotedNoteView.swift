@@ -148,8 +148,12 @@ final class QuotedNoteCache {
 struct QuotedNoteView: View {
     let eventId: String
     let relayHints: [String]
-    /// Author of the quoted note, from the quoting note's NIP-18 `q` tag.
-    /// Enables an outbox lookup when relay hints don't resolve the event.
+    /// Author of the quoted note — from the quoting note's NIP-18 `q` tag when
+    /// it named one, else the `nevent1…`'s own hint. Two consumers: it enables
+    /// an outbox lookup when relay hints don't resolve the event, and it
+    /// attributes a NIP-09 deletion request, which only counts from the quoted
+    /// note's own author — when the note can't be fetched this hint is the only
+    /// way to know who that is.
     var authorHint: String? = nil
     let profiles: [String: ProfileData]
     var onProfileTap: ((String) -> Void)? = nil
@@ -162,11 +166,22 @@ struct QuotedNoteView: View {
     /// own, wider caption indent and must pass its own total.
     var nestedHorizontalInset: CGFloat = 56
     var onHashtagTap: ((String) -> Void)? = nil
+    /// Whether a retracted note may render the quote recovered from its own
+    /// content (see `deletedCard`). False on that recovered child, so the
+    /// repair reaches exactly one level down and a chain of retracted notes
+    /// can't recurse.
+    var allowsDeletedQuoteRecovery: Bool = true
 
     @State private var event: NostrEvent?
     @State private var loaded = false
     @State private var blocked = false
     @State private var safetyHidden = false
+    /// The quoted note's author retracted it (NIP-09 kind-5).
+    @State private var deleted = false
+    /// The note the retracted note itself quoted, when a relay still served the
+    /// retracted event so we could read it back out. Keeps a quote stack from
+    /// losing everything below a deleted middle node.
+    @State private var recoveredQuote: RecoveredQuote?
     @State private var profile: ProfileData?
     @State private var contentExpanded = false
     @State private var attempt: Int = 0
@@ -194,6 +209,8 @@ struct QuotedNoteView: View {
         Group {
             if blocked {
                 blockedCard
+            } else if deleted {
+                deletedCard
             } else if safetyHidden {
                 safetyHiddenCard
             } else if let event {
@@ -211,6 +228,9 @@ struct QuotedNoteView: View {
         // the filter tightens (and a hidden one would stay hidden after it
         // relaxes).
         .onReceive(NotificationCenter.default.publisher(for: .safetyFilterChanged)) { _ in
+            // A retracted note is gone regardless of how the filter moves —
+            // re-gating it would replace the accurate card with a misleading one.
+            if deleted { return }
             if let event,
                !PrivateInteractionStore.shared.contains(event.id),
                SafetyFilter.shared.shouldDrop(event: event, context: .feed) {
@@ -233,6 +253,13 @@ struct QuotedNoteView: View {
     private struct TaskKey: Hashable {
         let eventId: String
         let attempt: Int
+    }
+
+    /// A quote reference lifted back out of a retracted note's own content.
+    private struct RecoveredQuote: Equatable {
+        let eventId: String
+        let relayHints: [String]
+        let author: String?
     }
 
     private var loadingCard: some View {
@@ -297,6 +324,55 @@ struct QuotedNoteView: View {
                 .stroke(Color.wispSurfaceVariant, lineWidth: 1)
         )
         .accessibilityLabel("Note hidden by your safety filters")
+    }
+
+    /// Shown when the quoted note's author retracted it with a NIP-09 kind-5.
+    /// Deliberately its own category: `missingCard` implies retrying might turn
+    /// the note up, and `safetyHiddenCard` points the reader at their own
+    /// settings — neither is true of a note the author took down. No retry
+    /// affordance, for the same reason.
+    ///
+    /// When a relay still served the retracted event we could read the quote it
+    /// carried, and that note renders below: it belongs to someone else and
+    /// wasn't retracted, so dropping it would silently cut the bottom off a
+    /// quote stack. The retracted note's own words never render either way.
+    private var deletedCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "trash")
+                    .foregroundStyle(.secondary)
+                Text("Note deleted by its author")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityLabel("Note deleted by its author")
+
+            if let recoveredQuote {
+                Text("It quoted:")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                QuotedNoteView(
+                    eventId: recoveredQuote.eventId,
+                    relayHints: recoveredQuote.relayHints,
+                    authorHint: recoveredQuote.author,
+                    profiles: profiles,
+                    onProfileTap: onProfileTap,
+                    onNoteTap: onNoteTap,
+                    nestedHorizontalInset: nestedHorizontalInset,
+                    onHashtagTap: onHashtagTap,
+                    allowsDeletedQuoteRecovery: false
+                )
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.wispSurfaceVariant.opacity(0.3))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.wispSurfaceVariant, lineWidth: 1)
+        )
     }
 
     private var missingCard: some View {
@@ -507,23 +583,7 @@ struct QuotedNoteView: View {
 
     private func load() async {
         if let cached = QuotedNoteCache.shared.cached(eventId: eventId) {
-            if SafetyFilter.shared.snapshot.blockedPubkeys.contains(cached.pubkey) {
-                self.blocked = true
-                loaded = true
-                return
-            }
-            // WoT gate — a qualified author quoting a stranger's note would
-            // otherwise inline-render the stranger's content/media right past
-            // the filter. Private rumors keep their gift-wrap exemption.
-            if !PrivateInteractionStore.shared.contains(cached.id),
-               SafetyFilter.shared.shouldDrop(event: cached, context: .feed) {
-                self.safetyHidden = true
-                loaded = true
-                return
-            }
-            self.event = cached
-            self.profile = profiles[cached.pubkey] ?? ProfileRepository.shared.get(cached.pubkey)
-            loaded = true
+            await present(cached)
             return
         }
         // Re-enter the loading state so a tap-to-retry hides the missing
@@ -551,28 +611,99 @@ struct QuotedNoteView: View {
         if Task.isCancelled { return }
 
         if let result {
-            if SafetyFilter.shared.snapshot.blockedPubkeys.contains(result.pubkey) {
-                self.blocked = true
-                loaded = true
-                return
-            }
-            if !PrivateInteractionStore.shared.contains(result.id),
-               SafetyFilter.shared.shouldDrop(event: result, context: .feed) {
-                self.safetyHidden = true
-                loaded = true
-                return
-            }
-            self.event = result
-            self.profile = profiles[result.pubkey] ?? ProfileRepository.shared.get(result.pubkey)
-            loaded = true
+            await present(result)
             return
         }
         if attempt < Self.autoRetryAttempts {
             // Bumping attempt re-keys the `.task` and triggers another load
             // pass with the expanded relay set.
             attempt += 1
-        } else {
-            loaded = true
+            return
         }
+        // Nothing served the note. "Not found" is only half an answer — the
+        // author may have retracted it, in which case no amount of retrying
+        // will help and the card should say so. The `nevent`'s author hint is
+        // the only attribution available here; without one the check no-ops
+        // and the missing card stands.
+        loaded = true
+        if await DeletionTracker.shared.check(
+            eventId: eventId,
+            author: authorHint,
+            relayHints: relayHints
+        ), !Task.isCancelled {
+            markDeleted(source: nil)
+        }
+    }
+
+    /// Apply the render gates to a resolved quoted note, in priority order:
+    /// blocked author, then author-retracted, then the safety filter.
+    ///
+    /// Deletion outranks the safety gate deliberately. Relays are free to keep
+    /// serving a retracted note, so one can arrive here and then be caught by
+    /// the WoT check — and "Note hidden by your safety filters" blames the
+    /// reader's own settings for something the author did. Neither card shows
+    /// any of the note's content, so ordering them this way costs nothing and
+    /// gives the accurate reason.
+    private func present(_ resolved: NostrEvent) async {
+        if SafetyFilter.shared.snapshot.blockedPubkeys.contains(resolved.pubkey) {
+            blocked = true
+            loaded = true
+            return
+        }
+
+        if DeletionTracker.shared.isDeleted(eventId: resolved.id, author: resolved.pubkey) {
+            markDeleted(source: resolved)
+            return
+        }
+
+        // WoT gate — a qualified author quoting a stranger's note would
+        // otherwise inline-render the stranger's content/media right past
+        // the filter. Private rumors keep their gift-wrap exemption.
+        if !PrivateInteractionStore.shared.contains(resolved.id),
+           SafetyFilter.shared.shouldDrop(event: resolved, context: .feed) {
+            // Paint the safety card first and ask relays about a deletion
+            // after: the check is one small query per hidden quote, cached for
+            // the session, and must never delay the placeholder. A positive
+            // answer upgrades the card in place.
+            safetyHidden = true
+            loaded = true
+            if await DeletionTracker.shared.check(
+                eventId: resolved.id,
+                author: resolved.pubkey,
+                relayHints: relayHints
+            ), !Task.isCancelled {
+                markDeleted(source: resolved)
+            }
+            return
+        }
+
+        event = resolved
+        profile = profiles[resolved.pubkey] ?? ProfileRepository.shared.get(resolved.pubkey)
+        loaded = true
+    }
+
+    /// Switch to the retracted-note card. `source` is the retracted event when a
+    /// relay still served it, which is the only way to recover the note it
+    /// quoted — that link lives in its content and nowhere else.
+    private func markDeleted(source: NostrEvent?) {
+        event = nil
+        blocked = false
+        safetyHidden = false
+        recoveredQuote = allowsDeletedQuoteRecovery
+            ? source.flatMap { Self.firstQuotedNote(in: $0, excluding: eventId) }
+            : nil
+        deleted = true
+        loaded = true
+    }
+
+    /// First `nostr:note1…` / `nostr:nevent1…` reference in `event`'s content.
+    /// Self-references are skipped so a note quoting itself can't recurse.
+    private static func firstQuotedNote(in event: NostrEvent, excluding excluded: String) -> RecoveredQuote? {
+        for segment in ContentParser.parse(content: event.content, tags: event.tags) {
+            guard case .nostrNote(let id, let hints, let author) = segment else { continue }
+            guard id != excluded, id != event.id else { continue }
+            return RecoveredQuote(eventId: id, relayHints: hints, author: author)
+        }
+        return nil
     }
 }

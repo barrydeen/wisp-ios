@@ -417,12 +417,14 @@ struct RichContentView: View {
             } else {
                 fallbackLink(url)
             }
-        case .nostrNote(let eventId, let relayHints):
+        case .nostrNote(let eventId, let relayHints, let neventAuthor):
             // NIP-18 requires a quote to carry `["q", <id>, <relay>, <pubkey>]`,
             // so the note doing the quoting already names the author of the
             // note being quoted. That's the only attribution available when
             // the quoted event itself can't be fetched — and it's what makes
-            // an outbox lookup possible.
+            // an outbox lookup possible. The `nevent`'s own hint covers a
+            // reference that arrived without a `q` tag (or a `q` tag published
+            // without the optional pubkey).
             let quotedAuthor = tags.first {
                 $0.count >= 4 && $0[0] == "q" && $0[1] == eventId && !$0[3].isEmpty
             }?[3]
@@ -435,7 +437,7 @@ struct RichContentView: View {
             QuotedNoteView(
                 eventId: eventId,
                 relayHints: relayHints,
-                authorHint: quotedAuthor,
+                authorHint: quotedAuthor ?? neventAuthor,
                 profiles: profiles,
                 onProfileTap: onProfileTap,
                 onNoteTap: onNoteTap,
