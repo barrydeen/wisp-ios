@@ -322,11 +322,15 @@ struct ComposeView: View {
         .onDisappear {
             // The local autosave is debounced off the keystroke, so the last
             // few characters may not be persisted yet. Flush them now — unless
-            // an explicit discard / successful publish already cleared the
-            // bucket (those paths call `clearLocalAutosave()`), in which case
-            // just drop the pending debounce so it can't resurrect the bucket.
-            if viewModel.explicitlyDiscarded || viewModel.publishedEventId != nil {
+            // an explicit discard / publish already cleared the bucket.
+            if viewModel.explicitlyDiscarded {
                 viewModel.clearLocalAutosave()
+            } else if viewModel.publishedEventId != nil {
+                // Every publish path clears the bucket itself. Don't clear it
+                // again here: a handed-off post whose relays all rejected it may
+                // already have restored the draft into that key by now. Just
+                // drop the pending debounce so it can't resurrect the bucket.
+                viewModel.cancelPendingAutosave()
             } else {
                 viewModel.flushLocalAutosave()
             }

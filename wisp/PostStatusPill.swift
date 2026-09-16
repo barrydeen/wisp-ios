@@ -6,7 +6,17 @@ import SwiftUI
 struct PostStatusPill: View {
     let phase: PostPublisher.Phase
     let onCancel: () -> Void
+    let onRetry: () -> Void
     let onDismissTap: () -> Void
+
+    /// `.failed` / `.stopped` both keep the draft alive in the publisher, so both
+    /// get the same Retry + dismiss controls.
+    private var isRetryable: Bool {
+        switch phase {
+        case .failed, .stopped: return true
+        case .idle, .mining, .broadcasting, .done: return false
+        }
+    }
 
     var body: some View {
         HStack(spacing: 8) {
@@ -14,7 +24,11 @@ struct PostStatusPill: View {
             Text(label)
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.white)
-                .lineLimit(1)
+                // Error copy is longer than the progress labels and wraps rather
+                // than truncating — "…accepted the post" cut off mid-sentence
+                // reads like the pill is broken, not like the post failed.
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
             if case .mining = phase {
                 Button(action: onCancel) {
                     Image(systemName: "xmark.circle.fill")
@@ -24,6 +38,24 @@ struct PostStatusPill: View {
                 .buttonStyle(.plain)
                 .padding(.leading, 2)
             }
+            if isRetryable {
+                Button(action: onRetry) {
+                    Text("Retry")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(.white.opacity(0.22), in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .padding(.leading, 2)
+                Button(action: onDismissTap) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.85))
+                }
+                .buttonStyle(.plain)
+            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
@@ -31,9 +63,10 @@ struct PostStatusPill: View {
         .shadow(color: .black.opacity(0.25), radius: 8, x: 0, y: 2)
         .contentShape(Capsule())
         .onTapGesture {
-            // Failed state lets the user dismiss immediately. Other states
-            // ignore the tap so a stray finger doesn't kill an in-flight post.
-            if case .failed = phase { onDismissTap() }
+            // Failed / stopped states let the user dismiss immediately. Other
+            // states ignore the tap so a stray finger doesn't kill an in-flight
+            // post.
+            if isRetryable { onDismissTap() }
         }
     }
 
@@ -54,6 +87,10 @@ struct PostStatusPill: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(.white)
+        case .stopped:
+            Image(systemName: "pause.circle.fill")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.white)
         }
     }
 
@@ -72,12 +109,19 @@ struct PostStatusPill: View {
             return "Posted to \(n) relay\(n == 1 ? "" : "s")"
         case .failed(let message):
             return message
+        case .stopped:
+            return "Mining stopped. Draft saved."
         }
     }
 
     private var background: Color {
-        if case .failed = phase { return .red }
-        return .wispPrimary
+        switch phase {
+        case .failed: return .red
+        // Stopping mining is the user's own doing, not an error — amber keeps it
+        // visually distinct from a rejected post while still reading as unfinished.
+        case .stopped: return .orange
+        case .idle, .mining, .broadcasting, .done: return .wispPrimary
+        }
     }
 
     private static func formatThousands(_ n: Int) -> String {
@@ -100,8 +144,10 @@ struct PostStatusPillOverlay: View {
                 PostStatusPill(
                     phase: publisher.phase,
                     onCancel: { publisher.cancel() },
+                    onRetry: { publisher.retry() },
                     onDismissTap: { publisher.dismiss() }
                 )
+                .padding(.horizontal, 16)  // gives the wrapping error copy a margin
                 .padding(.bottom, 64)  // clears the tab bar (~50pt + safe area inset)
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
@@ -118,6 +164,7 @@ struct PostStatusPillOverlay: View {
         PostStatusPill(
             phase: .mining(attempts: 23_500),
             onCancel: {},
+            onRetry: {},
             onDismissTap: {}
         )
     }
@@ -129,6 +176,7 @@ struct PostStatusPillOverlay: View {
         PostStatusPill(
             phase: .broadcasting(accepted: 3, sent: 8),
             onCancel: {},
+            onRetry: {},
             onDismissTap: {}
         )
     }
@@ -140,6 +188,7 @@ struct PostStatusPillOverlay: View {
         PostStatusPill(
             phase: .done(relayCount: 8),
             onCancel: {},
+            onRetry: {},
             onDismissTap: {}
         )
     }
@@ -149,9 +198,24 @@ struct PostStatusPillOverlay: View {
     ZStack {
         Color.wispBackground.ignoresSafeArea()
         PostStatusPill(
-            phase: .failed(message: "No relays accepted the post."),
+            phase: .failed(message: "No relay accepted the post. Draft saved."),
             onCancel: {},
+            onRetry: {},
             onDismissTap: {}
         )
+        .padding(.horizontal, 16)
+    }
+}
+
+#Preview("Mining stopped") {
+    ZStack {
+        Color.wispBackground.ignoresSafeArea()
+        PostStatusPill(
+            phase: .stopped,
+            onCancel: {},
+            onRetry: {},
+            onDismissTap: {}
+        )
+        .padding(.horizontal, 16)
     }
 }
