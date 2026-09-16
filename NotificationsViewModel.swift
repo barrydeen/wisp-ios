@@ -143,10 +143,11 @@ final class NotificationsViewModel {
         // self-contained if ever called in a different context.
         repo.bind(activePubkey: keypair.pubkey)
 
-        // Prime relay sets synchronously from cached state (UserDefaults + RelayScoreBoard)
-        // so live subscriptions can open IMMEDIATELY. Anything we don't have cached falls back
-        // to the default relay list. We refresh in the background and reopen subs only if the
-        // resolved set actually differs.
+        // Prime relay sets synchronously from cached state (UserDefaults) so live
+        // subscriptions can open IMMEDIATELY. Strict inbox routing: nothing is
+        // cached yet means nothing is subscribed yet — the background
+        // kind-10002 discovery below populates the inbox and we reopen subs once
+        // the resolved set actually differs.
         primeRelaySetsFromCache()
         openSubscriptions()
         startRearmCycle()
@@ -197,20 +198,22 @@ final class NotificationsViewModel {
 
     /// Synchronous relay-set seeding from local caches. Lets `openSubscriptions()` run on the
     /// first tick of `start()` instead of waiting on relay round trips.
+    ///
+    /// Strict inbox routing: notifications query OUR NIP-65 inbox relays ONLY —
+    /// no top-scored safety net, no static fallbacks. If no read relays are
+    /// cached yet the subs stay closed until `resolveRelaySets()` discovers the
+    /// kind-10002 list in the background (which is the intended tradeoff of
+    /// strict routing; mirrors Android's `subscribeToUserInboxStrict` for the
+    /// `notif` subs).
     private func primeRelaySetsFromCache() {
         let pubkey = keypair.pubkey
         let cachedRead = UserDefaults.standard.stringArray(forKey: "notif_read_relays_\(pubkey)") ?? []
         let cachedWrite = UserDefaults.standard.stringArray(forKey: "notif_write_relays_\(pubkey)") ?? []
-        let scored = RelayScoreBoard.load(pubkey: pubkey)?.scoredRelays.prefix(5).map(\.url) ?? []
-
-        var combined = Set<String>()
-        for r in cachedRead { combined.insert(r) }
-        for r in scored { combined.insert(r) }
-        for r in Self.fallbackRelays { combined.insert(r) }
 
         // Cap to a reasonable fanout — too many concurrent sockets actually slows first-event
         // latency on iOS. ~10 relays gives strong coverage without thrashing.
-        notifRelays = Array(combined.prefix(10)).sorted()
+        var seen = Set<String>()
+        notifRelays = Array(cachedRead.filter { seen.insert($0).inserted }.prefix(10))
         ownWriteRelays = cachedWrite.isEmpty ? Self.fallbackRelays : cachedWrite
     }
 
@@ -373,17 +376,16 @@ final class NotificationsViewModel {
             }
         }
 
-        // Top-5 scored relays (already on disk after onboarding).
-        let scored = RelayScoreBoard.load(pubkey: keypair.pubkey)?.scoredRelays.prefix(5).map(\.url) ?? []
-
         let dms = await resolveOwnDmRelays()
 
-        var combined = Set<String>()
-        for r in readRelays { combined.insert(r) }
-        for r in scored { combined.insert(r) }
-        for r in Self.fallbackRelays { combined.insert(r) }
-
-        notifRelays = Array(combined.prefix(10)).sorted()
+        // Strict inbox routing: the notif / notif-replies-etag / notif-quotes-qtag /
+        // poll-vote subs go to OUR NIP-65 read relays only — the top-scored safety
+        // net and static fallbacks are gone, so big relays aren't pulled in just
+        // for coverage. Empty read list → subs stay closed (cache-only) until the
+        // kind-10002 list resolves through the discovery query above.
+        var seen = Set<String>()
+        let inbox = readRelays.filter { seen.insert($0).inserted }
+        notifRelays = Array(inbox.prefix(10))
         ownWriteRelays = writeRelays.isEmpty ? Self.fallbackRelays : writeRelays
         dmRelays = dms
     }
