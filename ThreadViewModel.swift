@@ -365,7 +365,16 @@ final class ThreadViewModel {
                 startEngagementBatcher(relays: inboxRelays)
                 var ids2 = Set(events.keys)
                 ids2.insert(rootId)
-                queueEngagement(ids: ids2)
+                requeueEngagement(ids: ids2)
+            }
+            if inboxRelays.isEmpty && initialInbox.isEmpty {
+                // No inbox known: no reply stream was ever opened, so no
+                // watchdog will run to clear the spinner. The initial load is
+                // definitionally done once the root is in hand — the thread is
+                // cache-only by design here, not still loading. Clears only
+                // `isLoading`, not `pendingScrollToId` (cf. markStreamingDone),
+                // so a pending scroll target still gets its chance to land.
+                isLoading = false
             }
         }
 
@@ -1148,6 +1157,19 @@ final class ThreadViewModel {
             if !engagedIds.contains(id) {
                 pendingEngagementIds.insert(id)
             }
+        }
+    }
+
+    /// Force ids back into the pending set even if a previous batcher tick
+    /// already consumed them. With strict inbox routing the initial batcher can
+    /// burn ids while no inbox is known yet (taken into `engagedIds`, then
+    /// dropped on `openEngagementSub`'s empty-relay guard) — so the step-5
+    /// restart must requeue unconditionally, or engagement for the thread's
+    /// initial events would never be queried on the discovered inbox.
+    private func requeueEngagement<S: Sequence>(ids: S) where S.Element == String {
+        for id in ids {
+            engagedIds.remove(id)
+            pendingEngagementIds.insert(id)
         }
     }
 
