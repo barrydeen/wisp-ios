@@ -151,6 +151,14 @@ struct ThreadView: View {
         .onAppear {
             suppressNextDisappearChainRemoval = false
         }
+        // Landing on a poll must not show a stale count. The tally subscription
+        // closes 12 seconds after the poll first scrolled into view, so whatever
+        // the feed row collected could be hours old by the time it's opened.
+        .onChange(of: viewModel.rootEvent?.id, initial: true) { _, _ in
+            guard let root = viewModel.rootEvent,
+                  root.kind == Nip88.kindPoll || root.kind == Nip69.kindZapPoll else { return }
+            PollTallyRepository.shared.refresh(pollEvent: root)
+        }
         .task {
             // Register this thread on the side-channel chain so deeper
             // ThreadViews can smart-pop back to it. The contains-guard keeps
