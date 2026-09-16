@@ -1,5 +1,48 @@
 import SwiftUI
 import UIKit
+import ImageIO
+import os.signpost
+
+/// Pixel budgets for downsampled image decodes, sized to the surface each
+/// image renders on (× device scale, with oversampling headroom for retina
+/// sharpness and moderate zoom). Centralised so the feed and fullscreen
+/// targets are documented in one place.
+enum ImagePixelBudget {
+    /// Gallery tile / inline feed image — capped at one screen width of pixels.
+    /// A feed image never renders wider than the screen, and tiles are ~70% of
+    /// it, so this is already generous oversampling.
+    @MainActor static var feed: CGFloat {
+        UIScreen.main.bounds.width * UIScreen.main.scale
+    }
+
+    /// Fullscreen viewer — two screen widths so pinch-zoom (up to 4×) stays
+    /// reasonably crisp without retaining the full multi-megapixel source.
+    @MainActor static var fullscreen: CGFloat {
+        UIScreen.main.bounds.width * UIScreen.main.scale * 2
+    }
+}
+
+/// Decodes `data` straight to a thumbnail whose longest edge is at most
+/// `maxPixel` points-in-pixels, using ImageIO so the full-resolution bitmap is
+/// never retained — only the downsized result lives in memory. Returns nil if
+/// the source can't be read (caller falls back to a full `UIImage(data:)`).
+/// Free function so it can run inside a detached, nonisolated decode task.
+private func downsampledImage(from data: Data, maxPixel: CGFloat) -> UIImage? {
+    let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+    guard let source = CGImageSourceCreateWithData(data as CFData, sourceOptions) else {
+        return nil
+    }
+    let options: [CFString: Any] = [
+        kCGImageSourceCreateThumbnailFromImageAlways: true,
+        kCGImageSourceCreateThumbnailWithTransform: true,
+        kCGImageSourceShouldCacheImmediately: true,
+        kCGImageSourceThumbnailMaxPixelSize: Int(maxPixel.rounded()),
+    ]
+    guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+        return nil
+    }
+    return UIImage(cgImage: cgImage)
+}
 
 /// Drop-in replacement for `AsyncImage` that:
 ///   - reads from `DecodedImageCache` first so a cell scrolled back into view
@@ -14,11 +57,14 @@ import UIKit
 struct RetryingAsyncImage<Content: View, Loading: View, Failure: View>: View {
     let url: URL?
     let maxAttempts: Int
-    /// Longest-edge pixel cap for the decode. Defaults to 1024 (matches the
-    /// inline animated / video-poster cap) so feed / grid / gallery images are
-    /// downsampled to a bounded size instead of decompressing the full source
-    /// on the main thread at draw time. Full-screen zoom passes `nil` to keep
-    /// native resolution.
+    /// When set, the source bytes decode down to a thumbnail whose longest
+    /// edge is at most this many pixels, rather than at full resolution. Bounds
+    /// retained memory so a gallery of large images can't accumulate dozens of
+    /// multi-megapixel `UIImage`s. Nil (the default) preserves full-resolution
+    /// decoding for callers that need it (avatars, draft thumbnails). The
+    /// decoded result is cached per `url`+`maxPixelSize`, so a small tile
+    /// decode and a larger fullscreen decode of the same URL coexist instead of
+    /// clobbering each other.
     let maxPixelSize: CGFloat?
     @ViewBuilder let content: (Image) -> Content
     @ViewBuilder let loading: () -> Loading
@@ -37,7 +83,7 @@ struct RetryingAsyncImage<Content: View, Loading: View, Failure: View>: View {
     init(
         url: URL?,
         maxAttempts: Int = 3,
-        maxPixelSize: CGFloat? = 1024,
+        maxPixelSize: CGFloat? = nil,
         @ViewBuilder content: @escaping (Image) -> Content,
         @ViewBuilder loading: @escaping () -> Loading,
         @ViewBuilder failure: @escaping () -> Failure
@@ -80,7 +126,7 @@ struct RetryingAsyncImage<Content: View, Loading: View, Failure: View>: View {
                     }
             }
         }
-        .task(id: TaskKey(url: url, attempt: attempt)) {
+        .task(id: TaskKey(url: url, attempt: attempt, maxPixelSize: maxPixelSize)) {
             await load()
         }
     }
@@ -91,6 +137,10 @@ struct RetryingAsyncImage<Content: View, Loading: View, Failure: View>: View {
     private struct TaskKey: Hashable {
         let url: URL?
         let attempt: Int
+        /// Part of the identity so a caller that raises `maxPixelSize` (e.g.
+        /// the fullscreen viewer upgrading to full resolution on deep zoom)
+        /// kicks off a fresh, higher-resolution decode.
+        let maxPixelSize: CGFloat?
     }
 
     private func load() async {
@@ -98,10 +148,13 @@ struct RetryingAsyncImage<Content: View, Loading: View, Failure: View>: View {
             phase = .failure
             return
         }
-        // Cache hit — render immediately with no loading state. (Key is
-        // url + pixel cap so the inline-capped (1024) and full-screen-
-        // uncapped variants of the same URL don't collide.)
+        // Key the decoded cache by URL *and* target size: the same image
+        // decoded small for a gallery tile and larger for the fullscreen
+        // viewer are distinct entries, so neither serves the other a
+        // wrong-resolution bitmap.
         let key = InlineMediaLoader.staticKey(url: url, maxPixelSize: maxPixelSize)
+
+        // Cache hit — render immediately with no loading state.
         if let cached = DecodedImageCache.staticImage(for: key) {
             phase = .success(cached)
             return
@@ -114,7 +167,10 @@ struct RetryingAsyncImage<Content: View, Loading: View, Failure: View>: View {
             if Task.isCancelled { return }
         }
 
-        phase = .loading
+        // Keep any already-decoded image on screen while a re-decode runs
+        // (e.g. a deep-zoom upgrade to full resolution) so the viewer doesn't
+        // flash a loader over the image the user is actively zooming.
+        if case .success = phase {} else { phase = .loading }
         // Shared in-flight-deduped fetch+decode: if the lookahead prefetcher
         // (or another mounted view) already started this URL, attach to that
         // task instead of fetching again. This view's `.task` being cancelled

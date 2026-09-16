@@ -71,7 +71,7 @@ struct AddToPeopleListPickerSheet: View {
                     Text(profile?.displayString ?? shortKey(normalized))
                         .font(.subheadline.weight(.semibold))
                     if let nip = profile?.nip05, !nip.isEmpty {
-                        Text(nip).font(.caption2).foregroundStyle(.secondary)
+                        Text(nip.nip05DisplayString).font(.caption2).foregroundStyle(.secondary)
                     }
                 }
                 Spacer()
@@ -197,7 +197,7 @@ struct AddToPeopleListPickerSheet: View {
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                     if let nip = profile?.nip05, !nip.isEmpty {
-                        Text(nip).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                        Text(nip.nip05DisplayString).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                     }
                 }
                 Spacer()

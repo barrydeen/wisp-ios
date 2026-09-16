@@ -57,16 +57,18 @@ final class OnboardingViewModel {
         phase = .fetchingFollows
 
         var followPubkeys: [String] = []
+        var followCreatedAt = 0
         if let followEvent = profileAndFollows
             .filter({ $0.kind == 3 })
             .max(by: { $0.createdAt < $1.createdAt }) {
             followPubkeys = followEvent.tags.compactMap { tag in
                 tag.count >= 2 && tag[0] == "p" ? tag[1] : nil
             }
+            followCreatedAt = followEvent.createdAt
         }
 
         followCount = followPubkeys.count
-        FollowsCache.shared.update(pubkey: keypair.pubkey, follows: followPubkeys)
+        FollowsCache.shared.update(pubkey: keypair.pubkey, follows: followPubkeys, createdAt: followCreatedAt)
 
         guard !followPubkeys.isEmpty else {
             phase = .done

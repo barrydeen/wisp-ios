@@ -28,15 +28,12 @@ struct NoteListFeedView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            Divider().overlay(Color.wispSurfaceVariant.opacity(0.5))
-            content
-        }
-        .background(Color.wispBackground)
-        .toolbar(.hidden, for: .navigationBar)
-        .swipeBackFromLeftEdge()
-        .task { await viewModel.start() }
+        content
+            .background(Color.wispBackground)
+            .wispTopHeader { header }
+            .toolbar(.hidden, for: .navigationBar)
+            .swipeBackFromLeftEdge()
+            .task { await viewModel.start() }
     }
 
     private var header: some View {

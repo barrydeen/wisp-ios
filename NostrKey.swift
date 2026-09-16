@@ -39,7 +39,17 @@ enum NostrKey {
             return Keypair(privkey: Hex.encode(data), pubkey: Hex.encode(pub))
         }
 
-        if trimmed.count == 64, let data = Hex.decode(trimmed), data.count == 32 {
+        // Hex private key. Strip an optional `0x` prefix and any internal
+        // whitespace so a key copied from a wallet or terminal (where the
+        // value is sometimes shown with a `0x` prefix or with spaces around
+        // it) still parses. The Bech32 path above already handles the
+        // `nsec1` case so there's no risk of misinterpreting it here.
+        var hex = trimmed
+        if hex.hasPrefix("0x") || hex.hasPrefix("0X") {
+            hex = String(hex.dropFirst(2))
+        }
+        hex.removeAll(where: { $0.isWhitespace })
+        if hex.count == 64, let data = Hex.decode(hex), data.count == 32 {
             guard let pub = Secp256k1.publicKey(from: data) else { return nil }
             return Keypair(privkey: Hex.encode(data), pubkey: Hex.encode(pub))
         }
@@ -109,6 +119,7 @@ enum NostrKey {
             "onboarding_done_\(pubkey)",
             "watch_only_\(pubkey)",
             "follow_pubkeys_\(pubkey)",
+            "follow_pubkeys_ts_\(pubkey)",
             "relay_scoreboard_v1_\(pubkey)",
             "latest_feed_ts_\(pubkey)",
             // Safety: mute lists, blocked users, muted threads, mute event timestamp
@@ -191,6 +202,18 @@ enum NostrKey {
         if !list.contains(pubkey) {
             list.append(pubkey)
         }
+        UserDefaults.standard.set(list, forKey: "wisp_accounts")
+    }
+
+    /// Move an account one position earlier (offset -1) or later (offset +1)
+    /// in the persisted account list. No-op if already at that end.
+    static func moveAccount(pubkey: String, offset: Int) {
+        var list = accounts()
+        guard let index = list.firstIndex(of: pubkey) else { return }
+        let target = index + offset
+        guard target >= 0, target < list.count else { return }
+        list.remove(at: index)
+        list.insert(pubkey, at: target)
         UserDefaults.standard.set(list, forKey: "wisp_accounts")
     }
 }

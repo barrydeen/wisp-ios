@@ -11,6 +11,7 @@ struct SafetySettingsView: View {
     @State private var selectedTab: Tab = .filters
 
     @State private var newWord: String = ""
+    @State private var userFilterQuery: String = ""
     @State private var wotState: WotDiscoveryState = .idle
     @State private var wotSummary: (qualifiedCount: Int, computedAt: Int) = (0, 0)
     @State private var wotStateTask: Task<Void, Never>?
@@ -112,6 +113,24 @@ struct SafetySettingsView: View {
                 // exists — the filter is fail-closed, so an enabled-but-empty
                 // network hides everything until the graph lands, and a failed
                 // compute has to revert the flip (see the stateStream observer).
+                Toggle("Hellthread filter", isOn: $prefs.hellthreadFilterEnabled)
+                    .toggleStyle(SwitchToggleStyle(tint: theme.primary))
+                Text("Hides notes and notifications that tag more than the threshold number of distinct accounts.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(theme.palette.onSurfaceVariant)
+                if prefs.hellthreadFilterEnabled {
+                    Stepper(value: $prefs.hellthreadThreshold, in: 25...100, step: 5) {
+                        HStack(spacing: 4) {
+                            Text("Threshold:")
+                                .font(.system(size: 14))
+                            Text("\(prefs.hellthreadThreshold) mentions")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(theme.primary)
+                        }
+                    }
+                    .padding(.bottom, 4)
+                }
+
                 Toggle("Web of Trust", isOn: Binding(
                     get: { prefs.wotFilterEnabled },
                     set: { handleWotToggle(on: $0) }
@@ -286,17 +305,61 @@ struct SafetySettingsView: View {
 
     private var usersTab: some View {
         VStack(alignment: .leading, spacing: 16) {
+            if !mutes.blockedPubkeys.isEmpty {
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(theme.palette.onSurfaceVariant)
+                    TextField("Filter blocked users", text: $userFilterQuery)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    if !userFilterQuery.isEmpty {
+                        Button {
+                            userFilterQuery = ""
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(theme.palette.onSurfaceVariant)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(10)
+                .background(theme.palette.surfaceVariant)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+
             section(title: "Blocked users") {
                 if mutes.blockedPubkeys.isEmpty {
                     Text("No blocked users")
                         .font(.system(size: 14))
                         .foregroundStyle(theme.palette.onSurfaceVariant)
+                } else if filteredBlockedPubkeys.isEmpty {
+                    Text("No matches")
+                        .font(.system(size: 14))
+                        .foregroundStyle(theme.palette.onSurfaceVariant)
                 } else {
-                    ForEach(Array(mutes.blockedPubkeys).sorted(), id: \.self) { pk in
+                    ForEach(filteredBlockedPubkeys, id: \.self) { pk in
                         blockedRow(pk)
                     }
                 }
             }
+        }
+    }
+
+    /// Blocked pubkeys matching `userFilterQuery` against display name or
+    /// npub (case-insensitive substring), sorted by display name so a long
+    /// list — mostly bare npubs from relay-only blocks — stays scannable.
+    private var filteredBlockedPubkeys: [String] {
+        let all = Array(mutes.blockedPubkeys)
+        let query = userFilterQuery.trimmingCharacters(in: .whitespaces).lowercased()
+        let matching = query.isEmpty ? all : all.filter { pk in
+            let profile = ProfileRepository.shared.get(pk)
+            if let name = profile?.displayString, name.lowercased().contains(query) { return true }
+            return truncated(pk).lowercased().contains(query)
+        }
+        return matching.sorted { lhs, rhs in
+            let lName = ProfileRepository.shared.get(lhs)?.displayString ?? truncated(lhs)
+            let rName = ProfileRepository.shared.get(rhs)?.displayString ?? truncated(rhs)
+            return lName.localizedCaseInsensitiveCompare(rName) == .orderedAscending
         }
     }
 

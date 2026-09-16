@@ -21,27 +21,22 @@ struct MessagesView: View {
 
     var body: some View {
         NavigationStack(path: $navPath) {
-            VStack(spacing: 0) {
-                tabBar
-
-                Divider().overlay(Color.wispSurfaceVariant.opacity(0.5))
-
-                ZStack {
-                    switch tab {
-                    case .dms:
-                        DmListView(
-                            viewModel: viewModel,
-                            onTap: { conv in navPath.append(conv) },
-                            onCompose: { showingNewDm = true }
-                        )
-                    case .rooms:
-                        GroupListView(viewModel: groupListVM,
-                                      onTap: { room in navPath.append(room) })
-                    }
+            ZStack {
+                switch tab {
+                case .dms:
+                    DmListView(
+                        viewModel: viewModel,
+                        onTap: { conv in navPath.append(conv) },
+                        onCompose: { showingNewDm = true }
+                    )
+                case .rooms:
+                    GroupListView(viewModel: groupListVM,
+                                  onTap: { room in navPath.append(room) })
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color.wispBackground)
+            .wispTopHeader { tabBar }
             .navigationDestination(for: DmConversation.self) { conv in
                 DmConversationView(keypair: viewModel.keypair, participants: conv.participants)
             }

@@ -12,24 +12,39 @@ struct ResolvedLnurlInfo {
 
 enum WalletInputType {
     case unknown
-    case bolt11(amountSats: Int64?)
+    /// `invoice` carries the bolt11 string when it arrived inside something
+    /// else — a BIP-21 URI that offers both an address and an invoice. Paying
+    /// needs the invoice itself, not the URI it was wrapped in.
+    case bolt11(amountSats: Int64?, invoice: String? = nil)
     /// Spark SDK has already parsed this — payRequest is an opaque box that
     /// WalletStore unpacks when calling the SDK.
     case sparkLnurl(info: ResolvedLnurlInfo)
     /// NWC (or fallback) path: resolve LNURL manually from the address string.
     case lightningAddressNeedsResolve(String, info: ResolvedLnurlInfo?)
+    /// A Bitcoin address, or a BIP-21 URI carrying one. `amountSats` is set
+    /// only when the URI specified an amount; a bare address never does, so
+    /// the user is asked for one.
+    case bitcoinAddress(address: String, amountSats: Int64?)
 
     var needsAmountEntry: Bool {
         switch self {
-        case .bolt11(let amt): return amt == nil
+        case .bolt11(let amt, _): return amt == nil
         case .sparkLnurl, .lightningAddressNeedsResolve: return true
+        case .bitcoinAddress(_, let amt): return amt == nil
         case .unknown: return false
         }
     }
 
+    /// On-chain sends need a fee quote and a confirmation speed, which no
+    /// other payment type does.
+    var isOnchain: Bool {
+        if case .bitcoinAddress = self { return true }
+        return false
+    }
+
     var isPayable: Bool {
         switch self {
-        case .bolt11(let amt): return amt != nil
+        case .bolt11(let amt, _): return amt != nil
         default: return false
         }
     }
@@ -62,9 +77,15 @@ enum LnurlResolver {
             let payUrl: URL
             let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
 
-            if trimmed.hasPrefix("lnurl") {
-                // Bech32-encoded LNURL — skip, this is an edge case for NWC users
-                return .failure(.other("Encoded LNURLs not supported via NWC. Paste the decoded URL or a lightning address."))
+            if trimmed.hasPrefix("lnurl1") {
+                // Bech32-encoded LNURL: decode to the underlying HTTPS URL.
+                guard let (hrp, data) = Bech32.decode(trimmed),
+                      hrp == "lnurl",
+                      let decodedUrl = String(data: data, encoding: .utf8),
+                      let url = URL(string: decodedUrl) else {
+                    return .failure(.other("Invalid LNURL encoding"))
+                }
+                payUrl = url
             } else if isLightningAddress(trimmed) {
                 let parts = trimmed.split(separator: "@", maxSplits: 1)
                 let user = String(parts[0])

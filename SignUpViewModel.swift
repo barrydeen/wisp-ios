@@ -558,7 +558,10 @@ final class SignUpViewModel {
         var follows = selectedFollows
         follows.insert(keypair.pubkey)
 
-        FollowsCache.shared.update(pubkey: keypair.pubkey, follows: Array(follows))
+        // Stamp the cache with the same `created_at` the kind-3 below is signed
+        // with, so a later relay reconcile treats this as the freshest set.
+        let now = NostrClock.now()
+        FollowsCache.shared.update(pubkey: keypair.pubkey, follows: Array(follows), createdAt: now)
 
         let writeRelays = discoveredRelays.filter(\.write).map(\.url)
 
@@ -571,7 +574,6 @@ final class SignUpViewModel {
         startOutboxBuilder(follows: Array(follows), ownWriteRelays: writeRelays)
 
         let targets = (writeRelays + Self.indexerRelays).uniquedPreservingOrder()
-        let now = NostrClock.now()
         let tags: [[String]] = follows.map { ["p", $0] }
         guard let event = try? NostrEvent.sign(
             privkey32: privkey,

@@ -133,6 +133,35 @@ nonisolated enum Nip19 {
         return try? bech32Encode(hrp: "nprofile", data: tlv)
     }
 
+    /// Encode `naddr1...` for a replaceable event coordinate. `pubkey32` is the
+    /// raw 32-byte author key; `dTag` is the identifier as plain text.
+    ///
+    /// TLV layout mirrors `parseTlvAddress`: 0 = d tag (utf8), 1 = relay hints,
+    /// 2 = author, 3 = kind (4-byte big-endian).
+    static func naddrEncode(kind: Int, pubkey32: [UInt8], dTag: String, relays: [String] = []) -> String? {
+        guard pubkey32.count == 32 else { return nil }
+        guard kind >= 0, kind <= 0xFFFF_FFFF else { return nil }
+        let dBytes = Array(dTag.utf8)
+        // A single TLV value is length-prefixed with one byte, so anything past
+        // 255 can't be represented. `appendTlv` drops it silently, which would
+        // yield an naddr that decodes to an empty `d` tag — refuse instead.
+        guard dBytes.count <= 255 else { return nil }
+
+        var tlv: [UInt8] = []
+        appendTlv(&tlv, type: 0x00, value: dBytes)
+        for relay in relays {
+            appendTlv(&tlv, type: 0x01, value: Array(relay.utf8))
+        }
+        appendTlv(&tlv, type: 0x02, value: pubkey32)
+        appendTlv(&tlv, type: 0x03, value: [
+            UInt8((kind >> 24) & 0xFF),
+            UInt8((kind >> 16) & 0xFF),
+            UInt8((kind >> 8) & 0xFF),
+            UInt8(kind & 0xFF)
+        ])
+        return try? bech32Encode(hrp: "naddr", data: tlv)
+    }
+
     private static func appendTlv(_ buf: inout [UInt8], type: UInt8, value: [UInt8]) {
         guard value.count <= 255 else { return }
         buf.append(type)

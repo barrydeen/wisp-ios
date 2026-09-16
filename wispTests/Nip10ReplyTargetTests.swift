@@ -70,3 +70,61 @@ import Testing
         #expect(Nip10.replyTarget(of: e) == nil)
     }
 }
+
+/// Locks the `p`-tag carry-forward that keeps everyone in a thread notified.
+/// Regression guard for the bug where a reply only tagged the direct parent
+/// author and dropped earlier participants — e.g. A↔B then B replying to B's
+/// own note silently lost A.
+@Suite struct Nip10ParticipantTagsTests {
+
+    private func note(pubkey: String, tags: [[String]]) -> NostrEvent {
+        NostrEvent(id: "note", pubkey: pubkey, kind: 1, createdAt: 0, tags: tags, content: "", sig: "")
+    }
+
+    private func pubkeys(_ tags: [[String]]) -> [String] {
+        tags.compactMap { $0.count >= 2 && $0[0] == "p" ? $0[1] : nil }
+    }
+
+    /// The reported scenario: B replies to B's own note. That parent already
+    /// carries A (from when B replied to A), so A must ride along, and B is
+    /// added as the parent author.
+    @Test func selfReplyKeepsEarlierParticipant() {
+        let parent = note(pubkey: "B", tags: [["e", "root", "", "root"], ["p", "B"], ["p", "A"]])
+        #expect(pubkeys(Nip10.participantTags(replyingTo: parent)) == ["B", "A"])
+    }
+
+    /// Plain reply: the parent author joins the parent's existing participants.
+    @Test func carriesParentParticipantsThenAuthor() {
+        let parent = note(pubkey: "B", tags: [["p", "A"]])
+        #expect(pubkeys(Nip10.participantTags(replyingTo: parent)) == ["A", "B"])
+    }
+
+    /// The author is not duplicated when already present in the parent's p-tags.
+    @Test func authorNotDuplicated() {
+        let parent = note(pubkey: "B", tags: [["p", "A"], ["p", "B"]])
+        #expect(pubkeys(Nip10.participantTags(replyingTo: parent)) == ["A", "B"])
+    }
+
+    /// Duplicate p-tags on the parent collapse to one each.
+    @Test func deduplicatesRepeatedParticipants() {
+        let parent = note(pubkey: "B", tags: [["p", "A"], ["p", "A"], ["p", "C"]])
+        #expect(pubkeys(Nip10.participantTags(replyingTo: parent)) == ["A", "C", "B"])
+    }
+
+    /// A top-level note (no p-tags) yields just the author.
+    @Test func topLevelNoteTagsOnlyAuthor() {
+        let parent = note(pubkey: "B", tags: [])
+        #expect(pubkeys(Nip10.participantTags(replyingTo: parent)) == ["B"])
+    }
+
+    /// End-to-end via buildReplyTags: the full e/p set for replying to B's
+    /// self-reply keeps the root e-tag, marks the parent as reply, and carries
+    /// both participants.
+    @Test func buildReplyTagsCarriesWholeThread() {
+        let parent = note(pubkey: "B", tags: [["e", "root", "", "root"], ["p", "B"], ["p", "A"]])
+        let tags = Nip10.buildReplyTags(replyTo: parent)
+        #expect(tags.contains(["e", "root", "", "root"]))
+        #expect(tags.contains(["e", "note", "", "reply"]))
+        #expect(pubkeys(tags) == ["B", "A"])
+    }
+}

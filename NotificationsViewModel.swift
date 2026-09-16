@@ -10,12 +10,19 @@ final class NotificationsViewModel {
     var enabledTypes: Set<NotificationFilter> = Set(NotificationFilter.allCases)
     var isLoading: Bool = false
 
-    /// Id of the single currently-expanded notification row, or `nil` when none
-    /// is open. Lifted out of `NotificationRowView`'s local state so the list
-    /// behaves like an accordion — opening one row closes any other. Tracked
-    /// (not `@ObservationIgnored`) so every row re-evaluates its `expanded`
-    /// state when this changes.
+    /// Id of the single currently-expanded notification row while the feed is
+    /// in `.compact` style, or `nil` when none is open. Lifted out of
+    /// `NotificationRowView`'s local state so the list behaves like an
+    /// accordion — opening one row closes any other. Tracked (not
+    /// `@ObservationIgnored`) so every row re-evaluates its `expanded` state
+    /// when this changes.
     var expandedItemId: String? = nil
+
+    /// Rows the user manually folded shut while the feed is in `.expanded`
+    /// style (the inverse of `expandedItemId`, and without the accordion
+    /// constraint — collapsing one row leaves the rest open). Session-only:
+    /// the persisted preference is the style itself, not per-row state.
+    var collapsedItemIds: Set<String> = []
 
     /// Hidden authors whose NSpam-classified notifications should not appear.
     /// Tracked (not `@ObservationIgnored`) so `filteredItems` re-evaluates when
@@ -231,6 +238,48 @@ final class NotificationsViewModel {
         repo.markAllRead()
     }
 
+    // MARK: - Expansion / display style
+
+    /// Current list density, read straight off `AppSettings` (itself
+    /// `@Observable`, so a view reading this through the view model still
+    /// re-renders when the setting flips).
+    var feedStyle: AppSettings.NotificationFeedStyle {
+        AppSettings.shared.notificationFeedStyle
+    }
+
+    /// Whether `id`'s detail should render. In `.expanded` every row is open
+    /// unless the user folded it shut; in `.compact` only the accordion's
+    /// single open row is.
+    func isRowExpanded(_ id: String) -> Bool {
+        switch feedStyle {
+        case .expanded: !collapsedItemIds.contains(id)
+        case .compact:  expandedItemId == id
+        }
+    }
+
+    /// Flip `id`'s open/closed state within the current style.
+    func toggleRowExpansion(_ id: String) {
+        switch feedStyle {
+        case .expanded:
+            if collapsedItemIds.contains(id) {
+                collapsedItemIds.remove(id)
+            } else {
+                collapsedItemIds.insert(id)
+            }
+        case .compact:
+            expandedItemId = (expandedItemId == id) ? nil : id
+        }
+    }
+
+    /// Switch list density and persist it. Per-row overrides accumulated under
+    /// the previous style are dropped so the new style starts from its own
+    /// baseline (everything open / everything closed).
+    func setFeedStyle(_ style: AppSettings.NotificationFeedStyle) {
+        AppSettings.shared.notificationFeedStyle = style
+        collapsedItemIds.removeAll()
+        expandedItemId = nil
+    }
+
     // MARK: - Filter API
 
     /// Animation used for filter-toggle list reflows. Applied at the
@@ -364,6 +413,12 @@ final class NotificationsViewModel {
             limit: 100
         )
         let events = await RelayPool.query(relays: Array(relays), filter: filter, timeout: 6)
+        // Cache the poll events themselves so an incoming `.pollVote` notification
+        // (the gate is `selfEventIds.contains(pollId)`, the exact set fetched here)
+        // can resolve the voter's selected-option label in the collapsed row.
+        for e in events where e.kind == Nip88.kindPoll || e.kind == Nip69.kindZapPoll {
+            repo.cacheReferencedEvent(e)
+        }
         // Union with whatever the cache had so we don't shrink the horizon if a relay temporarily
         // returned a partial set.
         let before = repo.selfEventIds
@@ -497,6 +552,12 @@ final class NotificationsViewModel {
         var byId: [String: NostrEvent] = [:]
         for e in mine { byId[e.id] = e }
         for e in voted { byId[e.id] = e }
+
+        // Cache every poll event (active or ended) so consolidated `.pollVote`
+        // rows can resolve their per-choice labels — the poll itself is never
+        // ingested as a notification (it's the user's own event), so this is
+        // the only place the row's label source gets seeded.
+        for poll in byId.values { repo.cachePollEvent(poll) }
 
         var notified = pollEndedNotifiedIds
         var added = false

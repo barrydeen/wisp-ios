@@ -180,7 +180,7 @@ struct NwcSetupView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .center)
 
         case .found(let backupUri, let createdAt):
             VStack(alignment: .leading, spacing: 12) {

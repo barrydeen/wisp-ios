@@ -127,7 +127,7 @@ struct PeopleListEditorView: View {
                     .font(.subheadline.weight(.medium))
                     .lineLimit(1)
                 if let nip = profile?.nip05, !nip.isEmpty {
-                    Text(nip)
+                    Text(nip.nip05DisplayString)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)

@@ -337,7 +337,7 @@ struct ZapSheet: View {
                 }
             }
             .sheet(isPresented: $showEditPresets) {
-                EditPresetsSheet(presetsRaw: $presetsRaw)
+                EditPresetsSheet(presetsRaw: $presetsRaw, settings: settings)
             }
             .confirmationDialog(
                 settings.fiatModeEnabled
@@ -719,21 +719,47 @@ struct ZapSheet: View {
     @ViewBuilder
     private var instantZapRow: some View {
         @Bindable var settingsBindable = settings
-        HStack(spacing: 8) {
-            Image(systemName: "bolt.fill")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .frame(width: 18)
-            Text(settings.fiatModeEnabled ? "Instant payments" : "Instant zaps")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.primary)
-            Spacer(minLength: 0)
-            Toggle("", isOn: $settingsBindable.quickZapEnabled)
-                .labelsHidden()
-                .tint(Color.wispZapColor)
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "bolt.fill")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(settings.quickZapEnabled ? Color.wispZapColor : Color.secondary)
+                    .frame(width: 18)
+                Text(settings.fiatModeEnabled ? "Instant payments" : "Instant zaps")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                Spacer(minLength: 0)
+                Toggle("", isOn: $settingsBindable.quickZapEnabled)
+                    .labelsHidden()
+                    .tint(Color.wispZapColor)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+
+            if settings.quickZapEnabled {
+                Divider().opacity(0.4)
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 6) {
+                        Text("\(CurrencyFormatter.formatNumber(settings.quickZapAmountSats)) sats")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(Color.wispZapColor)
+                        if !settings.quickZapMessage.isEmpty {
+                            Text("·").foregroundStyle(.secondary)
+                            Text(settings.quickZapMessage)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                    Text("configure in Presets")
+                        .font(.caption)
+                        .foregroundStyle(.secondary.opacity(0.7))
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+            }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
         .background(Color.wispSurfaceVariant.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
     }
 
@@ -812,6 +838,11 @@ struct ZapSheet: View {
 
 private struct EditPresetsSheet: View {
     @Binding var presetsRaw: String
+    /// The shared settings object, passed from the parent `ZapSheet` (which
+    /// holds it via `@Environment`). Instant-zap enable + amount + message
+    /// are persisted here on Done, so the instant-zap configuration lives
+    /// where the presets are edited rather than buried in Settings.
+    @Bindable var settings: AppSettings
     @Environment(\.dismiss) private var dismiss
 
     /// Editable preset draft. `message` is optional — empty means no default
@@ -825,6 +856,12 @@ private struct EditPresetsSheet: View {
     }
 
     @State private var drafts: [Draft] = []
+    /// Local mirror of `settings.quickZapEnabled`, committed on Done so an
+    /// abandoned edit (Cancel) doesn't flip the toggle.
+    @State private var instantEnabled: Bool = false
+    /// The preset row designated as the instant-zap amount. Only meaningful
+    /// while `instantEnabled`; `nil` falls back to the first row on commit.
+    @State private var instantSelectedID: Draft.ID?
 
     /// One blank preset at a time so the Add button can't pile up empty
     /// rows. A blank is any draft with no digits in the amount field.
@@ -835,30 +872,62 @@ private struct EditPresetsSheet: View {
     var body: some View {
         NavigationStack {
             List {
+                // Instant-zap enable + explanation. Selecting which preset
+                // fires happens inline per-row below.
+                Section {
+                    Toggle(settings.fiatModeEnabled ? "Instant payments" : "Instant zaps",
+                           isOn: $instantEnabled)
+                        .tint(Color.wispZapColor)
+                    Text("Long-press the bolt to send the selected preset instantly.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 // Swipe-left-to-delete a row. We deliberately do NOT expose
                 // an `EditButton()` here — the red minus circles iOS shows
                 // in edit mode sit right under the amount TextField and
                 // were too easy to tap accidentally while editing. Standard
                 // iOS swipe (reveal Delete on the trailing edge → tap to
                 // confirm) is the right destructive UX for this list.
-                ForEach($drafts) { $draft in
-                    HStack(spacing: 8) {
-                        TextField("Amount (sats)", text: $draft.amount)
-                            .keyboardType(.numberPad)
-                            .frame(maxWidth: 120)
-                        Divider()
-                        TextField("Message (optional)", text: $draft.message)
-                    }
-                }
-                .onDelete { drafts.remove(atOffsets: $0) }
+                Section {
+                    ForEach($drafts) { $draft in
+                        HStack(spacing: 8) {
+                            // Per-row instant selection. Enabled only when the
+                            // instant toggle is on; tapping designates this
+                            // preset as the instant amount.
+                            Button {
+                                instantSelectedID = draft.id
+                            } label: {
+                                Image(systemName: instantSelectedID == draft.id ? "checkmark.circle.fill" : "circle")
+                                    .font(.system(size: 18))
+                                    .foregroundStyle(instantEnabled ? Color.wispZapColor : Color.secondary.opacity(0.4))
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(!instantEnabled)
 
-                Button {
-                    drafts.append(Draft(amount: "", message: ""))
-                } label: {
-                    Label("Add preset", systemImage: "plus")
-                        .foregroundStyle(hasBlankDraft ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.wispZapColor))
+                            TextField("Amount (sats)", text: $draft.amount)
+                                .keyboardType(.numberPad)
+                                .frame(maxWidth: 100)
+                            Divider()
+                            TextField("Message (optional)", text: $draft.message)
+                        }
+                    }
+                    .onDelete { offsets in
+                        let removedSelected = offsets.contains { drafts[$0].id == instantSelectedID }
+                        drafts.remove(atOffsets: offsets)
+                        if removedSelected {
+                            instantSelectedID = drafts.first?.id
+                        }
+                    }
+
+                    Button {
+                        drafts.append(Draft(amount: "", message: ""))
+                    } label: {
+                        Label("Add preset", systemImage: "plus")
+                            .foregroundStyle(hasBlankDraft ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.wispZapColor))
+                    }
+                    .disabled(hasBlankDraft)
                 }
-                .disabled(hasBlankDraft)
             }
             .navigationTitle("Edit Presets")
             .navigationBarTitleDisplayMode(.inline)
@@ -882,6 +951,14 @@ private struct EditPresetsSheet: View {
                         if !encoded.isEmpty {
                             presetsRaw = encoded.joined(separator: ",")
                         }
+                        // Persist instant-zap config from the selected preset.
+                        settings.quickZapEnabled = instantEnabled
+                        if let sel = drafts.first(where: { $0.id == instantSelectedID })
+                            ?? drafts.first,
+                           let sats = Int64(sel.amount.trimmingCharacters(in: .whitespaces)), sats > 0 {
+                            settings.quickZapAmountSats = min(10_000, max(1, sats))
+                            settings.quickZapMessage = sel.message.trimmingCharacters(in: .whitespaces)
+                        }
                         dismiss()
                     }
                 }
@@ -895,6 +972,9 @@ private struct EditPresetsSheet: View {
                         : ""
                     return Draft(amount: amount, message: message)
                 }
+                instantEnabled = settings.quickZapEnabled
+                instantSelectedID = drafts.first(where: { Int64($0.amount) == settings.quickZapAmountSats })?.id
+                    ?? drafts.first?.id
             }
         }
         // Wisp's zap accent — overrides the system blue applied by default

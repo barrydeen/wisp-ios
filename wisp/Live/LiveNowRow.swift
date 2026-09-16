@@ -13,9 +13,35 @@ struct FeedLiveNowSection: View {
     var body: some View {
         let liveStreams = repo.liveNowSorted
         if !liveStreams.isEmpty {
-            LiveNowRow(streams: liveStreams, profiles: profiles, onSelect: onSelect)
+            // The feed's `profiles` dict only covers feed-row authors — a live
+            // host is usually not in it. Pills look up `repo.hostProfiles`
+            // (the dedicated observable store for pill avatars) first and fall
+            // back to the feed dict. Per-pill lookups, NOT a dict merge: this
+            // body re-evaluates on every discovery chat message, and merging
+            // the whole feed-profiles dict each time is real main-thread work
+            // during the startup chat backfill.
+            let hostProfiles = repo.hostProfiles
+            LiveNowRow(streams: liveStreams, profiles: profiles, hostProfiles: hostProfiles, onSelect: onSelect)
+                .task(id: missingHostPubkeys(streams: liveStreams, hostProfiles: hostProfiles)) {
+                    // Self-heal pills whose host kind-0 never resolved (e.g. the
+                    // coordinator's startup query timed out). Routed through the
+                    // coordinator's debounced batch — NOT a direct
+                    // `ProfileRepository.ensure` — so streams trickling in during
+                    // startup collapse into one light indexer query instead of
+                    // overlapping `waitForAllRelays` fetches competing with the
+                    // initial feed load. The coordinator caps retries per pubkey.
+                    for pk in missingHostPubkeys(streams: liveStreams, hostProfiles: hostProfiles) {
+                        LiveStreamCoordinator.shared.requestHostProfile(pk)
+                    }
+                }
             Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
         }
+    }
+
+    /// Pubkeys of visible pills that have no profile from any source yet.
+    private func missingHostPubkeys(streams: [LiveStream], hostProfiles: [String: ProfileData]) -> Set<String> {
+        Set(streams.map { $0.activity.streamerPubkey ?? $0.activity.hostPubkey }
+            .filter { hostProfiles[$0] == nil && profiles[$0] == nil })
     }
 }
 
@@ -24,6 +50,7 @@ struct FeedLiveNowSection: View {
 struct LiveNowRow: View {
     let streams: [LiveStream]
     let profiles: [String: ProfileData]
+    let hostProfiles: [String: ProfileData]
     let onSelect: (LiveStream) -> Void
 
     var body: some View {
@@ -31,7 +58,8 @@ struct LiveNowRow: View {
             HStack(spacing: 8) {
                 liveBadge
                 ForEach(streams) { stream in
-                    LiveNowPill(stream: stream, profile: profiles[stream.activity.streamerPubkey ?? stream.activity.hostPubkey])
+                    let key = stream.activity.streamerPubkey ?? stream.activity.hostPubkey
+                    LiveNowPill(stream: stream, profile: hostProfiles[key] ?? profiles[key])
                         .onTapGesture { onSelect(stream) }
                 }
             }

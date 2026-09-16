@@ -25,6 +25,16 @@ final class RepostSender {
     }
 
     /// Publish a kind-6 repost of `targetEvent`. Idempotent per `(reposter, targetId)`.
+    // TODO: reposts of non-kind-1 events should be kind 16, not kind 6.
+    // NIP-18 scopes kind 6 to kind-1 text notes and defines kind 16 (generic
+    // repost) for everything else, carrying the original's kind in a `k` tag.
+    // We already emit that `k` tag but always sign as kind 6, so a repost of a
+    // kind-1111 comment (or a 30023 article, a kind-20 picture…) is
+    // technically malformed. Clients that filter kind 6 expecting kind-1
+    // content may drop it or render it wrong; ones that ignore kind 16
+    // entirely won't see it at all. Worth surveying what other clients do
+    // with each before changing, since switching kinds changes who sees the
+    // repost — a behavioral change, not just a correctness fix.
     func repost(_ targetEvent: NostrEvent, keypair: Keypair) async throws {
         let dedupKey = "\(keypair.pubkey)|\(targetEvent.id)"
         if sent.contains(dedupKey) { throw SendError.alreadyReposted }

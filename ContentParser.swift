@@ -10,13 +10,18 @@ struct MediaMeta: Hashable {
     /// frame preview before the user taps to play, without having to pre-decode
     /// the video itself.
     let posterUrl: String?
+    /// SHA-256 digest of the file (NIP-92 imeta `x`, falling back to `ox`). Used
+    /// to dedupe the same content-addressed file when it's served from more than
+    /// one host (e.g. a Blossom mirror in `content` vs the host in the imeta tag).
+    let sha256: String?
 
-    init(url: String, mime: String? = nil, dimension: String? = nil, blurhash: String? = nil, posterUrl: String? = nil) {
+    init(url: String, mime: String? = nil, dimension: String? = nil, blurhash: String? = nil, posterUrl: String? = nil, sha256: String? = nil) {
         self.url = url
         self.mime = mime
         self.dimension = dimension
         self.blurhash = blurhash
         self.posterUrl = posterUrl
+        self.sha256 = sha256
     }
 }
 
@@ -28,12 +33,19 @@ enum ContentSegment: Hashable {
     case unknownMedia(MediaMeta)
     case link(String)            // standalone URL → preview card
     case inlineLink(String)      // inline URL → tap text
-    case nostrNote(eventId: String, relayHints: [String])
+    /// `author` is the pubkey hint carried by an `nevent1…` (absent for a bare
+    /// `note1…`). Needed to attribute a NIP-09 deletion request to the quoted
+    /// note's own author when the note itself can't be fetched.
+    case nostrNote(eventId: String, relayHints: [String], author: String?)
     case nostrProfile(pubkey: String, relayHints: [String])
     case nostrAddressable(dTag: String, relays: [String], author: String?, kind: Int?)
     case customEmoji(shortcode: String, url: String)
     case hashtag(String)
     case lightningInvoice(invoice: String, amountSats: Int64?, description: String?)
+    /// A lightning address (`user@domain.tld`) found inline in text — rendered
+    /// as a tappable "Zap" pill that opens an LNURL-pay flow.
+    case lightningAddress(String)
+    case lnurlPayable(encoded: String)
 }
 
 enum ContentParser {
@@ -51,15 +63,28 @@ enum ContentParser {
         options: [.caseInsensitive]
     )
 
+    private static let sha256Regex = try! NSRegularExpression(
+        pattern: #"^[0-9a-f]{64}$"#,
+        options: [.caseInsensitive]
+    )
+
     // Mirrors Android's combined regex with the same TLD whitelist + hashtag, npub, nostr-uri, bare bech32 patterns.
     private static let combinedRegex: NSRegularExpression = {
         let tlds = "com|net|org|io|dev|app|pro|ai|co|me|info|xyz|cc|tv|to|gg|sh|im|is|it|rs|ly|site|online|store|tech|cloud|social|world|earth|space|lol|wtf|family|life|art|design|blog|news|live|video|media|chat|games|money|finance|agency|studio|build|run|codes|systems|network|zone|pub|blue|limo|fyi|wiki|page|link|click|exchange|markets|fun|club|today"
-        let pattern = #"nostr:(?:note1|nevent1|npub1|nprofile1|naddr1)[a-z0-9]+"#
-            + #"|(?<!\w)(npub1[a-z0-9]{58})(?!\w|\.[a-zA-Z])"#
+        // bech32 bodies are constrained with (?-i:…) so the outer .caseInsensitive
+        // flag doesn't let [a-z0-9] absorb uppercase letters that immediately follow
+        // a URI — e.g. "nostr:nprofile1…Bitcoin" would otherwise greedily swallow
+        // "Bitcoin" into the token, failing the decode and rendering the raw string.
+        let pattern = #"nostr:(?:note1|nevent1|npub1|nprofile1|naddr1)(?-i:[a-z0-9]+)"#
+            + #"|(?<!\w)(npub1(?-i:[a-z0-9]{58}))(?!\w|\.[a-zA-Z])"#
             + #"|(?:https?|wss?):\/\/\S+"#
-            + #"|(?<!\w)((?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+(?:\#(tlds))(?:\/\S*)?)(?!\w)"#
-            + #"|(?<!\w)#([a-zA-Z0-9_][a-zA-Z0-9_-]*)"#
-            + #"|(?<!\w)((?:note1|nevent1|nprofile1|naddr1)[a-z0-9]{10,})(?!\w)"#
+            // Lookbehind excludes `@` and `.` in addition to word chars so the
+            // domain half of a lightning / email address (`user@getalby.com`)
+            // or a deeper subdomain segment isn't matched as a standalone URL
+            // and rendered as a link-preview card.
+            + #"|(?<![\w@.])((?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+(?:\#(tlds))(?:\/\S*)?)(?!\w)"#
+            + #"|(?<!\w)#([\p{L}0-9_][\p{L}0-9_-]*)"#
+            + #"|(?<!\w)((?:note1|nevent1|nprofile1|naddr1)(?-i:[a-z0-9]{10,}))(?!\w)"#
         return try! NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
     }()
 
@@ -68,7 +93,39 @@ enum ContentParser {
         options: [.caseInsensitive]
     )
 
+    private static let lnurlRegex = try! NSRegularExpression(
+        pattern: #"(?<!\w)(lnurl1[a-z0-9]{30,})(?!\w)"#,
+        options: [.caseInsensitive]
+    )
+
     private static let emojiShortcodeRegex = try! NSRegularExpression(pattern: #":([a-zA-Z0-9_-]+):"#)
+
+    /// A run of two or more newlines, tolerating spaces / tabs / stray CRs on
+    /// the blank lines between them. Collapsed to a single blank line by pass
+    /// 6. The run deliberately ends at its last newline so indentation on the
+    /// following line isn't swallowed with it.
+    private static let blankLineRunRegex = try! NSRegularExpression(
+        pattern: #"\n(?:[ \t\r]*\n)+"#
+    )
+    /// Blank lines at the very start of a post, up to and including the last
+    /// of them. Horizontal whitespace *after* the final newline is kept so a
+    /// deliberately indented first line survives.
+    private static let leadingBlankLinesRegex = try! NSRegularExpression(
+        pattern: #"\A[ \t\r\n]*\n"#
+    )
+    /// Everything from the first trailing newline to the end of the post.
+    private static let trailingBlankLinesRegex = try! NSRegularExpression(
+        pattern: #"\n[ \t\r\n]*\z"#
+    )
+
+    /// Lightning / email address shape (`user@domain.tld`). Deliberately broad;
+    /// each match is validated with `LnurlResolver.isLightningAddress` before it
+    /// becomes a `.lightningAddress` segment. The `(?<![\w@.])` / `(?![\w@])`
+    /// boundaries stop it from matching inside URLs or larger tokens.
+    private static let lightningAddressRegex = try! NSRegularExpression(
+        pattern: #"(?<![\w@.])([a-z0-9][a-z0-9._%+-]*@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,})(?![\w@])"#,
+        options: [.caseInsensitive]
+    )
 
     // MARK: - imeta tags (NIP-92)
 
@@ -81,15 +138,19 @@ enum ContentParser {
             var dim: String?
             var blur: String?
             var image: String?
+            var x: String?
+            var ox: String?
             for entry in tag.dropFirst() {
                 if entry.hasPrefix("url ") { url = String(entry.dropFirst(4)) }
                 else if entry.hasPrefix("m ") { mime = String(entry.dropFirst(2)) }
                 else if entry.hasPrefix("dim ") { dim = String(entry.dropFirst(4)) }
                 else if entry.hasPrefix("blurhash ") { blur = String(entry.dropFirst(9)) }
                 else if entry.hasPrefix("image ") { image = String(entry.dropFirst(6)) }
+                else if entry.hasPrefix("ox ") { ox = String(entry.dropFirst(3)) }
+                else if entry.hasPrefix("x ") { x = String(entry.dropFirst(2)) }
             }
             if let url {
-                map[url] = MediaMeta(url: url, mime: mime, dimension: dim, blurhash: blur, posterUrl: image)
+                map[url] = MediaMeta(url: url, mime: mime, dimension: dim, blurhash: blur, posterUrl: image, sha256: x ?? ox)
             }
         }
         return map
@@ -127,6 +188,27 @@ enum ContentParser {
             trimBlankLines: trimBlankLines,
             linksAreInline: linksAreInline
         )
+    }
+
+    /// Character count of the parts of `content` that actually render as
+    /// flowing text — `.text`, inline `.hashtag`, and inline `.inlineLink`
+    /// runs. Media URLs (`.image`/`.video`/`.audio`/`.unknownMedia`),
+    /// standalone link-preview URLs (`.link`), embedded quote cards, and
+    /// lightning-invoice cards are excluded because they render as blocks,
+    /// not wrapped text.
+    ///
+    /// The feed's "long post" heuristic uses this instead of raw
+    /// `content.count` so a short caption followed by several inline media
+    /// URLs isn't mistaken for a long text body and needlessly truncated.
+    static func textualLength(content: String, tags: [[String]]) -> Int {
+        parse(content: content, tags: tags).reduce(0) { sum, seg in
+            switch seg {
+            case .text(let s):       return sum + s.trimmingCharacters(in: .whitespacesAndNewlines).count
+            case .inlineLink(let s): return sum + s.count
+            case .hashtag(let s):    return sum + s.count + 1   // include the leading '#'
+            default:                 return sum
+            }
+        }
     }
 
     static func parse(
@@ -182,20 +264,49 @@ enum ContentParser {
         // The regex pass above misses those URLs, so append them here as
         // explicit media segments in imeta tag order (so the publisher's
         // intended first image stays first).
-        if !imetaMap.isEmpty {
+        //
+        // The append pass only runs when `content` rendered no media of its
+        // own. Per NIP-92 an imeta tag describes a URL that appears in
+        // `content`; when a note already shows media, an unmatched imeta URL
+        // is the same file on another host (e.g. the publishing client's
+        // Blossom mirror), not an extra attachment — and it often carries no
+        // `x`/`ox` digest that could prove the match (a nostr.build URL in
+        // content vs a digest-named mirror URL in imeta has no common token),
+        // so appending it would render the image twice.
+        let contentHasMedia = segments.contains { seg in
+            switch seg {
+            case .image, .video, .audio, .unknownMedia: return true
+            default: return false
+            }
+        }
+        if !imetaMap.isEmpty && !contentHasMedia {
             var seenUrls = Set<String>()
+            // Content-addressed dedup: two imeta tags are often mirrors of the
+            // same file on different hosts, keyed by its SHA-256. A plain
+            // URL-string compare misses that and renders the image twice, so we
+            // also track the digest — from the imeta `x`/`ox` field or the
+            // 64-hex filename embedded in a media URL — and skip any imeta
+            // entry whose file we've already appended.
+            var seenHashes = Set<String>()
             for seg in segments {
+                let segUrl: String?
                 switch seg {
-                case .image(let m), .video(let m), .audio(let m), .unknownMedia(let m):
-                    seenUrls.insert(m.url)
                 case .link(let url), .inlineLink(let url):
-                    seenUrls.insert(url)
-                default: break
+                    segUrl = url
+                default:
+                    segUrl = nil
+                }
+                if let segUrl {
+                    seenUrls.insert(segUrl)
+                    if let h = sha256Hash(fromUrl: segUrl) { seenHashes.insert(h) }
                 }
             }
             let orderedUrls = imetaUrlOrder.isEmpty ? Array(imetaMap.keys) : imetaUrlOrder
-            for url in orderedUrls where !seenUrls.contains(url) {
+            for url in orderedUrls {
                 guard let meta = imetaMap[url] else { continue }
+                if seenUrls.contains(url) { continue }
+                let metaHash = meta.sha256?.lowercased() ?? sha256Hash(fromUrl: url)
+                if let metaHash, seenHashes.contains(metaHash) { continue }
                 let imetaClass = meta.mime.flatMap { classifyByMime($0) }
                 let ext = fileExtension(url)
                 if imetaClass == "image" { segments.append(.image(meta)) }
@@ -205,6 +316,10 @@ enum ContentParser {
                 else if videoExtensions.contains(ext) { segments.append(.video(meta)) }
                 else if audioExtensions.contains(ext) { segments.append(.audio(meta)) }
                 else { segments.append(.unknownMedia(meta)) }
+                // Record what we just appended so a second imeta tag pointing at
+                // the same file (another mirror) doesn't add yet another copy.
+                seenUrls.insert(url)
+                if let metaHash { seenHashes.insert(metaHash) }
             }
         }
 
@@ -226,28 +341,119 @@ enum ContentParser {
             return [seg]
         }
 
-        // Pass 4: trim blank lines preceding block segments
+        // Pass 3.5: detect lightning addresses (user@domain.tld) in text segments
+        segments = segments.flatMap { seg -> [ContentSegment] in
+            if case .text(let text) = seg {
+                return splitTextForLightningAddresses(text)
+            }
+            return [seg]
+        }
+
+        // Pass 4: detect bech32-encoded LNURLs in text segments
+        segments = segments.flatMap { seg -> [ContentSegment] in
+            if case .text(let text) = seg {
+                return splitTextForLnurls(text)
+            }
+            return [seg]
+        }
+
+        // Pass 5: trim blank lines adjacent to block segments.
+        //
+        // Block segments (image, video, quoted note, invoice, link preview…)
+        // render as their own card in RichContentView's 8pt-spaced VStack.
+        // Blank lines around them used to survive as (possibly empty) text
+        // rows — each one a full line of height inside the UITextView plus
+        // VStack spacing on both sides — which read as a large gap between
+        // e.g. a paragraph and a lightning invoice. Trim newline runs on both
+        // sides of the adjacency, and drop the text segment entirely when
+        // nothing but whitespace remains.
         if trimBlankLines, segments.count > 1 {
-            for i in 0..<(segments.count - 1) {
-                let next = segments[i + 1]
-                let isBlock: Bool
-                switch next {
+            func isBlock(_ seg: ContentSegment) -> Bool {
+                switch seg {
                 // .nostrProfile (npub @mention) is rendered inline by
-                // RichInlineTextView, not as a card — leave preceding blank
+                // RichInlineTextView, not as a card — leave surrounding blank
                 // lines alone so a bio that puts a mention on its own line,
                 // or after a paragraph break, keeps the line break the user
                 // typed.
-                case .text, .inlineLink, .customEmoji, .hashtag, .nostrProfile: isBlock = false
-                case .link: isBlock = !linksAreInline
-                default: isBlock = true
-                }
-                if isBlock, case .text(let text) = segments[i] {
-                    let trimmed = trimTrailingNewlines(text)
-                    if trimmed != text {
-                        segments[i] = .text(trimmed.isEmpty ? "" : trimmed + "\n")
-                    }
+                case .text, .inlineLink, .customEmoji, .hashtag, .nostrProfile: return false
+                case .link: return !linksAreInline
+                default: return true
                 }
             }
+            var pruned: [ContentSegment] = []
+            pruned.reserveCapacity(segments.count)
+            for (i, seg) in segments.enumerated() {
+                guard case .text(let text) = seg else {
+                    pruned.append(seg)
+                    continue
+                }
+                let prevIsBlock = i > 0 && isBlock(segments[i - 1])
+                let nextIsBlock = i + 1 < segments.count && isBlock(segments[i + 1])
+                // Only block-adjacent text is eligible: a whitespace-only run
+                // between two inline segments is a joiner (e.g. the single
+                // space between two custom-emoji URLs) and must survive.
+                guard prevIsBlock || nextIsBlock else {
+                    pruned.append(seg)
+                    continue
+                }
+                var t = text
+                if prevIsBlock {
+                    while t.first == "\n" { t.removeFirst() }
+                }
+                if nextIsBlock {
+                    while t.last == "\n" { t.removeLast() }
+                }
+                if t.allSatisfy({ $0 == " " || $0 == "\n" || $0 == "\t" || $0 == "\r" }) { continue }
+                pruned.append(.text(t))
+            }
+            segments = pruned
+        }
+
+        // Pass 6: normalize newline runs inside the text itself.
+        //
+        // Independent of pass 5, which only trims text sitting next to a block
+        // card. This one is about the prose: a post padded with trailing
+        // newlines, or paragraphs split by three or more, renders each extra
+        // newline as a real empty line inside the UITextView. That reads as a
+        // ragged gap the author usually didn't intend (often an artifact of the
+        // client they posted from) and the reader has no way to collapse.
+        //
+        // One blank line survives as the paragraph break — only the surplus
+        // goes, along with blank lines leading or trailing the whole post.
+        // Single newlines are never touched: a line break inside a stanza, an
+        // address, or a hand-made list is meaningful.
+        if trimBlankLines, !segments.isEmpty {
+            func collapse(_ s: String) -> String {
+                let ns = s as NSString
+                return blankLineRunRegex.stringByReplacingMatches(
+                    in: s, range: NSRange(location: 0, length: ns.length), withTemplate: "\n\n"
+                )
+            }
+            func strip(_ s: String, _ regex: NSRegularExpression) -> String {
+                let ns = s as NSString
+                return regex.stringByReplacingMatches(
+                    in: s, range: NSRange(location: 0, length: ns.length), withTemplate: ""
+                )
+            }
+
+            var normalized: [ContentSegment] = []
+            normalized.reserveCapacity(segments.count)
+            let lastIndex = segments.count - 1
+            for (i, seg) in segments.enumerated() {
+                guard case .text(let text) = seg else {
+                    normalized.append(seg)
+                    continue
+                }
+                var t = collapse(text)
+                // Edges of the rendered post, not of every text run: an
+                // interior segment's newlines are a real break between the
+                // inline pieces around it.
+                if i == 0 { t = strip(t, leadingBlankLinesRegex) }
+                if i == lastIndex { t = strip(t, trailingBlankLinesRegex) }
+                if t.isEmpty { continue }
+                normalized.append(.text(t))
+            }
+            segments = normalized
         }
 
         return segments
@@ -270,12 +476,37 @@ enum ContentParser {
     }
 
     private static func decodeNostrToken(_ token: String) -> ContentSegment {
-        guard let decoded = Nip19.decodeNostrUri(token) else {
-            return .text(token)
+        // Fast path.
+        if let decoded = Nip19.decodeNostrUri(token) {
+            return segment(from: decoded)
         }
+        // Slow path: two bech32 strings may have been concatenated with no
+        // separator (e.g. "nprofile1…k6nprofile1…k6" published without a
+        // space). The greedy regex matched both as one token whose checksum
+        // fails. Trim one character at a time from the end until the
+        // bech32 checksum of the remaining prefix validates, then decode
+        // that portion and silently drop the broken tail rather than
+        // rendering the entire mangled string as plain text.
+        let scheme = token.hasPrefix("nostr:") ? "nostr:" : ""
+        let body = String(token.dropFirst(scheme.count))
+        // Shortest conceivable valid body: hrp + "1" + 6-char checksum ≈ 12.
+        // Use 20 as the floor so we don't waste cycles on obviously-too-short
+        // suffixes.
+        let minBody = 20
+        var trimmed = body
+        while trimmed.count > minBody {
+            trimmed = String(trimmed.dropLast())
+            if let decoded = Nip19.decodeNostrUri(scheme + trimmed) {
+                return segment(from: decoded)
+            }
+        }
+        return .text(token)
+    }
+
+    private static func segment(from decoded: NostrUriData) -> ContentSegment {
         switch decoded {
-        case .noteRef(let eventId, let relays, _):
-            return .nostrNote(eventId: eventId, relayHints: relays)
+        case .noteRef(let eventId, let relays, let author):
+            return .nostrNote(eventId: eventId, relayHints: relays, author: author)
         case .profileRef(let pubkey, let relays):
             return .nostrProfile(pubkey: pubkey, relayHints: relays)
         case .addressRef(let dTag, let relays, let author, let kind):
@@ -316,6 +547,19 @@ enum ContentParser {
             return String(withoutQuery[withoutQuery.index(after: dot)...]).lowercased()
         }
         return ""
+    }
+
+    /// Extracts a content-addressed SHA-256 digest from a media URL when the
+    /// final path component is a 64-char hex string (optionally with a file
+    /// extension), as used by Blossom and most Nostr media hosts. Returns the
+    /// lowercased hash, or nil if the filename isn't a digest.
+    private static func sha256Hash(fromUrl url: String) -> String? {
+        guard let parsed = URL(string: url) else { return nil }
+        let last = parsed.lastPathComponent
+        let base = last.split(separator: ".").first.map(String.init) ?? last
+        let r = NSRange(location: 0, length: (base as NSString).length)
+        guard sha256Regex.firstMatch(in: base, range: r) != nil else { return nil }
+        return base.lowercased()
     }
 
     private static func isBlossomUrl(_ url: String) -> Bool {
@@ -424,6 +668,115 @@ enum ContentParser {
             result.append(.text(ns.substring(from: lastEnd)))
         }
         return result
+    }
+
+    /// Splits a text run on lightning addresses (`user@domain.tld`), emitting a
+    /// `.lightningAddress` segment for each. Each candidate is validated with
+    /// `LnurlResolver.isLightningAddress` so obviously-malformed tokens stay as
+    /// text; genuine emails still match the shape, but the pay sheet resolves
+    /// the LNURL on open and surfaces an error if it isn't payable.
+    private static func splitTextForLightningAddresses(_ text: String) -> [ContentSegment] {
+        let ns = text as NSString
+        let matches = lightningAddressRegex.matches(in: text, range: NSRange(location: 0, length: ns.length))
+        if matches.isEmpty { return [.text(text)] }
+
+        var result: [ContentSegment] = []
+        var lastEnd = 0
+        var anyFound = false
+        for match in matches {
+            let raw = ns.substring(with: match.range)
+            guard LnurlResolver.isLightningAddress(raw) else { continue }
+            anyFound = true
+            let r = match.range
+            if r.location > lastEnd {
+                result.append(.text(ns.substring(with: NSRange(location: lastEnd, length: r.location - lastEnd))))
+            }
+            result.append(.lightningAddress(raw))
+            lastEnd = r.location + r.length
+        }
+        if !anyFound { return [.text(text)] }
+        if lastEnd < ns.length {
+            result.append(.text(ns.substring(from: lastEnd)))
+        }
+        return result
+    }
+
+    private static func splitTextForLnurls(_ text: String) -> [ContentSegment] {
+        let ns = text as NSString
+        let matches = lnurlRegex.matches(in: text, range: NSRange(location: 0, length: ns.length))
+        if matches.isEmpty { return [.text(text)] }
+
+        var result: [ContentSegment] = []
+        var lastEnd = 0
+        var anyFound = false
+        for match in matches {
+            let raw = ns.substring(with: match.range)
+            let encoded = raw.lowercased()
+            guard let (hrp, _) = Bech32.decode(encoded), hrp == "lnurl" else { continue }
+            anyFound = true
+            let r = match.range
+            if r.location > lastEnd {
+                result.append(.text(ns.substring(with: NSRange(location: lastEnd, length: r.location - lastEnd))))
+            }
+            result.append(.lnurlPayable(encoded: encoded))
+            lastEnd = r.location + r.length
+        }
+        if !anyFound { return [.text(text)] }
+        if lastEnd < ns.length {
+            result.append(.text(ns.substring(from: lastEnd)))
+        }
+        return result
+    }
+
+    // MARK: - Image split (short free-form text)
+
+    /// Splits short free-form text — a zap comment, say — into the images it
+    /// references and whatever text is left once those URLs are stripped out.
+    /// Surfaces that only have a plain string to work with (no event, no imeta
+    /// tags) use this to render an image comment as an actual image instead of
+    /// a raw URL.
+    ///
+    /// Whitespace in the leftover text is collapsed to single spaces so a
+    /// comment written as "nice one\n\nhttps://…/x.jpg" doesn't leave a
+    /// trailing blank line behind in a one- or two-line label.
+    ///
+    /// `.unknownMedia` (an extension-less Blossom URL, where the file type is
+    /// only knowable from an imeta tag the plain string doesn't carry) counts as
+    /// an image here, matching how `RichContentView` renders that segment.
+    static func splitImages(from content: String) -> (text: String, images: [MediaMeta]) {
+        guard !content.isEmpty else { return ("", []) }
+        var images: [MediaMeta] = []
+        var seen = Set<String>()
+        for seg in parse(content: content) {
+            let meta: MediaMeta
+            switch seg {
+            case .image(let m), .unknownMedia(let m): meta = m
+            default: continue
+            }
+            guard seen.insert(meta.url).inserted else { continue }
+            images.append(meta)
+        }
+        guard !images.isEmpty else {
+            return (content.trimmingCharacters(in: .whitespacesAndNewlines), images)
+        }
+        var text = content
+        for meta in images {
+            text = text.replacingOccurrences(of: meta.url, with: " ")
+        }
+        let collapsed = text
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
+        return (collapsed, images)
+    }
+
+    /// One-line rendering of free-form text for chips and pills, where there's
+    /// no room to lay an image out: each image URL collapses to an `[image]`
+    /// marker so a URL-only comment doesn't render as a long truncated link.
+    static func compactImageMarkers(_ content: String) -> String {
+        let (text, images) = splitImages(from: content)
+        guard !images.isEmpty else { return text }
+        let markers = Array(repeating: "[image]", count: images.count).joined(separator: " ")
+        return text.isEmpty ? markers : "\(text) \(markers)"
     }
 
     // MARK: - Custom emoji tags (NIP-30)

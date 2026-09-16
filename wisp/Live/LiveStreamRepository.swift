@@ -35,6 +35,12 @@ final class LiveStreamRepository {
     var messagesByStream: [String: [LiveChatMessage]] = [:]
     var streamZapTotalsSats: [String: Int64] = [:]
     var currentATag: String?
+    /// Host/streamer kind-0 profiles keyed by pubkey, for the live pill row.
+    /// Fed by `LiveStreamCoordinator`'s batched fetch and `FeedLiveNowSection`'s
+    /// on-screen self-heal. Lives here (not only in `ProfileRepository`) because
+    /// this repo is `@Observable` — a write re-renders `LiveNowPill` the moment
+    /// an avatar resolves, which `ProfileRepository`'s plain dict can't do.
+    var hostProfiles: [String: ProfileData] = [:]
 
     @ObservationIgnored private var seenChatIds = Set<String>()
     @ObservationIgnored private var seenZapIds = Set<String>()
@@ -54,6 +60,11 @@ final class LiveStreamRepository {
 
     func messages(for aTag: String) -> [LiveChatMessage] {
         messagesByStream[aTag] ?? []
+    }
+
+    /// Record a resolved host/streamer profile so visible pills pick up the avatar.
+    func setHostProfile(_ profile: ProfileData) {
+        hostProfiles[profile.pubkey] = profile
     }
 
     // MARK: - Ingestion
@@ -181,6 +192,7 @@ final class LiveStreamRepository {
         streams.removeAll()
         messagesByStream.removeAll()
         streamZapTotalsSats.removeAll()
+        hostProfiles.removeAll()
         seenChatIds.removeAll()
         seenZapIds.removeAll()
         pendingFollowChatters.removeAll()

@@ -177,7 +177,8 @@ enum RelayPool {
     /// Open a persistent multi-relay subscription. Stays open after EOSE for live
     /// delivery; the connection pool re-issues the REQ automatically on reconnect
     /// and after NIP-42 AUTH. Cancel via `RelaySubscription.cancel()`.
-    static func subscribe(relays: [String], filter: NostrFilter, id: String) -> RelaySubscription {
+    static func subscribe(relays: [String], filter: NostrFilter, id: String,
+                          bypassConnectionCap: Bool = false) -> RelaySubscription {
         let sub = RelaySubscription(id: id)
         let reqFrame = "[\"REQ\",\"\(id)\",\(filter.toJSON())]"
         sub.setREQ(reqFrame)
@@ -185,7 +186,8 @@ enum RelayPool {
         let sink = RelaySink(onEvent: { [weak sub] event, relay in
             sub?.deliver(event: event, relayUrl: relay)
         })
-        Task { await RelayConnectionPool.shared.register(subId: id, relays: relayReqs, sink: sink) }
+        Task { await RelayConnectionPool.shared.register(subId: id, relays: relayReqs, sink: sink,
+                                                         bypassConnectionCap: bypassConnectionCap) }
         return sub
     }
 
@@ -645,7 +647,10 @@ actor RelayConnectionPool {
     /// exceeds the cap and evicts its own relays as other subs register. Still
     /// orders of magnitude below the per-process network-flow limit the old
     /// per-call socket model blew past; the jank came from ephemeral churn, not
-    /// the steady-state count.
+    /// the steady-state count. The cap is SOFT for the active user-selected relay
+    /// feed (`register(…, bypassConnectionCap: true)`): that one explicit choice
+    /// must always connect, so it overflows the cap when nothing is idle to evict;
+    /// the 30s idle reaper then shrinks the pool back under the cap.
     private let maxConnections = 96
     /// Close connections that have had no subscribers for this long.
     private let idleTTL: TimeInterval = 45
@@ -681,8 +686,12 @@ actor RelayConnectionPool {
     /// set) so that under the connection cap the highest-priority relays win.
     /// Duplicate relays within the list are collapsed. Relays that can't be
     /// connected under the cap are skipped — the subscription still works on the
-    /// rest.
-    func register(subId: String, relays: [(url: URL, req: String)], sink: RelaySink) async {
+    /// rest — UNLESS `bypassConnectionCap` is set, in which case every relay is
+    /// guaranteed a connection (evicting an idle conn first, else temporarily
+    /// overflowing the cap). Reserved for the active user-selected relay feed,
+    /// which is a single explicit choice that must always connect.
+    func register(subId: String, relays: [(url: URL, req: String)], sink: RelaySink,
+                  bypassConnectionCap: Bool = false) async {
         startReaperIfNeeded()
         #if DEBUG
         let connsBefore = conns.count
@@ -692,7 +701,7 @@ actor RelayConnectionPool {
         for entry in relays {
             let urlString = entry.url.absoluteString
             guard seenInThisSub.insert(urlString).inserted else { continue }
-            guard let conn = connection(for: urlString, url: entry.url) else { continue }
+            guard let conn = connection(for: urlString, url: entry.url, bypassCap: bypassConnectionCap) else { continue }
             await conn.addSub(id: subId, req: entry.req, sink: sink)
             relayRefCount[urlString, default: 0] += 1
             relayTouched[urlString] = Date()
@@ -703,7 +712,7 @@ actor RelayConnectionPool {
         // Catch scroll-triggered connection storms: a burst of `q-…` (one-shot
         // query / quoted-note / repost) registers each opening many NEW sockets
         // is the fingerprint of the freeze.
-        relayPoolLog.log("register sub=\(subId, privacy: .public) requested=\(relays.count, privacy: .public) registered=\(registered.count, privacy: .public) newConns=\(self.conns.count - connsBefore, privacy: .public) liveConns=\(self.conns.count, privacy: .public)")
+        relayPoolLog.log("register sub=\(subId, privacy: .public) requested=\(relays.count, privacy: .public) registered=\(registered.count, privacy: .public) newConns=\(self.conns.count - connsBefore, privacy: .public) liveConns=\(self.conns.count, privacy: .public) bypass=\(bypassConnectionCap, privacy: .public)")
         #endif
         // A `cancel()` may have raced ahead of this register (its deregister ran while we
         // were awaiting `addSub`, or before this Task was even scheduled). If so, tear down
@@ -738,10 +747,12 @@ actor RelayConnectionPool {
 
     /// Get-or-create a connection for `urlString`, evicting the least-recently-
     /// used idle connection if at the cap. Returns nil only when the cap is hit
-    /// and nothing is idle to evict.
-    private func connection(for urlString: String, url: URL) -> RelayConn? {
+    /// and nothing is idle to evict — unless `bypassCap`, where we still evict an
+    /// idle conn if one exists (keeping the pool bounded when possible) but
+    /// otherwise overflow the cap rather than refuse the connection.
+    private func connection(for urlString: String, url: URL, bypassCap: Bool = false) -> RelayConn? {
         if let existing = conns[urlString] { return existing }
-        if conns.count >= maxConnections, !evictOneIdle() {
+        if conns.count >= maxConnections, !evictOneIdle(), !bypassCap {
             return nil
         }
         let conn = RelayConn(url: url, session: session)

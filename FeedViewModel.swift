@@ -31,8 +31,10 @@ enum FeedKind: Equatable, Hashable {
 nonisolated enum FeedContentFilter: String, CaseIterable {
     /// No filter — every kind the feed surfaces is shown.
     case all
-    /// Plain text notes, reposts, and long-form articles.
+    /// Plain text notes and reposts.
     case notes
+    /// NIP-23 long-form articles.
+    case articles
     /// NIP-68 / NIP-71 gallery posts.
     case gallery
     /// NIP-88 polls.
@@ -43,8 +45,9 @@ nonisolated enum FeedContentFilter: String, CaseIterable {
     /// hints at the content type they isolate.
     var iconName: String {
         switch self {
-        case .all:     return "rectangle.grid.2x2"
-        case .notes:   return "doc.text"
+        case .all:      return "rectangle.grid.2x2"
+        case .notes:    return "doc.text"
+        case .articles: return "newspaper"
         case .gallery: return "photo"
         case .polls:   return "checklist"
         }
@@ -53,8 +56,9 @@ nonisolated enum FeedContentFilter: String, CaseIterable {
     /// The next filter in the cycle. `polls` wraps back to `all`.
     var next: FeedContentFilter {
         switch self {
-        case .all:     return .notes
-        case .notes:   return .gallery
+        case .all:      return .notes
+        case .notes:    return .articles
+        case .articles: return .gallery
         case .gallery: return .polls
         case .polls:   return .all
         }
@@ -65,6 +69,7 @@ nonisolated enum FeedContentFilter: String, CaseIterable {
         switch self {
         case .all:     return "No posts in your feed yet"
         case .notes:   return "No notes in your feed yet"
+        case .articles: return "No articles in your feed yet"
         case .gallery: return "No gallery posts in your feed yet"
         case .polls:   return "No polls in your feed yet"
         }
@@ -79,7 +84,11 @@ nonisolated enum FeedContentFilter: String, CaseIterable {
         case .all:
             return true
         case .notes:
-            return kind == 1 || kind == 6 || kind == 30023
+            // Articles have their own filter now, so leaving them here too
+            // would make two of the four options overlap.
+            return kind == 1 || kind == 6
+        case .articles:
+            return kind == 30023
         case .gallery:
             return kind == 20 || kind == 21 || kind == 22
         case .polls:
@@ -191,10 +200,24 @@ final class FeedViewModel {
 
     /// True for events that should appear as top-level rows in the feed list.
     /// Kept consistent across cache seed, live ingest, and relay backfill paths.
-    nonisolated static func isFeedRenderable(_ event: NostrEvent) -> Bool {
+    /// `includeReplies` admits kind-1 replies (the "Include replies in feeds"
+    /// setting); when false only root kind-1s pass, the original behaviour.
+    nonisolated static func isFeedRenderable(_ event: NostrEvent, includeReplies: Bool) -> Bool {
         if event.isRootNote { return true }
+        if includeReplies && event.kind == 1 { return true }
+        // NIP-22 comments are deliberately absent here: they surface on the
+        // profile Comments tab, not the timeline. A comment on a blog post is
+        // conversation about that article, not a broadcast to the author's
+        // followers. A dedicated follows-wide Comments feed is planned
+        // separately.
         switch event.kind {
-        case 6, 20, Nip88.kindPoll, Nip69.kindZapPoll: return true
+        // 30023 is long-form. `PostCardView` already has a renderer for it
+        // (`articleBody` → `ArticleFeedPreview`), but the gate dropped it
+        // before it could be reached, so articles never appeared in the feed.
+        //
+        // 21 / 22 (video / audio gallery) stay out on purpose: there is no
+        // card for them, so admitting them would add rows nothing can draw.
+        case 6, 20, 30023, Nip88.kindPoll, Nip69.kindZapPoll: return true
         default: return false
         }
     }
@@ -214,12 +237,22 @@ final class FeedViewModel {
             forName: .nostrEventPublished, object: nil, queue: .main
         ) { [weak self] note in
             guard let event = note.userInfo?["event"] as? NostrEvent else { return }
-            Task { @MainActor [weak self] in
+            // Synchronous main-actor call instead of `Task { @MainActor in }`
+            // so this observer and `PendingPostStore`'s observer run in the
+            // same runloop tick — SwiftUI batches both writes (events insert
+            // + pending clear) into a single render pass. Without this, the
+            // dimmed pending row could sit visible under the real card for a
+            // beat before the deferred clear committed.
+            MainActor.assumeIsolated {
                 guard let self else { return }
                 guard event.pubkey == self.keypair.pubkey else { return }
                 guard self.currentKind == .follows else { return }
-                guard Self.isFeedRenderable(event) else { return }
+                guard Self.isFeedRenderable(event, includeReplies: AppSettings.shared.includeRepliesInFeed) else { return }
                 guard self.seenIds.insert(event.id).inserted else { return }
+                // Clear the optimistic placeholder atomically with the real
+                // insert. PendingPostStore's own observer is also listening;
+                // this just guarantees the swap regardless of observer order.
+                PendingPostStore.shared.clearIfMatches(realEvent: event)
                 self.events = self.windowTrimmed(Self.consolidateReposts(
                     Self.mergeSortedDesc(self.events, [event])
                 ))
@@ -263,6 +296,28 @@ final class FeedViewModel {
                 }
             }
         }
+
+        // "Include replies in feeds" flips mid-session. Only the Follows feed
+        // strips replies — relay / relay-set / extended-network feeds show them
+        // unconditionally, so those must not be touched here.
+        NotificationCenter.default.addObserver(
+            forName: .feedRepliesSettingChanged, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.currentKind == .follows else { return }
+                if AppSettings.shared.includeRepliesInFeed {
+                    // OFF→ON: replies are already on disk but absent from the
+                    // in-memory window (and gated out of `seenIds` history) —
+                    // full reseed, then `refresh()` restarts the live REQ.
+                    self.reseedFollowsFeed()
+                } else {
+                    // ON→OFF: strip in place, including buffered live inserts
+                    // so a pending flush can't reinsert a reply after the strip.
+                    self.events.removeAll { !Self.isFeedRenderable($0, includeReplies: false) }
+                    self.pendingInserts.removeAll { !Self.isFeedRenderable($0, includeReplies: false) }
+                }
+            }
+        }
     }
 
     func start() async {
@@ -279,6 +334,13 @@ final class FeedViewModel {
         let kp = keypair
         Task { await RelaySetRepository.shared.bootstrap(keypair: kp) }
 
+        // 0. Re-seed the deletion tracker from persisted kind-5 events so
+        //    deleted notes are hidden from the very first frame — without this
+        //    they'd flash from cache until the live subscription delivers the
+        //    kind-5 again.
+        let deletionEvents = await eventStore.loadDeletionEvents()
+        DeletionTracker.shared.ingestBatch(deletionEvents)
+
         // 1. Seed from local storage for instant display.
         //    Filter + sort run off the MainActor so the first frame isn't blocked.
         //    Private rumors (gift-wrapped kind-1 from PrivateInteractionStore) are
@@ -291,12 +353,13 @@ final class FeedViewModel {
         if !cached.isEmpty {
             let myPubkey = keypair.pubkey
             let follows = followsCache
+            let includeReplies = AppSettings.shared.includeRepliesInFeed
             let (filtered, ids) = await Task.detached(priority: .userInitiated) {
                 var result: [NostrEvent] = []
                 var seen: Set<String> = []
                 for event in cached {
                     if SafetyFilter.shared.shouldDrop(event: event, context: .feed) { continue }
-                    if FeedViewModel.isFeedRenderable(event) &&
+                    if FeedViewModel.isFeedRenderable(event, includeReplies: includeReplies) &&
                        (event.pubkey == myPubkey || follows.contains(event.pubkey)) {
                         if seen.insert(event.id).inserted { result.append(event) }
                     }
@@ -469,8 +532,16 @@ final class FeedViewModel {
 
     func selectFollows() {
         guard currentKind != .follows else { return }
-        cancelLiveSubscription()
         currentKind = .follows
+        reseedFollowsFeed()
+    }
+
+    /// Reset the Follows feed and rebuild it from the local cache, then
+    /// `refresh()` to restart the live subscription. Shared by `selectFollows()`
+    /// and the "include replies" toggle handler (which must reseed while
+    /// `currentKind` is already `.follows`).
+    private func reseedFollowsFeed() {
+        cancelLiveSubscription()
         relayFeedStatus = .idle
         events = []
         seenIds = []
@@ -487,12 +558,13 @@ final class FeedViewModel {
             )
             let myPubkey = keypair.pubkey
             let fc = followsCache
+            let includeReplies = AppSettings.shared.includeRepliesInFeed
             let (reFiltered, reIds) = await Task.detached(priority: .userInitiated) {
                 var result: [NostrEvent] = []
                 var seen: Set<String> = []
                 for event in cached {
                     if SafetyFilter.shared.shouldDrop(event: event, context: .feed) { continue }
-                    guard FeedViewModel.isFeedRenderable(event),
+                    guard FeedViewModel.isFeedRenderable(event, includeReplies: includeReplies),
                           event.pubkey == myPubkey || fc.contains(event.pubkey) else { continue }
                     if seen.insert(event.id).inserted { result.append(event) }
                 }
@@ -651,11 +723,16 @@ final class FeedViewModel {
         guard hold != holdNewPosts else { return }
         holdNewPosts = hold
         if !hold {
-            // Apply anything that accumulated while held. Re-uses the same
-            // flush pathway so persistence / profile hydration paths stay
-            // identical between the held-then-applied and at-top-merge
-            // cases.
-            flushPendingInserts()
+            // Apply anything that accumulated while held — but defer to the
+            // next runloop tick. This is called from the view's
+            // `onScrollGeometryChange` action, and reassigning `events`
+            // synchronously inside that callback can corrupt SwiftUI's
+            // scroll-offset bookkeeping for the pass in flight, which
+            // manifests as the feed becoming unable to scroll to the top.
+            // The flag flips immediately; only the mutation is deferred.
+            Task { @MainActor in
+                flushPendingInserts()
+            }
         }
     }
 
@@ -798,7 +875,11 @@ final class FeedViewModel {
         connectedRelayCount = relays.count
         let filter = NostrFilter(kinds: Self.relayFeedKinds, limit: 100)
         let subId = "relay-feed-\(UUID().uuidString.prefix(8).lowercased())"
-        let sub = RelayPool.subscribe(relays: relays, filter: filter, id: subId)
+        // The active relay feed is the user's one explicit choice — bypass the
+        // pool's connection cap so it connects 100% of the time even when the
+        // always-on subs (follows/DM/notifications) have the pool at capacity.
+        let sub = RelayPool.subscribe(relays: relays, filter: filter, id: subId,
+                                      bypassConnectionCap: true)
         liveSubscription = sub
 
         // 15s "first event" watchdog — flips to noEvents if nothing arrives.
@@ -814,6 +895,11 @@ final class FeedViewModel {
             for await (event, _) in sub.events {
                 guard let self else { return }
                 if Task.isCancelled { return }
+                // Intercept deletion requests before any other processing.
+                if event.kind == Nip09.kindDeletion {
+                    DeletionTracker.shared.ingest(event)
+                    continue
+                }
                 if SafetyFilter.shared.shouldDrop(event: event, context: .feed) { continue }
                 self.markActivityIfFollowed(event)
                 guard Self.relayFeedKinds.contains(event.kind) else { continue }
@@ -868,6 +954,7 @@ final class FeedViewModel {
         let myPubkey = keypair.pubkey
         let follows = followsCache
         let currentIds = Set(events.map(\.id))
+        let includeReplies = AppSettings.shared.includeRepliesInFeed
         loadMoreTask = Task { [weak self] in
             defer { Task { @MainActor in self?.loadMoreTask = nil } }
             guard let self else { return }
@@ -885,7 +972,7 @@ final class FeedViewModel {
             let page = await Task.detached(priority: .userInitiated) {
                 candidates.filter { ev in
                     (ev.pubkey == myPubkey || follows.contains(ev.pubkey))
-                        && FeedViewModel.isFeedRenderable(ev)
+                        && FeedViewModel.isFeedRenderable(ev, includeReplies: includeReplies)
                         && !SafetyFilter.shared.shouldDrop(event: ev, context: .feed)
                         && !currentIds.contains(ev.id)
                 }
@@ -1024,6 +1111,28 @@ final class FeedViewModel {
             userProfile = updated
             profiles[pubkey] = updated
         }
+
+        // Reconcile the local follow set with the freshest kind-3 on relays.
+        // `FollowsCache` is otherwise only written at onboarding and on in-app
+        // follow/unfollow, so a follow list changed in another client (e.g.
+        // trimmed via an external tool) never lands locally — and the next
+        // in-app edit republishes the stale set, undoing the change.
+        // `reconcile` adopts the relay copy only when its `created_at` is
+        // newer than the set we already hold, so it can't clobber a fresher
+        // local edit.
+        let contactResults = await RelayPool.query(
+            relays: Self.indexerRelays,
+            filter: NostrFilter(kinds: [3], authors: [pubkey], limit: 1),
+            waitForAllRelays: true
+        )
+        if let bestContacts = contactResults.filter({ $0.kind == 3 }).max(by: { $0.createdAt < $1.createdAt }) {
+            let followPubkeys = bestContacts.tags.compactMap { tag -> String? in
+                tag.count >= 2 && tag[0] == "p" ? tag[1] : nil
+            }
+            if FollowsCache.shared.reconcile(pubkey: pubkey, follows: followPubkeys, createdAt: bestContacts.createdAt) {
+                reloadFollowsCache()
+            }
+        }
     }
 
     /// Number of (score-sorted) relays the live follows feed connects to. With
@@ -1079,12 +1188,27 @@ final class FeedViewModel {
         }
 
         // 4. Build one REQ per relay (multi-filter when authors > 200) — at most one socket per host.
-        let kinds = [1, 6, 20, Nip88.kindPoll, Nip69.kindZapPoll]
+        // Long-form was missing here while `relayFeedKinds` has carried it all
+        // along, so the follows feed never asked for articles at all.
+        let kinds = [1, 6, 20, 30023, Nip88.kindPoll, Nip69.kindZapPoll, Nip09.kindDeletion]
         var queries: [RelayQuery] = []
         for (relayUrl, authors) in relayToAuthors {
             let chunks = Array(authors).chunked(into: Self.maxAuthorsPerFilter)
-            let filters = chunks.map { chunk in
+            var filters = chunks.map { chunk in
                 NostrFilter(kinds: kinds, authors: chunk, limit: 100, since: since)
+            }
+            // Articles get their own filter rather than sharing the 100 above.
+            // People post many more notes than articles, so in a single mixed
+            // filter the relay's newest-100 is almost entirely notes and the
+            // long-form a follow published last week never comes back — the
+            // Articles view looked empty for feeds that had plenty.
+            //
+            // No `since` either: an article is worth reading a month after it
+            // was posted, where a note usually isn't. They still sort into the
+            // timeline by their own timestamp, so an older one simply sits
+            // lower rather than jumping the feed.
+            filters += chunks.map { chunk in
+                NostrFilter(kinds: [30023], authors: chunk, limit: 30)
             }
             queries.append(RelayQuery(relayUrl: relayUrl, filters: filters))
         }
@@ -1113,7 +1237,16 @@ final class FeedViewModel {
                 // was the one live path that skipped it.
                 if SafetyFilter.shared.shouldDrop(event: event, context: .feed) { continue }
                 self.markActivityIfFollowed(event)
-                guard Self.isFeedRenderable(event) else { continue }
+                // Kind 5 is a deletion request, not feed content — feed it to
+                // the tracker and drop it before it can reach the render path.
+                // This runs AFTER shouldDrop so the tracker has already learned
+                // about the deletion from the `shouldDrop` call above for any
+                // matching event id; this ingestion is for future events.
+                if event.kind == Nip09.kindDeletion {
+                    DeletionTracker.shared.ingest(event)
+                    continue
+                }
+                guard Self.isFeedRenderable(event, includeReplies: AppSettings.shared.includeRepliesInFeed) else { continue }
                 guard self.seenIds.insert(event.id).inserted else { continue }
                 self.enqueueLiveEvent(event)
             }

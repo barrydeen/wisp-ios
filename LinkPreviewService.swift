@@ -99,9 +99,15 @@ actor LinkPreviewService {
                     return synthesizeYoutubeChannelPreview(urlString)
                 }
             }
-            // Use first 256KB. YouTube + similar SPA-ish pages bury the OG
-            // meta tags well past the 64KB mark we used to allow.
-            let limited = data.prefix(256 * 1024)
+            // Parse up to the first 1MB. Google SPA pages (Chrome Web Store,
+            // YouTube) push the `<head>` OG meta tags far down behind inline
+            // bootstrap scripts — the Chrome Web Store buries og:title/image
+            // past the 470KB mark, so the old 256KB cap truncated them and the
+            // card fell back to a bare link. `URLSession.data` already fetched
+            // the whole body, so raising this only costs decode + regex time,
+            // not bandwidth; the 1MB ceiling bounds the regex work on the rare
+            // multi-megabyte page.
+            let limited = data.prefix(1024 * 1024)
             guard let html = String(data: Data(limited), encoding: .utf8) ??
                              String(data: Data(limited), encoding: .isoLatin1) else {
                 return synthesizeYoutubeChannelPreview(urlString)

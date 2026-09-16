@@ -169,12 +169,37 @@ final class ComposeViewModel {
         // alternative (a UserDefaults bucket holding the intended-private body)
         // would survive cleartext on disk, which violates the privacy intent.
         if isPrivate { return }
-        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
-        let uploaded = attachments.filter { $0.url != nil }
-        guard !trimmed.isEmpty || !uploaded.isEmpty else {
+        guard let payload = autosavePayload() else {
             UserDefaults.standard.removeObject(forKey: autosaveKey)
             return
         }
+        UserDefaults.standard.set(payload, forKey: autosaveKey)
+    }
+
+    /// Snapshot of the composer handed to `PostPublisher` at publish time. If the
+    /// post is rejected by every relay — or the user stops mining — the publisher
+    /// writes this back to `autosaveKey`, so the text the composer cleared on
+    /// hand-off comes back the next time the composer opens.
+    ///
+    /// Same exclusions as `writeLocalAutosave`: a draft-backed composer already
+    /// has its NIP-37 draft on relays (the publisher only deletes it on success),
+    /// and a private reply must never touch disk in cleartext.
+    ///
+    /// Carries exactly what the autosave format carries — body, uploaded
+    /// attachments, mentions, NSFW / PoW toggles. Poll structure and gallery mode
+    /// aren't part of that format; those ride on the pill's Retry instead, which
+    /// replays the fully prepared event rather than the composer state.
+    func autosaveRestoreSnapshot() -> ComposeAutosaveSnapshot? {
+        guard currentDraftId == nil, !isPrivate, let payload = autosavePayload() else { return nil }
+        return ComposeAutosaveSnapshot(payload: payload)
+    }
+
+    /// The composer state `loadLocalAutosave` knows how to read back. nil when
+    /// there's nothing worth keeping — no text and no uploaded attachments.
+    private func autosavePayload() -> [String: Any]? {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        let uploaded = attachments.filter { $0.url != nil }
+        guard !trimmed.isEmpty || !uploaded.isEmpty else { return nil }
         var payload: [String: Any] = [
             "content": content,
             "explicit": explicit,
@@ -201,7 +226,7 @@ final class ComposeViewModel {
         if !attachmentDicts.isEmpty {
             payload["attachments"] = attachmentDicts
         }
-        UserDefaults.standard.set(payload, forKey: autosaveKey)
+        return payload
     }
 
     /// Debounced entry point for the per-keystroke autosave triggers. The
@@ -231,6 +256,16 @@ final class ComposeViewModel {
         autosaveTask?.cancel()
         autosaveTask = nil
         UserDefaults.standard.removeObject(forKey: autosaveKey)
+    }
+
+    /// Drop the pending debounced write without touching the bucket. Used on
+    /// dismissal after a post has been handed to `PostPublisher`: the publisher
+    /// owns that key from then on and may already have restored the draft into
+    /// it after a rejection, so the sheet must not clear it on its way out — but
+    /// a late debounce firing would fight the publisher just as badly.
+    func cancelPendingAutosave() {
+        autosaveTask?.cancel()
+        autosaveTask = nil
     }
 
     private func loadLocalAutosave() {
@@ -385,7 +420,7 @@ final class ComposeViewModel {
     /// Called from the SwiftUI text-field binding. Re-derives mention/emoji/hashtag state.
     func updateContent(_ new: String) {
         // Auto-prefix bare bech32 (`nevent1...`, `note1...`, `nprofile1...`, `npub1...`) with `nostr:`.
-        let prefixed = autoPrefixBareBech32(new)
+        let prefixed = Self.autoPrefixBareBech32(new)
         if prefixed != content {
             content = prefixed
         } else {
@@ -658,25 +693,118 @@ final class ComposeViewModel {
         uploadProgress = nil
     }
 
+    /// Preference order matters: Safari's "Copy Image" on an animated GIF
+    /// publishes BOTH `com.compuserve.gif` and `public.png` representations,
+    /// and we have to read the GIF first or the PNG (frame zero) wins and
+    /// the animation is gone before bytes ever reach the compressor.
+    /// Animated formats first, then static.
     private static let pasteImageTypes: [(typeId: String, mime: String)] = [
+        ("com.compuserve.gif", "image/gif"),
+        ("org.webmproject.webp", "image/webp"),
         ("public.png", "image/png"),
         ("public.jpeg", "image/jpeg"),
-        ("public.heic", "image/heic"),
-        ("com.compuserve.gif", "image/gif"),
-        ("org.webmproject.webp", "image/webp")
+        ("public.heic", "image/heic")
     ]
 
     private func loadPastedImageData(from provider: NSItemProvider) async -> (data: Data, mime: String)? {
+        // Source URL preserves animation when the inline bytes do not.
+        // Most browsers rasterize images on "Copy Image" — Chromium for
+        // example only writes `public.png` (frame zero of the source GIF)
+        // even when the source was animated. Fetching the original URL
+        // sidesteps that and gets the bytes the server actually serves.
+        let sourceUrl = await pasteboardSourceImageUrl(from: provider)
+        var inline: (data: Data, mime: String)?
         for entry in Self.pasteImageTypes where provider.hasItemConformingToTypeIdentifier(entry.typeId) {
             if let data = await loadDataRepresentation(from: provider, typeIdentifier: entry.typeId) {
-                return (data, entry.mime)
+                inline = (data, entry.mime)
+                break
             }
         }
+        // Inline bytes already animated → no need to hit the network.
+        if let inline, MediaCompressor.isAnimated(inline.data) {
+            return inline
+        }
+        // Try the source URL when the inline bytes are static (or absent)
+        // and the URL looks like it might be image-flavoured. We trust the
+        // fetched bytes when they're animated; otherwise stick with whatever
+        // the clipboard provided so we don't pay a network round-trip for a
+        // worse result.
+        if let sourceUrl, let fetched = await fetchUrlImageBytes(sourceUrl) {
+            if MediaCompressor.isAnimated(fetched.data) {
+                return fetched
+            }
+            if inline == nil {
+                return fetched
+            }
+        }
+        if let inline { return inline }
         // Fallback for type-id-less providers (rare): re-encode anything decodable as JPEG.
         if let data = await loadDataRepresentation(from: provider, typeIdentifier: "public.image"),
            let img = UIImage(data: data),
            let jpeg = img.jpegData(compressionQuality: 0.92) {
             return (jpeg, "image/jpeg")
+        }
+        return nil
+    }
+
+    /// UTIs that browsers / share extensions use to carry the source URL of
+    /// a copied image. Checked in order; first hit wins.
+    private static let pasteSourceUrlTypeIds: [String] = [
+        "org.chromium.source-url",
+        "public.url",
+        "public.utf8-plain-text"
+    ]
+
+    private func pasteboardSourceImageUrl(from provider: NSItemProvider) async -> URL? {
+        for typeId in Self.pasteSourceUrlTypeIds where provider.hasItemConformingToTypeIdentifier(typeId) {
+            guard let data = await loadDataRepresentation(from: provider, typeIdentifier: typeId) else { continue }
+            guard let string = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+                  !string.isEmpty else { continue }
+            guard let url = URL(string: string), let scheme = url.scheme?.lowercased(),
+                  scheme == "https" || scheme == "http" else { continue }
+            return url
+        }
+        return nil
+    }
+
+    private func fetchUrlImageBytes(_ url: URL) async -> (data: Data, mime: String)? {
+        var req = URLRequest(url: url)
+        req.setValue("image/*", forHTTPHeaderField: "Accept")
+        req.timeoutInterval = 10
+        do {
+            let (data, response) = try await URLSession.shared.data(for: req)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return nil }
+            // Trust the server's Content-Type only when it's an image MIME;
+            // otherwise sniff the bytes so a `text/html` redirect page doesn't
+            // get uploaded as an image.
+            let serverMime = (http.value(forHTTPHeaderField: "Content-Type") ?? "")
+                .split(separator: ";").first.map { String($0).trimmingCharacters(in: .whitespaces) } ?? ""
+            let mime: String
+            if serverMime.hasPrefix("image/") {
+                mime = serverMime
+            } else if let sniffed = sniffImageMime(data) {
+                mime = sniffed
+            } else {
+                return nil
+            }
+            return (data, mime)
+        } catch {
+            return nil
+        }
+    }
+
+    /// Magic-byte sniff for the formats our compressor handles. Used when the
+    /// server doesn't send a useful `Content-Type` header (e.g. CDNs that
+    /// return `application/octet-stream`).
+    private func sniffImageMime(_ data: Data) -> String? {
+        guard data.count >= 12 else { return nil }
+        let p = data.prefix(12)
+        if p.starts(with: [0x47, 0x49, 0x46]) { return "image/gif" }
+        if p.starts(with: [0x89, 0x50, 0x4E, 0x47]) { return "image/png" }
+        if p.starts(with: [0xFF, 0xD8, 0xFF]) { return "image/jpeg" }
+        if p.starts(with: [0x52, 0x49, 0x46, 0x46]) && p.dropFirst(8).starts(with: [0x57, 0x45, 0x42, 0x50]) {
+            return "image/webp"
         }
         return nil
     }
@@ -1115,8 +1243,11 @@ final class ComposeViewModel {
         }
 
         // Normal post: hand off to PostPublisher so the sheet can dismiss
-        // immediately while mining + broadcasting run in the background.
+        // immediately while mining + broadcasting run in the background. The
+        // snapshot travels with the draft so a rejected or stopped publish can
+        // put the composer back the way the user left it.
         let createdAt = NostrClock.now()
+        let relayTargets = await resolvePublishRelays()
         let draft = PreparedDraft(
             kind: kind,
             tags: tags,
@@ -1125,11 +1256,27 @@ final class ComposeViewModel {
             signingKeypair: signingKeypair,
             powEnabled: powEnabled,
             powDifficulty: powDifficulty,
-            relays: topWriteRelays(),
-            autosaveKeyToClear: autosaveKey,
+            relays: relayTargets,
+            autosaveKey: autosaveKey,
+            autosaveSnapshot: autosaveRestoreSnapshot(),
             draftIdToClear: currentDraftId
         )
         currentDraftId = nil
+        // Empty the bucket here rather than in the sheet's `onDisappear`: the
+        // publisher can fail (and restore the draft) before the dismissal
+        // animation finishes, and a later clear would wipe the restore.
+        clearLocalAutosave()
+        // Stand up the optimistic feed row before handing off — the sheet
+        // dismisses immediately after this call, so the row needs to be in
+        // the store by the time the home feed re-renders. The row dissolves
+        // when the real published event arrives via `.nostrEventPublished`,
+        // or flips to a failed state if PostPublisher reports an error.
+        PendingPostStore.shared.start(
+            content: postContent,
+            tags: tags,
+            pubkey: signingKeypair.pubkey,
+            kind: kind
+        )
         PostPublisher.shared.submit(draft)
         Haptics.shared.pulse()
         // Any non-nil id triggers the sheet's dismiss observer. The actual event
@@ -1172,7 +1319,7 @@ final class ComposeViewModel {
     /// surfaces pick up the rumor via `PrivateInteractionRouter` (on echo) and
     /// via the `.nostrEventPublished` broadcast the publisher emits.
     private func runPrivateReplyPipeline(parent: NostrEvent, root: NostrEvent?) async {
-        let materialized = materializeMentions(content)
+        let materialized = Self.trimTrailingBlankLines(materializeMentions(content))
         let body = appendQuoteUri(to: appendAttachmentUrls(to: materialized))
 
         // Build the rumor's extra tag set: mentions, pubkey refs from inline
@@ -1224,10 +1371,28 @@ final class ComposeViewModel {
         }
     }
 
-    private func determineKind() -> Int {
+    /// NIP-22 tag set for this compose session, or nil when the reply isn't
+    /// answering an externally-rooted comment. Computed once and consulted by
+    /// both `determineKind` and `buildBaseTags` so the kind and the tags can
+    /// never disagree — a kind-1111 carrying NIP-10 `e`/`p` tags (or a kind-1
+    /// carrying `I`/`K`) would be malformed either way.
+    private var nip22ReplyTags: [[String]]? {
+        guard !pollEnabled, !galleryMode else { return nil }
+        guard case .reply(let parent, _) = mode else { return nil }
+        return Nip22.buildReplyTags(to: parent, relayHint: "")
+    }
+
+    /// Internal (not private) so `ComposeReplyKindTests` can assert the
+    /// published kind directly — the alternative is a full signing +
+    /// broadcast round-trip.
+    func determineKind() -> Int {
         if pollEnabled {
             return isZapPoll ? Nip69.kindZapPoll : Nip88.kindPoll
         }
+        // NIP-22 forbids answering a comment with a kind-1: the reply has to
+        // stay kind-1111 to remain attached to the external root (the web
+        // page), which a NIP-10 `e` tag can't express.
+        if nip22ReplyTags != nil { return Nip22.kindComment }
         guard galleryMode else { return 1 }
         if attachments.contains(where: { $0.isVideo }) {
             // Pick orientation from the first video.
@@ -1243,12 +1408,31 @@ final class ComposeViewModel {
     /// spliced onto the end (in `attachments` order). For gallery events the body
     /// is just the caption — upload URLs ride in `imeta` tags instead.
     private func bodyForPublish(kind: Int, materialized: String) -> String {
+        let trimmed = Self.trimTrailingBlankLines(materialized)
         switch kind {
         case Nip68.kindPicture, Nip71.kindVideoHorizontal, Nip71.kindVideoVertical:
-            return materialized
+            return trimmed
         default:
-            return appendQuoteUri(to: appendAttachmentUrls(to: materialized))
+            return appendQuoteUri(to: appendAttachmentUrls(to: trimmed))
         }
+    }
+
+    /// Drop blank lines left at the end of the buffer before the note goes
+    /// out. `ContentParser` collapses these when rendering, but that only
+    /// helps readers on Wisp — every other client shows the padding as real
+    /// empty lines, so it shouldn't leave here in the first place.
+    ///
+    /// Trailing only. Spacing *between* paragraphs is the author's to choose,
+    /// and rewriting the middle of someone's post on publish is a different
+    /// thing entirely from tidying its end. Drafts are also left alone: that
+    /// buffer is still being typed in.
+    nonisolated static func trimTrailingBlankLines(_ s: String) -> String {
+        var out = s
+        while let last = out.last,
+              last == "\n" || last == "\r" || last == " " || last == "\t" {
+            out.removeLast()
+        }
+        return out
     }
 
     private func appendAttachmentUrls(to body: String) -> String {
@@ -1445,7 +1629,7 @@ final class ComposeViewModel {
                 let nextIdx = r.upperBound
                 if nextIdx < out.endIndex {
                     let c = out[nextIdx]
-                    if (c >= "a" && c <= "z") || (c >= "0" && c <= "9") {
+                    if (c >= "a" && c <= "z") || (c >= "A" && c <= "Z") || (c >= "0" && c <= "9") {
                         out.insert(" ", at: nextIdx)
                         cursor = out.index(after: nextIdx)
                         continue
@@ -1457,7 +1641,9 @@ final class ComposeViewModel {
         return out
     }
 
-    private func buildBaseTags(kind: Int, materializedContent: String) -> [[String]] {
+    /// Internal (not private) for the same reason as `determineKind`: the
+    /// reply tag set is worth asserting without publishing.
+    func buildBaseTags(kind: Int, materializedContent: String) -> [[String]] {
         var tags: [[String]] = []
 
         // Reply / quote contextual tags.
@@ -1465,6 +1651,14 @@ final class ComposeViewModel {
         case .new:
             break
         case .reply(let parent, let root):
+            // Replying to a NIP-22 comment: emit its `I`/`K` root scope plus
+            // lowercase `e`/`k`/`p` at the parent, instead of NIP-10 threading.
+            // NIP-10 tags here would detach the reply from the web page the
+            // thread is about.
+            if let commentTags = nip22ReplyTags {
+                tags.append(contentsOf: commentTags)
+                break
+            }
             if let root {
                 tags.append(["e", root.id, "", "root"])
                 if root.id != parent.id {
@@ -1473,7 +1667,13 @@ final class ComposeViewModel {
             } else {
                 tags.append(["e", parent.id, "", "reply"])
             }
-            tags.append(["p", parent.pubkey])
+            // Re-emit every distinct `p` tag carried in the parent so everyone
+            // already in the thread stays notified, then the parent author.
+            // (Mirrors the private-reply path.) Without the carry-forward we'd
+            // only tag the direct parent author, so a reply to a note that
+            // itself p-tagged others silently drops them — e.g. A↔B then B
+            // replying to B's own note would lose A.
+            tags.append(contentsOf: Nip10.participantTags(replyingTo: parent))
         case .quote(let q):
             tags.append(contentsOf: Nip18.buildQuoteTags(event: q))
         }
@@ -1585,8 +1785,16 @@ final class ComposeViewModel {
         hashtags = out
     }
 
-    private func autoPrefixBareBech32(_ s: String) -> String {
-        let pattern = "(?<![a-z0-9:./])(?<!nostr:)(nevent1|note1|nprofile1|naddr1|npub1)([a-z0-9]{20,})"
+    /// Internal (not private) so `ComposeMentionTests` can exercise the URL
+    /// guard directly — publishing a note needs a full signing round-trip.
+    static func autoPrefixBareBech32(_ s: String) -> String {
+        // The trailing `(?!\.[a-zA-Z])` mirrors ContentParser's npub pattern:
+        // a bech32 token followed by a dot + letters is a subdomain (a Blossom
+        // server like `npub1….blossom.band`), and prefixing it with `nostr:`
+        // would corrupt the URL. NSDataDetector can't catch this — it doesn't
+        // detect scheme-less domains as links, so the URL skip below is blind
+        // to exactly the bare-URL shapes that need the exclusion.
+        let pattern = "(?<![a-z0-9:./])(?<!nostr:)(nevent1|note1|nprofile1|naddr1|npub1)([a-z0-9]{20,})(?!\\.[a-zA-Z])"
         guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return s }
         let nsRange = NSRange(s.startIndex..<s.endIndex, in: s)
         let matches = regex.matches(in: s, range: nsRange)
@@ -1680,8 +1888,41 @@ final class ComposeViewModel {
         return cleaned.isEmpty ? "user" : cleaned
     }
 
+    private func resolvePublishRelays() async -> [String] {
+        var relays = Set(await RelayListRepository.shared.getWriteRelays(signingKeypair.pubkey))
+
+        switch mode {
+        case .new:
+            break
+        case .reply(let parent, _):
+            let authorReads = await RelayListRepository.shared.getReadRelays(parent.pubkey)
+            relays.formUnion(authorReads)
+        case .quote(let q):
+            let authorReads = await RelayListRepository.shared.getReadRelays(q.pubkey)
+            relays.formUnion(authorReads)
+        }
+
+        if !relays.isEmpty { return Array(relays) }
+        return topWriteRelays()
+    }
+
     private func topWriteRelays() -> [String] {
-        RelayRouting.topWriteRelays(for: signingKeypair.pubkey)
+        if let board = RelayScoreBoard.load(pubkey: signingKeypair.pubkey) {
+            // The scoreboard holds every relay any follow writes to — hundreds of
+            // them, junk from other people's relay lists included. Uncapped, this
+            // published drafts to all of them and stamped all of them into a
+            // poll's `relay` tags: one such poll went out at 21.5 KB with 480
+            // tags, among them `.onion` addresses, malformed URLs and a couple of
+            // wallet-connect endpoints someone had put in their NIP-65 list.
+            // Same filter-then-cap the feed pool uses; `DraftsViewModel` already
+            // caps its copy of this helper at 5.
+            let top = board.scoredRelays
+                .filter { RelayUrlValidator.isConnectable($0.url) }
+                .prefix(5)
+                .map(\.url)
+            if !top.isEmpty { return top }
+        }
+        return ["wss://relay.damus.io", "wss://relay.primal.net", "wss://nos.lol"]
     }
 }
 

@@ -28,4 +28,10 @@ extension Notification.Name {
     /// posted off the main thread, so observers must hop to main
     /// (`.receive(on: RunLoop.main)`).
     static let followsDidChange = Notification.Name("WispFollowsDidChange")
+
+    /// Posted by `wispApp`'s `onOpenURL` when the Share Extension hands off
+    /// media via `wisp://share`. `object` carries the `[NSItemProvider]`
+    /// built from the staged files. `MainView` observes this to open a new
+    /// note pre-loaded with the shared attachment(s).
+    static let pendingShareReceived = Notification.Name("WispPendingShareReceived")
 }

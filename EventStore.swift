@@ -8,7 +8,11 @@ actor EventStore {
 
     // 1068, 1018, 6969 are NIP-88 polls / poll responses and NIP-69 zap polls.
     // 10030 / 30030 are NIP-30 user emoji list / emoji set (custom emoji packs).
-    private static let persistedKinds: Set<Int> = [0, 1, 6, 7, 9735, 10002, 10012, 10030, 20, 21, 22, 30000, 30002, 30003, 30030, 1068, 1018, 6969]
+    // 30023 is NIP-23 long-form articles.
+    // 5 is NIP-09 deletion requests, persisted so the DeletionTracker can
+    // re-seed from disk on launch.
+    // 1111 is NIP-22 comments (replies scoped to an external item or event).
+    private static let persistedKinds: Set<Int> = [0, 1, 5, 6, 7, 9735, 10002, 10012, 10030, 20, 21, 22, 30000, 30002, 30003, 30023, 30030, 1068, 1018, 6969, 1111]
 
     /// Kinds retained on disk *even for a blocked author* so the block-list
     /// settings UI, name/avatar resolution, and installed emoji packs keep
@@ -35,6 +39,22 @@ actor EventStore {
     // MARK: - Write
 
     func persist(_ events: [NostrEvent]) {
+        // Record quote edges before the kind filter: a quote chain is only
+        // discoverable one link at a time, and the link from a note to the one
+        // it quotes lives inside that note. Losing it — retracted, or on no
+        // relay we can reach — takes everything below it with it, unless the
+        // edge was written down while we had the note. NIP-18 requires the
+        // `q` tag, so this reads tags rather than parsing content.
+        for event in events {
+            for tag in event.tags where tag.count >= 2 && tag[0] == "q" && !tag[1].isEmpty {
+                QuoteGraph.shared.record(
+                    eventId: event.id,
+                    quotedId: tag[1],
+                    quotedAuthor: tag.count >= 4 && !tag[3].isEmpty ? tag[3] : nil
+                )
+            }
+        }
+
         guard let box = ensureBox() else { return }
         let eligible = events.filter { Self.persistedKinds.contains($0.kind) }
         guard !eligible.isEmpty else { return }
@@ -88,6 +108,22 @@ actor EventStore {
 
     // MARK: - Read
 
+    /// Load persisted kind-5 deletion events so `DeletionTracker` can
+    /// re-seed its deleted-ids set on launch without waiting for the live
+    /// subscription to deliver them.
+    func loadDeletionEvents() -> [NostrEvent] {
+        guard let box = ensureBox() else { return [] }
+        do {
+            let query = try box.query {
+                EventEntity.kind == Nip09.kindDeletion
+            }.build()
+            let entities = try query.find(offset: 0, limit: 5000)
+            return entities.compactMap { $0.toNostrEvent() }
+        } catch {
+            return []
+        }
+    }
+
     /// Seed the home/feed cache from disk. `excludingEventIds` filters out
     /// gift-wrap-materialized private replies/reactions so they never bleed
     /// into the public timeline — `PrivateInteractionStore` is the source of
@@ -98,6 +134,7 @@ actor EventStore {
             let query = try box.query {
                 EventEntity.kind == 1 || EventEntity.kind == 6 || EventEntity.kind == 20
                     || EventEntity.kind == Nip88.kindPoll || EventEntity.kind == Nip69.kindZapPoll
+                    || EventEntity.kind == Nip22.kindComment
             }
             .ordered(by: EventEntity.createdAt, flags: .descending)
             .build()
@@ -119,7 +156,8 @@ actor EventStore {
         do {
             let query = try box.query {
                 (EventEntity.kind == 1 || EventEntity.kind == 6 || EventEntity.kind == 20
-                    || EventEntity.kind == Nip88.kindPoll || EventEntity.kind == Nip69.kindZapPoll)
+                    || EventEntity.kind == Nip88.kindPoll || EventEntity.kind == Nip69.kindZapPoll
+                    || EventEntity.kind == Nip22.kindComment)
                     && EventEntity.createdAt < before
             }
             .ordered(by: EventEntity.createdAt, flags: .descending)
@@ -143,7 +181,8 @@ actor EventStore {
             if let exclude = excludingPubkey {
                 let query = try box.query {
                     (EventEntity.kind == 1 || EventEntity.kind == 6 || EventEntity.kind == 20
-                        || EventEntity.kind == Nip88.kindPoll || EventEntity.kind == Nip69.kindZapPoll)
+                        || EventEntity.kind == Nip88.kindPoll || EventEntity.kind == Nip69.kindZapPoll
+                        || EventEntity.kind == Nip22.kindComment)
                         && EventEntity.pubkey != exclude
                 }
                 .ordered(by: EventEntity.createdAt, flags: .descending)
@@ -153,6 +192,7 @@ actor EventStore {
             let query = try box.query {
                 EventEntity.kind == 1 || EventEntity.kind == 6 || EventEntity.kind == 20
                     || EventEntity.kind == Nip88.kindPoll || EventEntity.kind == Nip69.kindZapPoll
+                    || EventEntity.kind == Nip22.kindComment
             }
             .ordered(by: EventEntity.createdAt, flags: .descending)
             .build()
@@ -187,6 +227,50 @@ actor EventStore {
                         tag.count >= 2 && tag[0] == "e" && targetIds.contains(tag[1])
                     }
                     if matchesTarget {
+                        seenIds.insert(event.id)
+                        out.append(event)
+                    }
+                }
+            } catch {
+                continue
+            }
+        }
+        return out
+    }
+
+    /// Returns cached poll votes (kind-1018 responses) and zap receipts
+    /// (kind-9735) whose tags point at any of `pollIds`. Used to disk-seed
+    /// `PollTallyRepository` so a previously-seen poll renders its full tally
+    /// instantly on cold start — and so the user's own prior vote is detected
+    /// before the live subscription returns (driving the "already voted →
+    /// results, no re-vote" gate). Mirrors `loadEngagement`'s substring
+    /// pre-filter + Swift tag-walk. Target rule matches the live ingest path:
+    /// kind-1018 → first `e` tag; kind-9735 → last non-`mention` `e` tag.
+    func loadPollVotes(forPollIds pollIds: Set<String>) -> [NostrEvent] {
+        guard let box = ensureBox(), !pollIds.isEmpty else { return [] }
+        var out: [NostrEvent] = []
+        var seenIds = Set<String>()
+        for target in pollIds {
+            do {
+                let query = try box.query {
+                    (EventEntity.kind == Nip88.kindPollResponse || EventEntity.kind == 9735)
+                    && EventEntity.tags.contains(target)
+                }.build()
+                let candidates = try query.find(offset: 0, limit: 5000)
+                for entity in candidates {
+                    guard let event = entity.toNostrEvent(), !seenIds.contains(event.id) else { continue }
+                    let matches: Bool
+                    if event.kind == Nip88.kindPollResponse {
+                        matches = Nip88.getPollEventId(event).map { pollIds.contains($0) } ?? false
+                    } else {
+                        let eTargets = event.tags.compactMap { tag -> String? in
+                            guard tag.count >= 2, tag[0] == "e" else { return nil }
+                            if tag.count >= 4, tag[3] == "mention" { return nil }
+                            return tag[1]
+                        }
+                        matches = eTargets.last.map { pollIds.contains($0) } ?? false
+                    }
+                    if matches {
                         seenIds.insert(event.id)
                         out.append(event)
                     }
@@ -245,7 +329,8 @@ actor EventStore {
         guard let box = ensureBox() else { return [] }
         do {
             let query = try box.query {
-                EventEntity.kind == 1 && EventEntity.tags.contains(rootId)
+                (EventEntity.kind == 1 || EventEntity.kind == Nip22.kindComment)
+                    && EventEntity.tags.contains(rootId)
             }.build()
             let entities = try query.find(offset: 0, limit: 5000)
             var results = entities.compactMap { $0.toNostrEvent() }
@@ -461,6 +546,30 @@ actor EventStore {
             }
         } catch {
             return []
+        }
+    }
+
+    /// Load the newest persisted version of an addressable (NIP-33) event by
+    /// its `(kind, author, d-tag)` coordinate. The `d` tag lives inside the
+    /// opaque JSON `tags` column, so candidates are narrowed by kind + pubkey
+    /// in the query and the d-tag match happens in Swift — mirrors
+    /// `loadEmojiPacksByAddress`. Replaceable events can have several versions
+    /// on disk (each has a distinct event id), so the max `createdAt` wins.
+    func loadAddressable(kind: Int, author: String, dTag: String) -> NostrEvent? {
+        guard let box = ensureBox() else { return nil }
+        do {
+            let query = try box.query {
+                EventEntity.kind == kind && EventEntity.pubkey == author
+            }.build()
+            let candidates = try query.find(offset: 0, limit: 500)
+            return candidates
+                .compactMap { $0.toNostrEvent() }
+                .filter { event in
+                    event.tags.first(where: { $0.count >= 2 && $0[0] == "d" })?[1] == dTag
+                }
+                .max(by: { $0.createdAt < $1.createdAt })
+        } catch {
+            return nil
         }
     }
 

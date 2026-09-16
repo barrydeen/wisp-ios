@@ -10,8 +10,50 @@ struct PollSection: View {
 
     @State private var tallyRepo = PollTallyRepository.shared
     @State private var pendingMultiSelections: Set<String> = []
+    @State private var optionsExpanded = false
+
+    private static let collapsedOptionCount = 4
 
     private var isZapPoll: Bool { pollEvent.kind == Nip69.kindZapPoll }
+
+    private func timeLabel(ended: Bool, endsAt: Int?) -> String? {
+        guard let endsAt else { return nil }
+        let date = Date(timeIntervalSince1970: TimeInterval(endsAt))
+        if ended { return nil }
+        let diff = date.timeIntervalSinceNow
+        if diff <= 0 { return nil }
+        let days = Int(diff / 86400)
+        let hours = Int(diff / 3600) % 24
+        let minutes = Int(diff / 60) % 60
+        if days > 0 { return "\(days) \(days == 1 ? "day" : "days") left" }
+        if hours > 0 { return "\(hours) \(hours == 1 ? "hour" : "hours") left" }
+        let m = max(1, minutes)
+        return "\(m) \(m == 1 ? "minute" : "minutes") left"
+    }
+
+    /// Re-pulls the tally on demand. The subscription that fills a poll's counts
+    /// closes after 12 seconds, so anything cast after that isn't on screen until
+    /// something asks again.
+    private var refreshButton: some View {
+        let isRefreshing = tallyRepo.refreshingPollIds.contains(pollEvent.id)
+        return Button {
+            tallyRepo.refresh(pollEvent: pollEvent)
+        } label: {
+            HStack(spacing: 3) {
+                if isRefreshing {
+                    ProgressView().controlSize(.mini)
+                } else {
+                    Image(systemName: "arrow.clockwise")
+                }
+                Text("Refresh")
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+        .disabled(isRefreshing)
+        .accessibilityLabel("Refresh poll results")
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -37,10 +79,13 @@ struct PollSection: View {
         let pollType = Nip88.parsePollType(pollEvent)
         let ended = Nip88.isPollEnded(pollEvent)
         let hasVoted = !tally.userVotes.isEmpty
-        let showResults = hasVoted || ended
+        let isAuthor = pollEvent.pubkey == NostrKey.load()?.pubkey
+        let showResults = hasVoted || ended || isAuthor
+        let isLong = options.count > Self.collapsedOptionCount
+        let visibleOptions = optionsExpanded ? options : Array(options.prefix(Self.collapsedOptionCount))
 
         return VStack(alignment: .leading, spacing: 8) {
-            ForEach(options, id: \.id) { option in
+            ForEach(visibleOptions, id: \.id) { option in
                 if showResults {
                     PollResultRow(
                         label: option.label,
@@ -70,6 +115,23 @@ struct PollSection: View {
                 }
             }
 
+            if isLong {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { optionsExpanded.toggle() }
+                } label: {
+                    Text(optionsExpanded ? "Show fewer" : "\(options.count - Self.collapsedOptionCount) more options")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.wispPrimary)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 7)
+                        .background(Color.wispSurfaceVariant.opacity(0.6), in: Capsule())
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.top, 4)
+            }
+
             if !showResults, pollType == .multiplechoice {
                 Button {
                     let ordered = options.map(\.id).filter { pendingMultiSelections.contains($0) }
@@ -97,7 +159,17 @@ struct PollSection: View {
                     Text("· Poll ended")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                } else if let t = timeLabel(ended: ended, endsAt: Nip88.parseEndsAt(pollEvent)) {
+                    Text("· \(t)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("· ∞ left")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
+                Spacer(minLength: 8)
+                refreshButton
             }
         }
     }
@@ -108,12 +180,15 @@ struct PollSection: View {
         let options = Nip69.parseZapPollOptions(pollEvent)
         let closed = Nip69.isZapPollClosed(pollEvent)
         let hasVoted = tally.userOptionIndex != nil
-        let showResults = hasVoted || closed
+        let isAuthor = pollEvent.pubkey == NostrKey.load()?.pubkey
+        let showResults = hasVoted || closed || isAuthor
         let minSats = Nip69.parseValueMinimum(pollEvent)
         let maxSats = Nip69.parseValueMaximum(pollEvent)
+        let isLong = options.count > Self.collapsedOptionCount
+        let visibleOptions = optionsExpanded ? options : Array(options.prefix(Self.collapsedOptionCount))
 
         return VStack(alignment: .leading, spacing: 8) {
-            ForEach(options, id: \.index) { option in
+            ForEach(visibleOptions, id: \.index) { option in
                 if showResults {
                     ZapPollResultRow(
                         label: option.label,
@@ -132,6 +207,23 @@ struct PollSection: View {
                         onZapVote(option.index)
                     }
                 }
+            }
+
+            if isLong {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { optionsExpanded.toggle() }
+                } label: {
+                    Text(optionsExpanded ? "Show fewer" : "\(options.count - Self.collapsedOptionCount) more options")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.wispPrimary)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 7)
+                        .background(Color.wispSurfaceVariant.opacity(0.6), in: Capsule())
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.top, 4)
             }
 
             if minSats != nil || maxSats != nil {
@@ -156,7 +248,17 @@ struct PollSection: View {
                     Text("· Poll ended")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                } else if let t = timeLabel(ended: closed, endsAt: Nip69.parseClosedAt(pollEvent)) {
+                    Text("· \(t)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("· ∞ left")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
+                Spacer(minLength: 8)
+                refreshButton
             }
         }
     }

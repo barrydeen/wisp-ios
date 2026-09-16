@@ -12,24 +12,21 @@ struct RecoveryPhraseView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            Divider().overlay(Color.wispSurfaceVariant.opacity(0.5))
-            ScrollView {
-                VStack(spacing: 24) {
-                    warningCard
-                    phraseSection
-                    if revealed {
-                        actionButtons
-                    }
-                    if !store.seedBackupAcknowledged {
-                        acknowledgeButton
-                    }
+        ScrollView {
+            VStack(spacing: 24) {
+                warningCard
+                phraseSection
+                if revealed {
+                    actionButtons
                 }
-                .padding(20)
+                if !store.seedBackupAcknowledged {
+                    acknowledgeButton
+                }
             }
+            .padding(20)
         }
         .background(Color.wispBackground.ignoresSafeArea())
+        .wispTopHeader { header }
         .toolbar(.hidden, for: .navigationBar)
     }
 

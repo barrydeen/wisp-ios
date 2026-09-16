@@ -3,6 +3,7 @@ import SwiftUI
 enum ProfileTab: String, CaseIterable, Hashable {
     case notes
     case replies
+    case comments
     case conversation
     case gallery
     case media
@@ -15,6 +16,7 @@ enum ProfileTab: String, CaseIterable, Hashable {
         switch self {
         case .notes: return "Notes"
         case .replies: return "Replies"
+        case .comments: return "Comments"
         case .conversation: return "Conversation"
         case .gallery: return "Gallery"
         case .media: return "Media"
@@ -306,6 +308,48 @@ struct ProfileSortPicker: View {
 
 // MARK: - Gallery / Media grid tabs
 
+/// NIP-22 comments this user left on external items. Each row is a normal
+/// `PostCardView`, which already renders the "Commenting on <host>" context
+/// and the linked page's preview card — so the subject is visible without
+/// this tab having to draw anything special.
+struct CommentsTabView: View {
+    @Bindable var viewModel: ProfileViewModel
+    var onProfileTap: ((String) -> Void)? = nil
+    var onNoteTap: ((String) -> Void)? = nil
+    var onHashtagTap: ((String) -> Void)? = nil
+    @State private var engagementRepo = EngagementRepository.shared
+
+    var body: some View {
+        Group {
+            if viewModel.isLoadingComments && viewModel.comments.isEmpty {
+                loading("Loading comments…")
+            } else if viewModel.comments.isEmpty {
+                emptyState("No comments on external content yet")
+            } else {
+                LazyVStack(spacing: 0) {
+                    ForEach(viewModel.comments, id: \.id) { event in
+                        NavigationLink(value: ThreadRoute(eventId: event.id, authorPubkey: event.pubkey)) {
+                            PostCardView(
+                                event: event,
+                                profile: viewModel.profiles[event.pubkey],
+                                profiles: viewModel.profiles,
+                                engagement: nil,
+                                onProfileTap: onProfileTap,
+                                onNoteTap: onNoteTap,
+                                onHashtagTap: onHashtagTap
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .onAppear { engagementRepo.markVisible(event: event) }
+                        .onDisappear { engagementRepo.markInvisible(event: event) }
+                        Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
+                    }
+                }
+            }
+        }
+    }
+}
+
 struct GalleryTabView: View {
     @Bindable var viewModel: ProfileViewModel
     var onNoteTap: ((String) -> Void)? = nil
@@ -559,7 +603,7 @@ private struct ProfileRow: View {
                         weight: .semibold
                     )
                     if let nip = profile.nip05, !nip.isEmpty {
-                        Text(nip)
+                        Text(nip.nip05DisplayString)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)

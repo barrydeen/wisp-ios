@@ -35,7 +35,19 @@ enum MediaCompressor {
     /// for images with alpha (which we infer from PNG/HEIC source). HEIC is always
     /// transcoded to JPEG so non-Apple clients can decode. Videos are not handled
     /// here — pass them through unchanged.
+    ///
+    /// Animated payloads (GIF, animated WebP, APNG) bypass the UIImage round-trip
+    /// entirely: `UIImage(data:)` decodes only the first frame, so re-encoding
+    /// would silently strip the animation. The frame-count probe via
+    /// `CGImageSource` is cheap (header-only) and catches every multi-frame
+    /// container regardless of MIME. The cost is that a multi-MB animated source
+    /// uploads at its full size — per-frame resize would be the right fix but
+    /// requires reconstructing the container, deferred until users complain.
     static func compressImage(data: Data, mime: String) -> Result {
+        if isAnimated(data) {
+            let dim = imageDimensions(data) ?? .zero
+            return Result(data: data, mime: mime, dim: dim)
+        }
         if data.count < skipBelowBytes, let dim = imageDimensions(data) {
             return Result(data: data, mime: mime, dim: dim)
         }
@@ -66,6 +78,13 @@ enum MediaCompressor {
         return Result(data: outData, mime: outMime, dim: outDim)
     }
 
+    /// True when the bytes contain more than one frame — i.e. an animated GIF,
+    /// animated WebP, APNG, etc. Cheap header-only probe (no full decode).
+    static func isAnimated(_ data: Data) -> Bool {
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil) else { return false }
+        return CGImageSourceGetCount(src) > 1
+    }
+
     /// Read pixel dimensions of an image without decoding the full bitmap.
     static func imageDimensions(_ data: Data) -> CGSize? {
         guard let src = CGImageSourceCreateWithData(data as CFData, nil),
@@ -86,10 +105,14 @@ enum MediaCompressor {
         format.scale = 1
         format.opaque = !hasAlpha(image)
         // Preserve wide-gamut colours (Display P3 from iPhone cameras) through the
-        // resize. Default `.standard` flattens to sRGB, which strips the saturation
+        // resize. `.standard` flattens to sRGB, which strips the saturation
         // visible on color-managed viewers and produces washed-out uploads.
         // `UIImage.jpegData` then embeds the matching ICC profile in the output.
-        format.preferredRange = .extended
+        // `.automatic` still gets P3 — `.extended` forces the EDR headroom used
+        // for true HDR content, and redrawing a Smart HDR/gain-map source photo
+        // (the common case for bright outdoor shots) into that headroom bakes a
+        // dark horizontal band into the output where the tone-mapping seams.
+        format.preferredRange = .automatic
         let renderer = UIGraphicsImageRenderer(size: target, format: format)
         return renderer.image { _ in
             image.draw(in: CGRect(origin: .zero, size: target))

@@ -20,15 +20,21 @@ final class SafetyFilterSnapshot: @unchecked Sendable {
     let qualifiedNetwork: Set<String>     // empty when WoT off or never computed — with
                                           // wotEnabled that means FAIL CLOSED (drop all)
     let userPubkey: String                // empty before bind
+    let hellthreadFilterEnabled: Bool
+    let hellthreadThreshold: Int
 
     init(mutedWords: Set<String>, blockedPubkeys: Set<String>, mutedThreads: Set<String>,
-         wotEnabled: Bool, qualifiedNetwork: Set<String>, userPubkey: String) {
+         wotEnabled: Bool, qualifiedNetwork: Set<String>, userPubkey: String,
+         hellthreadFilterEnabled: Bool = false,
+         hellthreadThreshold: Int = NostrEvent.hellthreadThreshold) {
         self.mutedWords = mutedWords
         self.blockedPubkeys = blockedPubkeys
         self.mutedThreads = mutedThreads
         self.wotEnabled = wotEnabled
         self.qualifiedNetwork = qualifiedNetwork
         self.userPubkey = userPubkey
+        self.hellthreadFilterEnabled = hellthreadFilterEnabled
+        self.hellthreadThreshold = hellthreadThreshold
     }
 
     static let empty = SafetyFilterSnapshot(
@@ -67,6 +73,13 @@ final class SafetyFilter: @unchecked Sendable {
     func shouldDrop(event: NostrEvent, context: SafetyContext) -> Bool {
         let s = _current
 
+        // NIP-09: hide events their author has deleted. Checked here so every
+        // render path (feed, thread, search, profile, notifications, quotes)
+        // is covered by the single chokepoint without threading callbacks.
+        if DeletionTracker.shared.isDeleted(event.id) {
+            return true
+        }
+
         if !s.blockedPubkeys.isEmpty, s.blockedPubkeys.contains(event.pubkey) {
             return true
         }
@@ -99,6 +112,15 @@ final class SafetyFilter: @unchecked Sendable {
                 for tag in event.tags where tag.count >= 2 && tag[0] == "e" {
                     if s.mutedThreads.contains(tag[1]) { return true }
                 }
+            case .thread, .messages:
+                break
+            }
+        }
+
+        if s.hellthreadFilterEnabled {
+            switch context {
+            case .feed, .notifications:
+                if event.isHellthread(threshold: s.hellthreadThreshold) { return true }
             case .thread, .messages:
                 break
             }
@@ -191,9 +213,9 @@ final class SafetyFilter: @unchecked Sendable {
                 let m = MuteRepository.shared
                 return (m.mutedWords, m.blockedPubkeys, m.mutedThreads)
             }
-        let prefs: (wot: Bool, pubkey: String) = await MainActor.run {
+        let prefs: (wot: Bool, pubkey: String, hellthread: Bool, hellthreadThreshold: Int) = await MainActor.run {
             let p = SafetyPreferences.shared
-            return (p.wotFilterEnabled, p.activePubkey ?? "")
+            return (p.wotFilterEnabled, p.activePubkey ?? "", p.hellthreadFilterEnabled, p.hellthreadThreshold)
         }
         let qualified = await ExtendedNetworkRepository.shared.qualifiedSet()
 
@@ -203,7 +225,9 @@ final class SafetyFilter: @unchecked Sendable {
             mutedThreads: mutes.threads,
             wotEnabled: prefs.wot,
             qualifiedNetwork: qualified,
-            userPubkey: prefs.pubkey
+            userPubkey: prefs.pubkey,
+            hellthreadFilterEnabled: prefs.hellthread,
+            hellthreadThreshold: prefs.hellthreadThreshold
         ))
     }
 

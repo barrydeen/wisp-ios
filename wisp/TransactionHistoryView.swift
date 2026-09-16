@@ -32,41 +32,41 @@ struct TransactionHistoryView: View {
     }
 
     private var transactionList: some View {
-        List {
-            ForEach(store.transactions) { tx in
-                WalletTransactionRow(tx: tx, displayMode: balanceDisplay)
-                    .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
-                    .listRowBackground(Color.wispBackground)
-                    .listRowSeparatorTint(Color.wispSurfaceVariant.opacity(0.4))
-            }
-
-            if store.hasMoreTransactions {
-                HStack {
-                    Spacer()
-                    Button {
-                        Task { await loadMore() }
-                    } label: {
-                        Group {
-                            if isLoadingMore {
-                                ProgressView().scaleEffect(0.8)
-                            } else {
-                                Text("Load more")
-                                    .font(.subheadline.weight(.medium))
-                                    .foregroundStyle(Color.wispZapColor)
-                            }
-                        }
-                        .frame(height: 44)
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(isLoadingMore)
-                    Spacer()
+        ScrollView {
+            LazyVStack(spacing: 0) {
+                ForEach(store.transactions) { tx in
+                    WalletTransactionRow(tx: tx, displayMode: balanceDisplay, expandable: true)
+                        .padding(.horizontal, 16)
+                    Divider()
+                        .overlay(Color.wispSurfaceVariant.opacity(0.4))
+                        .padding(.horizontal, 16)
                 }
-                .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
-                .listRowBackground(Color.wispBackground)
-                .listRowSeparator(.hidden)
+
+                if store.hasMoreTransactions {
+                    HStack {
+                        Spacer()
+                        Button {
+                            Task { await loadMore() }
+                        } label: {
+                            Group {
+                                if isLoadingMore {
+                                    ProgressView().scaleEffect(0.8)
+                                } else {
+                                    Text("Load more")
+                                        .font(.subheadline.weight(.medium))
+                                        .foregroundStyle(Color.wispZapColor)
+                                }
+                            }
+                            .frame(height: 44)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(isLoadingMore)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 16)
+                }
             }
         }
-        .listStyle(.plain)
         .refreshable {
             await store.refreshTransactions()
         }
