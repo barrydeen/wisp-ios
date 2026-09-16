@@ -152,8 +152,11 @@ final class ArticleViewModel {
         }
     }
 
-    /// Author's NIP-65 read relays + the user's top scored relays, with the
-    /// global fallbacks when both come back empty. Capped at 12.
+    /// Author's NIP-65 read (inbox) relays ONLY — no scored-relay safety net,
+    /// no static fallbacks. When the author's inbox is unknown, `loadComments`
+    /// skips the subscriptions and the comment list stays cache-only; relay
+    /// lists still get discovered through the article fetch and profile subs.
+    /// Mirrors Android's strict inbox routing for article comments.
     private func commentRelays(author: String) async -> [String] {
         var seen = Set<String>()
         var out: [String] = []
@@ -162,13 +165,7 @@ final class ArticleViewModel {
             if seen.insert(canon).inserted { out.append(canon) }
         }
         for url in await RelayListRepository.shared.getReadRelays(author) { append(url) }
-        if let me = NostrKey.load()?.pubkey, let board = RelayScoreBoard.load(pubkey: me) {
-            for entry in board.scoredRelays.prefix(6) { append(entry.url) }
-        }
-        if out.isEmpty {
-            for url in RelayDefaults.fallbacks { append(url) }
-        }
-        return Array(out.prefix(12))
+        return out
     }
 
     private func consume(_ sub: RelaySubscription) {

@@ -316,9 +316,17 @@ final class ThreadViewModel {
         await seedFromCache()
 
         // 2. Initial relay set (focal author + scored + indexer fallback when
-        //    rootEvent isn't loaded). This is the widest set we'll have until
-        //    the root resolves.
+        //    rootEvent isn't loaded). Strictly for the explicit root / ancestor
+        //    fetches below — the reply + engagement queries never touch it.
         let initialRelays = await resolveRelays()
+
+        // Strict inbox set for the reply / engagement subscriptions: ONLY the
+        // root + tapped-note authors' NIP-65 read relays. No scored-relay
+        // safety net, no indexer/fallback broadcast — if no inbox is known yet
+        // the thread stays cache-only until the root resolves (step 5 reopens
+        // the streams on the root author's inbox). Mirrors Android's
+        // `subscribeToUserInboxStrict` for `thread-replies`.
+        let initialInbox = await resolveInboxRelays()
 
         // 3. Open live subscriptions IMMEDIATELY so reply / ancestor events
         //    stream in concurrently with the explicit fetches below.
@@ -326,8 +334,8 @@ final class ThreadViewModel {
         //    blocking the live stream by up to ~12s on a cold notification
         //    deep-link — long enough for the user to see "just the focal" and
         //    reach for pull-to-refresh.
-        startReplyStream(relays: initialRelays)
-        startEngagementBatcher(relays: initialRelays)
+        startReplyStream(relays: initialInbox)
+        startEngagementBatcher(relays: initialInbox)
         var seedIds = Set(events.keys)
         seedIds.insert(rootId)
         queueEngagement(ids: seedIds)
@@ -341,19 +349,20 @@ final class ThreadViewModel {
             await fetchRoot(from: initialRelays)
         }
 
-        // 5. Once the root is loaded, re-resolve relays (now using the real
-        //    root author's outbox) and re-stream so the broader set catches
-        //    descendants the initial set may have missed. Saves the user
-        //    from pull-to-refresh on cold notification loads.
+        // 5. Once the root is loaded, re-resolve the strict inbox set (now
+        //    including the real root author's NIP-65 read relays) and re-stream
+        //    so their inbox catches descendants the pre-root initial set may
+        //    have missed. Saves the user from pull-to-refresh on cold
+        //    notification loads.
         if rootEvent != nil {
-            let widerRelays = await resolveRelays()
-            // Restart when the relay set widened OR fetchRoot bumped us to a
+            let inboxRelays = await resolveInboxRelays()
+            // Restart when the inbox set grew OR fetchRoot bumped us to a
             // higher true root (the live consumer captured the old root id, so
             // the higher subtree wouldn't otherwise subscribe).
-            if Set(widerRelays) != Set(initialRelays) || rootId != rootBefore {
+            if Set(inboxRelays) != Set(initialInbox) || rootId != rootBefore {
                 cancelStreams()
-                startReplyStream(relays: widerRelays)
-                startEngagementBatcher(relays: widerRelays)
+                startReplyStream(relays: inboxRelays)
+                startEngagementBatcher(relays: inboxRelays)
                 var ids2 = Set(events.keys)
                 ids2.insert(rootId)
                 queueEngagement(ids: ids2)
@@ -372,7 +381,7 @@ final class ThreadViewModel {
 
     func refresh() async {
         cancelStreams()
-        let relays = await resolveRelays()
+        let relays = await resolveInboxRelays()
         startReplyStream(relays: relays)
         startEngagementBatcher(relays: relays)
         var seedIds = Set(events.keys)
@@ -769,6 +778,38 @@ final class ThreadViewModel {
 
     // MARK: - Network fetch
 
+    /// The strict inbox relay set for reply / engagement queries: ONLY the root
+    /// author's and the tapped-note author's NIP-65 read relays — no scored-relay
+    /// safety net, no indexer / static fallback broadcast. Empty when neither
+    /// author's relay list is known, in which case the thread stays cache-only.
+    /// This is the intended tradeoff of strict routing (mirrors Android PR
+    /// barrydeen/wisp#650); relay lists still get discovered through the root /
+    /// ancestor fetches below and the profile metadata subs.
+    private func resolveInboxRelays() async -> [String] {
+        var seen = Set<String>()
+        var ordered: [String] = []
+
+        let rootAuthor = rootEvent?.pubkey ?? authorHint
+        if let pk = rootAuthor {
+            for url in await relayListRepo.getReadRelays(pk) where seen.insert(url).inserted {
+                ordered.append(url)
+            }
+        }
+
+        let focalAuthor = events[seedTargetId]?.pubkey ?? authorHint
+        if let pk = focalAuthor, pk != rootAuthor {
+            for url in await relayListRepo.getReadRelays(pk) where seen.insert(url).inserted {
+                ordered.append(url)
+            }
+        }
+
+        return ordered
+    }
+
+    /// Broad relay set used ONLY for the root / ancestor id fetches (the
+    /// `thread-root` equivalent — the root author isn't known until the root
+    /// arrives, so the fetch keeps its wide reach). Reply and engagement
+    /// queries use `resolveInboxRelays` instead.
     private func resolveRelays() async -> [String] {
         var seen = Set<String>()
         var ordered: [String] = []
@@ -794,7 +835,9 @@ final class ThreadViewModel {
             }
         }
 
-        // Top scored relays (highest follow coverage) — mirrors the Android `take(5)` safety net.
+        // Top scored relays (highest follow coverage). Only reachable from the
+        // root / ancestor id fetches — reply + engagement queries route through
+        // `resolveInboxRelays`, which drops this safety net entirely.
         if let board = RelayScoreBoard.load(pubkey: keypair.pubkey) {
             for relay in board.scoredRelays.prefix(5) where seen.insert(relay.url).inserted {
                 ordered.append(relay.url)
@@ -806,8 +849,7 @@ final class ThreadViewModel {
         // for a notification deep-link that's the user's own inbox,
         // which usually doesn't carry the thread root or its ancestors.
         // Indexer relays catch most events and let fetchRoot resolve so
-        // the second resolveRelays() pass can use the real root author's
-        // outbox set.
+        // `resolveInboxRelays` can use the real root author's read relays.
         if rootEvent == nil {
             for url in Self.indexerRelays where seen.insert(url).inserted {
                 ordered.append(url)
