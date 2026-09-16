@@ -7,7 +7,7 @@ import Testing
 /// emptying their wallet.
 struct WithdrawOnchainQuoteTests {
 
-    private func quote(spend: Int64, fee: Int64, speed: WithdrawOnchainSpeed = .medium) -> WithdrawOnchainQuote {
+    private func quote(spend: Int64, fee: Int64, speed: OnchainSpeed = .medium) -> WithdrawOnchainQuote {
         WithdrawOnchainQuote(address: "bc1qexample", spendSats: spend, feeSats: fee, speed: speed)
     }
 
@@ -59,7 +59,7 @@ struct WithdrawOnchainQuoteTests {
     }
 
     @Test func everySpeedIsLabelledAndExplained() {
-        for speed in WithdrawOnchainSpeed.allCases {
+        for speed in OnchainSpeed.allCases {
             #expect(!speed.label.isEmpty)
             #expect(!speed.detail.isEmpty)
         }

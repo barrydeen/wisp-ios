@@ -169,12 +169,37 @@ final class ComposeViewModel {
         // alternative (a UserDefaults bucket holding the intended-private body)
         // would survive cleartext on disk, which violates the privacy intent.
         if isPrivate { return }
-        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
-        let uploaded = attachments.filter { $0.url != nil }
-        guard !trimmed.isEmpty || !uploaded.isEmpty else {
+        guard let payload = autosavePayload() else {
             UserDefaults.standard.removeObject(forKey: autosaveKey)
             return
         }
+        UserDefaults.standard.set(payload, forKey: autosaveKey)
+    }
+
+    /// Snapshot of the composer handed to `PostPublisher` at publish time. If the
+    /// post is rejected by every relay — or the user stops mining — the publisher
+    /// writes this back to `autosaveKey`, so the text the composer cleared on
+    /// hand-off comes back the next time the composer opens.
+    ///
+    /// Same exclusions as `writeLocalAutosave`: a draft-backed composer already
+    /// has its NIP-37 draft on relays (the publisher only deletes it on success),
+    /// and a private reply must never touch disk in cleartext.
+    ///
+    /// Carries exactly what the autosave format carries — body, uploaded
+    /// attachments, mentions, NSFW / PoW toggles. Poll structure and gallery mode
+    /// aren't part of that format; those ride on the pill's Retry instead, which
+    /// replays the fully prepared event rather than the composer state.
+    func autosaveRestoreSnapshot() -> ComposeAutosaveSnapshot? {
+        guard currentDraftId == nil, !isPrivate, let payload = autosavePayload() else { return nil }
+        return ComposeAutosaveSnapshot(payload: payload)
+    }
+
+    /// The composer state `loadLocalAutosave` knows how to read back. nil when
+    /// there's nothing worth keeping — no text and no uploaded attachments.
+    private func autosavePayload() -> [String: Any]? {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        let uploaded = attachments.filter { $0.url != nil }
+        guard !trimmed.isEmpty || !uploaded.isEmpty else { return nil }
         var payload: [String: Any] = [
             "content": content,
             "explicit": explicit,
@@ -201,7 +226,7 @@ final class ComposeViewModel {
         if !attachmentDicts.isEmpty {
             payload["attachments"] = attachmentDicts
         }
-        UserDefaults.standard.set(payload, forKey: autosaveKey)
+        return payload
     }
 
     /// Debounced entry point for the per-keystroke autosave triggers. The
@@ -231,6 +256,16 @@ final class ComposeViewModel {
         autosaveTask?.cancel()
         autosaveTask = nil
         UserDefaults.standard.removeObject(forKey: autosaveKey)
+    }
+
+    /// Drop the pending debounced write without touching the bucket. Used on
+    /// dismissal after a post has been handed to `PostPublisher`: the publisher
+    /// owns that key from then on and may already have restored the draft into
+    /// it after a rejection, so the sheet must not clear it on its way out — but
+    /// a late debounce firing would fight the publisher just as badly.
+    func cancelPendingAutosave() {
+        autosaveTask?.cancel()
+        autosaveTask = nil
     }
 
     private func loadLocalAutosave() {
@@ -1208,7 +1243,9 @@ final class ComposeViewModel {
         }
 
         // Normal post: hand off to PostPublisher so the sheet can dismiss
-        // immediately while mining + broadcasting run in the background.
+        // immediately while mining + broadcasting run in the background. The
+        // snapshot travels with the draft so a rejected or stopped publish can
+        // put the composer back the way the user left it.
         let createdAt = NostrClock.now()
         let relayTargets = await resolvePublishRelays()
         let draft = PreparedDraft(
@@ -1220,10 +1257,15 @@ final class ComposeViewModel {
             powEnabled: powEnabled,
             powDifficulty: powDifficulty,
             relays: relayTargets,
-            autosaveKeyToClear: autosaveKey,
+            autosaveKey: autosaveKey,
+            autosaveSnapshot: autosaveRestoreSnapshot(),
             draftIdToClear: currentDraftId
         )
         currentDraftId = nil
+        // Empty the bucket here rather than in the sheet's `onDisappear`: the
+        // publisher can fail (and restore the draft) before the dismissal
+        // animation finishes, and a later clear would wipe the restore.
+        clearLocalAutosave()
         // Stand up the optimistic feed row before handing off — the sheet
         // dismisses immediately after this call, so the row needs to be in
         // the store by the time the home feed re-renders. The row dissolves
@@ -1838,7 +1880,18 @@ final class ComposeViewModel {
 
     private func topWriteRelays() -> [String] {
         if let board = RelayScoreBoard.load(pubkey: signingKeypair.pubkey) {
-            let top = board.scoredRelays.map(\.url)
+            // The scoreboard holds every relay any follow writes to — hundreds of
+            // them, junk from other people's relay lists included. Uncapped, this
+            // published drafts to all of them and stamped all of them into a
+            // poll's `relay` tags: one such poll went out at 21.5 KB with 480
+            // tags, among them `.onion` addresses, malformed URLs and a couple of
+            // wallet-connect endpoints someone had put in their NIP-65 list.
+            // Same filter-then-cap the feed pool uses; `DraftsViewModel` already
+            // caps its copy of this helper at 5.
+            let top = board.scoredRelays
+                .filter { RelayUrlValidator.isConnectable($0.url) }
+                .prefix(5)
+                .map(\.url)
             if !top.isEmpty { return top }
         }
         return ["wss://relay.damus.io", "wss://relay.primal.net", "wss://nos.lol"]

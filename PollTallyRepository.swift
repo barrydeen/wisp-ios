@@ -43,7 +43,17 @@ final class PollTallyRepository {
     /// Bumped on every mutation so SwiftUI views observing `tallies[pollId]` re-render.
     private(set) var version: Int = 0
 
+    /// Polls with a tally subscription currently open. Observable so a Refresh
+    /// control can show progress; `queriedPollIds` used to mean "queried at some
+    /// point this session" and was never cleared, which froze every tally after
+    /// its first 12-second window.
+    private(set) var refreshingPollIds: Set<String> = []
+
     @ObservationIgnored private var queriedPollIds: Set<String> = []
+    /// pollId -> when its last subscription window closed. The viewport path
+    /// re-queries only after `rerunCooldown`; an explicit refresh ignores it.
+    @ObservationIgnored private var lastQueriedAt: [String: Date] = [:]
+    private static let rerunCooldown: TimeInterval = 20
     @ObservationIgnored private var pending: [(pollId: String, kind: Int, author: String, advertisedRelays: [String])] = []
     @ObservationIgnored private var debounceTask: Task<Void, Never>?
     @ObservationIgnored private var liveTasks: [Task<Void, Never>] = []
@@ -75,13 +85,27 @@ final class PollTallyRepository {
     func markVisible(pollEvent: NostrEvent) {
         guard pollEvent.kind == Nip88.kindPoll || pollEvent.kind == Nip69.kindZapPoll else { return }
         pollEventCache[pollEvent.id] = pollEvent
+        // A subscription is open right now — let it run.
         guard !queriedPollIds.contains(pollEvent.id) else { return }
+        // Its window has closed. Re-query, but not on every row recycle.
+        if let last = lastQueriedAt[pollEvent.id],
+           Date().timeIntervalSince(last) < Self.rerunCooldown { return }
         if pending.contains(where: { $0.pollId == pollEvent.id }) { return }
         let advertised = pollEvent.kind == Nip88.kindPoll
             ? Nip88.parsePollRelays(pollEvent)
             : Nip69.parseZapPollRelays(pollEvent)
         pending.append((pollEvent.id, pollEvent.kind, pollEvent.pubkey, advertised))
         if debounceTask == nil { scheduleFlush() }
+    }
+
+    /// Re-query a poll's votes now, ignoring the viewport cooldown. Called when
+    /// the user lands on a poll's thread or taps Refresh: the tally on screen is
+    /// a snapshot of whenever the last 12-second window ran, which may be hours
+    /// stale. The `since` cursor keeps this cheap — it pulls only the delta.
+    func refresh(pollEvent: NostrEvent) {
+        guard !queriedPollIds.contains(pollEvent.id) else { return }
+        lastQueriedAt.removeValue(forKey: pollEvent.id)
+        markVisible(pollEvent: pollEvent)
     }
 
     func clear() {
@@ -93,6 +117,8 @@ final class PollTallyRepository {
         liveTasks.removeAll()
         tallies = [:]
         queriedPollIds.removeAll()
+        refreshingPollIds.removeAll()
+        lastQueriedAt.removeAll()
         pending.removeAll()
         seenEventIds.removeAll()
         voteCursor.removeAll()
@@ -312,7 +338,10 @@ final class PollTallyRepository {
         guard !batch.isEmpty else { return }
         // Mark queried synchronously so a re-entrant `markVisible` during the
         // async relay resolution below can't enqueue the same poll twice.
-        for entry in batch { queriedPollIds.insert(entry.pollId) }
+        for entry in batch {
+            queriedPollIds.insert(entry.pollId)
+            refreshingPollIds.insert(entry.pollId)
+        }
 
         let pollIds = Set(batch.map(\.pollId))
         Task { @MainActor [weak self] in
@@ -418,6 +447,7 @@ final class PollTallyRepository {
             sub.cancel()
             consumer.cancel()
             self?.prune(sub: sub)
+            self?.finishQuery(pollIds: pollIds)
         }
         liveTasks.append(consumer)
         liveTasks.append(watchdog)
@@ -425,5 +455,16 @@ final class PollTallyRepository {
 
     private func prune(sub: RelaySubscription) {
         liveSubs.removeAll { $0 === sub }
+    }
+
+    /// Release polls whose subscription window just closed so a later viewport
+    /// pass — or an explicit refresh — can query them again.
+    private func finishQuery(pollIds: [String]) {
+        let now = Date()
+        for id in pollIds {
+            queriedPollIds.remove(id)
+            refreshingPollIds.remove(id)
+            lastQueriedAt[id] = now
+        }
     }
 }
