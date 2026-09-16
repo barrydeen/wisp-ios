@@ -39,6 +39,22 @@ actor EventStore {
     // MARK: - Write
 
     func persist(_ events: [NostrEvent]) {
+        // Record quote edges before the kind filter: a quote chain is only
+        // discoverable one link at a time, and the link from a note to the one
+        // it quotes lives inside that note. Losing it — retracted, or on no
+        // relay we can reach — takes everything below it with it, unless the
+        // edge was written down while we had the note. NIP-18 requires the
+        // `q` tag, so this reads tags rather than parsing content.
+        for event in events {
+            for tag in event.tags where tag.count >= 2 && tag[0] == "q" && !tag[1].isEmpty {
+                QuoteGraph.shared.record(
+                    eventId: event.id,
+                    quotedId: tag[1],
+                    quotedAuthor: tag.count >= 4 && !tag[3].isEmpty ? tag[3] : nil
+                )
+            }
+        }
+
         guard let box = ensureBox() else { return }
         let eligible = events.filter { Self.persistedKinds.contains($0.kind) }
         guard !eligible.isEmpty else { return }
