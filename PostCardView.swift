@@ -2396,9 +2396,22 @@ private struct NoteDetailsPanel: View {
     /// option label and its tally; expanded, it lists the voters who picked it.
     /// Choices are ordered by tally (votes, or sats for zap polls) descending so
     /// the leading option leads.
+    /// Whether the viewer may see the split at all. Same rule the poll body
+    /// uses: without it the drawer handed the tally to anyone who tapped the
+    /// chevron — including a reader the body was deliberately withholding it
+    /// from — which made that gate decorative.
+    private func mayRevealVotes(_ pollEvent: NostrEvent) -> Bool {
+        if pollEvent.pubkey == NostrKey.load()?.pubkey { return true }
+        let tally = PollTallyRepository.shared.tally(for: pollEvent.id)
+        if pollEvent.kind == Nip69.kindZapPoll {
+            return tally.userOptionIndex != nil || Nip69.isZapPollClosed(pollEvent)
+        }
+        return !tally.userVotes.isEmpty || Nip88.isPollEnded(pollEvent)
+    }
+
     @ViewBuilder
     private var pollVotesSection: some View {
-        if let pollEvent {
+        if let pollEvent, mayRevealVotes(pollEvent) {
             // Touch `version` so live vote ingestion re-renders the section.
             let _ = tallyRepo.version
             let isZap = pollEvent.kind == Nip69.kindZapPoll
