@@ -60,7 +60,7 @@ final class QuotedNoteCache {
     private func runFetch(eventId: String, relayHints: [String], author: String?, attempt: Int) async -> NostrEvent? {
         let task = Task<NostrEvent?, Never> { [weak self] in
             guard let self else { return nil }
-            let relays = await self.relayList(hints: relayHints, author: author, attempt: attempt)
+            let relays = await self.relayList(hints: relayHints, author: author, eventId: eventId, attempt: attempt)
             // Retries get a longer window — broader relay sets contain slower
             // peers (.onion, regional, archive) that need extra time.
             let timeout: TimeInterval = attempt == 0 ? 6 : 10
@@ -96,7 +96,7 @@ final class QuotedNoteCache {
     /// relays of people they follow — likely to mirror notes the author
     /// reposted or interacted with) and an extra fallback list, widening the
     /// cap to 12 relays.
-    private func relayList(hints: [String], author: String?, attempt: Int) async -> [String] {
+    private func relayList(hints: [String], author: String?, eventId: String, attempt: Int) async -> [String] {
         var seen = Set<String>()
         var out: [String] = []
 
@@ -106,6 +106,11 @@ final class QuotedNoteCache {
         }
 
         for r in hints { append(r) }
+        // A note this client saw earlier may have recorded who wrote the note
+        // it quoted, even when the current reference didn't name them — a bare
+        // `note1…`, or a `q` tag published without the optional pubkey. That
+        // remembered author is what makes an outbox lookup possible here.
+        let effectiveAuthor = author ?? QuoteGraph.shared.author(of: eventId)
         // The author's own NIP-65 write relays — the outbox model, and the
         // one place a note is actually guaranteed to have been published.
         // Ahead of the generic defaults: a hint that misses used to fall
@@ -113,8 +118,8 @@ final class QuotedNoteCache {
         // author's notes, which is why quotes from outside the usual relays
         // showed as "not found" while the note was sitting where its author
         // put it.
-        if let author {
-            for r in await RelayListRepository.shared.getWriteRelays(author) { append(r) }
+        if let effectiveAuthor {
+            for r in await RelayListRepository.shared.getWriteRelays(effectiveAuthor) { append(r) }
         }
         for r in Self.defaultRelays { append(r) }
 
