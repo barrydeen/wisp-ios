@@ -14,9 +14,9 @@ import Testing
         SafetyFilter.shared.install(.empty)
     }
 
-    private func comment(id: String, author: String, parent: String, at: Int = 100, extraTags: [[String]] = []) -> NostrEvent {
+    private func comment(id: String, author: String, parent: String, at: Int = 100) -> NostrEvent {
         NostrEvent(id: id, pubkey: author, kind: Nip22.kindComment, createdAt: at,
-                   tags: [["e", parent]] + extraTags, content: "nice", sig: "")
+                   tags: [["e", parent]], content: "nice", sig: "")
     }
 
     // MARK: - Engagement counts
@@ -53,7 +53,8 @@ import Testing
             tags: [["I", "https://example.com/a"], ["K", "web"], ["i", "https://example.com/a"], ["k", "web"]],
             content: "on the web", sig: ""
         ))
-        _ = repo.box(for: note)
+        // The comment has no `e` tag at a tracked note, so no box is
+        // attributed anything — the untouched box reads zero replies.
         #expect(repo.box(for: note).counts.replies == 0)
     }
 

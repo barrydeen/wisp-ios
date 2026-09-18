@@ -1297,7 +1297,10 @@ final class ThreadViewModel {
 
     fileprivate func maybeScoreReplyForSpam(_ event: NostrEvent) {
         guard SafetyPreferences.shared.spamFilterEnabled else { return }
-        guard event.kind == 1, event.pubkey != keypair.pubkey else { return }
+        // NIP-22 comments score like kind-1 replies — otherwise a spammer
+        // posting only 1111s would never be flagged.
+        guard event.kind == 1 || event.kind == Nip22.kindComment,
+              event.pubkey != keypair.pubkey else { return }
         let author = event.pubkey
         if SafetyPreferences.shared.isSafelisted(author) { return }
         if hiddenSpamPubkeys.contains(author) { return }
@@ -1308,7 +1311,9 @@ final class ThreadViewModel {
         spamScoringInflight.insert(author)
         Task { [weak self, author] in
             guard let self else { return }
-            let recent = await EventStore.shared.loadRecentByAuthor(pubkey: author, limit: 5)
+            // Include comments: a comment-only spammer has no kind-1s, and
+            // scoring them on the arrived event alone is a thinner signal.
+            let recent = await EventStore.shared.loadRecentByAuthor(pubkey: author, kinds: [1, Nip22.kindComment], limit: 5)
             var pool = recent
             if !pool.contains(where: { $0.id == event.id }) { pool.insert(event, at: 0) }
             let score = await SpamScorer.shared.score(pubkey: author, recentEvents: pool)

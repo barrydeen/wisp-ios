@@ -78,7 +78,9 @@ nonisolated enum FeedContentFilter: String, CaseIterable {
     /// True when an event of `kind` passes this filter. Matches Android's
     /// kind-set mapping: notes = kind-1 / repost / long-form;
     /// gallery = picture / video / audio (20 / 21 / 22);
-    /// polls = NIP-88 poll. `all` accepts everything.
+    /// polls = NIP-88 poll. `all` accepts everything. iOS additionally
+    /// counts NIP-22 comments as notes (Android parity predates 1111
+    /// support there).
     func accepts(kind: Int) -> Bool {
         switch self {
         case .all:

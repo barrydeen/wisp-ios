@@ -388,9 +388,10 @@ final class NotificationRepository {
 
     // MARK: - Classification
 
-    /// Re-run `classifyKind1` over every in-memory `.mention` row and promote
-    /// any whose source event actually targets one of the user's notes to
-    /// `.reply` (or `.quote`). Called by `NotificationsViewModel` after
+    /// Re-run `classifyKind1` over every in-memory `.mention` row — plus
+    /// comment rows sitting in the p-tag-only `.reply` fallback shape — and
+    /// promote any whose source event actually targets one of the user's
+    /// notes to `.reply` (or `.quote`). Called by `NotificationsViewModel` after
     /// `refreshSelfEventIds` discovers ids that weren't in the warm-load /
     /// publish-time set — without this, the row's icon stays frozen at "@"
     /// and the 24h summary counters undercount replies until cold relaunch.

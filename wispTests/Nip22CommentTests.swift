@@ -92,9 +92,4 @@ import Testing
         #expect(Nip22.externalParent(of: e) == nil)
     }
 
-    /// Wisp never publishes 1111 — replying to a comment ships as a kind-1,
-    /// so the tag builder that used to emit `I`/`K`/`e`/`k` sets is gone.
-    @Test func nip22ReplyTagsBuilderIsGone() {
-        #expect(Nip22.kindComment == 1111)
-    }
 }

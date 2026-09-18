@@ -823,7 +823,9 @@ final class NotificationsViewModel {
     /// scoring for safelisted authors, the user's own follows, or the user themselves.
     fileprivate func maybeScoreReplyForSpam(_ event: NostrEvent) {
         guard SafetyPreferences.shared.spamFilterEnabled else { return }
-        guard event.kind == 1 else { return }
+        // NIP-22 comments score like kind-1 replies — otherwise a spammer
+        // posting only 1111s would never be flagged.
+        guard event.kind == 1 || event.kind == Nip22.kindComment else { return }
         // Replies have an `e` tag; root notes don't (NotificationsViewModel only sees pings, so
         // most kind-1s here will be replies/mentions, but check anyway).
         guard event.tags.contains(where: { $0.count >= 2 && $0[0] == "e" }) else { return }
@@ -840,7 +842,9 @@ final class NotificationsViewModel {
         spamScoringInflight.insert(author)
         Task { [weak self, author] in
             guard let self else { return }
-            let recent = await EventStore.shared.loadRecentByAuthor(pubkey: author, limit: 5)
+            // Include comments: a comment-only spammer has no kind-1s, and
+            // scoring them on the arrived event alone is a thinner signal.
+            let recent = await EventStore.shared.loadRecentByAuthor(pubkey: author, kinds: [1, Nip22.kindComment], limit: 5)
             // Always include the just-arrived event so cold-cache authors still get a meaningful
             // signal on their first appearance.
             var pool = recent
