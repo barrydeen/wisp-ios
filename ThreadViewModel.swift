@@ -58,7 +58,6 @@ final class ThreadViewModel {
     /// lag between tapping a note and anything appearing.
     var isLoading = true
     var errorMessage: String?
-    var isSending = false
     /// Set when the view should scroll to a specific event. Cleared by ThreadView
     /// after scrolling. Only promoted from `pendingScrollToId` once the target
     /// event actually appears in `nestedReplies`, so the scroll fires after data
@@ -88,12 +87,6 @@ final class ThreadViewModel {
     /// Event backing the bottom "Reply…" composer's default parent — the tapped
     /// note (`seedTargetId`), not the re-rooted focal/root.
     var composerDefaultParent: NostrEvent? { events[seedTargetId] }
-    /// Active undo countdown for an unsent reply, mirroring `ComposeViewModel`.
-    var replyCountdown: Int?
-    /// Buffered text + parent for a reply that's mid-countdown, so `publishNow` /
-    /// `cancelReply` know what to do.
-    @ObservationIgnored private var pendingReply: (text: String, parentId: String?)?
-    @ObservationIgnored private var replyCountdownTask: Task<Void, Never>?
 
     @ObservationIgnored private var events: [String: NostrEvent] = [:]
     @ObservationIgnored private var loadedOnce = false
@@ -434,205 +427,6 @@ final class ThreadViewModel {
         rebuildTask = nil
         rebuildWindowOpen = false
         rebuildCoalesced = false
-    }
-
-    // MARK: - Reply
-
-    /// Sends a kind:1 reply to `parentId` (defaults to the focal). Publishes to the user's
-    /// own write relays plus the inbox relays of the root author, parent author, and every pubkey
-    /// already participating in the chain.
-    /// Begin an undo countdown before actually publishing the reply (length
-    /// from `AppSettings.postUndoTimerSeconds`). Replies skip the countdown
-    /// entirely when `postUndoTimerEnabled` is off OR when the user opted to
-    /// keep the timer for top-level posts only (`postUndoTimerForReplies`
-    /// false — the default).
-    /// While the countdown is running, callers can `publishReplyNow()` to skip
-    /// the timer or `cancelReply()` to drop the pending send.
-    ///
-    /// - Warning: UNUSED. Nothing calls this (or `publishReplyNow` /
-    ///   `cancelReply` / `runReplyPublishPipeline`) — every reply in the app is
-    ///   published by `ComposeViewModel`, which `ThreadView` presents as a
-    ///   `ComposeView(mode: .reply(...))`. Its NIP-22 branch below is therefore
-    ///   NOT the live one; reading it as proof that comment replies stay
-    ///   kind-1111 is how they shipped as kind-1. Change `ComposeViewModel`,
-    ///   not this. Candidate for deletion.
-    func publishReply(content: String, parentId: String? = nil) {
-        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        guard rootEvent != nil else {
-            errorMessage = "Thread root unavailable"
-            return
-        }
-        guard replyCountdown == nil, !isSending else { return }
-
-        pendingReply = (trimmed, parentId)
-
-        let settings = AppSettings.shared
-        let useTimer = settings.postUndoTimerEnabled && settings.postUndoTimerForReplies
-        guard useTimer, settings.postUndoTimerSeconds > 0 else {
-            // Flip `isSending` synchronously so the reply input shows the
-            // spinner the moment the user taps Send. The pipeline sets the
-            // same flag again, harmlessly, and resets via `defer`.
-            isSending = true
-            Task { @MainActor [weak self] in await self?.runReplyPublishPipeline() }
-            return
-        }
-        let totalSeconds = settings.postUndoTimerSeconds
-        // Surface the countdown UI synchronously. Without this the inline
-        // reply button stays in its idle state until the countdown Task
-        // first runs, which feels like a no-op on the user's tap.
-        replyCountdown = totalSeconds
-        replyCountdownTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            for n in stride(from: totalSeconds - 1, through: 1, by: -1) {
-                do {
-                    try await Task.sleep(for: .seconds(1))
-                } catch {
-                    return
-                }
-                self.replyCountdown = n
-            }
-            do {
-                try await Task.sleep(for: .seconds(1))
-            } catch {
-                return
-            }
-            self.replyCountdown = nil
-            await self.runReplyPublishPipeline()
-        }
-    }
-
-    /// Skip the remaining countdown and publish immediately.
-    func publishReplyNow() {
-        replyCountdownTask?.cancel()
-        replyCountdownTask = nil
-        replyCountdown = nil
-        Task { await runReplyPublishPipeline() }
-    }
-
-    /// Discard the pending reply without publishing.
-    func cancelReply() {
-        replyCountdownTask?.cancel()
-        replyCountdownTask = nil
-        replyCountdown = nil
-        pendingReply = nil
-    }
-
-    private func runReplyPublishPipeline() async {
-        guard let pending = pendingReply else { return }
-        pendingReply = nil
-        let trimmed = pending.text
-        guard let root = rootEvent else {
-            errorMessage = "Thread root unavailable"
-            return
-        }
-        // Default reply parent is the note the user opened the thread on
-        // (`seedTargetId`), not the re-rooted focal/root.
-        let defaultParent: NostrEvent = events[seedTargetId] ?? events[focalEventId] ?? root
-        let parent: NostrEvent = pending.parentId.flatMap { events[$0] } ?? defaultParent
-
-        isSending = true
-        defer { isSending = false }
-
-        // If the focal (or the specifically-targeted parent) is itself a
-        // private rumor, force the inline reply through `PrivateReplyPublisher`
-        // — the user opened the reply input on a private chain, so we must
-        // not leak this reply as a public kind-1. The publisher handles the
-        // synthetic-event broadcast back to the thread via
-        // `.nostrEventPublished`, which our publishObserver picks up.
-        if PrivateInteractionStore.shared.contains(parent.id) {
-            var extras: [[String]] = []
-            if let clientTag = NostrEvent.clientTagIfEnabled() { extras.append(clientTag) }
-            do {
-                _ = try await PrivateReplyPublisher.send(
-                    keypair: keypair,
-                    parent: parent,
-                    root: root,
-                    content: trimmed,
-                    extraTags: extras
-                )
-            } catch PrivateReplyPublisher.SendError.noRecipientRelays {
-                errorMessage = "Recipient has no DM relays."
-            } catch PrivateReplyPublisher.SendError.noOwnRelays {
-                errorMessage = "Add a DM relay in settings to send private replies."
-            } catch let PrivateReplyPublisher.SendError.publishFailed(recipientTried, ownTried) {
-                errorMessage = "No relay accepted the private reply (tried \(recipientTried) recipient, \(ownTried) own)."
-            } catch {
-                errorMessage = "Failed to send private reply."
-            }
-            return
-        }
-
-        let createdAt = NostrClock.now()
-        // NIP-22 forbids replying to a comment with a kind-1 — the thread has
-        // to stay in kind-1111 so it remains attached to the external root
-        // (the web page), which a kind-1 `e` tag can't express.
-        let replyKind: Int
-        var tags: [[String]]
-        if let commentTags = Nip22.buildReplyTags(to: parent, relayHint: "") {
-            replyKind = Nip22.kindComment
-            tags = commentTags
-        } else {
-            replyKind = 1
-            tags = Nip10.buildReplyTags(replyTo: parent, relayHint: "")
-        }
-        if let clientTag = NostrEvent.clientTagIfEnabled() { tags.append(clientTag) }
-
-        let signed: NostrEvent
-        do {
-            signed = try await Signer.sign(
-                keypair: keypair,
-                kind: replyKind,
-                tags: tags,
-                content: trimmed,
-                createdAt: createdAt
-            )
-        } catch {
-            errorMessage = "Failed to sign event: \(error.localizedDescription)"
-            return
-        }
-
-        // Build target relay set: own write + inboxes of every pubkey in the chain.
-        var targets = Set<String>()
-
-        let ownWrite = await relayListRepo.getWriteRelays(keypair.pubkey)
-        if ownWrite.isEmpty {
-            // Fall back to the user's outbox score board so the event lands somewhere.
-            if let board = RelayScoreBoard.load(pubkey: keypair.pubkey) {
-                for relay in board.scoredRelays.prefix(5) { targets.insert(relay.url) }
-            }
-            for url in Self.fallbackRelays { targets.insert(url) }
-        } else {
-            for url in ownWrite { targets.insert(url) }
-        }
-
-        var inboxPubkeys = Set<String>()
-        inboxPubkeys.insert(root.pubkey)
-        inboxPubkeys.insert(parent.pubkey)
-        for tag in tags where tag.count >= 2 && tag[0] == "p" {
-            inboxPubkeys.insert(tag[1])
-        }
-        inboxPubkeys.remove(keypair.pubkey)
-
-        for pubkey in inboxPubkeys {
-            for url in await relayListRepo.getReadRelays(pubkey) {
-                targets.insert(url)
-            }
-        }
-
-        let accepted = await RelayPool.publish(event: signed, to: Array(targets), timeout: 6)
-        if accepted.isEmpty {
-            errorMessage = "No relays accepted the reply"
-            return
-        }
-
-        // Optimistic insert.
-        events[signed.id] = signed
-        await eventStore.persist([signed])
-        if profiles[keypair.pubkey] == nil, let me = profileRepo.get(keypair.pubkey) {
-            profiles[keypair.pubkey] = me
-        }
-        rebuildSlices()
     }
 
     // MARK: - Cache seed
@@ -1190,7 +984,7 @@ final class ThreadViewModel {
             // the chunk under-fetches. A target with no cached engagement is
             // cold → the helper returns nil → full pull for this REQ.
             let since = EngagementRepository.sinceFloor(forTargets: chunk, cursor: perTargetFloor, forceFull: false)
-            let filter = NostrFilter(kinds: [1, 6, 7, 9735], eTags: chunk, limit: 500, since: since)
+            let filter = NostrFilter(kinds: [1, 6, 7, 9735, Nip22.kindComment], eTags: chunk, limit: 500, since: since)
             let sub = RelayPool.subscribe(relays: relays, filter: filter, id: subId)
             // NIP-18 quote reposts (kind-1 with only a `q` tag) are not
             // fetched here. A parallel `#q` subscription roughly doubled
@@ -1264,7 +1058,7 @@ final class ThreadViewModel {
             guard let primary = targets.last else { continue }
             var current = engagement[primary] ?? EngagementCounts()
             switch event.kind {
-            case 1:
+            case 1, Nip22.kindComment:
                 current.replies += 1
             case 6:
                 current.reposts += 1

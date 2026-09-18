@@ -92,32 +92,9 @@ import Testing
         #expect(Nip22.externalParent(of: e) == nil)
     }
 
-    /// A reply must stay kind-1111 and carry the root scope forward unchanged,
-    /// pointing its lowercase tags at the comment being replied to.
-    @Test func buildReplyTagsCarriesRootAndTargetsParent() {
-        let url = "https://example.com/a"
-        let parent = NostrEvent(id: "parentid", pubkey: "parentpk", kind: 1111,
-                                createdAt: 0,
-                                tags: [["I", url], ["K", "web"], ["i", url], ["k", "web"]],
-                                content: "", sig: "")
-        let tags = Nip22.buildReplyTags(to: parent)
-        #expect(tags != nil)
-        guard let tags else { return }
-
-        #expect(tags.contains(["I", url]))
-        #expect(tags.contains(["K", "web"]))
-        // Parent is the comment itself — an event — so e/k/p, not a repeated `i`.
-        #expect(tags.contains(["e", "parentid", "", "parentpk"]))
-        #expect(tags.contains(["k", "1111"]))
-        #expect(tags.contains(["p", "parentpk"]))
-        #expect(!tags.contains { $0.first == "i" })
-    }
-
-    /// Replying to a note that isn't an external-rooted comment is out of
-    /// scope — callers fall back to NIP-10 kind-1 threading.
-    @Test func buildReplyTagsReturnsNilForPlainNote() {
-        let note = NostrEvent(id: "n", pubkey: "pk", kind: 1, createdAt: 0,
-                              tags: [], content: "", sig: "")
-        #expect(Nip22.buildReplyTags(to: note) == nil)
+    /// Wisp never publishes 1111 — replying to a comment ships as a kind-1,
+    /// so the tag builder that used to emit `I`/`K`/`e`/`k` sets is gone.
+    @Test func nip22ReplyTagsBuilderIsGone() {
+        #expect(Nip22.kindComment == 1111)
     }
 }
