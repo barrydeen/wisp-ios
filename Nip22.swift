@@ -7,9 +7,9 @@ import Foundation
 /// geohash, ISBN…). Uppercase tags name the *root* scope, lowercase name the
 /// *immediate parent*, so a top-level comment repeats the same value in both.
 ///
-/// Wisp only renders these; it doesn't compose them yet. The job here is to
-/// recover enough context that a comment on a web page doesn't read as a
-/// stray remark with no subject — see `ExternalContentRef`.
+/// Wisp renders these but never publishes them: replies to comments ship as
+/// kind-1. The job here is to recover enough context that a comment on a web
+/// page doesn't read as a stray remark with no subject — see `ExternalRef`.
 nonisolated enum Nip22 {
     static let kindComment = 1111
 
@@ -73,32 +73,5 @@ nonisolated enum Nip22 {
         let kind = event.tags.first(where: { $0.count >= 2 && $0[0] == "k" })?[1] ?? "web"
         let hint = iTag.count >= 3 && !iTag[2].isEmpty ? iTag[2] : nil
         return ExternalRef(value: iTag[1], kind: kind, hint: hint)
-    }
-
-    /// Build the tag set for a kind-1111 reply to `parent`, carrying its root
-    /// scope forward unchanged and pointing the lowercase tags at `parent`.
-    ///
-    /// Only the external-root case is supported, which is the one Wisp can
-    /// currently reply to.
-    static func buildReplyTags(to parent: NostrEvent, relayHint: String = "") -> [[String]]? {
-        guard let root = externalRoot(of: parent) else { return nil }
-
-        var tags: [[String]] = []
-        var rootTag = ["I", root.value]
-        if let hint = root.hint { rootTag.append(hint) }
-        tags.append(rootTag)
-        tags.append(["K", root.kind])
-
-        // Parent is the comment itself — an event — so the lowercase side uses
-        // e/k/p rather than repeating the I tag.
-        tags.append(["e", parent.id, relayHint, parent.pubkey])
-        tags.append(["k", String(kindComment)])
-        tags.append(["p", parent.pubkey])
-
-        // Carry the root author forward when the parent named one.
-        if let rootAuthor = parent.tags.first(where: { $0.count >= 2 && $0[0] == "P" }) {
-            tags.append(rootAuthor)
-        }
-        return tags
     }
 }
