@@ -8,12 +8,16 @@ enum Nip68 {
         let mimeType: String?
         let dim: String?
         let hash: String?
+        /// NIP-92 imeta `alt` slot — the image's accessibility description.
+        /// Emitted only when non-empty; never breaks an undescribed image.
+        let alt: String?
 
-        init(url: String, mimeType: String? = nil, dim: String? = nil, hash: String? = nil) {
+        init(url: String, mimeType: String? = nil, dim: String? = nil, hash: String? = nil, alt: String? = nil) {
             self.url = url
             self.mimeType = mimeType
             self.dim = dim
             self.hash = hash
+            self.alt = alt
         }
     }
 
@@ -34,6 +38,8 @@ enum Nip68 {
             if let m = entry.mimeType { imeta.append("m \(m)") }
             if let d = entry.dim { imeta.append("dim \(d)") }
             if let h = entry.hash { imeta.append("x \(h)") }
+            if let alt = entry.alt?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !alt.isEmpty { imeta.append("alt \(alt)") }
             tags.append(imeta)
         }
         for tag in hashtags {

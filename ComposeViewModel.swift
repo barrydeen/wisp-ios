@@ -221,6 +221,7 @@ final class ComposeViewModel {
             ]
             if let h = a.sha256Hex { d["sha256"] = h }
             if let s = a.durationSec { d["duration"] = s }
+            if let alt = a.trimmedAltText { d["alt"] = alt }
             return d
         }
         if !attachmentDicts.isEmpty {
@@ -283,7 +284,8 @@ final class ComposeViewModel {
                 dim: CGSize(width: w, height: h),
                 durationSec: d["duration"] as? Int,
                 sha256Hex: d["sha256"] as? String,
-                localBytes: nil
+                localBytes: nil,
+                altText: d["alt"] as? String
             )
         }
         let restoredMentions: [InsertedMention] = (payload["mentions"] as? [[String: String]] ?? []).compactMap { d in
@@ -641,6 +643,10 @@ final class ComposeViewModel {
                     keypair: signingKeypair
                 )
                 if let idx = attachments.firstIndex(where: { $0.id == pendingId }) {
+                    // The ALT chip is live while an upload runs, so whatever
+                    // the user saved in that window must survive the
+                    // placeholder → uploaded replacement.
+                    let savedAlt = attachments[idx].altText
                     attachments[idx] = ComposeAttachment(
                         id: pendingId,
                         url: result.url,
@@ -648,7 +654,8 @@ final class ComposeViewModel {
                         dim: prepared.2,
                         durationSec: pendingDuration,
                         sha256Hex: result.sha256Hex,
-                        localBytes: nil
+                        localBytes: nil,
+                        altText: savedAlt
                     )
                 }
                 uploaded += 1
@@ -666,6 +673,19 @@ final class ComposeViewModel {
 
     func removeMedia(id: UUID) {
         attachments.removeAll { $0.id == id }
+    }
+
+    /// Set (or clear) the accessibility description on one attachment. A
+    /// blank-after-trim string clears — clearing the alt removes the imeta
+    /// `alt` slot at publish time, per the handoff contract.
+    func setAltText(_ text: String, for id: UUID) {
+        guard let i = attachments.firstIndex(where: { $0.id == id }) else { return }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        attachments[i].altText = trimmed.isEmpty ? nil : trimmed
+        // The view's autosave triggers key off URL changes only; an alt-only
+        // edit would otherwise never reach the bucket until some other state
+        // changed or the sheet flushed on dismiss.
+        scheduleLocalAutosave()
     }
 
     /// Handle images from a SwiftUI `.onPasteCommand([UTType.image])` callback.
@@ -839,6 +859,9 @@ final class ComposeViewModel {
                 keypair: signingKeypair
             )
             if let idx = attachments.firstIndex(where: { $0.id == pendingId }) {
+                // Same alt-preservation as the picker path — the chip is
+                // tappable during the upload and the replace must not wipe it.
+                let savedAlt = attachments[idx].altText
                 attachments[idx] = ComposeAttachment(
                     id: pendingId,
                     url: result.url,
@@ -846,7 +869,8 @@ final class ComposeViewModel {
                     dim: compressed.dim,
                     durationSec: nil,
                     sha256Hex: result.sha256Hex,
-                    localBytes: nil
+                    localBytes: nil,
+                    altText: savedAlt
                 )
             }
         } catch {
@@ -1080,6 +1104,7 @@ final class ComposeViewModel {
             }
             if let hash = attachment.sha256Hex { imeta.append("x \(hash)") }
             if let d = attachment.durationSec { imeta.append("duration \(d)") }
+            if let alt = attachment.trimmedAltText { imeta.append("alt \(alt)") }
             innerTags.append(imeta)
         }
 
@@ -1439,6 +1464,25 @@ final class ComposeViewModel {
         appendUrls(to: body, urls: attachments.compactMap { $0.url })
     }
 
+    /// One `imeta` tag per **described** attachment — the alt-text contract.
+    /// Undescribed attachments emit nothing (no empty metadata), and `url`
+    /// stays the first slot with `alt` last, matching what Amethyst/Quartz
+    /// write. Only meaningful for notes whose URLs ride in `content`; gallery
+    /// kinds build their imeta through `Nip68` / `Nip71` instead.
+    static func imetaTagsForDescribedAttachments(_ attachments: [ComposeAttachment]) -> [[String]] {
+        attachments.compactMap { attachment in
+            guard let url = attachment.url, let alt = attachment.trimmedAltText else { return nil }
+            var imeta: [String] = ["imeta", "url \(url)"]
+            imeta.append("m \(attachment.mime)")
+            if attachment.dim != .zero {
+                imeta.append("dim \(Int(attachment.dim.width))x\(Int(attachment.dim.height))")
+            }
+            if let hash = attachment.sha256Hex { imeta.append("x \(hash)") }
+            imeta.append("alt \(alt)")
+            return imeta
+        }
+    }
+
     private func appendUrls(to body: String, urls: [String]) -> String {
         guard !urls.isEmpty else { return body }
         var out = body
@@ -1450,8 +1494,8 @@ final class ComposeViewModel {
     }
 
     /// Parse `imeta` tags from a draft into `ComposeAttachment` entries. Mirror of the
-    /// imeta builder in `saveDraft`: each tag's `url`, `m`, `dim`, `x`, `duration`
-    /// sub-entries become attachment fields.
+    /// imeta builder in `saveDraft`: each tag's `url`, `m`, `dim`, `x`, `duration`,
+    /// `alt` sub-entries become attachment fields.
     static func parseImetaAttachments(tags: [[String]]) -> [ComposeAttachment] {
         tags.compactMap { tag in
             guard tag.first == "imeta", tag.count > 1 else { return nil }
@@ -1460,6 +1504,7 @@ final class ComposeViewModel {
             var dim: CGSize = .zero
             var hash: String? = nil
             var durationSec: Int? = nil
+            var alt: String? = nil
             for entry in tag.dropFirst() {
                 if let value = entry.split(separator: " ", maxSplits: 1).last.map(String.init) {
                     if entry.hasPrefix("url ") { url = value }
@@ -1472,6 +1517,10 @@ final class ComposeViewModel {
                     }
                     else if entry.hasPrefix("x ") { hash = value }
                     else if entry.hasPrefix("duration ") { durationSec = Int(value) }
+                    else if entry.hasPrefix("alt ") {
+                        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                        alt = trimmed.isEmpty ? nil : trimmed
+                    }
                 }
             }
             guard let url else { return nil }
@@ -1482,7 +1531,8 @@ final class ComposeViewModel {
                 dim: dim,
                 durationSec: durationSec,
                 sha256Hex: hash,
-                localBytes: nil
+                localBytes: nil,
+                altText: alt
             )
         }
     }
@@ -1721,6 +1771,9 @@ final class ComposeViewModel {
                     relayUrls: pollRelays
                 ))
             }
+            // Poll bodies splice attachment URLs like text notes, so described
+            // attachments carry their imeta `alt` the same way.
+            tags.append(contentsOf: Self.imetaTagsForDescribedAttachments(attachments))
             if explicit { tags.append(["content-warning", ""]) }
             tags.append(contentsOf: EmojiShortcode.emojiTags(in: materializedContent))
             if let clientTag = NostrEvent.clientTagIfEnabled() { tags.append(clientTag) }
@@ -1734,7 +1787,7 @@ final class ComposeViewModel {
                 let imeta: [Nip68.ImetaEntry] = attachments.compactMap { a in
                     guard let url = a.url else { return nil }
                     let dim = a.dim != .zero ? "\(Int(a.dim.width))x\(Int(a.dim.height))" : nil
-                    return Nip68.ImetaEntry(url: url, mimeType: a.mime, dim: dim, hash: a.sha256Hex)
+                    return Nip68.ImetaEntry(url: url, mimeType: a.mime, dim: dim, hash: a.sha256Hex, alt: a.trimmedAltText)
                 }
                 let extra = Nip68.buildPictureTags(
                     title: nil,
@@ -1747,7 +1800,7 @@ final class ComposeViewModel {
                 let videos: [Nip71.VideoMeta] = attachments.compactMap { a in
                     guard let url = a.url else { return nil }
                     let dim = a.dim != .zero ? "\(Int(a.dim.width))x\(Int(a.dim.height))" : nil
-                    return Nip71.VideoMeta(url: url, mimeType: a.mime, dim: dim, duration: a.durationSec, hash: a.sha256Hex)
+                    return Nip71.VideoMeta(url: url, mimeType: a.mime, dim: dim, duration: a.durationSec, hash: a.sha256Hex, alt: a.trimmedAltText)
                 }
                 let extra = Nip71.buildVideoTags(
                     title: nil,
@@ -1759,8 +1812,16 @@ final class ComposeViewModel {
             default:
                 break
             }
-        } else if explicit {
-            tags.append(["content-warning", ""])
+        } else {
+            // Text notes / NIP-22 comments splice their attachment URLs into
+            // the body. Described attachments (and only those) also carry an
+            // `imeta` tag whose `url` matches the spliced URL exactly, so the
+            // alt text rides NIP-92 to every client. Never emit imeta for an
+            // undescribed attachment here: a tag-less URL stays a plain URL.
+            tags.append(contentsOf: Self.imetaTagsForDescribedAttachments(attachments))
+            if explicit {
+                tags.append(["content-warning", ""])
+            }
         }
 
         tags.append(contentsOf: EmojiShortcode.emojiTags(in: materializedContent))

@@ -10,13 +10,16 @@ enum Nip71 {
         let dim: String?
         let duration: Int?
         let hash: String?
+        /// NIP-92 imeta `alt` slot — the video's accessibility description.
+        let alt: String?
 
-        init(url: String, mimeType: String? = nil, dim: String? = nil, duration: Int? = nil, hash: String? = nil) {
+        init(url: String, mimeType: String? = nil, dim: String? = nil, duration: Int? = nil, hash: String? = nil, alt: String? = nil) {
             self.url = url
             self.mimeType = mimeType
             self.dim = dim
             self.duration = duration
             self.hash = hash
+            self.alt = alt
         }
     }
 
@@ -36,6 +39,8 @@ enum Nip71 {
             if let d = entry.dim { imeta.append("dim \(d)") }
             if let dur = entry.duration { imeta.append("duration \(dur)") }
             if let h = entry.hash { imeta.append("x \(h)") }
+            if let alt = entry.alt?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !alt.isEmpty { imeta.append("alt \(alt)") }
             tags.append(imeta)
         }
         for tag in hashtags {

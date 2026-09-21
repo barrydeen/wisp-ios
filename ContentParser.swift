@@ -14,14 +14,19 @@ struct MediaMeta: Hashable {
     /// to dedupe the same content-addressed file when it's served from more than
     /// one host (e.g. a Blossom mirror in `content` vs the host in the imeta tag).
     let sha256: String?
+    /// Author-supplied accessibility description (NIP-92 imeta `alt` slot).
+    /// Surfaced to VoiceOver and the ALT badge / description dialog. Trimmed at
+    /// parse time; nil when the event carries no description for this URL.
+    let alt: String?
 
-    init(url: String, mime: String? = nil, dimension: String? = nil, blurhash: String? = nil, posterUrl: String? = nil, sha256: String? = nil) {
+    init(url: String, mime: String? = nil, dimension: String? = nil, blurhash: String? = nil, posterUrl: String? = nil, sha256: String? = nil, alt: String? = nil) {
         self.url = url
         self.mime = mime
         self.dimension = dimension
         self.blurhash = blurhash
         self.posterUrl = posterUrl
         self.sha256 = sha256
+        self.alt = alt
     }
 }
 
@@ -140,6 +145,7 @@ enum ContentParser {
             var image: String?
             var x: String?
             var ox: String?
+            var alt: String?
             for entry in tag.dropFirst() {
                 if entry.hasPrefix("url ") { url = String(entry.dropFirst(4)) }
                 else if entry.hasPrefix("m ") { mime = String(entry.dropFirst(2)) }
@@ -148,10 +154,32 @@ enum ContentParser {
                 else if entry.hasPrefix("image ") { image = String(entry.dropFirst(6)) }
                 else if entry.hasPrefix("ox ") { ox = String(entry.dropFirst(3)) }
                 else if entry.hasPrefix("x ") { x = String(entry.dropFirst(2)) }
+                else if entry.hasPrefix("alt ") { alt = String(entry.dropFirst(4)) }
             }
             if let url {
-                map[url] = MediaMeta(url: url, mime: mime, dimension: dim, blurhash: blur, posterUrl: image, sha256: x ?? ox)
+                // The `alt` value may contain spaces but never newlines; trim
+                // whitespace and drop a blank slot entirely so an empty
+                // description reads as "no description".
+                let trimmedAlt = alt.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                map[url] = MediaMeta(
+                    url: url, mime: mime, dimension: dim, blurhash: blur,
+                    posterUrl: image, sha256: x ?? ox,
+                    alt: (trimmedAlt?.isEmpty == false) ? trimmedAlt : nil
+                )
             }
+        }
+        return map
+    }
+
+    /// `url → alt` map from an event's imeta tags — the kind-agnostic lookup
+    /// the alt-text handoff is built on (web `imetaAltByUrl`; Amethyst's
+    /// `tags.imetasByUrl()`). URLs match by exact string against the URL as it
+    /// appears in `content` (or the `image` tag on kind-30023) — no
+    /// normalization on either side.
+    static func imetaAltByUrl(_ tags: [[String]]) -> [String: String] {
+        var map: [String: String] = [:]
+        for (url, meta) in parseImetaTags(tags) {
+            if let alt = meta.alt { map[url] = alt }
         }
         return map
     }

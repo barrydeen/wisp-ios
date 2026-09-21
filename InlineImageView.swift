@@ -11,6 +11,7 @@ struct InlineImageView: View {
     @State private var showFullScreen = false
     @State private var manualLoad = false
     @State private var showPhotosAlert = false
+    @State private var showAltDescription = false
 
     private func tapped() {
         if let onTap = onTap { onTap() }
@@ -31,48 +32,10 @@ struct InlineImageView: View {
 
         Group {
             if settings.autoLoadMedia || manualLoad {
-                if isAnimated {
-                    AnimatedImageView(
-                        url: URL(string: meta.url),
-                        aspect: aspect,
-                        placeholder: {
-                            placeholder(systemName: nil, height: height)
-                                .overlay { ProgressView() }
-                        },
-                        failure: {
-                            placeholder(systemName: "photo", height: 200)
-                        }
-                    )
-                    .contentShape(Rectangle())
-                    .onTapGesture { tapped() }
-                } else {
-                    RetryingAsyncImage(
-                        url: URL(string: meta.url),
-                        maxPixelSize: ImagePixelBudget.feed,
-                        content: { image in
-                            image.resizable()
-                                .aspectRatio(contentMode: .fit)
-                                .frame(maxWidth: .infinity)
-                                .onTapGesture { tapped() }
-                        },
-                        loading: {
-                            placeholder(systemName: nil, height: height)
-                                .overlay { ProgressView() }
-                        },
-                        failure: {
-                            placeholder(systemName: "photo", height: 200)
-                                .overlay {
-                                    VStack(spacing: 4) {
-                                        Image(systemName: "arrow.clockwise")
-                                            .font(.title3)
-                                        Text("Tap to retry")
-                                            .font(.caption2)
-                                    }
-                                    .foregroundStyle(.secondary)
-                                }
-                        }
-                    )
-                }
+                loadedMedia(isAnimated: isAnimated, aspect: aspect, height: height)
+                    // VoiceOver reads the author's description instead of a
+                    // bare "image". Undescribed images keep today's default.
+                    .modifier(AltAccessibilityLabel(label: meta.alt))
             } else {
                 Button {
                     manualLoad = true
@@ -92,9 +55,25 @@ struct InlineImageView: View {
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: Self.cornerRadius))
-        .fullScreenCover(isPresented: $showFullScreen) {
-            FullScreenImageView(url: meta.url, mime: meta.mime)
+        // The ALT badge is a sibling of the image's tap target — a second,
+        // separate focus stop that opens the Description dialog.
+        .overlay(alignment: .bottomLeading) {
+            if meta.alt != nil {
+                Button {
+                    showAltDescription = true
+                } label: {
+                    AltBadge()
+                        .padding(8)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("View image description")
+            }
         }
+        .fullScreenCover(isPresented: $showFullScreen) {
+            FullScreenImageView(url: meta.url, mime: meta.mime, alt: meta.alt)
+        }
+        .mediaAltDescriptionSheet(alt: meta.alt, isPresented: $showAltDescription)
         .alert("Photos Access Required", isPresented: $showPhotosAlert) {
             Button("Open Settings") {
                 if let url = URL(string: UIApplication.openSettingsURLString) {
@@ -117,6 +96,55 @@ struct InlineImageView: View {
             } label: {
                 Label("Save to Photos", systemImage: "square.and.arrow.down")
             }
+        }
+    }
+
+    /// The media itself, in its loaded states. Kept out of `body` so the
+    /// alt-text accessibility label scopes to *this* content and doesn't
+    /// swallow the manual-load button's own affordance label.
+    @ViewBuilder
+    private func loadedMedia(isAnimated: Bool, aspect: CGFloat?, height: CGFloat) -> some View {
+        if isAnimated {
+            AnimatedImageView(
+                url: URL(string: meta.url),
+                aspect: aspect,
+                placeholder: {
+                    placeholder(systemName: nil, height: height)
+                        .overlay { ProgressView() }
+                },
+                failure: {
+                    placeholder(systemName: "photo", height: 200)
+                }
+            )
+            .contentShape(Rectangle())
+            .onTapGesture { tapped() }
+        } else {
+            RetryingAsyncImage(
+                url: URL(string: meta.url),
+                maxPixelSize: ImagePixelBudget.feed,
+                content: { image in
+                    image.resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(maxWidth: .infinity)
+                        .onTapGesture { tapped() }
+                },
+                loading: {
+                    placeholder(systemName: nil, height: height)
+                        .overlay { ProgressView() }
+                },
+                failure: {
+                    placeholder(systemName: "photo", height: 200)
+                        .overlay {
+                            VStack(spacing: 4) {
+                                Image(systemName: "arrow.clockwise")
+                                    .font(.title3)
+                                Text("Tap to retry")
+                                    .font(.caption2)
+                            }
+                            .foregroundStyle(.secondary)
+                        }
+                }
+            )
         }
     }
 
@@ -178,6 +206,11 @@ struct InlineImageView: View {
 struct FullScreenImageView: View {
     let url: String
     let mime: String?
+    /// The image's accessibility description (NIP-92 imeta `alt`), rendered
+    /// as a caption bar pinned to the bottom of the pane. The fullscreen
+    /// pager passes nil here and draws one caption itself so video pages get
+    /// the same treatment.
+    var alt: String?
     /// Forwarded centroid translation when the image is unzoomed and embedded
     /// in `FullScreenMediaPager`. Fires on every recogniser update and once on
     /// end; `isEnded` distinguishes the two so the carousel can commit on
@@ -187,6 +220,10 @@ struct FullScreenImageView: View {
     /// standalone viewer — it handles its own drag entirely (swipe-down
     /// dismisses, no on-screen close button).
     var onCarouselDrag: ((CGSize, CGSize, Bool) -> Void)?
+    /// Single-tap toggle, set by `FullScreenMediaPager` so a tap anywhere on
+    /// the image flips the pager's shared chrome (toolbar, badge, caption).
+    /// Nil when standalone — the viewer then toggles its own chrome.
+    var onSingleTap: (() -> Void)?
     @Environment(\.dismiss) private var dismiss
 
     @State private var scale: CGFloat = 1.0
@@ -205,6 +242,9 @@ struct FullScreenImageView: View {
     /// auto-dismisses after a short window.
     @State private var copiedToastVisible = false
     @State private var showPhotosAlert = false
+    /// Photos-app behavior: one tap hides every overlay (save button,
+    /// caption) until the next tap brings them back.
+    @State private var chromeHidden = false
     /// Latched true once the user zooms in past `fullResZoomThreshold`, which
     /// swaps the downsampled decode for a full-resolution one in place. Stays
     /// true after zooming back out — the full-res bitmap is already cached, so
@@ -223,11 +263,15 @@ struct FullScreenImageView: View {
     init(
         url: String,
         mime: String? = nil,
-        onCarouselDrag: ((CGSize, CGSize, Bool) -> Void)? = nil
+        alt: String? = nil,
+        onCarouselDrag: ((CGSize, CGSize, Bool) -> Void)? = nil,
+        onSingleTap: (() -> Void)? = nil
     ) {
         self.url = url
         self.mime = mime
+        self.alt = alt
         self.onCarouselDrag = onCarouselDrag
+        self.onSingleTap = onSingleTap
     }
 
     var body: some View {
@@ -238,6 +282,28 @@ struct FullScreenImageView: View {
                     .opacity(dismissY > 0 ? max(0.3, 1.0 - Double(dismissY) / 250.0) : 1.0)
 
                 gesturedImageContent(in: geo)
+
+                // Caption bar pinned to the bottom of the pane — the
+                // fullscreen form of the alt-text handoff (§2.4). The image
+                // surface above swallows no hit tests here since gestures
+                // live on their own overlay; the caption is display-only.
+                // Part of the tappable chrome: hides with everything else.
+                if let alt, !alt.isEmpty {
+                    Text(alt)
+                        .font(.caption)
+                        .foregroundStyle(.white)
+                        .multilineTextAlignment(.leading)
+                        .lineLimit(5)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(Color.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 10))
+                        .padding(.horizontal, 16)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                        .padding(.bottom, 24)
+                        .allowsHitTesting(false)
+                        .opacity(chromeHidden ? 0 : 1)
+                }
 
                 // Transparent gesture-capturing overlay sitting above the
                 // image. Attaches every drag / pinch / double-tap gesture
@@ -273,7 +339,8 @@ struct FullScreenImageView: View {
                         handlePinchEnd(magValue: pinchScale, in: geo.size)
                     },
                     onDoubleTap: { toggleZoom() },
-                    onLongPress: { copyURLToPasteboard() }
+                    onLongPress: { copyURLToPasteboard() },
+                    onSingleTap: { handleSingleTap() }
                 )
 
                 if copiedToastVisible {
@@ -309,6 +376,8 @@ struct FullScreenImageView: View {
                         }
                         Spacer()
                     }
+                    .opacity(chromeHidden ? 0 : 1)
+                    .allowsHitTesting(!chromeHidden)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -544,6 +613,20 @@ struct FullScreenImageView: View {
         }
     }
 
+    /// One tap on the image: hide (or restore) every overlay — caption, save
+    /// button when standalone; the pager's toolbar + badge + caption when
+    /// embedded. Double-tap still zooms (the single-tap recogniser waits for
+    /// the double-tap to fail first).
+    private func handleSingleTap() {
+        if let onSingleTap {
+            onSingleTap()
+        } else {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                chromeHidden.toggle()
+            }
+        }
+    }
+
     /// Latch `loadFullRes` once zoom reaches `fullResZoomThreshold` so the
     /// decode upgrades to full resolution. One-way — see `loadFullRes`.
     private func upgradeToFullResIfNeeded(scale: CGFloat) {
@@ -554,11 +637,13 @@ struct FullScreenImageView: View {
 }
 
 /// Hosts the UIKit recognisers (`UIPanGestureRecognizer` with max 1 touch,
-/// `UIPinchGestureRecognizer`, double-tap `UITapGestureRecognizer`) for the
-/// fullscreen image. All three recognise simultaneously via their shared
-/// delegate, so a two-finger pinch can scale and pan in lock-step (via the
-/// pinch recogniser's `location(in:)` centroid). Each recogniser feeds back
-/// into SwiftUI through callbacks.
+/// `UIPinchGestureRecognizer`, double-tap `UITapGestureRecognizer`, single-tap
+/// `UITapGestureRecognizer`, `UILongPressGestureRecognizer`) for the
+/// fullscreen image. All cooperate via their shared delegate, so a two-finger
+/// pinch can scale and pan in lock-step (via the pinch recogniser's
+/// `location(in:)` centroid). The single-tap waits for the double-tap to fail
+/// so quick taps toggle chrome while double-taps still zoom. Each recogniser
+/// feeds back into SwiftUI through callbacks.
 struct ImageGesturesView: UIViewRepresentable {
     let onPanChanged: (CGSize) -> Void
     /// Second arg is the velocity-projected end translation
@@ -569,6 +654,7 @@ struct ImageGesturesView: UIViewRepresentable {
     let onPinchEnded: (CGFloat) -> Void
     let onDoubleTap: () -> Void
     let onLongPress: () -> Void
+    var onSingleTap: () -> Void = {}
 
     func makeUIView(context: Context) -> UIView {
         let view = UIView()
@@ -599,6 +685,15 @@ struct ImageGesturesView: UIViewRepresentable {
         doubleTap.delegate = context.coordinator
         view.addGestureRecognizer(doubleTap)
 
+        let singleTap = UITapGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handleSingleTap(_:))
+        )
+        singleTap.numberOfTapsRequired = 1
+        singleTap.require(toFail: doubleTap)
+        singleTap.delegate = context.coordinator
+        view.addGestureRecognizer(singleTap)
+
         let longPress = UILongPressGestureRecognizer(
             target: context.coordinator,
             action: #selector(Coordinator.handleLongPress(_:))
@@ -618,6 +713,7 @@ struct ImageGesturesView: UIViewRepresentable {
         context.coordinator.onPinchEnded = onPinchEnded
         context.coordinator.onDoubleTap = onDoubleTap
         context.coordinator.onLongPress = onLongPress
+        context.coordinator.onSingleTap = onSingleTap
     }
 
     func makeCoordinator() -> Coordinator {
@@ -627,7 +723,8 @@ struct ImageGesturesView: UIViewRepresentable {
             onPinchChanged: onPinchChanged,
             onPinchEnded: onPinchEnded,
             onDoubleTap: onDoubleTap,
-            onLongPress: onLongPress
+            onLongPress: onLongPress,
+            onSingleTap: onSingleTap
         )
     }
 
@@ -638,6 +735,7 @@ struct ImageGesturesView: UIViewRepresentable {
         var onPinchEnded: (CGFloat) -> Void
         var onDoubleTap: () -> Void
         var onLongPress: () -> Void
+        var onSingleTap: () -> Void
 
         private var pinchStartCentroid: CGPoint = .zero
 
@@ -647,7 +745,8 @@ struct ImageGesturesView: UIViewRepresentable {
             onPinchChanged: @escaping (CGFloat, CGSize) -> Void,
             onPinchEnded: @escaping (CGFloat) -> Void,
             onDoubleTap: @escaping () -> Void,
-            onLongPress: @escaping () -> Void
+            onLongPress: @escaping () -> Void,
+            onSingleTap: @escaping () -> Void = {}
         ) {
             self.onPanChanged = onPanChanged
             self.onPanEnded = onPanEnded
@@ -655,6 +754,7 @@ struct ImageGesturesView: UIViewRepresentable {
             self.onPinchEnded = onPinchEnded
             self.onDoubleTap = onDoubleTap
             self.onLongPress = onLongPress
+            self.onSingleTap = onSingleTap
         }
 
         @objc func handlePan(_ g: UIPanGestureRecognizer) {
@@ -703,6 +803,12 @@ struct ImageGesturesView: UIViewRepresentable {
         @objc func handleDoubleTap(_ g: UITapGestureRecognizer) {
             if g.state == .ended {
                 onDoubleTap()
+            }
+        }
+
+        @objc func handleSingleTap(_ g: UITapGestureRecognizer) {
+            if g.state == .ended {
+                onSingleTap()
             }
         }
 
