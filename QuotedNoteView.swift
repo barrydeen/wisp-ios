@@ -185,19 +185,52 @@ struct QuotedNoteView: View {
     @State private var profile: ProfileData?
     @State private var contentExpanded = false
     @State private var attempt: Int = 0
+    /// Natural (pre-cap) height of the text portion, measured so the collapse
+    /// fade is drawn only when the cap actually cut text off.
+    @State private var textPortionIntrinsicHeight: CGFloat = 0
 
     /// Mirror PostCardView's long-post threshold so a quoted long note collapses
     /// to the same height with a "Show more" toggle instead of pushing the
     /// surrounding card off-screen.
     private static let longPostCharThreshold = 600
     private static let longPostTextCollapsedHeight: CGFloat = 280
+    /// Fraction of the quoted card's own content width that collapsed media
+    /// may occupy.
+    ///
+    /// PostCardView's flat 80pt peek is sized for a different job: there the
+    /// reader already has the post's text in front of them and the strip only
+    /// has to signal "media continues below the toggle". An embedded card has
+    /// no such body to lean on — for a short-text quote the image *is* the
+    /// context — and 80pt of a ~337pt-wide photo is a ~48pt sliver once the
+    /// 32pt bottom fade is drawn over it, which reads as no image at all.
+    ///
+    /// Keyed to width rather than a flat point value so the peek tracks the
+    /// card it sits in (`NotificationRowView`'s wider indent leaves a
+    /// narrower card, so a proportionally shorter slice of the same photo).
+    /// At 0.8 landscape photos clear the cap outright and a square or
+    /// portrait one keeps its top ~80% — most of the shot, with the fade
+    /// below still signalling that the rest is one tap away.
+    private static let mediaPeekWidthFraction: CGFloat = 0.8
+
     /// Visible height of trailing media when collapsed. Rendered as its own
     /// portion (see `renderMode: .mediaPortion` below) with its own height
     /// budget so a long caption above it can't eat into the gallery's peek —
     /// previously text and media shared one combined cap, and a caption
     /// alone could consume nearly all of it, leaving almost nothing of the
-    /// gallery visible. Matches PostCardView's `mediaPeekHeight`.
-    private static let mediaPeekHeight: CGFloat = 80
+    /// gallery visible.
+    private var mediaPeekHeight: CGFloat {
+        Self.mediaPeekHeight(
+            forContentWidth: UIScreen.main.bounds.width - nestedHorizontalInset
+        )
+    }
+
+    /// Pure form of `mediaPeekHeight`, seeded the way
+    /// `MediaGridView.tileHeightForNested` seeds its own guess: the quoted
+    /// card's content width is the screen less `nestedHorizontalInset`, this
+    /// view's total horizontal chrome.
+    static func mediaPeekHeight(forContentWidth width: CGFloat) -> CGFloat {
+        max(1, width) * mediaPeekWidthFraction
+    }
 
     /// One silent redundancy retry on initial miss — broadens the relay set
     /// without making the user tap. Beyond that the missing card becomes a
@@ -253,6 +286,17 @@ struct QuotedNoteView: View {
     private struct TaskKey: Hashable {
         let eventId: String
         let attempt: Int
+    }
+
+    /// Reports the text portion's natural height out from under the collapsed
+    /// `.frame(maxHeight:)` cap. The background GeometryReader sits before the
+    /// frame in the modifier chain, so it measures what the text *wants* to
+    /// be, not what the cap left visible.
+    private struct TextPortionHeightKey: PreferenceKey {
+        static var defaultValue: CGFloat = 0
+        static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+            value = max(value, nextValue())
+        }
     }
 
     /// A quote reference lifted back out of a retracted note's own content.
@@ -480,13 +524,28 @@ struct QuotedNoteView: View {
                         // stamp-sized preview. The cap then clips the
                         // bottom rather than scaling the image.
                         .fixedSize(horizontal: false, vertical: true)
+                        .background(
+                            GeometryReader { geo in
+                                Color.clear.preference(
+                                    key: TextPortionHeightKey.self,
+                                    value: geo.size.height
+                                )
+                            }
+                        )
                         .frame(
                             maxHeight: collapsed ? Self.longPostTextCollapsedHeight : .infinity,
                             alignment: .top
                         )
                         .clipped()
                         .overlay(alignment: .bottom) {
-                            if collapsed {
+                            // The fade means "text continues below the cap",
+                            // so only draw it when the cap actually cut
+                            // something. A quote whose text fits whole was
+                            // getting its only line dimmed under the fade,
+                            // which read as a truncated preview of text
+                            // that wasn't there.
+                            if collapsed,
+                               textPortionIntrinsicHeight > Self.longPostTextCollapsedHeight + 0.5 {
                                 LinearGradient(
                                     colors: [Color.wispBackground.opacity(0), Color.wispBackground],
                                     startPoint: .top,
@@ -529,7 +588,7 @@ struct QuotedNoteView: View {
                         )
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(
-                            maxHeight: collapsed ? Self.mediaPeekHeight : .infinity,
+                            maxHeight: collapsed ? mediaPeekHeight : .infinity,
                             alignment: .top
                         )
                         .clipped()
@@ -545,6 +604,7 @@ struct QuotedNoteView: View {
                             }
                         }
                     }
+                    .onPreferenceChange(TextPortionHeightKey.self) { textPortionIntrinsicHeight = $0 }
                 }
             }
             .padding(12)
