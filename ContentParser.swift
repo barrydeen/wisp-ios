@@ -157,18 +157,43 @@ enum ContentParser {
                 else if entry.hasPrefix("alt ") { alt = String(entry.dropFirst(4)) }
             }
             if let url {
-                // The `alt` value may contain spaces but never newlines; trim
-                // whitespace and drop a blank slot entirely so an empty
-                // description reads as "no description".
-                let trimmedAlt = alt.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                // The `alt` value is everything after the first space, so
+                // interior line breaks belong to it and survive the parse —
+                // the wire carries real `\n` characters inside the tag
+                // string. Break runs are capped (normalizeAltBreaks) so
+                // third-party alt can't balloon the layout, and a blank slot
+                // reads as "no description".
+                let normalizedAlt = alt.map { normalizeAltBreaks($0) }
                 map[url] = MediaMeta(
                     url: url, mime: mime, dimension: dim, blurhash: blur,
                     posterUrl: image, sha256: x ?? ox,
-                    alt: (trimmedAlt?.isEmpty == false) ? trimmedAlt : nil
+                    alt: (normalizedAlt?.isEmpty == false) ? normalizedAlt : nil
                 )
             }
         }
         return map
+    }
+
+    /// Normalizes an `alt` value's line breaks per the imeta linebreak
+    /// contract: CRLF/CR → LF, each line's surrounding whitespace trimmed,
+    /// runs of 3+ newlines capped at one blank line, ends trimmed. Single
+    /// breaks and a single paragraph gap survive — multi-paragraph
+    /// descriptions are the point. Applied when publishing an `alt` slot and
+    /// when parsing one, so third-party alt can't balloon the layout either.
+    static func normalizeAltBreaks(_ text: String) -> String {
+        let lf = text
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+        let trimmedLines = lf
+            .components(separatedBy: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .joined(separator: "\n")
+        let capped = trimmedLines.replacingOccurrences(
+            of: "\n{3,}",
+            with: "\n\n",
+            options: .regularExpression
+        )
+        return capped.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// `url → alt` map from an event's imeta tags — the kind-agnostic lookup

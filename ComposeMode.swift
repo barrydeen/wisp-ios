@@ -44,11 +44,15 @@ struct ComposeAttachment: Identifiable {
     var isVideo: Bool { mime.hasPrefix("video/") }
 
     /// The description as it should be written into the imeta `alt` slot:
-    /// trimmed, empty collapsed to nil.
+    /// line breaks normalized (`normalizeAltBreaks` — CRLF → LF, lines
+    /// trimmed, blank-line runs capped at one paragraph gap) and empty
+    /// collapsed to nil. The editor is multiline and the wire carries real
+    /// `\n` characters inside the tag string, so authored structure
+    /// survives; only bloat is removed.
     var trimmedAltText: String? {
-        guard let trimmed = altText?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !trimmed.isEmpty else { return nil }
-        return trimmed
+        guard let altText, !altText.isEmpty else { return nil }
+        let normalized = ContentParser.normalizeAltBreaks(altText)
+        return normalized.isEmpty ? nil : normalized
     }
 }
 

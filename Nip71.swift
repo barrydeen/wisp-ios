@@ -39,7 +39,7 @@ enum Nip71 {
             if let d = entry.dim { imeta.append("dim \(d)") }
             if let dur = entry.duration { imeta.append("duration \(dur)") }
             if let h = entry.hash { imeta.append("x \(h)") }
-            if let alt = entry.alt?.trimmingCharacters(in: .whitespacesAndNewlines),
+            if let alt = entry.alt.map(ContentParser.normalizeAltBreaks),
                !alt.isEmpty { imeta.append("alt \(alt)") }
             tags.append(imeta)
         }

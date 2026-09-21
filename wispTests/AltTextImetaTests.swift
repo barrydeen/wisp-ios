@@ -256,6 +256,71 @@ struct AltTextImetaTests {
         #expect(reader.attachments.first?.trimmedAltText == nil)
     }
 
+    // MARK: - Line breaks (imeta alt linebreak contract)
+
+    /// The reference normalization vectors: single breaks survive, runs cap
+    /// at one paragraph gap, CRLF/CR normalizes, lines and ends trim.
+    @Test func normalizeAltBreaksVectors() {
+        #expect(ContentParser.normalizeAltBreaks("two\nlines") == "two\nlines")
+        #expect(ContentParser.normalizeAltBreaks("a\n\n\n\n\nb") == "a\n\nb")
+        #expect(ContentParser.normalizeAltBreaks("a\r\nb") == "a\nb")
+        #expect(ContentParser.normalizeAltBreaks("a\rb") == "a\nb")
+        #expect(ContentParser.normalizeAltBreaks("  first \n\n  second  ") == "first\n\nsecond")
+        #expect(ContentParser.normalizeAltBreaks("   ") == "")
+    }
+
+    /// Publish path: a multiline description rides as real `\n` inside the
+    /// tag string — never flattened to spaces.
+    @Test func publishPreservesLineBreaksInAlt() {
+        let described = ComposeAttachment(
+            id: UUID(), url: "https://host/multi.jpg", mime: "image/jpeg",
+            dim: .zero, durationSec: nil, sha256Hex: nil,
+            localBytes: nil, altText: "A screenshot.\n\nBelow it, a quoted post."
+        )
+        let tags = ComposeViewModel.imetaTagsForDescribedAttachments([described])
+        #expect(tags.count == 1)
+        #expect(tags[0].last == "alt A screenshot.\n\nBelow it, a quoted post.")
+    }
+
+    /// Publish path: runaway break runs collapse to one paragraph gap and
+    /// CRLF normalizes — authored structure survives, bloat doesn't.
+    @Test func publishCapsBreakRunsAndNormalizesCRLF() {
+        let described = ComposeAttachment(
+            id: UUID(), url: "https://host/capped.jpg", mime: "image/jpeg",
+            dim: .zero, durationSec: nil, sha256Hex: nil,
+            localBytes: nil, altText: "a\r\n\n\n\n\nb"
+        )
+        let tags = ComposeViewModel.imetaTagsForDescribedAttachments([described])
+        #expect(tags.count == 1)
+        #expect(tags[0].last == "alt a\n\nb")
+    }
+
+    /// Read path: the slot splits on the first space only, so interior
+    /// breaks survive the parse and reach every render surface.
+    @Test func parseKeepsInteriorLineBreaks() {
+        let tags: [[String]] = [
+            ["imeta", "url https://host/multi.jpg", "m image/jpeg",
+             "alt First paragraph\n\nSecond paragraph"],
+        ]
+        let segments = ContentParser.parse(content: "https://host/multi.jpg", tags: tags)
+        let alts = segments.compactMap { seg -> String? in
+            if case .image(let meta) = seg { return meta.alt }
+            return nil
+        }
+        #expect(alts == ["First paragraph\n\nSecond paragraph"])
+    }
+
+    /// Read path: third-party alt with runaway break runs is capped at
+    /// extraction too, so remote events can't balloon the layout.
+    @Test func parseCapsRunawayBreakRuns() {
+        let tags: [[String]] = [
+            ["imeta", "url https://host/ballooning.jpg", "m image/jpeg",
+             "alt a\n\n\n\n\n\nb"],
+        ]
+        let map = ContentParser.imetaAltByUrl(tags)
+        #expect(map["https://host/ballooning.jpg"] == "a\n\nb")
+    }
+
     // MARK: - Fixtures
 
     private let keypair = Keypair(privkey: String(repeating: "1", count: 64),
