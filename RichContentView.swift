@@ -113,7 +113,15 @@ struct RichContentView: View {
         // produces different segments when the host folds `.link` into inline
         // — without it, a feed-card render would poison the cache entry
         // consumed by a bio (or vice versa).
-        let key = "\(generation)|\(showLinkPreviews ? 1 : 0)|\(content)" as NSString
+        //
+        // Tags are part of the key too: the parse reads imeta (media mime +
+        // alt), emoji shortcodes, and `q`-tag attribution out of them. The
+        // composer's live preview parses the *same content string* with
+        // t-tags only, so a tags-less key let that preview poison the cache —
+        // the published note then rendered from the stale segments and lost
+        // its imeta-derived metadata (alt badge gone, mime fallback).
+        let tagsKey = tags.map { $0.joined(separator: "\u{1F}") }.joined(separator: "\u{1E}")
+        let key = "\(generation)|\(showLinkPreviews ? 1 : 0)|\(tagsKey)|\(content)" as NSString
         if let box = Self.parseCache.object(forKey: key) { return box.segments }
         let signpostState = Signposts.render.beginInterval("parseCacheMiss")
         defer { Signposts.render.endInterval("parseCacheMiss", signpostState) }
@@ -388,9 +396,9 @@ struct RichContentView: View {
     private func mediaItem(from segment: ContentSegment) -> MediaGridView.MediaItem? {
         switch segment {
         case .image(let meta), .unknownMedia(let meta):
-            return MediaGridView.MediaItem(url: meta.url, mime: meta.mime, dimension: meta.dimension, isVideo: false, posterUrl: meta.posterUrl)
+            return MediaGridView.MediaItem(url: meta.url, mime: meta.mime, dimension: meta.dimension, isVideo: false, posterUrl: meta.posterUrl, alt: meta.alt)
         case .video(let meta):
-            return MediaGridView.MediaItem(url: meta.url, mime: meta.mime, dimension: meta.dimension, isVideo: true, posterUrl: meta.posterUrl)
+            return MediaGridView.MediaItem(url: meta.url, mime: meta.mime, dimension: meta.dimension, isVideo: true, posterUrl: meta.posterUrl, alt: meta.alt)
         default:
             return nil
         }

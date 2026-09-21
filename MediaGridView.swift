@@ -40,6 +40,7 @@ struct MediaGridView: View {
     var onTileTap: ((Int) -> Void)? = nil
     @State private var openIndex: Int?
     @State private var currentItemId: String?
+    @State private var showAltDescription = false
 
     struct MediaItem: Hashable, Identifiable {
         let url: String
@@ -50,6 +51,10 @@ struct MediaGridView: View {
         /// imeta `image` field. When nil and `isVideo` is true, the tile falls
         /// back to a frame decoded by `VideoPosterCache`.
         let posterUrl: String?
+        /// Author-supplied accessibility description (NIP-92 imeta `alt`).
+        /// Drives the ALT badge, the Description dialog, the pager caption,
+        /// and VoiceOver. Nil keeps today's unlabeled behavior.
+        let alt: String?
 
         var id: String { url }
 
@@ -196,34 +201,55 @@ struct MediaGridView: View {
 
     @ViewBuilder
     private func tile(_ item: MediaItem, width: CGFloat, height: CGFloat) -> some View {
-        Button {
-            let idx = items.firstIndex(of: item) ?? 0
-            if let onTileTap = onTileTap {
-                onTileTap(idx)
-            } else {
-                openIndex = idx
-            }
-        } label: {
-            ZStack {
-                MediaTileImage(item: item)
-                    .frame(width: width, height: height)
-                    .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
-                if item.isVideo {
-                    Image(systemName: "play.circle.fill")
-                        .font(.system(size: 36))
-                        .foregroundStyle(.white.opacity(0.9))
-                        .shadow(radius: 4)
+        ZStack(alignment: .bottomLeading) {
+            Button {
+                let idx = items.firstIndex(of: item) ?? 0
+                if let onTileTap = onTileTap {
+                    onTileTap(idx)
+                } else {
+                    openIndex = idx
                 }
+            } label: {
+                ZStack {
+                    MediaTileImage(item: item)
+                        .frame(width: width, height: height)
+                        .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+                    if item.isVideo {
+                        Image(systemName: "play.circle.fill")
+                            .font(.system(size: 36))
+                            .foregroundStyle(.white.opacity(0.9))
+                            .shadow(radius: 4)
+                    }
+                }
+                // Animated tiles render via a UIImageView (UIViewRepresentable),
+                // which doesn't contribute to the Button's derived hit-test
+                // region the way a SwiftUI Image does. Without an explicit
+                // content shape, taps on a GIF / animated WebP tile fall
+                // through and the gallery only opens from static tiles.
+                .frame(width: width, height: height)
+                .contentShape(RoundedRectangle(cornerRadius: cornerRadius))
             }
-            // Animated tiles render via a UIImageView (UIViewRepresentable),
-            // which doesn't contribute to the Button's derived hit-test
-            // region the way a SwiftUI Image does. Without an explicit
-            // content shape, taps on a GIF / animated WebP tile fall
-            // through and the gallery only opens from static tiles.
-            .frame(width: width, height: height)
-            .contentShape(RoundedRectangle(cornerRadius: cornerRadius))
+            .buttonStyle(.plain)
+            .accessibilityLabel(item.alt ?? (item.isVideo ? "Video" : "Image"))
+            .accessibilityHint("Opens the image viewer")
+
+            // The ALT badge is a *sibling* of the tile's tap target, never a
+            // nested button inside it — VoiceOver gets two clean focus stops
+            // ("the description, image" / "View image description") instead of
+            // one flattened control.
+            if let alt = item.alt {
+                Button {
+                    showAltDescription = true
+                } label: {
+                    AltBadge()
+                        .padding(8)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("View image description")
+            }
         }
-        .buttonStyle(.plain)
+        .mediaAltDescriptionSheet(alt: item.alt, isPresented: $showAltDescription)
     }
 
     private var indexBadge: some View {
@@ -348,6 +374,22 @@ struct FullScreenMediaPager: View {
     @State private var pageWidth: CGFloat = 0
     @State private var showPhotosAlert = false
     @State private var copiedToastVisible = false
+    @State private var showAltDescription = false
+    /// Photos-app chrome behavior: one tap anywhere on the image hides the
+    /// toolbar, the N/M badge, and the alt caption until the next tap.
+    @State private var chromeHidden = false
+
+    /// Bounds-safe read of the current page's description — the pager is
+    /// only ever presented with a non-empty list, but `index` is state.
+    private var currentAlt: String? {
+        items.indices.contains(index) ? items[index].alt : nil
+    }
+
+    private func toggleChrome() {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            chromeHidden.toggle()
+        }
+    }
 
     init(items: [MediaGridView.MediaItem], initialIndex: Int) {
         self.items = items
@@ -390,21 +432,51 @@ struct FullScreenMediaPager: View {
                 .onAppear { pageWidth = geo.size.width }
                 .onChange(of: geo.size.width) { _, new in pageWidth = new }
 
-                if items.count > 1 {
-                    // A numeric `N / M` badge, matching the in-feed gallery's
-                    // `indexBadge`. A per-item dot row overflowed the viewport
-                    // once a post carried more than ~25 images; numbers stay a
-                    // fixed-width capsule at any count and read consistently
-                    // with the feed.
-                    Text("\(index + 1) / \(items.count)")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.white.opacity(0.9))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
-                        .background(Color.black.opacity(0.4), in: Capsule())
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                        .padding(.bottom, 24)
-                        .allowsHitTesting(false)
+                if items.count > 1 || currentAlt != nil {
+                    // Bottom stack: the numeric "N / M" badge above the alt
+                    // caption bar. The caption renders the current page's
+                    // accessibility description pinned to the bottom of the
+                    // pane (the lightbox caption from the alt-text handoff);
+                    // tapping it opens the full Description dialog when the
+                    // text is long enough to truncate.
+                    VStack(spacing: 10) {
+                        if items.count > 1 {
+                            // A numeric `N / M` badge, matching the in-feed gallery's
+                            // `indexBadge`. A per-item dot row overflowed the viewport
+                            // once a post carried more than ~25 images; numbers stay a
+                            // fixed-width capsule at any count and read consistently
+                            // with the feed.
+                            Text("\(index + 1) / \(items.count)")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.white.opacity(0.9))
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 4)
+                                .background(Color.black.opacity(0.4), in: Capsule())
+                        }
+                        if let alt = currentAlt {
+                            Button {
+                                showAltDescription = true
+                            } label: {
+                                Text(alt)
+                                    .font(.caption)
+                                    .foregroundStyle(.white)
+                                    .multilineTextAlignment(.leading)
+                                    .lineLimit(6)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 10)
+                                    .background(Color.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 10))
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Image description: \(alt)")
+                            .padding(.horizontal, 16)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                    .padding(.bottom, 24)
+                    .allowsHitTesting(!chromeHidden)
+                    .opacity(chromeHidden ? 0 : 1)
+                    .animation(.easeInOut(duration: 0.15), value: index)
                 }
 
                 // Fixed toolbar — save / copy / close for the current page.
@@ -436,6 +508,7 @@ struct FullScreenMediaPager: View {
             } message: {
                 Text("Allow Wisp to add to Photos in Settings to save media.")
             }
+            .mediaAltDescriptionSheet(alt: currentAlt, isPresented: $showAltDescription)
         }
     }
 
@@ -463,6 +536,8 @@ struct FullScreenMediaPager: View {
             .padding(.trailing, 16)
             Spacer()
         }
+        .allowsHitTesting(!chromeHidden)
+        .opacity(chromeHidden ? 0 : 1)
     }
 
     private func toolbarIcon(_ systemName: String) -> some View {
@@ -515,6 +590,14 @@ struct FullScreenMediaPager: View {
     ) {
         let dx = translation.width
         let dy = translation.height
+        // A tap lands here only from video pages (their DragGesture has
+        // minimumDistance 0, so a stationary touch ends with ~zero
+        // translation). Image pages don't reach this path on a tap — their
+        // pan recogniser fails without movement — so no double-toggle.
+        if isEnded && abs(dx) < 10 && abs(dy) < 10 {
+            toggleChrome()
+            return
+        }
         if !isEnded {
             if abs(dy) > abs(dx) {
                 dismissY = max(0, dy)
@@ -595,7 +678,8 @@ struct FullScreenMediaPager: View {
                 mime: item.mime,
                 onCarouselDrag: { translation, predictedEnd, ended in
                     handleCarouselDrag(translation, predictedEnd: predictedEnd, isEnded: ended)
-                }
+                },
+                onSingleTap: { toggleChrome() }
             )
         }
     }

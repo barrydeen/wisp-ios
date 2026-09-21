@@ -29,6 +29,7 @@ struct ComposeView: View {
     @State private var showDraftsSheet = false
     @State private var photosPickerMaxCount: Int = 8
     @State private var showAccountPicker = false
+    @State private var altEditorTarget: AltTextEditorTarget?
 
     /// Draft to load on first appear. Nil for `.new` and `.reply`/`.quote` composers.
     /// Loaded from `.task` rather than `init` to defeat SwiftUI's State preservation
@@ -266,6 +267,15 @@ struct ComposeView: View {
         }
         .sheet(isPresented: $showAccountPicker) {
             accountPickerSheet
+        }
+        .sheet(item: $altEditorTarget) { target in
+            AltTextEditorView(
+                target: target
+            ) { savedText in
+                viewModel.setAltText(savedText ?? "", for: target.attachmentID)
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
         }
         // GIF picker is presented as a true UIKit modal via a hidden
         // representable rather than a SwiftUI .sheet / .fullScreenCover.
@@ -740,7 +750,8 @@ struct ComposeView: View {
     }
 
     private func attachmentThumb(_ attachment: ComposeAttachment, size: CGFloat) -> some View {
-        ZStack(alignment: .topTrailing) {
+        let hasAlt = attachment.trimmedAltText != nil
+        return ZStack(alignment: .topTrailing) {
             ZStack {
                 if let bytes = attachment.localBytes,
                    AnimatedImageHint.isLikelyAnimated(url: "", mime: attachment.mime),
@@ -789,6 +800,32 @@ struct ComposeView: View {
             }
             .frame(width: size, height: size)
             .clipShape(RoundedRectangle(cornerRadius: 10))
+            // "+ ALT" before a description exists, "✓ ALT" in the theme
+            // accent once saved — the composer chip from the alt-text
+            // handoff. Tapping opens the editor; alt never blocks publish.
+            .overlay(alignment: .topLeading) {
+                Button {
+                    altEditorTarget = AltTextEditorTarget(
+                        attachmentID: attachment.id,
+                        previewURL: attachment.url,
+                        localBytes: attachment.localBytes,
+                        initialText: attachment.trimmedAltText
+                    )
+                } label: {
+                    Text(hasAlt ? "✓ ALT" : "+ ALT")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(
+                            hasAlt ? Color.wispPrimary : Color.black.opacity(0.6),
+                            in: Capsule()
+                        )
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(hasAlt ? "Edit image description" : "Add image description")
+                .padding(4)
+            }
 
             Button {
                 viewModel.removeMedia(id: attachment.id)

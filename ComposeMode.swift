@@ -36,8 +36,24 @@ struct ComposeAttachment: Identifiable {
     /// Local copy of the bytes — kept around until upload completes so we can render
     /// a thumbnail. Cleared once `url` is set.
     var localBytes: Data?
+    /// Author-supplied accessibility description. Published as the NIP-92
+    /// imeta `alt` slot (one imeta tag per described image — undescribed
+    /// attachments emit no tag) and round-tripped through drafts.
+    var altText: String?
 
     var isVideo: Bool { mime.hasPrefix("video/") }
+
+    /// The description as it should be written into the imeta `alt` slot:
+    /// line breaks normalized (`normalizeAltBreaks` — CRLF → LF, lines
+    /// trimmed, blank-line runs capped at one paragraph gap) and empty
+    /// collapsed to nil. The editor is multiline and the wire carries real
+    /// `\n` characters inside the tag string, so authored structure
+    /// survives; only bloat is removed.
+    var trimmedAltText: String? {
+        guard let altText, !altText.isEmpty else { return nil }
+        let normalized = ContentParser.normalizeAltBreaks(altText)
+        return normalized.isEmpty ? nil : normalized
+    }
 }
 
 /// A confirmed mention inserted into the composer text.
