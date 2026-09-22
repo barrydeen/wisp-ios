@@ -453,7 +453,9 @@ final class EngagementRepository {
         // only pull the delta since last time. Any cold id, or a forced resync,
         // disables `since` for the whole REQ (a single REQ carries one `since`).
         let since = Self.sinceFloor(forTargets: eventIds, cursor: engagementCursor, forceFull: forceFull)
-        let filter = NostrFilter(kinds: [1, 6, 7, 9735], eTags: eventIds, limit: 500, since: since)
+        // 1111 = NIP-22 comments: replies to a note published by NIP-22
+        // clients, counted as replies alongside kind-1.
+        let filter = NostrFilter(kinds: [1, 6, 7, 9735, Nip22.kindComment], eTags: eventIds, limit: 500, since: since)
         let sub = RelayPool.subscribe(relays: [relay], filter: filter, id: subId)
         liveSubs.append(sub)
         Signposts.feed.emitEvent("engagement.req.opened", "active: \(self.liveSubs.count)/\(self.maxConcurrentSubs) ids: \(eventIds.count)")
@@ -588,7 +590,7 @@ final class EngagementRepository {
         // reposter drawers. Zaps (9735) are checked separately in the kind
         // switch below against the *resolved* sender, since `event.pubkey` on a
         // zap receipt is the LNURL server, not the zapper.
-        if event.kind == 1 || event.kind == 6 || event.kind == 7,
+        if event.kind == 1 || event.kind == 6 || event.kind == 7 || event.kind == Nip22.kindComment,
            SafetyFilter.shared.snapshot.blockedPubkeys.contains(event.pubkey) {
             return
         }
@@ -643,7 +645,10 @@ final class EngagementRepository {
         var current = b.counts
         current.seenRelays.insert(relayUrl)
         switch event.kind {
-        case 1:
+        case 1, Nip22.kindComment:
+            // NIP-22 comments are replies to the e-tagged event (or, for the
+            // external-root case, to another comment — which we don't track
+            // here). Attribution is the last non-mention `e` tag either way.
             current.replies += 1
         case 6:
             current.reposts += 1

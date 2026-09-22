@@ -70,20 +70,12 @@ enum PrivateReplyPublisher {
         //    have locally, keeping the private chain coherent across devices.
         let rumorCreatedAt = NostrClock.now()
 
-        // 4. Build canonical reply tags. NIP-10 for an ordinary note; NIP-22
-        //    `I`/`K` + lowercase `e`/`k`/`p` when the parent is an
-        //    externally-rooted comment, since answering a comment with NIP-10
-        //    threading detaches the reply from its external root. Either set
-        //    already includes `["p", parent.pubkey]`.
-        let rumorKind: Int
-        var tags: [[String]]
-        if let commentTags = Nip22.buildReplyTags(to: parent, relayHint: "") {
-            rumorKind = Nip22.kindComment
-            tags = commentTags
-        } else {
-            rumorKind = 1
-            tags = Nip10.buildReplyTags(replyTo: parent, relayHint: "")
-        }
+        // 4. Build canonical reply tags. Always NIP-10 kind-1: Wisp renders
+        //    NIP-22 comments from other clients but never publishes 1111
+        //    itself — even a reply to a comment ships as a plain kind-1.
+        //    The tag set already includes `["p", parent.pubkey]`.
+        let rumorKind = 1
+        var tags = Nip10.buildReplyTags(replyTo: parent, relayHint: "")
         for tag in extraTags {
             if !tags.contains(where: { $0 == tag }) {
                 tags.append(tag)

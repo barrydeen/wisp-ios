@@ -469,7 +469,9 @@ final class SearchViewModel {
     private func loadEngagement(for ids: [String]) async {
         guard !ids.isEmpty else { return }
         let relays = engagementRelays()
-        let kinds = [1, 6, 7, 9735]
+        // 1111 counted as a reply alongside kind 1 — search cards must not
+        // undercount notes whose replies are NIP-22 comments.
+        let kinds = [1, 6, 7, 9735, Nip22.kindComment]
         let chunks = ids.chunked(into: 200)
         let timeout = engagementTimeout
         await withTaskGroup(of: [NostrEvent].self) { group in
@@ -493,7 +495,7 @@ final class SearchViewModel {
             guard let target = event.tags.first(where: { $0.first == "e" && $0.count >= 2 })?[1] else { continue }
             var current = engagement[target] ?? EngagementCounts()
             switch event.kind {
-            case 1:
+            case 1, Nip22.kindComment:
                 current.replies += 1
             case 6:
                 current.reposts += 1
