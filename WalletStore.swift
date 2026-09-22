@@ -353,6 +353,12 @@ final class WalletStore {
         return newWallet.isConnected
     }
 
+    /// How long the setup flow waits for the verification round-trip before
+    /// declaring the connection dead. Long enough for a slow wallet on a cold
+    /// relay, short enough that a revoked or offline string alerts within a
+    /// few seconds instead of "succeeding" into a silently broken dashboard.
+    private static let nwcVerifyTimeout: TimeInterval = 6
+
     /// Persist a new NWC URI and connect.
     func connectNwc(uri: String) async -> Bool {
         guard let _ = NwcConnection.parse(uri) else { return false }
@@ -369,8 +375,19 @@ final class WalletStore {
         mode = .nwc
         WalletMode.save(.nwc, for: keypair.pubkey)
         await nwc.connect()
-        isConnected = nwc.isConnected
-        if isConnected {
+        guard nwc.isConnected else {
+            isConnected = false
+            return false
+        }
+        // Opening the subscription says nothing about whether the wallet
+        // service still answers — a revoked URI "connects" fine and the
+        // dashboard's balance fetch would only fail, silently, ~30s later.
+        // One short round-trip proves the service is alive so setup can
+        // alert within seconds. The URI stays saved either way: an offline
+        // wallet may come back, and pasting a new string overwrites it.
+        switch await nwc.verify(timeout: Self.nwcVerifyTimeout) {
+        case .confirmed:
+            isConnected = true
             Task { _ = await self.fetchBalance() }
             Task { await self.refreshTransactions() }
             Task { await self.refreshNwcNodeAlias() }
@@ -378,8 +395,41 @@ final class WalletStore {
             // Persist an encrypted backup of the connection so it can be
             // restored on another device. Best-effort, off the connect path.
             Task { await self.publishNwcBackup() }
+            return true
+        case .refused(let code, let message):
+            failSetup(nwc, message: Self.setupFailureMessage(for: .refused(code: code, message: message)))
+        case .unresponsive:
+            failSetup(nwc, message: Self.setupFailureMessage(for: .unresponsive))
         }
-        return isConnected
+        return false
+    }
+
+    /// Tear the failed attempt down and leave the reason on the status line
+    /// the setup sheet reads. Cancelling the status task first stops the
+    /// wallet's still-buffered "Connected" line from draining after the
+    /// failure message and overwriting it.
+    private func failSetup(_ nwc: NwcWallet, message: String) {
+        statusTask?.cancel()
+        statusTask = nil
+        nwc.disconnect()
+        isConnected = false
+        lastStatus = message
+    }
+
+    /// User-facing wording for a failed setup verification.
+    static func setupFailureMessage(for outcome: NwcWallet.VerifyOutcome) -> String {
+        switch outcome {
+        case .confirmed:
+            return "Connected"
+        case .refused(let code, let message):
+            if code == "UNAUTHORIZED" {
+                return "The wallet rejected this connection — it may have been revoked. Create a new connection string in your wallet and try again."
+            }
+            return message.map { "The wallet rejected the request: \($0)." }
+                ?? "The wallet rejected the request (\(code))."
+        case .unresponsive:
+            return "No response from the wallet — the connection may have been revoked, or the wallet is offline."
+        }
     }
 
     /// Save a Spark mnemonic and connect.
