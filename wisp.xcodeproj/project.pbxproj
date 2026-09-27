@@ -123,6 +123,7 @@
 		4CFF010100000000000000A1 /* Nip19.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF010000000000000000A1 /* Nip19.swift */; };
 		4CFF010300000000000000A2 /* Bolt11.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF010200000000000000A2 /* Bolt11.swift */; };
 		4CFF010500000000000000A3 /* ContentParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF010400000000000000A3 /* ContentParser.swift */; };
+		4CFF010500000000000000B0 /* TldList.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF010400000000000000B0 /* TldList.swift */; };
 		4CFF010700000000000000A4 /* LinkPreviewService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF010600000000000000A4 /* LinkPreviewService.swift */; };
 		4CFF010900000000000000A5 /* LinkPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF010800000000000000A5 /* LinkPreviewView.swift */; };
 		4CFF010B00000000000000A6 /* LightningInvoiceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF010A00000000000000A6 /* LightningInvoiceView.swift */; };
@@ -474,6 +475,7 @@
 		4CFF010000000000000000A1 /* Nip19.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Nip19.swift; sourceTree = "<group>"; };
 		4CFF010200000000000000A2 /* Bolt11.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Bolt11.swift; sourceTree = "<group>"; };
 		4CFF010400000000000000A3 /* ContentParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentParser.swift; sourceTree = "<group>"; };
+		4CFF010400000000000000B0 /* TldList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TldList.swift; sourceTree = "<group>"; };
 		4CFF010600000000000000A4 /* LinkPreviewService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkPreviewService.swift; sourceTree = "<group>"; };
 		4CFF010800000000000000A5 /* LinkPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkPreviewView.swift; sourceTree = "<group>"; };
 		4CFF010A00000000000000A6 /* LightningInvoiceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LightningInvoiceView.swift; sourceTree = "<group>"; };
@@ -792,6 +794,7 @@
 				4CFF010000000000000000A1 /* Nip19.swift */,
 				4CFF010200000000000000A2 /* Bolt11.swift */,
 				4CFF010400000000000000A3 /* ContentParser.swift */,
+				4CFF010400000000000000B0 /* TldList.swift */,
 				4CFF010600000000000000A4 /* LinkPreviewService.swift */,
 				4CFF010800000000000000A5 /* LinkPreviewView.swift */,
 				4CFF010A00000000000000A6 /* LightningInvoiceView.swift */,
@@ -1305,6 +1308,7 @@
 				4CFF010100000000000000A1 /* Nip19.swift in Sources */,
 				4CFF010300000000000000A2 /* Bolt11.swift in Sources */,
 				4CFF010500000000000000A3 /* ContentParser.swift in Sources */,
+				4CFF010500000000000000B0 /* TldList.swift in Sources */,
 				4CFF010700000000000000A4 /* LinkPreviewService.swift in Sources */,
 				4CFF010900000000000000A5 /* LinkPreviewView.swift in Sources */,
 				4CFF010B00000000000000A6 /* LightningInvoiceView.swift in Sources */,
