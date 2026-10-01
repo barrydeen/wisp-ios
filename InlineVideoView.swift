@@ -239,12 +239,17 @@ struct InlineVideoView: View {
                         MediaAudioSession.activateMixed()
                         player.isMuted = isMuted
                         player.play()
+                        ScreenKeepAwake.track(player)
                         // A re-appearing row autoplays, so clear any prior
                         // user-pause. (onDisappear's pause is a lifecycle
                         // pause and intentionally leaves `isPaused` alone.)
                         isPaused = false
                     }
                     .onDisappear {
+                        // Always drop this row's keep-awake hold; while the
+                        // video is popped into PiP the coordinator's own hold
+                        // keeps the screen on for the floating window.
+                        ScreenKeepAwake.untrack(player)
                         // Don't pause a video that's been popped into PiP — it
                         // must keep playing in the floating window after the row
                         // scrolls off-screen.
@@ -560,8 +565,10 @@ struct FullScreenVideoView: View {
                     .onAppear {
                         MediaAudioSession.activatePlayback()
                         player.play()
+                        ScreenKeepAwake.track(player)
                     }
                     .onDisappear {
+                        ScreenKeepAwake.untrack(player)
                         // Keep playing if the user popped this into PiP.
                         guard !VideoPiPCoordinator.shared.isOwning(player) else { return }
                         player.pause()
