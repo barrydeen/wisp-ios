@@ -167,6 +167,7 @@ final class NotificationRepository {
         var item: FlatNotificationItem?
         switch event.kind {
         case 1:    item = classifyKind1(event)
+        case Nip22.kindComment: item = classifyKind1(event, nonReplyKind: .reply)
         case 6:    item = classifyRepost(event)
         case 7:    item = classifyReaction(event)
         case 9735: item = classifyZap(event, isFromDmRelay: isFromDmRelay)
@@ -387,9 +388,10 @@ final class NotificationRepository {
 
     // MARK: - Classification
 
-    /// Re-run `classifyKind1` over every in-memory `.mention` row and promote
-    /// any whose source event actually targets one of the user's notes to
-    /// `.reply` (or `.quote`). Called by `NotificationsViewModel` after
+    /// Re-run `classifyKind1` over every in-memory `.mention` row — plus
+    /// comment rows sitting in the p-tag-only `.reply` fallback shape — and
+    /// promote any whose source event actually targets one of the user's
+    /// notes to `.reply` (or `.quote`). Called by `NotificationsViewModel` after
     /// `refreshSelfEventIds` discovers ids that weren't in the warm-load /
     /// publish-time set — without this, the row's icon stays frozen at "@"
     /// and the 24h summary counters undercount replies until cold relaunch.
@@ -402,9 +404,17 @@ final class NotificationRepository {
         withTransaction(Transaction(animation: nil)) {
             for idx in flatItems.indices {
                 let item = flatItems[idx]
-                guard item.kind == .mention else { continue }
+                // `.mention` rows may promote to `.reply` / `.quote`. Comment
+                // rows that landed as the p-tag-only `.reply` fallback
+                // (`referencedEventId == event.id`) re-run too: once the
+                // targeted id enters `selfEventIds`, the row re-points at the
+                // parent note instead of the comment itself.
+                guard item.kind == .mention ||
+                      (item.kind == .reply && item.referencedEventId == item.id) else { continue }
                 guard let event = eventCache[item.id] else { continue }
-                guard let replacement = classifyKind1(event), replacement.kind != .mention else { continue }
+                let nonReplyKind: NotificationKind = event.kind == Nip22.kindComment ? .reply : .mention
+                guard let replacement = classifyKind1(event, nonReplyKind: nonReplyKind),
+                      replacement.kind != .mention, replacement != item else { continue }
                 var updated = replacement
                 updated.isPrivate = item.isPrivate
                 flatItems[idx] = updated
@@ -416,7 +426,12 @@ final class NotificationRepository {
         }
     }
 
-    private func classifyKind1(_ event: NostrEvent) -> FlatNotificationItem? {
+    /// Classify a kind-1 (or NIP-22 kind-1111) event into a reply / quote /
+    /// mention row. `nonReplyKind` is what a p-tag-only hit becomes: `.mention`
+    /// for kind-1, `.reply` for comments — a comment on an external item that
+    /// p-tags the user is conversation aimed at them, and rendering it as a
+    /// reply matches how NIP-22 clients present it.
+    private func classifyKind1(_ event: NostrEvent, nonReplyKind: NotificationKind = .mention) -> FlatNotificationItem? {
         // Reply: any "e" tag pointing at one of my notes wins.
         if let selfETag = event.tags.first(where: { $0.first == "e" && $0.count >= 2 && selfEventIds.contains($0[1]) }) {
             // Show what the actor actually replied to — the immediate parent — which for a
@@ -451,7 +466,7 @@ final class NotificationRepository {
         if event.tags.contains(where: { $0.first == "p" && $0.count >= 2 && $0[1] == activePubkey }) {
             return FlatNotificationItem(
                 id: event.id,
-                kind: .mention,
+                kind: nonReplyKind,
                 actorPubkey: event.pubkey,
                 referencedEventId: event.id,
                 timestamp: event.createdAt

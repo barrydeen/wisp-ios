@@ -409,8 +409,11 @@ final class NotificationsViewModel {
         for r in ownWriteRelays { relays.insert(r) }
         for r in notifRelays { relays.insert(r) }
         for r in Self.fallbackRelays { relays.insert(r) }
+        // 1111 = NIP-22 comments the user published (from any client): their
+        // ids must be in `selfEventIds` so replies/comments e-tagging them
+        // arrive on the `notif-replies-etag` sub below.
         let filter = NostrFilter(
-            kinds: [1, Nip88.kindPoll, Nip69.kindZapPoll],
+            kinds: [1, Nip88.kindPoll, Nip69.kindZapPoll, Nip22.kindComment],
             authors: [keypair.pubkey],
             limit: 100
         )
@@ -443,7 +446,7 @@ final class NotificationsViewModel {
         // Done AFTER the cap so the cap can't evict private rumors when the
         // user has a large public-event history.
         let localOwn = await EventStore.shared.loadRecentByAuthor(
-            pubkey: keypair.pubkey, kinds: [1], limit: 200
+            pubkey: keypair.pubkey, kinds: [1, Nip22.kindComment], limit: 200
         )
         for e in localOwn where PrivateInteractionStore.shared.contains(e.id) {
             ids.insert(e.id)
@@ -483,7 +486,7 @@ final class NotificationsViewModel {
         ) ?? 0
         let since = cachedNewest > 0 ? max(0, cachedNewest - 60) : (now - 86400)
         let filter = NostrFilter(
-            kinds: [1, 6, 7, 9735],
+            kinds: [1, 6, 7, 9735, Nip22.kindComment],
             authors: nil,
             pTags: [keypair.pubkey],
             limit: 300,
@@ -601,7 +604,10 @@ final class NotificationsViewModel {
         let pubkey = keypair.pubkey
         let selfIds = Array(repo.selfEventIds.prefix(100))
 
-        let f1 = NostrFilter(kinds: [1, 6, 7, 9735], pTags: [pubkey], limit: 300)
+        // 1111 alongside 1: a NIP-22 comment p-tagging the user is a mention
+        // (external-root) or reply (e-tagged at their note) — classified by
+        // `NotificationRepository.classifyKind1`.
+        let f1 = NostrFilter(kinds: [1, 6, 7, 9735, Nip22.kindComment], pTags: [pubkey], limit: 300)
         subNotif = RelayPool.subscribe(relays: notifRelays, filter: f1, id: "notif")
         listenerTasks.append(Task { [weak self] in
             guard let sub = self?.subNotif else { return }
@@ -618,7 +624,7 @@ final class NotificationsViewModel {
         })
 
         if !selfIds.isEmpty {
-            let f2 = NostrFilter(kinds: [1], eTags: selfIds, limit: 200)
+            let f2 = NostrFilter(kinds: [1, Nip22.kindComment], eTags: selfIds, limit: 200)
             subRepliesEtag = RelayPool.subscribe(relays: notifRelays, filter: f2, id: "notif-replies-etag")
             listenerTasks.append(Task { [weak self] in
                 guard let sub = self?.subRepliesEtag else { return }
@@ -817,7 +823,9 @@ final class NotificationsViewModel {
     /// scoring for safelisted authors, the user's own follows, or the user themselves.
     fileprivate func maybeScoreReplyForSpam(_ event: NostrEvent) {
         guard SafetyPreferences.shared.spamFilterEnabled else { return }
-        guard event.kind == 1 else { return }
+        // NIP-22 comments score like kind-1 replies — otherwise a spammer
+        // posting only 1111s would never be flagged.
+        guard event.kind == 1 || event.kind == Nip22.kindComment else { return }
         // Replies have an `e` tag; root notes don't (NotificationsViewModel only sees pings, so
         // most kind-1s here will be replies/mentions, but check anyway).
         guard event.tags.contains(where: { $0.count >= 2 && $0[0] == "e" }) else { return }
@@ -834,7 +842,9 @@ final class NotificationsViewModel {
         spamScoringInflight.insert(author)
         Task { [weak self, author] in
             guard let self else { return }
-            let recent = await EventStore.shared.loadRecentByAuthor(pubkey: author, limit: 5)
+            // Include comments: a comment-only spammer has no kind-1s, and
+            // scoring them on the arrived event alone is a thinner signal.
+            let recent = await EventStore.shared.loadRecentByAuthor(pubkey: author, kinds: [1, Nip22.kindComment], limit: 5)
             // Always include the just-arrived event so cold-cache authors still get a meaningful
             // signal on their first appearance.
             var pool = recent

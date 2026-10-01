@@ -282,8 +282,8 @@ actor EventStore {
         return out
     }
 
-    /// Per-target reply counts from disk: how many cached kind:1 events reply to
-    /// each of `targetIds`. Count-only (no `NostrEvent` materialization) because
+    /// Per-target reply counts from disk: how many cached kind:1 / kind:1111
+    /// events reply to each of `targetIds`. Count-only (no `NostrEvent` materialization) because
     /// the feed card renders just a reply *number* — this lets the feed seed a
     /// last-known reply count on a cold open without the cost of walking the
     /// whole reply table into objects. Attribution mirrors the engagement-ingest
@@ -297,7 +297,8 @@ actor EventStore {
         for target in targetIds {
             do {
                 let query = try box.query {
-                    EventEntity.kind == 1 && EventEntity.tags.contains(target)
+                    (EventEntity.kind == 1 || EventEntity.kind == Nip22.kindComment)
+                        && EventEntity.tags.contains(target)
                 }.build()
                 let candidates = try query.find(offset: 0, limit: 5000)
                 for entity in candidates {
@@ -347,7 +348,7 @@ actor EventStore {
         }
     }
 
-    /// Returns cached notification-relevant events (kinds 1/6/7/9735) that target the given
+    /// Returns cached notification-relevant events (kinds 1/6/7/9735/1111) that target the given
     /// pubkey, ordered by `createdAt` desc. Tags are stored as a JSON blob — we use a
     /// substring `contains(pubkey)` filter at the DB level to narrow candidates, then
     /// confirm tag-by-tag in Swift since the substring may also hit authors-of-content etc.
@@ -356,7 +357,8 @@ actor EventStore {
         do {
             let query = try box.query {
                 (EventEntity.kind == 1 || EventEntity.kind == 6 ||
-                 EventEntity.kind == 7 || EventEntity.kind == 9735) &&
+                 EventEntity.kind == 7 || EventEntity.kind == 9735 ||
+                 EventEntity.kind == Nip22.kindComment) &&
                 EventEntity.tags.contains(pubkey)
             }
             .ordered(by: EventEntity.createdAt, flags: .descending)

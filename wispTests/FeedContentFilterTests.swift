@@ -92,14 +92,15 @@ struct FeedContentFilterTests {
         }
     }
 
-    /// NIP-22 comments stay out — they belong on the profile Comments tab,
-    /// not the timeline.
-    @Test func commentsStayOutOfTheFeed() {
+    /// NIP-22 comments are replies like any other: they reach the feed only
+    /// when "include replies in feeds" is on.
+    @Test func commentsReachTheFeedOnlyWithReplies() {
         let comment = NostrEvent(
             id: "id", pubkey: "pk", kind: 1111, createdAt: 0,
             tags: [], content: "", sig: ""
         )
-        #expect(!FeedViewModel.isFeedRenderable(comment, includeReplies: true))
+        #expect(FeedViewModel.isFeedRenderable(comment, includeReplies: true))
+        #expect(!FeedViewModel.isFeedRenderable(comment, includeReplies: false))
     }
 
     // MARK: - Presentation
