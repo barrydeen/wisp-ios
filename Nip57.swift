@@ -326,4 +326,38 @@ nonisolated enum Nip57 {
 
         return true
     }
+
+    /// Zap messages are free-form text, and some clients write an npub straight
+    /// into them — "From: nostr:npub1…" — which renders as unreadable bech32
+    /// noise in the top-zapper pill and the details panel. Replace every
+    /// `nostr:npub…` / bare `npub…` / `nprofile…` reference with the profile's
+    /// display name when one is cached, falling back to the short-npub form.
+    /// The pattern mirrors `ContentParser`'s mention rules, so a trailing
+    /// hostname dot (the `npub1….blossom.band` subdomain shape) is not treated
+    /// as a mention, and undecodable tokens pass through untouched.
+    @MainActor
+    static func resolvingNpubUsernames(in text: String, profiles: [String: ProfileData]) -> String {
+        guard text.contains("npub") || text.contains("nprofile") else { return text }
+        let pattern = #"nostr:(?:npub1|nprofile1)[a-z0-9]+|(?<!\w)(?:npub1|nprofile1)[a-z0-9]{50,}(?!\w|\.[a-zA-Z])"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return text }
+        let range = NSRange(text.startIndex..., in: text)
+        var out = ""
+        out.reserveCapacity(text.count)
+        var cursor = text.startIndex
+        for match in regex.matches(in: text, options: [], range: range) {
+            guard let tokenRange = Range(match.range, in: text) else { continue }
+            out += text[cursor..<tokenRange.lowerBound]
+            let token = String(text[tokenRange])
+            let bech32 = token.hasPrefix("nostr:") ? String(token.dropFirst(6)) : token
+            if let uri = Nip19.decodeNostrUri(bech32), case .profileRef(let pubkey, _) = uri {
+                let profile = profiles[pubkey] ?? ProfileRepository.shared.get(pubkey)
+                out += profile?.displayString ?? Nip19.shortNpub(hex: pubkey)
+            } else {
+                out += token
+            }
+            cursor = tokenRange.upperBound
+        }
+        out += text[cursor...]
+        return out
+    }
 }
