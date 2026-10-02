@@ -179,8 +179,19 @@ enum RelayPool {
     /// and after NIP-42 AUTH. Cancel via `RelaySubscription.cancel()`.
     static func subscribe(relays: [String], filter: NostrFilter, id: String,
                           bypassConnectionCap: Bool = false) -> RelaySubscription {
+        subscribe(relays: relays, filters: [filter], id: id, bypassConnectionCap: bypassConnectionCap)
+    }
+
+    /// Multi-filter variant: one REQ per relay carrying every filter, which
+    /// relays treat as OR. The thread view needs this to pair a `#e` reply
+    /// filter (NIP-10's whole tree) with a `#E` comment filter (NIP-22's root
+    /// scope) — combining both tag filters into one filter would AND them and
+    /// match nothing but top-level comments.
+    static func subscribe(relays: [String], filters: [NostrFilter], id: String,
+                          bypassConnectionCap: Bool = false) -> RelaySubscription {
         let sub = RelaySubscription(id: id)
-        let reqFrame = "[\"REQ\",\"\(id)\",\(filter.toJSON())]"
+        let joined = filters.map { $0.toJSON() }.joined(separator: ",")
+        let reqFrame = "[\"REQ\",\"\(id)\",\(joined)]"
         sub.setREQ(reqFrame)
         let relayReqs = relays.compactMap(Self.wsURL).map { (url: $0, req: reqFrame) }
         let sink = RelaySink(onEvent: { [weak sub] event, relay in

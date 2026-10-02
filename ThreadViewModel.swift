@@ -282,6 +282,13 @@ final class ThreadViewModel {
             return tag[1]
         }
         let known = etags.contains(where: { events.keys.contains($0) || $0 == rootId })
+            // A NIP-22 reply to a comment carries its parent in lowercase `e` and
+            // the thread root only in uppercase `E` — accept either proof that it
+            // belongs to this screen.
+            || event.tags.contains { tag in
+                guard tag.count >= 2, tag[0] == "E" else { return false }
+                return tag[1] == rootId || events.keys.contains(tag[1])
+            }
         guard known else { return }
         if event.kind == 1 || event.kind == Nip22.kindComment {
             // The router/publisher already calls `markPrivate`; this is a
@@ -498,7 +505,12 @@ final class ThreadViewModel {
         // Now load the full thread cache anchored at the resolved root.
         let cached = await eventStore.loadThreadCache(rootId: rootId)
         let blockedPubkeys = SafetyFilter.shared.snapshot.blockedPubkeys
-        for event in cached where event.kind == 1 {
+        // Kind 1111 replays alongside kind 1: `loadThreadCache` already
+        // returns comments (their uppercase `E` root tag substring-matches),
+        // and dropping them here made a reopened thread paint with the
+        // kind-1 replies only until the live stream happened to re-deliver
+        // the comments — which the `#e`-only stream never fully did.
+        for event in cached where event.kind == 1 || event.kind == Nip22.kindComment {
             if event.id != rootId {
                 // Blocked authors' replies are no longer persisted (see
                 // `ingestReply`), so this branch normally only matches legacy
@@ -737,7 +749,13 @@ final class ThreadViewModel {
     /// with whatever subtree hangs off it. The ancestors stay missing (they're
     /// genuinely gone), but a truncated thread beats an empty one.
     private func reRootToSeedIfRootUnreachable(relays: [String]) async {
-        guard rootEvent == nil, rootId != seedTargetId else { return }
+        // Two dead ends land here: the seed was re-rooted to an ancestor no
+        // relay had (re-root to the seed), and — with rootId already equal to
+        // the seed — a plain fetch failure of the seed itself. Both need the
+        // seed HELD as rootEvent: without it the wider-relay restart in
+        // `start()` never fires and the reply stream keeps the indexer-only
+        // set it cold-started with.
+        guard rootEvent == nil else { return }
         // Usually cached (that's how we learned the root id at all), but a
         // re-root discovered mid-fetch can leave the seed itself unloaded.
         var seed = events[seedTargetId]
@@ -804,20 +822,36 @@ final class ThreadViewModel {
         // Query for events tagging the root OR the focal — root catches the
         // whole tree, focal catches direct children that some relays may
         // store without the root e-tag.
-        var eTagTargets = [rootId]
-        if focalEventId != rootId { eTagTargets.append(focalEventId) }
+        var eTagTargets: Set<String> = [rootId, focalEventId]
+        // A NIP-22 subtree anchors on its uppercase `E` root, which can sit
+        // mid-tree (a kind-1 thread that switched to comments partway down).
+        // When a held comment anchors elsewhere — typically the tapped seed
+        // itself when the true root is unreachable — target that anchor too,
+        // or the whole comment branch is invisible to both filters.
+        for event in events.values where event.kind == Nip22.kindComment {
+            if let anchor = Nip22.rootEventId(of: event) {
+                eTagTargets.insert(anchor)
+            }
+        }
         // Kind 5 rides the same subscription — a deletion request e-tags the
         // deleted event, so it matches the same `#e` filter as replies. No
         // extra round-trip; the relay returns deletions alongside replies.
         //
-        // Kind 1111 rides along for the same reason: replies to a NIP-22
-        // comment must themselves be comments, so a kind-1-only subscription
-        // would show the thread as having no replies.
-        let filter = NostrFilter(kinds: [1, Nip09.kindDeletion, Nip22.kindComment], eTags: eTagTargets, limit: 500)
+        // Kind 1111 needs a second, sibling filter: a NIP-10 reply carries the
+        // root in a lowercase `e`, but a NIP-22 comment names only its
+        // *immediate parent* there and puts the root in uppercase `E` — so a
+        // `#e`-only REQ returns top-level comments and strands every
+        // comment-to-comment branch below them (relay-verified on a
+        // four-deep chain: `#e` returns one event, `#E` returns four). Two
+        // filters in ONE REQ gives relay-side OR; folding `#e` and `#E` into
+        // a single filter would AND them and match nothing new.
+        let targetList = Array(eTagTargets)
+        let replyFilter = NostrFilter(kinds: [1, Nip09.kindDeletion, Nip22.kindComment], eTags: targetList, limit: 500)
+        let commentRootFilter = NostrFilter(kinds: [Nip22.kindComment], capitalETags: targetList, limit: 500)
         let subId = "thread-replies-\(UUID().uuidString.prefix(6))"
-        let sub = RelayPool.subscribe(relays: relays, filter: filter, id: subId)
+        let sub = RelayPool.subscribe(relays: relays, filters: [replyFilter, commentRootFilter], id: subId)
 
-        let consumer = Task { [weak self, rootId, focalEventId] in
+        let consumer = Task { [weak self, targets = eTagTargets] in
             for await (event, _) in sub.events {
                 guard let self else { break }
                 // Intercept deletion requests so the tracker learns before
@@ -827,12 +861,10 @@ final class ThreadViewModel {
                     continue
                 }
                 guard event.kind == 1 || event.kind == Nip22.kindComment else { continue }
-                // Accept any event tagging the root or the focal — both
-                // are valid for the current screen.
-                guard event.tags.contains(where: { tag in
-                    guard tag.count >= 2, tag[0] == "e" else { return false }
-                    return tag[1] == rootId || tag[1] == focalEventId
-                }) else { continue }
+                // Accept events rooted on the thread by either system's
+                // convention — lowercase `e` for NIP-10 replies, uppercase
+                // `E` for NIP-22 comments (see `threadsOffRoot`).
+                guard Nip22.threadsOffRoot(event, targets: targets) else { continue }
                 let snap = SafetyFilter.shared.snapshot
                 if snap.blockedPubkeys.contains(event.pubkey) {
                     // Keep as a placeholder; do not score for spam.

@@ -5,9 +5,10 @@ import Testing
 /// The composer is the live reply path — `ThreadView` presents it as
 /// `ComposeView(mode: .reply(...))` for both the sticky reply bar and a card's
 /// comment icon. These tests pin the kind and tags on the path that actually
-/// publishes: Wisp renders NIP-22 comments but never emits them itself, so
-/// every reply — including one to a kind-1111 comment — is a kind-1 with
-/// NIP-10 threading.
+/// publishes: a comment reply must stay kind-1111 and carry its root scope
+/// forward — `I`/`K` for an external root, `E`/`K`/`P` for a nostr-event
+/// root — because a NIP-10 kind-1 detaches the branch from every `#E`-reading
+/// client either way.
 @MainActor
 struct ComposeReplyKindTests {
 
@@ -37,40 +38,71 @@ struct ComposeReplyKindTests {
         tags.filter { $0.count >= 2 && $0[0] == name }.map { $0[1] }
     }
 
-    // MARK: - Comment replies publish as kind 1
+    // MARK: - Comment replies stay kind 1111
 
-    @Test func replyToWebCommentIsKind1() throws {
+    @Test func replyToWebCommentIsKind1111() throws {
         let vm = ComposeViewModel(keypair: keypair, mode: .reply(parent: webComment(), root: nil))
         vm.content = "agreed"
-        #expect(vm.determineKind() == 1)
+        #expect(vm.determineKind() == Nip22.kindComment)
     }
 
-    @Test func replyToWebCommentUsesNip10NotNip22Tags() throws {
+    @Test func replyToWebCommentCarriesRootScopeNotNip10() throws {
         let vm = ComposeViewModel(keypair: keypair, mode: .reply(parent: webComment(), root: nil))
         vm.content = "agreed"
         let tags = vm.buildBaseTags(kind: vm.determineKind(), materializedContent: vm.content)
 
-        // NIP-10 threading at the parent comment; no `I`/`K` root scope —
-        // Wisp doesn't emit NIP-22 comments itself.
-        #expect(tagValues(tags, "I").isEmpty)
-        #expect(tagValues(tags, "K").isEmpty)
-        #expect(tagValues(tags, "k").isEmpty)
-        let eTags = tags.filter { $0.count >= 4 && $0[0] == "e" }
-        #expect(eTags.contains { $0[1] == "parentcomment" && $0[3] == "reply" })
+        // Root scope preserved, so the reply stays attached to the page.
+        #expect(tagValues(tags, "I") == [Self.article])
+        #expect(tagValues(tags, "K") == ["web"])
+        // Lowercase side points at the parent comment, and declares its kind.
+        #expect(tagValues(tags, "e") == ["parentcomment"])
+        #expect(tagValues(tags, "k") == [String(Nip22.kindComment)])
         #expect(tagValues(tags, "p").contains("parentpk"))
+        // NIP-10 markers would detach it from the external root.
+        let eTags = tags.filter { $0.count >= 4 && $0[0] == "e" }
+        #expect(!eTags.contains { $0[3] == "root" || $0[3] == "reply" })
     }
 
-    @Test func replyToEventRootedCommentIsKind1() throws {
+    /// A comment whose root is a nostr event (uppercase `E`) must also stay a
+    /// comment: the reply copies the root scope forward verbatim, so `#E`
+    /// readers keep finding the branch. This used to fall back to NIP-10
+    /// kind-1, which is how replies to comments vanished from comment threads.
+    @Test func replyToEventRootedCommentStaysKind1111() throws {
         let eventRooted = NostrEvent(
             id: "c2", pubkey: "parentpk", kind: Nip22.kindComment, createdAt: 0,
-            tags: [["E", "rootid", "", "rootpk"], ["K", "1"],
-                   ["e", "parentid", "", "parentpk"], ["k", "1111"]],
+            tags: [["E", "rootid", "", "rootpk"], ["K", "1"], ["P", "rootpk"],
+                   ["e", "parentid", "", "parentpk"], ["k", "1111"], ["p", "parentpk"]],
             content: "", sig: ""
         )
         let vm = ComposeViewModel(keypair: keypair, mode: .reply(parent: eventRooted, root: nil))
         vm.content = "hm"
+        #expect(vm.determineKind() == Nip22.kindComment)
+        let tags = vm.buildBaseTags(kind: vm.determineKind(), materializedContent: vm.content)
+        // Root scope carried verbatim from the parent.
+        #expect(tagValues(tags, "E") == ["rootid"])
+        #expect(tagValues(tags, "K") == ["1"])
+        #expect(tagValues(tags, "P") == ["rootpk"])
+        // Lowercase side points at the comment being answered.
+        #expect(tagValues(tags, "e") == ["c2"])
+        #expect(tagValues(tags, "k") == [String(Nip22.kindComment)])
+        #expect(tagValues(tags, "p").contains("parentpk"))
+        // NIP-10 markers would detach it from the `#E` root scope.
+        let eTags = tags.filter { $0.count >= 4 && $0[0] == "e" }
+        #expect(!eTags.contains { $0[3] == "root" || $0[3] == "reply" })
+        #expect(tagValues(tags, "I").isEmpty)
+    }
+
+    /// A malformed comment with no root scope must not produce an unscoped
+    /// reply — the composer falls back to NIP-10 kind-1 instead.
+    @Test func replyToRootlessCommentFallsBackToNip10() throws {
+        let rootless = NostrEvent(
+            id: "c3", pubkey: "parentpk", kind: Nip22.kindComment, createdAt: 0,
+            tags: [["e", "parentid", "", "parentpk"], ["k", "1111"]],
+            content: "", sig: ""
+        )
+        let vm = ComposeViewModel(keypair: keypair, mode: .reply(parent: rootless, root: nil))
+        vm.content = "hm"
         #expect(vm.determineKind() == 1)
-        #expect(tagValues(vm.buildBaseTags(kind: vm.determineKind(), materializedContent: vm.content), "I").isEmpty)
     }
 
     // MARK: - Non-regressions
@@ -124,9 +156,8 @@ struct ComposeReplyKindTests {
                    content: "good piece", sig: "")
     }
 
-    /// Reply to that comment, as NIP-22 clients build it: same uppercase
-    /// root, lowercase side pointing at the parent event. (Wisp's own replies
-    /// ship as kind-1 instead.)
+    /// Reply to that comment, exactly as the composer now builds it: same
+    /// uppercase root, lowercase side pointing at the parent event.
     private var replyToComment: NostrEvent {
         NostrEvent(id: "reply", pubkey: "author", kind: Nip22.kindComment, createdAt: 0,
                    tags: [["I", Self.article], ["K", "web"],
