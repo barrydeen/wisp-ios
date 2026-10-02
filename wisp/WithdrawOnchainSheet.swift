@@ -330,6 +330,10 @@ struct WithdrawOnchainSheet: View {
 
     private func send() async {
         guard let quote else { return }
+        // The button's `.disabled(isSending)` only takes effect after a
+        // re-render, so a second tap in the same frame reaches this before the
+        // first has flipped the flag.
+        guard !isSending else { return }
         isSending = true
         error = nil
         defer { isSending = false }

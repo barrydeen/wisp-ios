@@ -4,10 +4,10 @@ import Testing
 
 /// The composer is the live reply path — `ThreadView` presents it as
 /// `ComposeView(mode: .reply(...))` for both the sticky reply bar and a card's
-/// comment icon. `ThreadViewModel.publishReply` also carries a NIP-22 branch
-/// but nothing calls it, so these tests pin the kind and tags on the path that
-/// actually publishes: a comment reply must stay kind-1111 and keep its `I`/`K`
-/// root scope, because NIP-10 threading can't express an external root.
+/// comment icon. These tests pin the kind and tags on the path that actually
+/// publishes: Wisp renders NIP-22 comments but never emits them itself, so
+/// every reply — including one to a kind-1111 comment — is a kind-1 with
+/// NIP-10 threading.
 @MainActor
 struct ComposeReplyKindTests {
 
@@ -37,35 +37,30 @@ struct ComposeReplyKindTests {
         tags.filter { $0.count >= 2 && $0[0] == name }.map { $0[1] }
     }
 
-    // MARK: - Comment replies stay kind 1111
+    // MARK: - Comment replies publish as kind 1
 
-    @Test func replyToWebCommentIsKind1111() throws {
+    @Test func replyToWebCommentIsKind1() throws {
         let vm = ComposeViewModel(keypair: keypair, mode: .reply(parent: webComment(), root: nil))
         vm.content = "agreed"
-        #expect(vm.determineKind() == Nip22.kindComment)
+        #expect(vm.determineKind() == 1)
     }
 
-    @Test func replyToWebCommentCarriesRootScopeNotNip10() throws {
+    @Test func replyToWebCommentUsesNip10NotNip22Tags() throws {
         let vm = ComposeViewModel(keypair: keypair, mode: .reply(parent: webComment(), root: nil))
         vm.content = "agreed"
         let tags = vm.buildBaseTags(kind: vm.determineKind(), materializedContent: vm.content)
 
-        // Root scope preserved, so the reply stays attached to the page.
-        #expect(tagValues(tags, "I") == [Self.article])
-        #expect(tagValues(tags, "K") == ["web"])
-        // Lowercase side points at the parent comment, and declares its kind.
-        #expect(tagValues(tags, "e") == ["parentcomment"])
-        #expect(tagValues(tags, "k") == [String(Nip22.kindComment)])
-        #expect(tagValues(tags, "p").contains("parentpk"))
-        // NIP-10 markers would detach it from the external root.
+        // NIP-10 threading at the parent comment; no `I`/`K` root scope —
+        // Wisp doesn't emit NIP-22 comments itself.
+        #expect(tagValues(tags, "I").isEmpty)
+        #expect(tagValues(tags, "K").isEmpty)
+        #expect(tagValues(tags, "k").isEmpty)
         let eTags = tags.filter { $0.count >= 4 && $0[0] == "e" }
-        #expect(!eTags.contains { $0[3] == "root" || $0[3] == "reply" })
+        #expect(eTags.contains { $0[1] == "parentcomment" && $0[3] == "reply" })
+        #expect(tagValues(tags, "p").contains("parentpk"))
     }
 
-    /// A comment whose root is a nostr event (uppercase `E`) has no external
-    /// root, so `Nip22.buildReplyTags` returns nil and we fall back to NIP-10
-    /// — the pre-existing behavior for that shape.
-    @Test func replyToEventRootedCommentFallsBackToNip10() throws {
+    @Test func replyToEventRootedCommentIsKind1() throws {
         let eventRooted = NostrEvent(
             id: "c2", pubkey: "parentpk", kind: Nip22.kindComment, createdAt: 0,
             tags: [["E", "rootid", "", "rootpk"], ["K", "1"],
@@ -129,8 +124,9 @@ struct ComposeReplyKindTests {
                    content: "good piece", sig: "")
     }
 
-    /// Reply to that comment, exactly as the composer now builds it: same
-    /// uppercase root, lowercase side pointing at the parent event.
+    /// Reply to that comment, as NIP-22 clients build it: same uppercase
+    /// root, lowercase side pointing at the parent event. (Wisp's own replies
+    /// ship as kind-1 instead.)
     private var replyToComment: NostrEvent {
         NostrEvent(id: "reply", pubkey: "author", kind: Nip22.kindComment, createdAt: 0,
                    tags: [["I", Self.article], ["K", "web"],

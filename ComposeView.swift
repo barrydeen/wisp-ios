@@ -30,6 +30,20 @@ struct ComposeView: View {
     @State private var photosPickerMaxCount: Int = 8
     @State private var showAccountPicker = false
     @State private var altEditorTarget: AltTextEditorTarget?
+    /// How far the keyboard eats into this sheet's safe bottom edge, computed
+    /// from UIKit keyboard-frame notifications. The composer stops relying on
+    /// SwiftUI's `.keyboard` safe-area propagation for its publish bar: on
+    /// device, switching the signing account (sheet-in-sheet while the
+    /// keyboard is up) can leave the keyboard inset permanently unapplied,
+    /// rendering the bar under the keyboard where the user can't reach it.
+    /// Tracking the frame directly sidesteps that whole class of glitch.
+    @State private var keyboardBottomOverlap: CGFloat = 0
+    /// Bottom edge of the composer's content area in window coordinates,
+    /// derived from the window's bounds and container safe-area inset — both
+    /// stable across keyboard and sheet-transition churn (reported by
+    /// `KeyboardFrameAnchor`; the window's `safeAreaInsets` never include the
+    /// keyboard, so this is the true un-avoided content bottom).
+    @State private var contentBottomInWindow: CGFloat = 0
 
     /// Draft to load on first appear. Nil for `.new` and `.reply`/`.quote` composers.
     /// Loaded from `.task` rather than `init` to defeat SwiftUI's State preservation
@@ -175,6 +189,35 @@ struct ComposeView: View {
 
                     bottomBar
                 }
+                // Re-creates the keyboard avoidance the system would apply,
+                // from UIKit keyboard frames (see `keyboardBottomOverlap`).
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    Color.clear.frame(height: keyboardBottomOverlap)
+                }
+            }
+            // The composer opts out of SwiftUI's `.keyboard` safe area — the
+            // propagation path that on device can get stuck behind a
+            // sheet-in-sheet transition (switching the signing account while
+            // the keyboard is up) and strand the publish bar under the
+            // keyboard — and the bottom inset above re-creates the same
+            // geometry from UIKit keyboard frames, which always fire.
+            .ignoresSafeArea(.keyboard, edges: .bottom)
+            .background(
+                KeyboardFrameAnchor { windowFrame, windowSafeBottom in
+                    contentBottomInWindow = windowFrame.maxY - windowSafeBottom
+                    resyncKeyboardInset(animated: false)
+                }
+                .ignoresSafeArea()
+            )
+            .onReceive(NotificationCenter.default.publisher(
+                for: UIResponder.keyboardWillChangeFrameNotification
+            )) { note in
+                absorbKeyboardNotification(note, animated: true)
+            }
+            .onReceive(NotificationCenter.default.publisher(
+                for: UIResponder.keyboardDidChangeFrameNotification
+            )) { note in
+                absorbKeyboardNotification(note, animated: false)
             }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -370,6 +413,38 @@ struct ComposeView: View {
     }
 
     // MARK: - Sub-areas
+
+    /// Record the keyboard's target frame and refresh the bar's inset.
+    /// Fired from both will/did keyboard notifications — will-change keeps
+    /// the bar ahead of the animation, did-change re-syncs afterwards.
+    private func absorbKeyboardNotification(_ note: Notification, animated: Bool) {
+        guard let endValue = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue else { return }
+        KeyboardFrameTracker.lastEndFrame = endValue.cgRectValue
+        resyncKeyboardInset(
+            animated: animated,
+            duration: note.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double
+        )
+    }
+
+    /// Overlap between the keyboard and the composer's content bottom edge,
+    /// both in window coordinates. `contentBottomInWindow` comes from the
+    /// window's bounds minus its container safe-area inset, so the result is
+    /// exactly the height the publish bar must climb to sit on the keyboard's
+    /// top edge — the same value SwiftUI's own `.keyboard` safe area would
+    /// compute, just sourced from UIKit, where the keyboard always reports.
+    private func resyncKeyboardInset(animated: Bool, duration: Double? = nil) {
+        let keyboardFrame = KeyboardFrameTracker.lastEndFrame
+        guard contentBottomInWindow > 0, keyboardFrame != .zero else { return }
+        let overlap = max(0, contentBottomInWindow - keyboardFrame.minY)
+        guard keyboardBottomOverlap != overlap else { return }
+        if animated {
+            withAnimation(.easeOut(duration: max(0.05, min(duration ?? 0.2, 0.3)))) {
+                keyboardBottomOverlap = overlap
+            }
+        } else {
+            keyboardBottomOverlap = overlap
+        }
+    }
 
     private var isPublishInFlight: Bool {
         viewModel.isPublishing
@@ -608,6 +683,7 @@ struct ComposeView: View {
         }
         .buttonStyle(.plain)
         .disabled(!multiAccount)
+        .accessibilityIdentifier("composer.signingAccountHeader")
     }
 
     /// Bottom-sheet picker for the signing account. Replaces a SwiftUI
@@ -650,6 +726,7 @@ struct ComposeView: View {
                         }
                         .buttonStyle(.plain)
                         .listRowBackground(Color.wispSurfaceVariant.opacity(0.4))
+                        .accessibilityIdentifier("composer.accountRow.\(keypair.pubkey.prefix(8))")
                     }
                 }
                 .scrollContentBackground(.hidden)
@@ -1231,4 +1308,60 @@ struct ComposeView: View {
         return tags
     }
 
+}
+
+/// Last keyboard target frame seen anywhere in the process (window
+/// coordinates, from `keyboardWill/DidChangeFrame` notifications). Lets a
+/// freshly-presented composer seed its keyboard inset on appear — UIKit
+/// won't re-fire a willShow for a composer arriving over an already-raised
+/// keyboard, and SwiftUI's own `.keyboard` safe area is exactly the
+/// propagation path this view no longer trusts.
+@MainActor
+enum KeyboardFrameTracker {
+    static var lastEndFrame: CGRect = .zero
+}
+
+/// Invisible UIKit anchor living alongside the composer. Reports the window's
+/// frame and container safe-area inset — the stable reference the keyboard
+/// overlap is measured against. The window's `safeAreaInsets` exclude the
+/// keyboard and never change with layout, so this measurement can't feed back
+/// into the inset it informs.
+private struct KeyboardFrameAnchor: UIViewRepresentable {
+    var onFrame: (CGRect, CGFloat) -> Void
+
+    func makeUIView(context: Context) -> AnchorView {
+        AnchorView(onFrame: onFrame)
+    }
+
+    func updateUIView(_ view: AnchorView, context: Context) {
+        view.onFrame = onFrame
+    }
+
+    final class AnchorView: UIView {
+        var onFrame: (CGRect, CGFloat) -> Void
+        private var lastReported: String = ""
+
+        init(onFrame: @escaping (CGRect, CGFloat) -> Void) {
+            self.onFrame = onFrame
+            super.init(frame: .zero)
+            isUserInteractionEnabled = false
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            guard let window else { return }
+            let windowFrame = window.frame
+            let windowSafeBottom = window.safeAreaInsets.bottom
+            // Deduplicate: layoutSubviews fires on every SwiftUI relayout,
+            // and an unconditional state write here would schedule another
+            // relayout — a feedback loop that starves the main thread.
+            let key = "\(windowFrame)|\(windowSafeBottom)"
+            guard key != lastReported else { return }
+            lastReported = key
+            onFrame(windowFrame, windowSafeBottom)
+        }
+    }
 }

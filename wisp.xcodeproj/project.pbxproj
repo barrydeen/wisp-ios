@@ -72,6 +72,7 @@
 		4CDA88FB2F9C540000000001 /* AppDataWipe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA88FA2F9C540000000001 /* AppDataWipe.swift */; };
 		4CDA88FB2F9C540000000002 /* AnimatedImageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA88FA2F9C540000000002 /* AnimatedImageView.swift */; };
 		4CDA88FB2F9C540000000003 /* MediaAudioSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA88FA2F9C540000000003 /* MediaAudioSession.swift */; };
+		4CDA88FB2F9C540000000007 /* ScreenKeepAwake.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA88FA2F9C540000000007 /* ScreenKeepAwake.swift */; };
 		4CDA88FB2F9C540000000004 /* RelayProber.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA88FA2F9C540000000004 /* RelayProber.swift */; };
 		4CDA88FB2F9C540000000005 /* SignUpFlowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA88FA2F9C540000000005 /* SignUpFlowView.swift */; };
 		4CDA88FB2F9C540000000006 /* SignUpViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CDA88FA2F9C540000000006 /* SignUpViewModel.swift */; };
@@ -123,6 +124,7 @@
 		4CFF010100000000000000A1 /* Nip19.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF010000000000000000A1 /* Nip19.swift */; };
 		4CFF010300000000000000A2 /* Bolt11.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF010200000000000000A2 /* Bolt11.swift */; };
 		4CFF010500000000000000A3 /* ContentParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF010400000000000000A3 /* ContentParser.swift */; };
+		4CFF010500000000000000B0 /* TldList.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF010400000000000000B0 /* TldList.swift */; };
 		4CFF010700000000000000A4 /* LinkPreviewService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF010600000000000000A4 /* LinkPreviewService.swift */; };
 		4CFF010900000000000000A5 /* LinkPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF010800000000000000A5 /* LinkPreviewView.swift */; };
 		4CFF010B00000000000000A6 /* LightningInvoiceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF010A00000000000000A6 /* LightningInvoiceView.swift */; };
@@ -132,6 +134,7 @@
 		4CFF011300000000000000AA /* InlineImageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF011200000000000000AA /* InlineImageView.swift */; };
 		4CFF011500000000000000AB /* AnimatedImageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF011400000000000000AB /* AnimatedImageView.swift */; };
 		4CFF011700000000000000AC /* MediaAudioSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF011600000000000000AC /* MediaAudioSession.swift */; };
+		4CFF011700000000000000AE /* ScreenKeepAwake.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF011600000000000000AE /* ScreenKeepAwake.swift */; };
 		4CFF011900000000000000AD /* LnurlPayableView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF011800000000000000AD /* LnurlPayableView.swift */; };
 		4CFFQG010000000000000A51 /* QuoteGraph.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFFQG000000000000000A51 /* QuoteGraph.swift */; };
 		4CFF020100000000000000A8 /* VideoPiPCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFF020000000000000000A8 /* VideoPiPCoordinator.swift */; };
@@ -424,6 +427,7 @@
 		4CDA88FA2F9C540000000001 /* AppDataWipe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDataWipe.swift; sourceTree = "<group>"; };
 		4CDA88FA2F9C540000000002 /* AnimatedImageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnimatedImageView.swift; sourceTree = "<group>"; };
 		4CDA88FA2F9C540000000003 /* MediaAudioSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaAudioSession.swift; sourceTree = "<group>"; };
+		4CDA88FA2F9C540000000007 /* ScreenKeepAwake.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenKeepAwake.swift; sourceTree = "<group>"; };
 		4CDA88FA2F9C540000000004 /* RelayProber.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayProber.swift; sourceTree = "<group>"; };
 		4CDA88FA2F9C540000000005 /* SignUpFlowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignUpFlowView.swift; sourceTree = "<group>"; };
 		4CDA88FA2F9C540000000006 /* SignUpViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignUpViewModel.swift; sourceTree = "<group>"; };
@@ -474,6 +478,7 @@
 		4CFF010000000000000000A1 /* Nip19.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Nip19.swift; sourceTree = "<group>"; };
 		4CFF010200000000000000A2 /* Bolt11.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Bolt11.swift; sourceTree = "<group>"; };
 		4CFF010400000000000000A3 /* ContentParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentParser.swift; sourceTree = "<group>"; };
+		4CFF010400000000000000B0 /* TldList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TldList.swift; sourceTree = "<group>"; };
 		4CFF010600000000000000A4 /* LinkPreviewService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkPreviewService.swift; sourceTree = "<group>"; };
 		4CFF010800000000000000A5 /* LinkPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkPreviewView.swift; sourceTree = "<group>"; };
 		4CFF010A00000000000000A6 /* LightningInvoiceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LightningInvoiceView.swift; sourceTree = "<group>"; };
@@ -483,6 +488,7 @@
 		4CFF011200000000000000AA /* InlineImageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InlineImageView.swift; sourceTree = "<group>"; };
 		4CFF011400000000000000AB /* AnimatedImageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnimatedImageView.swift; sourceTree = "<group>"; };
 		4CFF011600000000000000AC /* MediaAudioSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaAudioSession.swift; sourceTree = "<group>"; };
+		4CFF011600000000000000AE /* ScreenKeepAwake.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenKeepAwake.swift; sourceTree = "<group>"; };
 		4CFF011800000000000000AD /* LnurlPayableView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LnurlPayableView.swift; sourceTree = "<group>"; };
 		4CFFQG000000000000000A51 /* QuoteGraph.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuoteGraph.swift; sourceTree = "<group>"; };
 		4CFF020000000000000000A8 /* VideoPiPCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoPiPCoordinator.swift; sourceTree = "<group>"; };
@@ -771,6 +777,7 @@
 				4CDA88FA2F9C540000000001 /* AppDataWipe.swift */,
 				4CDA88FA2F9C540000000002 /* AnimatedImageView.swift */,
 				4CDA88FA2F9C540000000003 /* MediaAudioSession.swift */,
+				4CDA88FA2F9C540000000007 /* ScreenKeepAwake.swift */,
 				4CDA88FA2F9C540000000004 /* RelayProber.swift */,
 				4CDA88FA2F9C540000000005 /* SignUpFlowView.swift */,
 				4CDA88FA2F9C540000000006 /* SignUpViewModel.swift */,
@@ -792,6 +799,7 @@
 				4CFF010000000000000000A1 /* Nip19.swift */,
 				4CFF010200000000000000A2 /* Bolt11.swift */,
 				4CFF010400000000000000A3 /* ContentParser.swift */,
+				4CFF010400000000000000B0 /* TldList.swift */,
 				4CFF010600000000000000A4 /* LinkPreviewService.swift */,
 				4CFF010800000000000000A5 /* LinkPreviewView.swift */,
 				4CFF010A00000000000000A6 /* LightningInvoiceView.swift */,
@@ -812,6 +820,7 @@
 				4CFF011200000000000000AA /* InlineImageView.swift */,
 				4CFF011400000000000000AB /* AnimatedImageView.swift */,
 				4CFF011600000000000000AC /* MediaAudioSession.swift */,
+				4CFF011600000000000000AE /* ScreenKeepAwake.swift */,
 				4CFF020000000000000000B1 /* ProfileRoute.swift */,
 				4CFF020200000000000000B2 /* ProfileViewModel.swift */,
 				4CFF020400000000000000B3 /* ProfileView.swift */,
@@ -1276,6 +1285,7 @@
 				4CDA88FB2F9C540000000001 /* AppDataWipe.swift in Sources */,
 				4CDA88FB2F9C540000000002 /* AnimatedImageView.swift in Sources */,
 				4CDA88FB2F9C540000000003 /* MediaAudioSession.swift in Sources */,
+				4CDA88FB2F9C540000000007 /* ScreenKeepAwake.swift in Sources */,
 				4CDA88FB2F9C540000000004 /* RelayProber.swift in Sources */,
 				4CDA88FB2F9C540000000005 /* SignUpFlowView.swift in Sources */,
 				4CDA88FB2F9C540000000006 /* SignUpViewModel.swift in Sources */,
@@ -1305,6 +1315,7 @@
 				4CFF010100000000000000A1 /* Nip19.swift in Sources */,
 				4CFF010300000000000000A2 /* Bolt11.swift in Sources */,
 				4CFF010500000000000000A3 /* ContentParser.swift in Sources */,
+				4CFF010500000000000000B0 /* TldList.swift in Sources */,
 				4CFF010700000000000000A4 /* LinkPreviewService.swift in Sources */,
 				4CFF010900000000000000A5 /* LinkPreviewView.swift in Sources */,
 				4CFF010B00000000000000A6 /* LightningInvoiceView.swift in Sources */,
@@ -1325,6 +1336,7 @@
 				4CFF011300000000000000AA /* InlineImageView.swift in Sources */,
 				4CFF011500000000000000AB /* AnimatedImageView.swift in Sources */,
 				4CFF011700000000000000AC /* MediaAudioSession.swift in Sources */,
+				4CFF011700000000000000AE /* ScreenKeepAwake.swift in Sources */,
 				4CFF020100000000000000B1 /* ProfileRoute.swift in Sources */,
 				4CFF020300000000000000B2 /* ProfileViewModel.swift in Sources */,
 				4CFF020500000000000000B3 /* ProfileView.swift in Sources */,

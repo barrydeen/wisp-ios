@@ -806,7 +806,12 @@ final class SparkWallet: Wallet {
     /// The most recent quote and its signed-off SDK request. Execution reuses
     /// this so the amount and destination the user confirmed are exactly what
     /// gets sent, and so the SDK request type never leaves this file.
-    private var preparedWithdrawal: (quote: WithdrawOnchainQuote, prepared: PrepareSendPaymentResponse)?
+    private var preparedWithdrawal: (
+        quote: WithdrawOnchainQuote,
+        prepared: PrepareSendPaymentResponse,
+        idempotencyKey: String,
+        quotedAt: Date
+    )?
 
 
     /// Quote draining the entire spendable balance to a Bitcoin address.
@@ -869,7 +874,7 @@ final class SparkWallet: Wallet {
             )
             // Held here rather than handed back, so the SDK's request type
             // stays out of WalletStore and the view layer.
-            preparedWithdrawal = (quote, prepared)
+            preparedWithdrawal = (quote, prepared, UUID().uuidString, Date())
             return .success(quote)
         } catch {
             return .failure(.other(Self.friendlyPayError(error)))
@@ -891,6 +896,17 @@ final class SparkWallet: Wallet {
         guard let held = preparedWithdrawal, held.quote == quote else {
             return .failure(.other("This quote expired. Check the amount and try again."))
         }
+        guard Date().timeIntervalSince(held.quotedAt) < Self.quoteValiditySecs else {
+            preparedWithdrawal = nil
+            return .failure(.other("This quote expired. Check the amount and try again."))
+        }
+        // Consume BEFORE the first suspension. `SparkWallet` is `@MainActor`, so
+        // guard-and-consume runs atomically and a second concurrent call — a
+        // second tap landing in the same frame — finds nothing left to send.
+        // Draining to an address has no natural idempotency the way a paid
+        // invoice does, so without this both sends land and the balance goes
+        // out twice. The key below is the second layer.
+        preparedWithdrawal = nil
         let prepared = held.prepared
 
         let sdkSpeed: OnchainConfirmationSpeed
@@ -900,19 +916,22 @@ final class SparkWallet: Wallet {
         case .fast: sdkSpeed = .fast
         }
 
-        func send(_ request: PrepareSendPaymentResponse) async throws -> SendPaymentResponse {
+        func send(
+            _ request: PrepareSendPaymentResponse,
+            idempotencyKey: String
+        ) async throws -> SendPaymentResponse {
             try await sdk.sendPayment(
                 request: SendPaymentRequest(
                     prepareResponse: request,
                     options: .bitcoinAddress(confirmationSpeed: sdkSpeed),
-                    idempotencyKey: nil
+                    idempotencyKey: idempotencyKey
                 )
             )
         }
 
         do {
             emit("Sending on-chain…")
-            let response = try await send(prepared)
+            let response = try await send(prepared, idempotencyKey: held.idempotencyKey)
 
             if case .failed = response.payment.status {
                 // Same shape as payInvoice: a failed payment comes back
@@ -940,12 +959,18 @@ final class SparkWallet: Wallet {
             case .failure(let error):
                 return .failure(error)
             case .success:
-                guard let requoted = preparedWithdrawal?.prepared else {
+                guard let requoted = preparedWithdrawal else {
                     return .failure(.other("Couldn't re-quote the withdrawal after consolidating."))
                 }
+                // A fresh key: the first attempt threw before spending, so this
+                // is a new payment rather than a replay of that one.
+                preparedWithdrawal = nil
                 do {
                     emit("Retrying on-chain send…")
-                    let response = try await send(requoted)
+                    let response = try await send(
+                        requoted.prepared,
+                        idempotencyKey: requoted.idempotencyKey
+                    )
                     if case .failed = response.payment.status {
                         return .failure(.other("The withdrawal failed — your funds were not sent."))
                     }

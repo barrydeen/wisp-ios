@@ -99,6 +99,42 @@ final class NwcWallet: Wallet {
         }
     }
 
+    /// Outcome of the setup-flow verification round-trip.
+    enum VerifyOutcome {
+        case confirmed
+        /// The wallet service answered with an NIP-47 RPC error.
+        /// `UNAUTHORIZED` means the client secret was rejected — the
+        /// connection was revoked or re-issued.
+        case refused(code: String, message: String?)
+        /// No answer at all: the service is offline, the relay path is
+        /// dead, or the wallet silently dropped the request.
+        case unresponsive
+    }
+
+    /// One `get_balance` round-trip with a short timeout, used by the setup
+    /// flow to prove the wallet service actually answers. `connect()` only
+    /// opens the relay subscription — a revoked or offline connection opens
+    /// one fine and would otherwise look successful until the dashboard's
+    /// first real request timed out half a minute later with no explanation.
+    /// `get_balance` over `get_info` because it's in every wallet's required
+    /// method set while `get_info` is skippable.
+    func verify(timeout: TimeInterval = 6) async -> VerifyOutcome {
+        guard isConnected else { return .unresponsive }
+        let result = await send(.getBalance, timeout: timeout) { response -> Void in
+            guard case .balance = response else {
+                throw WalletError.decodeFailed("expected balance response")
+            }
+        }
+        switch result {
+        case .success:
+            return .confirmed
+        case .failure(.rpcError(let code, let message)):
+            return .refused(code: code, message: message)
+        case .failure:
+            return .unresponsive
+        }
+    }
+
     func connect() async {
         guard let uri = WalletKeychain.loadNwcUri(for: pubkey) else {
             emit("No NWC connection saved")

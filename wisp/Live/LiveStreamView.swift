@@ -129,6 +129,9 @@ final class LivePlayerStore {
         if currentURL == urlString, let existing = player { return existing }
         // Switching streams: tear the previous one down.
         player?.pause()
+        if let old = player {
+            ScreenKeepAwake.untrack(old)
+        }
         let item = AVPlayerItem(url: url)
         let p = AVPlayer(playerItem: item)
         p.automaticallyWaitsToMinimizeStalling = true
@@ -142,12 +145,18 @@ final class LivePlayerStore {
     func releaseIfNotPiP() {
         if pipActive { return }
         player?.pause()
+        if let player {
+            ScreenKeepAwake.untrack(player)
+        }
         player = nil
         currentURL = nil
     }
 
     func releaseAll() {
         player?.pause()
+        if let player {
+            ScreenKeepAwake.untrack(player)
+        }
         player = nil
         currentURL = nil
         pipActive = false
@@ -250,6 +259,9 @@ private struct AVPlayerControllerRepresentable: UIViewControllerRepresentable {
         vc.player = player
         context.coordinator.attach(player: player)
         player?.play()
+        if let player {
+            ScreenKeepAwake.track(player)
+        }
     }
 
     final class Coordinator: NSObject, AVPlayerViewControllerDelegate {

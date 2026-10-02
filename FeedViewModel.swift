@@ -78,15 +78,18 @@ nonisolated enum FeedContentFilter: String, CaseIterable {
     /// True when an event of `kind` passes this filter. Matches Android's
     /// kind-set mapping: notes = kind-1 / repost / long-form;
     /// gallery = picture / video / audio (20 / 21 / 22);
-    /// polls = NIP-88 poll. `all` accepts everything.
+    /// polls = NIP-88 poll. `all` accepts everything. iOS additionally
+    /// counts NIP-22 comments as notes (Android parity predates 1111
+    /// support there).
     func accepts(kind: Int) -> Bool {
         switch self {
         case .all:
             return true
         case .notes:
             // Articles have their own filter now, so leaving them here too
-            // would make two of the four options overlap.
-            return kind == 1 || kind == 6
+            // would make two of the four options overlap. NIP-22 comments
+            // count as notes: the notes filter already shows kind-1 replies.
+            return kind == 1 || kind == 6 || kind == Nip22.kindComment
         case .articles:
             return kind == 30023
         case .gallery:
@@ -196,20 +199,20 @@ final class FeedViewModel {
     /// Kinds queried from a single relay or relay set, matching the Android client.
     /// 1068 = NIP-88 poll, 6969 = NIP-69 zap poll, 30023 = long-form. Polls render as
     /// `PollSection` in `PostCardView`; long-form falls through to the text path.
-    static let relayFeedKinds = [1, 6, 1068, 6969, 30023, 20, 21, 22]
+    /// 1111 = NIP-22 comments; these feeds show replies unconditionally, so
+    /// comments ride along (the follows feed render-gates them on the setting).
+    static let relayFeedKinds = [1, 6, 1068, 6969, 30023, 20, 21, 22, 1111]
 
     /// True for events that should appear as top-level rows in the feed list.
     /// Kept consistent across cache seed, live ingest, and relay backfill paths.
-    /// `includeReplies` admits kind-1 replies (the "Include replies in feeds"
-    /// setting); when false only root kind-1s pass, the original behaviour.
+    /// `includeReplies` admits kind-1 replies and NIP-22 comments (the "Include
+    /// replies in feeds" setting); when false only root kind-1s pass. External-
+    /// root (I-tagged) comments render with their source-card header in
+    /// `PostCardView`, so a comment on a web page still reads as a reply to
+    /// something.
     nonisolated static func isFeedRenderable(_ event: NostrEvent, includeReplies: Bool) -> Bool {
         if event.isRootNote { return true }
-        if includeReplies && event.kind == 1 { return true }
-        // NIP-22 comments are deliberately absent here: they surface on the
-        // profile Comments tab, not the timeline. A comment on a blog post is
-        // conversation about that article, not a broadcast to the author's
-        // followers. A dedicated follows-wide Comments feed is planned
-        // separately.
+        if includeReplies && (event.kind == 1 || event.kind == Nip22.kindComment) { return true }
         switch event.kind {
         // 30023 is long-form. `PostCardView` already has a renderer for it
         // (`articleBody` → `ArticleFeedPreview`), but the gate dropped it
@@ -1190,7 +1193,10 @@ final class FeedViewModel {
         // 4. Build one REQ per relay (multi-filter when authors > 200) — at most one socket per host.
         // Long-form was missing here while `relayFeedKinds` has carried it all
         // along, so the follows feed never asked for articles at all.
-        let kinds = [1, 6, 20, 30023, Nip88.kindPoll, Nip69.kindZapPoll, Nip09.kindDeletion]
+        // 1111 is requested unconditionally like kind 1: replies/comments are
+        // fetched always and render-gated by `isFeedRenderable`, so toggling
+        // "Include replies in feeds" re-seeds without re-subscribing kinds.
+        let kinds = [1, 6, 20, 30023, Nip88.kindPoll, Nip69.kindZapPoll, Nip09.kindDeletion, Nip22.kindComment]
         var queries: [RelayQuery] = []
         for (relayUrl, authors) in relayToAuthors {
             let chunks = Array(authors).chunked(into: Self.maxAuthorsPerFilter)

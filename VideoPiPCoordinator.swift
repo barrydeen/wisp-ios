@@ -55,6 +55,12 @@ final class VideoPiPCoordinator {
         activePlayer = player
         retained = objects
         isPiPActive = true
+        // The source surface drops its keep-awake hold when it disappears;
+        // this hold keeps the screen on for the floating window until PiP
+        // stops.
+        if let player {
+            ScreenKeepAwake.track(player, owner: self)
+        }
     }
 
     /// Release whatever this coordinator owns. Safe to call when nothing is
@@ -73,6 +79,9 @@ final class VideoPiPCoordinator {
     }
 
     private func reset() {
+        if let player = activePlayer {
+            ScreenKeepAwake.untrack(player, owner: self)
+        }
         activePlayer = nil
         retained = []
         isPiPActive = false

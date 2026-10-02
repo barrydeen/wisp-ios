@@ -106,11 +106,10 @@ final class ArticleViewModel {
                 return
             }
 
-            // NIP-22 requires replies to a long-form article to be kind
-            // 1111, which is what other clients publish — and what Wisp
-            // publishes itself. Subscribing to kind 1 alone showed an article
-            // as having almost no comments while the web showed a full
-            // thread.
+            // Other clients publish article comments as kind 1111 per NIP-22
+            // (Wisp itself answers with kind 1). Subscribing to kind 1 alone
+            // showed an article as having almost no comments while the web
+            // showed a full thread.
             let commentKinds = [1, Nip22.kindComment]
             // Uppercase tags name the root scope, lowercase the immediate
             // parent, so `#A` returns the whole thread and `#a` only the

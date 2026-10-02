@@ -125,6 +125,7 @@ struct MainView: View {
                 profile: viewModel.userProfile,
                 keypair: keypair,
                 onClose: { closeDrawer() },
+                isVisible: drawerOpen,
                 onSelectTab: { tab in
                     selectedTab = tab
                     closeDrawer()
