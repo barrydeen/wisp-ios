@@ -34,6 +34,30 @@ struct MediaAltDescriptionSheet: ViewModifier {
     }
 }
 
+/// Identifiable sheet payload for grid-level presentation: the tapped tile's
+/// description. Using `.sheet(item:)` with the text *inside* the payload —
+/// rather than a shared `isPresented` bool plus an ambient alt value — is what
+/// lets one sheet serve every tile in a multi-image grid (see
+/// `MediaGridView.altDescriptionTarget`).
+struct AltDescriptionTarget: Identifiable {
+    let text: String
+    var id: String { text }
+}
+
+/// Item-driven variant of `mediaAltDescriptionSheet(alt:isPresented:)`: the
+/// sheet presents only while a target is set, and shows *that* target's text.
+struct MediaAltDescriptionItemSheet: ViewModifier {
+    @Binding var item: AltDescriptionTarget?
+
+    func body(content: Content) -> some View {
+        content.sheet(item: $item) { target in
+            AltDescriptionSheet(text: target.text)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
+    }
+}
+
 /// Sheet body: the full accessibility description, scrollable.
 struct AltDescriptionSheet: View {
     let text: String
@@ -61,6 +85,10 @@ struct AltDescriptionSheet: View {
 extension View {
     func mediaAltDescriptionSheet(alt: String?, isPresented: Binding<Bool>) -> some View {
         modifier(MediaAltDescriptionSheet(alt: alt, isPresented: isPresented))
+    }
+
+    func mediaAltDescriptionSheet(item: Binding<AltDescriptionTarget?>) -> some View {
+        modifier(MediaAltDescriptionItemSheet(item: item))
     }
 }
 
@@ -166,10 +194,22 @@ struct AltTextEditorView: View {
 
     @ViewBuilder
     private var previewImage: some View {
-        if let bytes = target.localBytes, let img = UIImage(data: bytes) {
-            Image(uiImage: img)
-                .resizable()
-                .scaledToFit()
+        if let bytes = target.localBytes {
+            // ImageIO downsample, same helper the feed tiles use: this editor
+            // renders into a 180 pt frame, so decoding the camera-roll original
+            // (tens of megapixels) via `UIImage(data:)` would spike memory for
+            // zero visual gain.
+            if let img = downsampledImage(from: bytes, maxPixel: ImagePixelBudget.feed) {
+                Image(uiImage: img)
+                    .resizable()
+                    .scaledToFit()
+            } else if let img = UIImage(data: bytes) {
+                Image(uiImage: img)
+                    .resizable()
+                    .scaledToFit()
+            } else {
+                previewPlaceholder
+            }
         } else if let url = target.previewURL {
             AsyncImage(url: URL(string: url)) { phase in
                 switch phase {
@@ -178,12 +218,16 @@ struct AltTextEditorView: View {
                 }
             }
         } else {
-            Color.wispSurfaceVariant
-                .overlay {
-                    Image(systemName: "photo")
-                        .font(.title2)
-                        .foregroundStyle(.secondary)
-                }
+            previewPlaceholder
         }
+    }
+
+    private var previewPlaceholder: some View {
+        Color.wispSurfaceVariant
+            .overlay {
+                Image(systemName: "photo")
+                    .font(.title2)
+                    .foregroundStyle(.secondary)
+            }
     }
 }

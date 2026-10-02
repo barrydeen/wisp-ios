@@ -25,9 +25,11 @@ enum ImagePixelBudget {
 /// Decodes `data` straight to a thumbnail whose longest edge is at most
 /// `maxPixel` points-in-pixels, using ImageIO so the full-resolution bitmap is
 /// never retained — only the downsized result lives in memory. Returns nil if
-/// the source can't be read (caller falls back to a full `UIImage(data:)`).
-/// Free function so it can run inside a detached, nonisolated decode task.
-private func downsampledImage(from data: Data, maxPixel: CGFloat) -> UIImage? {
+/// the source can't be read (caller falls back to a full `UIImage(data:`).
+/// Free function so it can run inside a detached, nonisolated decode task —
+/// and so other local-bytes surfaces (the alt-text editor preview) share the
+/// one downsample path.
+func downsampledImage(from data: Data, maxPixel: CGFloat) -> UIImage? {
     let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
     guard let source = CGImageSourceCreateWithData(data as CFData, sourceOptions) else {
         return nil

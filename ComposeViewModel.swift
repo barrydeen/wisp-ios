@@ -1457,11 +1457,12 @@ final class ComposeViewModel {
     /// One `imeta` tag per **described** attachment — the alt-text contract.
     /// Undescribed attachments emit nothing (no empty metadata), and `url`
     /// stays the first slot with `alt` last, matching what Amethyst/Quartz
-    /// write. Only meaningful for notes whose URLs ride in `content`; gallery
-    /// kinds build their imeta through `Nip68` / `Nip71` instead.
+    /// write. The `alt` value is the wire-flattened single line
+    /// (`wireAltText`). Only meaningful for notes whose URLs ride in
+    /// `content`; gallery kinds build their imeta through `Nip68` / `Nip71`.
     static func imetaTagsForDescribedAttachments(_ attachments: [ComposeAttachment]) -> [[String]] {
         attachments.compactMap { attachment in
-            guard let url = attachment.url, let alt = attachment.trimmedAltText else { return nil }
+            guard let url = attachment.url, let alt = attachment.wireAltText else { return nil }
             var imeta: [String] = ["imeta", "url \(url)"]
             imeta.append("m \(attachment.mime)")
             if attachment.dim != .zero {
@@ -1769,7 +1770,7 @@ final class ComposeViewModel {
                 let imeta: [Nip68.ImetaEntry] = attachments.compactMap { a in
                     guard let url = a.url else { return nil }
                     let dim = a.dim != .zero ? "\(Int(a.dim.width))x\(Int(a.dim.height))" : nil
-                    return Nip68.ImetaEntry(url: url, mimeType: a.mime, dim: dim, hash: a.sha256Hex, alt: a.trimmedAltText)
+                    return Nip68.ImetaEntry(url: url, mimeType: a.mime, dim: dim, hash: a.sha256Hex, alt: a.wireAltText)
                 }
                 let extra = Nip68.buildPictureTags(
                     title: nil,
@@ -1782,7 +1783,7 @@ final class ComposeViewModel {
                 let videos: [Nip71.VideoMeta] = attachments.compactMap { a in
                     guard let url = a.url else { return nil }
                     let dim = a.dim != .zero ? "\(Int(a.dim.width))x\(Int(a.dim.height))" : nil
-                    return Nip71.VideoMeta(url: url, mimeType: a.mime, dim: dim, duration: a.durationSec, hash: a.sha256Hex, alt: a.trimmedAltText)
+                    return Nip71.VideoMeta(url: url, mimeType: a.mime, dim: dim, duration: a.durationSec, hash: a.sha256Hex, alt: a.wireAltText)
                 }
                 let extra = Nip71.buildVideoTags(
                     title: nil,

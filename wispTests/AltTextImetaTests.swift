@@ -269,9 +269,25 @@ struct AltTextImetaTests {
         #expect(ContentParser.normalizeAltBreaks("   ") == "")
     }
 
-    /// Publish path: a multiline description rides as real `\n` inside the
-    /// tag string — never flattened to spaces.
-    @Test func publishPreservesLineBreaksInAlt() {
+    /// The wire flatten: normalize first, then every break run becomes one
+    /// space — never a doubled or leading/trailing space. Tag values are not
+    /// newline-safe in practice (relays sanitize raw `\n` inside tags,
+    /// invalidating the event id), so descriptions publish single-line.
+    @Test func altForWireVectors() {
+        #expect(ContentParser.altForWire("two\nlines") == "two lines")
+        #expect(ContentParser.altForWire("a\n\nb") == "a b")
+        #expect(ContentParser.altForWire("a\r\nb") == "a b")
+        #expect(ContentParser.altForWire("a\rb") == "a b")
+        #expect(ContentParser.altForWire("a\n\n\n\n\nb") == "a b")
+        #expect(ContentParser.altForWire("  first \n\n  second  ") == "first second")
+        #expect(ContentParser.altForWire("single line") == "single line")
+        #expect(ContentParser.altForWire("   ") == "")
+    }
+
+    /// Publish path: authored paragraph structure flattens to single spaces on
+    /// the wire. Structure stays a local concern — drafts and the editor keep
+    /// the author's breaks (see `draftImetaRoundTripsMultilineAlt`).
+    @Test func publishFlattensLineBreaksInAlt() {
         let described = ComposeAttachment(
             id: UUID(), url: "https://host/multi.jpg", mime: "image/jpeg",
             dim: .zero, durationSec: nil, sha256Hex: nil,
@@ -279,12 +295,12 @@ struct AltTextImetaTests {
         )
         let tags = ComposeViewModel.imetaTagsForDescribedAttachments([described])
         #expect(tags.count == 1)
-        #expect(tags[0].last == "alt A screenshot.\n\nBelow it, a quoted post.")
+        #expect(tags[0].last == "alt A screenshot. Below it, a quoted post.")
     }
 
-    /// Publish path: runaway break runs collapse to one paragraph gap and
-    /// CRLF normalizes — authored structure survives, bloat doesn't.
-    @Test func publishCapsBreakRunsAndNormalizesCRLF() {
+    /// Publish path: break runs collapse and CRLF normalizes before the
+    /// flatten, so the wire value is one clean single-space line.
+    @Test func publishFlattensBreakRunsAndCRLF() {
         let described = ComposeAttachment(
             id: UUID(), url: "https://host/capped.jpg", mime: "image/jpeg",
             dim: .zero, durationSec: nil, sha256Hex: nil,
@@ -292,11 +308,23 @@ struct AltTextImetaTests {
         )
         let tags = ComposeViewModel.imetaTagsForDescribedAttachments([described])
         #expect(tags.count == 1)
-        #expect(tags[0].last == "alt a\n\nb")
+        #expect(tags[0].last == "alt a b")
+    }
+
+    /// Gallery publish flattens too — `Nip68` builds the same wire shape as
+    /// the text-note path.
+    @Test func galleryPublishFlattensLineBreaksInAlt() {
+        let media = [Nip68.ImetaEntry(
+            url: "https://host/gallery-multi.jpg", mimeType: "image/jpeg",
+            alt: "First paragraph\n\nSecond paragraph"
+        )]
+        let tags = Nip68.buildPictureTags(title: nil, media: media)
+        #expect(tags[0].last == "alt First paragraph Second paragraph")
     }
 
     /// Read path: the slot splits on the first space only, so interior
-    /// breaks survive the parse and reach every render surface.
+    /// breaks survive the parse and reach every render surface — third-party
+    /// clients that already sent newlines keep rendering as structure.
     @Test func parseKeepsInteriorLineBreaks() {
         let tags: [[String]] = [
             ["imeta", "url https://host/multi.jpg", "m image/jpeg",
@@ -319,6 +347,20 @@ struct AltTextImetaTests {
         ]
         let map = ContentParser.imetaAltByUrl(tags)
         #expect(map["https://host/ballooning.jpg"] == "a\n\nb")
+    }
+
+    // MARK: - Drafts keep structure (only the wire flattens)
+
+    /// Drafts store the in-app normalized value — the author's paragraph
+    /// structure survives save/reopen; only the publish path flattens.
+    @Test func draftImetaRoundTripsMultilineAlt() {
+        let draftTags: [[String]] = [
+            ["imeta", "url https://host/multi.jpg", "m image/jpeg",
+             "alt A screenshot.\n\nBelow it, a quoted post."],
+        ]
+        let restored = ComposeViewModel.parseImetaAttachments(tags: draftTags)
+        #expect(restored.count == 1)
+        #expect(restored[0].trimmedAltText == "A screenshot.\n\nBelow it, a quoted post.")
     }
 
     // MARK: - Fixtures

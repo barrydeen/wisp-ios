@@ -43,16 +43,24 @@ struct ComposeAttachment: Identifiable {
 
     var isVideo: Bool { mime.hasPrefix("video/") }
 
-    /// The description as it should be written into the imeta `alt` slot:
-    /// line breaks normalized (`normalizeAltBreaks` — CRLF → LF, lines
-    /// trimmed, blank-line runs capped at one paragraph gap) and empty
-    /// collapsed to nil. The editor is multiline and the wire carries real
-    /// `\n` characters inside the tag string, so authored structure
-    /// survives; only bloat is removed.
+    /// The description as it is kept in the app — drafts, autosave, and the
+    /// editor's prefill: line breaks normalized (`normalizeAltBreaks` — CRLF
+    /// → LF, lines trimmed, blank-line runs capped at one paragraph gap) and
+    /// empty collapsed to nil. Authored paragraph structure survives locally;
+    /// only the publish path flattens it further (see `wireAltText`).
     var trimmedAltText: String? {
         guard let altText, !altText.isEmpty else { return nil }
         let normalized = ContentParser.normalizeAltBreaks(altText)
         return normalized.isEmpty ? nil : normalized
+    }
+
+    /// `trimmedAltText` as it goes on the wire in an imeta `alt` slot: every
+    /// remaining break flattened to one space (`ContentParser.altForWire`).
+    /// Raw `\n` inside a tag value is not newline-safe in practice — relays
+    /// may sanitize tag values, which invalidates the event id — so
+    /// descriptions publish single-line.
+    var wireAltText: String? {
+        trimmedAltText.map(ContentParser.altForWire)
     }
 }
 

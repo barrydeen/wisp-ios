@@ -40,7 +40,11 @@ struct MediaGridView: View {
     var onTileTap: ((Int) -> Void)? = nil
     @State private var openIndex: Int?
     @State private var currentItemId: String?
-    @State private var showAltDescription = false
+    /// The description to present in the Description sheet, captured from the
+    /// tapped tile. One grid-level `.sheet(item:)` serves every tile — a
+    /// per-tile `isPresented` bool would register N sheets on one flag and
+    /// present whichever tile registered first, not the one tapped.
+    @State private var altDescriptionTarget: AltDescriptionTarget?
 
     struct MediaItem: Hashable, Identifiable {
         let url: String
@@ -88,11 +92,14 @@ struct MediaGridView: View {
     }
 
     var body: some View {
-        if nested {
-            nestedBody
-        } else {
-            feedBody
+        Group {
+            if nested {
+                nestedBody
+            } else {
+                feedBody
+            }
         }
+        .mediaAltDescriptionSheet(item: $altDescriptionTarget)
     }
 
     /// Nested-container layout: ask `GeometryReader` for the actual
@@ -239,7 +246,7 @@ struct MediaGridView: View {
             // one flattened control.
             if let alt = item.alt {
                 Button {
-                    showAltDescription = true
+                    altDescriptionTarget = AltDescriptionTarget(text: alt)
                 } label: {
                     AltBadge()
                         .padding(8)
@@ -249,7 +256,6 @@ struct MediaGridView: View {
                 .accessibilityLabel("View image description")
             }
         }
-        .mediaAltDescriptionSheet(alt: item.alt, isPresented: $showAltDescription)
     }
 
     private var indexBadge: some View {

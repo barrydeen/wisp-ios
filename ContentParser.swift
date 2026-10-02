@@ -138,6 +138,9 @@ enum ContentParser {
 
     // MARK: - imeta tags (NIP-92)
 
+    /// Parses every imeta tag into `url → MediaMeta`. Duplicate slots inside
+    /// one tag are last-wins (plain assignment), matching how the other slots
+    /// behave; well-formed events carry each slot once.
     static func parseImetaTags(_ tags: [[String]]) -> [String: MediaMeta] {
         var map: [String: MediaMeta] = [:]
         for tag in tags {
@@ -163,10 +166,11 @@ enum ContentParser {
             if let url {
                 // The `alt` value is everything after the first space, so
                 // interior line breaks belong to it and survive the parse —
-                // the wire carries real `\n` characters inside the tag
-                // string. Break runs are capped (normalizeAltBreaks) so
-                // third-party alt can't balloon the layout, and a blank slot
-                // reads as "no description".
+                // third-party clients may have sent real `\n` inside the tag
+                // string, and they render as authored structure. Break runs
+                // are capped (normalizeAltBreaks) so remote alt can't balloon
+                // the layout, and a blank slot reads as "no description".
+                // (Outgoing alt is flattened to one line first — altForWire.)
                 let normalizedAlt = alt.map { normalizeAltBreaks($0) }
                 map[url] = MediaMeta(
                     url: url, mime: mime, dimension: dim, blurhash: blur,
@@ -178,12 +182,13 @@ enum ContentParser {
         return map
     }
 
-    /// Normalizes an `alt` value's line breaks per the imeta linebreak
-    /// contract: CRLF/CR → LF, each line's surrounding whitespace trimmed,
-    /// runs of 3+ newlines capped at one blank line, ends trimmed. Single
-    /// breaks and a single paragraph gap survive — multi-paragraph
-    /// descriptions are the point. Applied when publishing an `alt` slot and
-    /// when parsing one, so third-party alt can't balloon the layout either.
+    /// Normalizes an `alt` value's line breaks: CRLF/CR → LF, each line's
+    /// surrounding whitespace trimmed, runs of 3+ newlines capped at one
+    /// blank line, ends trimmed. Single breaks and a single paragraph gap
+    /// survive. Applied when parsing an `alt` slot (third-party events may
+    /// carry real breaks; the read path renders them as authored) and as the
+    /// first step of the publish flatten (`altForWire`), so remote alt can't
+    /// balloon the layout either.
     static func normalizeAltBreaks(_ text: String) -> String {
         let lf = text
             .replacingOccurrences(of: "\r\n", with: "\n")
@@ -198,6 +203,20 @@ enum ContentParser {
             options: .regularExpression
         )
         return capped.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// The `alt` value as it goes on the wire: `normalizeAltBreaks` first,
+    /// then every remaining break run flattened to one space. Tag strings are
+    /// not reliably newline-safe — several widely-used relays sanitize raw
+    /// `\n` inside tag values (rewriting the tags and invalidating the event
+    /// id rather than fixing it) — so authored paragraph structure stays a
+    /// local/editing concern (`trimmedAltText`, drafts) and a read-path
+    /// concern (`parseImetaTags` still restores real breaks from third-party
+    /// events that sent them); only single-line descriptions are published.
+    static func altForWire(_ text: String) -> String {
+        normalizeAltBreaks(text)
+            .replacingOccurrences(of: "\n+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces)
     }
 
     /// `url → alt` map from an event's imeta tags — the kind-agnostic lookup
