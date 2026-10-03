@@ -1371,18 +1371,36 @@ final class ComposeViewModel {
         }
     }
 
+    /// NIP-22 tag set for this compose session, or nil when the reply isn't
+    /// answering a comment (of either root form — external `I` or event
+    /// `E`/`A`). A single derivation from the same inputs (`mode`, poll /
+    /// gallery state) that both `determineKind` and `buildBaseTags` consult,
+    /// so the kind and the tags can never disagree — a kind-1111 carrying
+    /// NIP-10 `e`/`p` tags (or a kind-1 carrying `I`/`K`) would be malformed
+    /// either way. It is recomputed on each access; nothing is cached.
+    private var nip22ReplyTags: [[String]]? {
+        guard !pollEnabled, !galleryMode else { return nil }
+        guard case .reply(let parent, _) = mode else { return nil }
+        return Nip22.buildReplyTags(to: parent, relayHint: "")
+    }
+
     /// Internal (not private) so `ComposeReplyKindTests` can assert the
     /// published kind directly — the alternative is a full signing +
     /// broadcast round-trip.
     ///
-    /// Wisp never publishes kind-1111: it renders NIP-22 comments from other
-    /// clients but always answers with a kind-1 NIP-10 reply, even to a
-    /// comment. (A NIP-22-pure reply would have to stay 1111 with `I`/`K`
-    /// scope, which we deliberately don't emit.)
+    /// Reply-kind policy: the only replies that leave the kind-1 default are
+    /// ones answering a comment — NIP-22 forbids answering a comment with a
+    /// kind-1 (the root scope has to survive the hop), so those stay 1111.
+    /// Everything else, including replies to plain notes, remains kind 1
+    /// with NIP-10 tags for maximum cross-client visibility.
     func determineKind() -> Int {
         if pollEnabled {
             return isZapPoll ? Nip69.kindZapPoll : Nip88.kindPoll
         }
+        // NIP-22 forbids answering a comment with a kind-1: the reply has to
+        // stay kind-1111 so it keeps the parent's root scope — the thing
+        // every comment-aware client uses to find the branch again.
+        if nip22ReplyTags != nil { return Nip22.kindComment }
         guard galleryMode else { return 1 }
         if attachments.contains(where: { $0.isVideo }) {
             // Pick orientation from the first video.
@@ -1641,6 +1659,15 @@ final class ComposeViewModel {
         case .new:
             break
         case .reply(let parent, let root):
+            // Replying to a NIP-22 comment (either root form): copy its root
+            // scope forward and point the lowercase `e`/`k`/`p` at the parent,
+            // instead of NIP-10 threading. NIP-10 tags here would detach the
+            // branch from the root — for an external root they can't express
+            // it at all, and for an event root `#E` readers lose the reply.
+            if let commentTags = nip22ReplyTags {
+                tags.append(contentsOf: commentTags)
+                break
+            }
             if let root {
                 tags.append(["e", root.id, "", "root"])
                 if root.id != parent.id {

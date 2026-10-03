@@ -233,6 +233,19 @@ struct MainView: View {
         .background(Color.wispBackground)
         .overlay(SuccessToastOverlay())
         .overlay(PostStatusPillOverlay())
+        #if DEBUG
+        .task {
+            // `-ThreadHarnessSeed <id> [-ThreadHarnessAuthor <pubkey>]` — push
+            // the thread screen at launch so relay-driven verification of
+            // `ThreadViewModel` needs no UI driving. No-op without the
+            // launch argument.
+            if let seed = ThreadHarness.seedEventId {
+                try? await Task.sleep(for: .seconds(3))
+                selectedTab = .home
+                feedPath.append(ThreadRoute(eventId: seed, authorPubkey: ThreadHarness.authorHint))
+            }
+        }
+        #endif
         .environment(walletStore)
         .environment(composePresenter)
         .onReceive(NotificationCenter.default.publisher(for: .openWalletTab)) { _ in

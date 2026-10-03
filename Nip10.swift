@@ -5,7 +5,15 @@ nonisolated enum Nip10 {
 
     /// Returns the root event id of `event`, or nil if the event has no `e` tags.
     /// Prefers a marked `root` e-tag; falls back to the first e-tag (legacy positional).
+    ///
+    /// NIP-22 comments override this: their lowercase `e` names the *immediate
+    /// parent* (a nested comment's parent is not the root) and the conversation
+    /// root lives in uppercase `E`. Reading lowercase first would re-root a
+    /// thread opened on a comment at its parent instead of the conversation.
     static func rootId(of event: NostrEvent) -> String? {
+        if event.kind == Nip22.kindComment, let commentRoot = Nip22.rootEventId(of: event) {
+            return commentRoot
+        }
         let eTags = eTagsExcludingMentions(event)
         if let marked = eTags.first(where: { $0.count >= 4 && $0[3] == "root" }) {
             return marked[1]
