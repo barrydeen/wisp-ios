@@ -166,4 +166,25 @@ nonisolated enum Nip22 {
         return parentEventIds.contains(where: targets.contains)
             || rootEventIds.contains(where: targets.contains)
     }
+
+    /// True when `event` is a kind-1 note replying to a kind-1111 comment.
+    ///
+    /// Comment threads are a 1111-only namespace: a kind 1 whose reply target
+    /// is a comment belongs to the main feed, not the comment subtree — thread
+    /// and article-comment views hide it and it must not bump the comment's
+    /// reply count (the same rule barrydeen/wisp#667 ships on Android).
+    /// Detection reads the `k` tag when the replying client emitted one, and
+    /// otherwise resolves the reply target's kind through `parentKindOf` (the
+    /// caller's in-memory map). An unresolvable parent returns false — an
+    /// unknown parent counts as a normal reply rather than a dropped one.
+    /// Callers exempt private gift-wrapped replies: private comment publishing
+    /// isn't implemented, so a private reply rumor is still kind 1.
+    static func isStrayKind1OnComment(_ event: NostrEvent, parentKindOf: (String) -> Int?) -> Bool {
+        guard event.kind == 1 else { return false }
+        if event.tags.contains(where: { $0.count >= 2 && $0[0] == "k" && Int($0[1]) == kindComment }) {
+            return true
+        }
+        guard let parentId = Nip10.replyTarget(of: event) else { return false }
+        return parentKindOf(parentId) == kindComment
+    }
 }

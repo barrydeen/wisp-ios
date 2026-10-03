@@ -210,6 +210,16 @@ final class ArticleViewModel {
         var parentToChildren: [String: [NostrEvent]] = [:]
 
         for event in commentEvents.values {
+            // A kind-1 note replying to a comment is a stray main-feed note,
+            // not an article-comment reply — hidden from the comment tree.
+            // Private gift-wrapped replies are exempt (a private reply rumor
+            // is still kind 1). The stray stays cached: it is a legitimate
+            // note everywhere else.
+            if event.kind == 1,
+               !PrivateInteractionStore.shared.contains(event.id),
+               Nip22.isStrayKind1OnComment(event, parentKindOf: { commentEvents[$0]?.kind }) {
+                continue
+            }
             let replyTarget = Nip10.replyTarget(of: event)
             let parentId: String
             if let replyTarget, commentEvents[replyTarget] != nil, replyTarget != articleId {

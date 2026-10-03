@@ -92,4 +92,41 @@ import Testing
         #expect(Nip22.externalParent(of: e) == nil)
     }
 
+    // MARK: - Stray kind-1 replies to comments
+
+    /// A kind-1 whose reply target resolves to a kind-1111 comment is a stray
+    /// main-feed note: thread and article-comment views hide it and it must
+    /// not bump the comment's reply count.
+    @Test func strayKind1DetectedByParentKindResolution() {
+        let stray = NostrEvent(id: "s1", pubkey: "pk", kind: 1, createdAt: 0,
+                               tags: [["e", "c1", "", "reply"]], content: "", sig: "")
+        #expect(Nip22.isStrayKind1OnComment(stray, parentKindOf: { $0 == "c1" ? Nip22.kindComment : nil }))
+    }
+
+    /// The `k` tag decides without any parent cache — the replying client
+    /// named the kind it answered.
+    @Test func strayKind1DetectedByKTagWithoutParentCache() {
+        let stray = NostrEvent(id: "s2", pubkey: "pk", kind: 1, createdAt: 0,
+                               tags: [["e", "unknown-parent", "", "reply"], ["k", "1111"]],
+                               content: "", sig: "")
+        #expect(Nip22.isStrayKind1OnComment(stray, parentKindOf: { _ in nil }))
+    }
+
+    /// Replies to notes, comments themselves, and events with an
+    /// unresolvable parent are not strays — the default is to keep counting,
+    /// never to drop.
+    @Test func normalRepliesAreNotStrays() {
+        let kindOf: (String) -> Int? = { $0 == "root" ? 1 : nil }
+        let replyToNote = NostrEvent(id: "r1", pubkey: "pk", kind: 1, createdAt: 0,
+                                     tags: [["e", "root", "", "reply"]], content: "", sig: "")
+        #expect(!Nip22.isStrayKind1OnComment(replyToNote, parentKindOf: kindOf))
+
+        let commentReply = NostrEvent(id: "r2", pubkey: "pk", kind: Nip22.kindComment, createdAt: 0,
+                                      tags: [["e", "c1", "", "pk"]], content: "", sig: "")
+        #expect(!Nip22.isStrayKind1OnComment(commentReply, parentKindOf: { _ in Nip22.kindComment }))
+
+        let unknownParent = NostrEvent(id: "r3", pubkey: "pk", kind: 1, createdAt: 0,
+                                       tags: [["e", "missing", "", "reply"]], content: "", sig: "")
+        #expect(!Nip22.isStrayKind1OnComment(unknownParent, parentKindOf: kindOf))
+    }
 }

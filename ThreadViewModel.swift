@@ -1080,6 +1080,18 @@ final class ThreadViewModel {
                 }
             }
 
+            // A stray kind-1 reply to a comment neither counts here nor
+            // forwards to the shared feed box — the comment's reply count
+            // must not include main-feed notes (see
+            // `Nip22.isStrayKind1OnComment`). Parent kinds resolve from this
+            // thread's in-memory map only; an unresolvable parent counts as
+            // a normal reply.
+            if event.kind == 1,
+               !PrivateInteractionStore.shared.contains(event.id),
+               Nip22.isStrayKind1OnComment(event, parentKindOf: { self.events[$0]?.kind }) {
+                continue
+            }
+
             // Aggregate against every e-tag the engagement event references so the count attaches to
             // both the direct parent and (where applicable) the root.
             let targets = event.tags.compactMap { tag -> String? in
@@ -1183,6 +1195,17 @@ final class ThreadViewModel {
         var childrenByParent: [String: [NostrEvent]] = [:]
         for event in events.values
         where (event.kind == 1 || event.kind == Nip22.kindComment) && event.id != renderRootId {
+            // A kind-1 note replying to a comment is a stray main-feed note,
+            // not a comment-thread reply (NIP-22 threads are a 1111-only
+            // namespace) — hidden from the tree and excluded from counts.
+            // Private gift-wrapped replies are exempt: private comment
+            // publishing isn't implemented, so a private reply rumor is
+            // still kind 1.
+            if event.kind == 1,
+               !PrivateInteractionStore.shared.contains(event.id),
+               Nip22.isStrayKind1OnComment(event, parentKindOf: { self.events[$0]?.kind }) {
+                continue
+            }
             guard let parentId = parent(of: event) else { continue }
             childrenByParent[parentId, default: []].append(event)
         }
