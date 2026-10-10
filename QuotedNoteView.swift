@@ -212,22 +212,10 @@ struct QuotedNoteView: View {
     /// below still signalling that the rest is one tap away.
     private static let mediaPeekWidthFraction: CGFloat = 0.8
 
-    /// Visible height of trailing media when collapsed. Rendered as its own
-    /// portion (see `renderMode: .mediaPortion` below) with its own height
-    /// budget so a long caption above it can't eat into the gallery's peek —
-    /// previously text and media shared one combined cap, and a caption
-    /// alone could consume nearly all of it, leaving almost nothing of the
-    /// gallery visible.
-    private var mediaPeekHeight: CGFloat {
-        Self.mediaPeekHeight(
-            forContentWidth: UIScreen.main.bounds.width - nestedHorizontalInset
-        )
-    }
-
-    /// Pure form of `mediaPeekHeight`, seeded the way
-    /// `MediaGridView.tileHeightForNested` seeds its own guess: the quoted
-    /// card's content width is the screen less `nestedHorizontalInset`, this
-    /// view's total horizontal chrome.
+    /// Height of the collapsed media peek for a card whose content is
+    /// `width` points wide. `CollapsedMediaPeek` passes the width proposed
+    /// to this card, so a split view or resized window caps against the
+    /// card rather than the physical screen.
     static func mediaPeekHeight(forContentWidth width: CGFloat) -> CGFloat {
         max(1, width) * mediaPeekWidthFraction
     }
@@ -304,6 +292,34 @@ struct QuotedNoteView: View {
         let eventId: String
         let relayHints: [String]
         let author: String?
+    }
+
+    /// Caps collapsed quote media to a fraction of the width proposed to the
+    /// card. The proposal is the card's layout width (split view, resized
+    /// window), which `UIScreen.main.bounds` is not.
+    private struct CollapsedMediaPeek: Layout {
+        var collapsed: Bool
+
+        func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+            guard let subview = subviews.first else {
+                return CGSize(width: proposal.width ?? 0, height: 0)
+            }
+            let ideal = subview.sizeThatFits(ProposedViewSize(width: proposal.width, height: nil))
+            let width = proposal.width ?? ideal.width
+            let height = collapsed
+                ? min(ideal.height, QuotedNoteView.mediaPeekHeight(forContentWidth: width))
+                : ideal.height
+            return CGSize(width: width, height: height)
+        }
+
+        func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+            guard let subview = subviews.first else { return }
+            subview.place(
+                at: CGPoint(x: bounds.minX, y: bounds.minY),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(width: bounds.width, height: nil)
+            )
+        }
     }
 
     private var loadingCard: some View {
@@ -569,28 +585,27 @@ struct QuotedNoteView: View {
                         }
                         // Media portion: everything from the first
                         // block/media group onward. Always rendered, even
-                        // when collapsed — peeked to `mediaPeekHeight` so
-                        // the user can see media (e.g. a gallery) exists
-                        // below, instead of the caption's cap swallowing it
-                        // entirely. Expands to natural size on toggle.
-                        RichContentView(
-                            content: event.content,
-                            tags: event.tags,
-                            profiles: profiles,
-                            authorPubkey: event.pubkey,
-                            onProfileTap: onProfileTap,
-                            onNoteTap: onNoteTap,
-                            onHashtagTap: onHashtagTap,
-                            showLinkPreviews: false,
-                            nested: true,
-                            nestedHorizontalInset: nestedHorizontalInset,
-                            renderMode: .mediaPortion
-                        )
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(
-                            maxHeight: collapsed ? mediaPeekHeight : .infinity,
-                            alignment: .top
-                        )
+                        // when collapsed — peeked to a fraction of this
+                        // card's proposed width so the user can see media
+                        // (e.g. a gallery) exists below, instead of the
+                        // caption's cap swallowing it entirely. Expands to
+                        // natural size on toggle.
+                        CollapsedMediaPeek(collapsed: collapsed) {
+                            RichContentView(
+                                content: event.content,
+                                tags: event.tags,
+                                profiles: profiles,
+                                authorPubkey: event.pubkey,
+                                onProfileTap: onProfileTap,
+                                onNoteTap: onNoteTap,
+                                onHashtagTap: onHashtagTap,
+                                showLinkPreviews: false,
+                                nested: true,
+                                nestedHorizontalInset: nestedHorizontalInset,
+                                renderMode: .mediaPortion
+                            )
+                            .fixedSize(horizontal: false, vertical: true)
+                        }
                         .clipped()
                         .overlay(alignment: .bottom) {
                             if collapsed {
