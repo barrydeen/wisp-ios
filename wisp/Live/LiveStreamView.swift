@@ -132,7 +132,11 @@ final class LivePlayerStore {
         if let old = player {
             ScreenKeepAwake.untrack(old)
         }
-        let item = AVPlayerItem(url: url)
+        // Route HLS through the playlist loader: zap.stream's LL-HLS origin 416s
+        // partial-segment byte-range requests, which AVPlayer treats as fatal a
+        // few seconds in. The loader strips LL-HLS tags so AVPlayer falls back to
+        // whole segments (a few seconds more latency, uninterrupted playback).
+        let item = HLSPlaylistLoader.playerItem(for: url)
         let p = AVPlayer(playerItem: item)
         p.automaticallyWaitsToMinimizeStalling = true
         p.allowsExternalPlayback = true
