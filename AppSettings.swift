@@ -61,6 +61,7 @@ final class AppSettings {
         static let videoLoop = "wisp_settings_video_loop"
         static let autoTranslate = "wisp_settings_auto_translate"
         static let includeRepliesInFeed = "wisp_settings_include_replies_in_feed"
+        static let showsLiveContent = "wisp_settings_shows_live_content"
         static func quickZapEnabled(for pubkey: String?) -> String {
             pubkey.map { "wisp_settings_quick_zap_enabled_\($0)" } ?? "wisp_settings_quick_zap_enabled"
         }
@@ -201,6 +202,11 @@ final class AppSettings {
             UserDefaults.standard.set(quickZapMessage, forKey: Keys.quickZapMessage(for: pk))
         }
     }
+    /// Master switch for live-stream surfaces: the home feed's LIVE pill row and
+    /// NIP-53 live activity/chat discovery. Off hides live content entirely.
+    var showsLiveContent: Bool {
+        didSet { UserDefaults.standard.set(showsLiveContent, forKey: Keys.showsLiveContent) }
+    }
 
     private init() {
         let defaults = UserDefaults.standard
@@ -230,6 +236,7 @@ final class AppSettings {
         self.videoLoop = defaults.object(forKey: Keys.videoLoop) as? Bool ?? true
         self.autoTranslate = defaults.object(forKey: Keys.autoTranslate) as? Bool ?? false
         self.includeRepliesInFeed = defaults.object(forKey: Keys.includeRepliesInFeed) as? Bool ?? false
+        self.showsLiveContent = defaults.object(forKey: Keys.showsLiveContent) as? Bool ?? true
         let qzPubkey = NostrKey.load()?.pubkey
         self.quickZapEnabled = defaults.object(forKey: Keys.quickZapEnabled(for: qzPubkey)) as? Bool ?? false
         let storedQuickInt = defaults.integer(forKey: Keys.quickZapAmountSats(for: qzPubkey))

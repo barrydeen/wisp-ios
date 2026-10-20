@@ -38,12 +38,16 @@ struct LiveStreamView: View {
                     profile: profileRepo.get(vm.activity?.streamerPubkey ?? vm.hostPubkey),
                     status: vm.activity?.status,
                     zapTotalSats: vm.streamZapTotalSats,
+                    zapTotalUncertain: vm.isZapTotalUncertain,
                     onZap: { showStreamZapSheet = true }
                 )
                 Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
                 LiveChatList(
                     messages: vm.messages,
                     profileRepo: profileRepo,
+                    isLoadingOlder: vm.isLoadingOlder,
+                    hasMoreHistory: vm.hasMoreChatHistory,
+                    onLoadOlder: { Task { await vm.loadOlderMessages() } },
                     onReply: { vm.setReplyTarget($0) },
                     onReact: { msg, emoji in
                         Task { await vm.sendReaction(messageId: msg.id, targetPubkey: msg.senderPubkey, emoji: emoji) }
@@ -132,7 +136,11 @@ final class LivePlayerStore {
         if let old = player {
             ScreenKeepAwake.untrack(old)
         }
-        let item = AVPlayerItem(url: url)
+        // Route HLS through the playlist loader: zap.stream's LL-HLS origin 416s
+        // partial-segment byte-range requests, which AVPlayer treats as fatal a
+        // few seconds in. The loader strips LL-HLS tags so AVPlayer falls back to
+        // whole segments (a few seconds more latency, uninterrupted playback).
+        let item = HLSPlaylistLoader.playerItem(for: url)
         let p = AVPlayer(playerItem: item)
         p.automaticallyWaitsToMinimizeStalling = true
         p.allowsExternalPlayback = true
@@ -253,6 +261,13 @@ private struct AVPlayerControllerRepresentable: UIViewControllerRepresentable {
     static func dismantleUIViewController(_ vc: AVPlayerViewController, coordinator: Coordinator) {
         coordinator.detach()
         // Note: do NOT clear vc.player here — PiP continues against the original player.
+        // A final `updateUIViewController` can run AFTER `LiveStreamView.onDisappear`
+        // released the player; `ensurePlayer` then recreates it and `attach` plays it,
+        // leaving an orphaned player sounding off with no view. Pause on teardown
+        // unless that player is genuinely out in Picture-in-Picture right now.
+        if let player = vc.player, !VideoPiPCoordinator.shared.isOwning(player) {
+            player.pause()
+        }
     }
 
     private func attach(player: AVPlayer?, to vc: AVPlayerViewController, context: Context) {
@@ -349,6 +364,9 @@ private struct StreamInfoBar: View {
     let profile: ProfileData?
     let status: String?
     let zapTotalSats: Int64
+    /// The total came from a bounded relay scan and may still be short of the
+    /// stream's lifetime sum — rendered with a trailing "+", sidecar-style.
+    var zapTotalUncertain: Bool = false
     let onZap: () -> Void
 
     var body: some View {
@@ -374,7 +392,7 @@ private struct StreamInfoBar: View {
                     Image(systemName: "bolt.fill")
                         .foregroundStyle(Color.wispZapColor)
                     if zapTotalSats > 0 {
-                        Text(formatSats(zapTotalSats))
+                        Text(formatSats(zapTotalSats) + (zapTotalUncertain ? "+" : ""))
                             .font(.caption.weight(.medium))
                     } else {
                         Text("Zap")
@@ -403,9 +421,15 @@ private struct StreamInfoBar: View {
 private struct LiveChatList: View {
     let messages: [LiveChatMessage]
     let profileRepo: ProfileRepository
+    var isLoadingOlder: Bool = false
+    var hasMoreHistory: Bool = false
+    var onLoadOlder: () -> Void = {}
     let onReply: (LiveChatMessage) -> Void
     let onReact: (LiveChatMessage, String) -> Void
     let onZap: (LiveChatMessage) -> Void
+    /// Newest row id seen at the last count change — distinguishes appends
+    /// (new chat, autoscroll to bottom) from prepends (older history, keep position).
+    @State private var lastNewestId: String?
 
     private static let memberPalette: [Color] = [
         Color(red: 0.898, green: 0.451, blue: 0.451),  // E57373 red
@@ -426,6 +450,27 @@ private struct LiveChatList: View {
         ScrollViewReader { reader in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 6) {
+                    if hasMoreHistory {
+                        // Top sentinel: scrolling here pages in older history.
+                        // The VM re-entrancy guard makes repeat onAppear calls cheap.
+                        Group {
+                            if isLoadingOlder {
+                                HStack(spacing: 6) {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                    Text("Loading older messages…")
+                                        .font(.caption2)
+                                        .foregroundStyle(Color.wispOnSurfaceVariant)
+                                }
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 6)
+                            } else {
+                                Color.clear
+                                    .frame(height: 1)
+                            }
+                        }
+                        .onAppear { onLoadOlder() }
+                    }
                     ForEach(messages) { msg in
                         LiveChatBubble(
                             message: msg,
@@ -444,10 +489,14 @@ private struct LiveChatList: View {
             }
             .scrollDismissesKeyboard(.interactively)
             .onChange(of: messages.count) { _, _ in
-                if let last = messages.last {
-                    withAnimation(.easeOut(duration: 0.15)) {
-                        reader.scrollTo(last.id, anchor: .bottom)
-                    }
+                let newest = messages.last?.id
+                let appended = newest != nil && newest != lastNewestId
+                lastNewestId = newest
+                // Older-history prepends keep the reading position; only a new
+                // newest message autoscrolls to the live edge.
+                guard appended, let last = messages.last else { return }
+                withAnimation(.easeOut(duration: 0.15)) {
+                    reader.scrollTo(last.id, anchor: .bottom)
                 }
             }
         }

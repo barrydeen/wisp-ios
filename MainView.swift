@@ -58,6 +58,7 @@ struct MainView: View {
     @State private var showMediaServers = false
     @State private var hashtagSetRepo = HashtagSetRepository.shared
     @Environment(AudioPlayerStore.self) private var audioPlayer
+    @Environment(AppSettings.self) private var settings
     @State private var showRelaySettings = false
     @State private var pendingAuthRequest: PendingAuthRequest?
     @State private var feedFabOpacity: Double = 1.0
@@ -500,6 +501,11 @@ struct MainView: View {
         .onReceive(NotificationCenter.default.publisher(for: .pendingShareReceived)) { note in
             guard let item = note.object as? PendingShareItem else { return }
             pendingShare = item
+        }
+        .onChange(of: settings.showsLiveContent) { _, enabled in
+            // Apply the "Show live streams" switch immediately: start or tear
+            // down NIP-53 discovery without waiting for the next app launch.
+            viewModel.liveContentSettingChanged(enabled)
         }
         .onChange(of: draftToast.pendingDraft?.dTag) { _, dTag in
             // ComposeView's autosave-on-dismiss writes the draft here from
