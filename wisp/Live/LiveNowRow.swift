@@ -9,9 +9,10 @@ struct FeedLiveNowSection: View {
     let profiles: [String: ProfileData]
     let onSelect: (LiveStream) -> Void
     @State private var repo = LiveStreamRepository.shared
+    @Environment(AppSettings.self) private var settings
 
     var body: some View {
-        let liveStreams = repo.liveNowSorted
+        let liveStreams = settings.showsLiveContent ? repo.liveNowSorted : []
         if !liveStreams.isEmpty {
             // The feed's `profiles` dict only covers feed-row authors — a live
             // host is usually not in it. Pills look up `repo.hostProfiles`

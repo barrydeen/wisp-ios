@@ -30,6 +30,25 @@ final class LiveStreamViewModel: EmojiComposing {
     @ObservationIgnored private var consumerTasks: [Task<Void, Never>] = []
     @ObservationIgnored private var started = false
 
+    // MARK: Chat history paging (sidecar-style)
+    /// Newest page only on open; each scroll-back pulls one more page until the
+    /// in-memory cap or the stream's first message is reached.
+    var isLoadingOlder = false
+    @ObservationIgnored private var reachedOldestHistory = false
+    var hasMoreChatHistory: Bool { !reachedOldestHistory }
+    var isZapTotalUncertain: Bool {
+        LiveStreamRepository.shared.zapTotalsUncertain.contains(aTagValue)
+    }
+
+    private static let chatPageSize = 50
+    private static let zapScanPageSize = 1000
+    /// Public relays that archive kind-9735 receipts for popular streams
+    /// (sidecar's ZAP_ARCHIVE_RELAYS) — chat relays alone only hold recent zaps.
+    private static let zapArchiveRelays = [
+        "wss://nostr21.com", "wss://relay.ditto.pub", "wss://nostr-01.yakihonne.com",
+        "wss://relay.nostr.net", "wss://soloco.nl"
+    ]
+
     init(aTagValue: String, hostPubkey: String, dTag: String, naddrRelayHints: [String], keypair: Keypair) {
         self.aTagValue = aTagValue
         self.hostPubkey = hostPubkey
@@ -56,14 +75,30 @@ final class LiveStreamViewModel: EmojiComposing {
         LiveStreamRepository.shared.setCurrent(aTagValue)
 
         await resolveChatRelays()
-        guard !chatRelays.isEmpty else {
+        if chatRelays.isEmpty {
             chatRelays = ["wss://relay.damus.io", "wss://nos.lol", "wss://relay.primal.net"]
-            return
+        }
+
+        // Recent history first: long-running streams carry months of kind-1311,
+        // and backfilling them wholesale stalls the chat for seconds. Pull the
+        // newest page up front and page older history on scroll (sidecar-style).
+        let initial = await RelayPool.query(
+            relays: chatRelays,
+            filter: NostrFilter(kinds: [Nip53.kindLiveChatMessage], aTags: [aTagValue], limit: Self.chatPageSize),
+            timeout: 8
+        )
+        for event in initial.sorted(by: { $0.createdAt < $1.createdAt }) {
+            LiveStreamRepository.shared.addChatMessage(event)
         }
 
         let chat = RelayPool.subscribe(
             relays: chatRelays,
-            filter: NostrFilter(kinds: [Nip53.kindLiveChatMessage], aTags: [aTagValue], limit: 200),
+            filter: NostrFilter(
+                kinds: [Nip53.kindLiveChatMessage],
+                aTags: [aTagValue],
+                limit: 100,
+                since: NostrClock.now() - 10
+            ),
             id: "live-chat-\(dTag)"
         )
         let react = RelayPool.subscribe(
@@ -104,6 +139,67 @@ final class LiveStreamViewModel: EmojiComposing {
                 await MainActor.run { LiveStreamRepository.shared.addStreamZap(event, aTag: aTag) }
             }
         })
+
+        // The live zap sub only sees receipts delivered while watching (plus a
+        // small backfill) — a fraction of a popular stream's lifetime total.
+        // Scan chat + archive relays once for a much closer number.
+        consumerTasks.append(Task { [weak self] in
+            await self?.refreshZapTotal()
+        })
+    }
+
+    /// One-shot kind-9735 scan across the chat relays plus zap-archive relays,
+    /// deduped by event id in the repository. Bounded sample: mark the total
+    /// uncertain (rendered "+") when relays went quiet or hit the page limit.
+    func refreshZapTotal() async {
+        var relays = chatRelays
+        for url in Self.zapArchiveRelays where !relays.contains(url) {
+            relays.append(url)
+        }
+        if relays.count > 12 {
+            relays = Array(relays.prefix(12))
+        }
+        let (events, responded) = await RelayPool.queryDetailed(
+            relays: relays,
+            filter: NostrFilter(kinds: [9735], aTags: [aTagValue], limit: Self.zapScanPageSize),
+            timeout: 12
+        )
+        guard !events.isEmpty else { return }
+        for event in events.sorted(by: { $0.createdAt < $1.createdAt }) {
+            LiveStreamRepository.shared.addStreamZap(event, aTag: aTagValue)
+        }
+        if events.count >= Self.zapScanPageSize || responded < relays.count {
+            LiveStreamRepository.shared.zapTotalsUncertain.insert(aTagValue)
+        }
+    }
+
+    /// Loads one older page of chat (scroll-back). Pages by count from the
+    /// oldest loaded chat message; `until` is inclusive so boundary-second
+    /// messages aren't skipped, and the repository dedupes the overlap.
+    func loadOlderMessages() async {
+        guard !isLoadingOlder, !reachedOldestHistory, !chatRelays.isEmpty else { return }
+        let existing = LiveStreamRepository.shared.messages(for: aTagValue)
+        guard let oldest = existing.first(where: { !$0.isZapAnnouncement })?.createdAt else { return }
+        isLoadingOlder = true
+        defer { isLoadingOlder = false }
+
+        let page = await RelayPool.query(
+            relays: chatRelays,
+            filter: NostrFilter(
+                kinds: [Nip53.kindLiveChatMessage],
+                aTags: [aTagValue],
+                limit: Self.chatPageSize,
+                until: oldest
+            ),
+            timeout: 8
+        )
+        for event in page.sorted(by: { $0.createdAt < $1.createdAt }) {
+            LiveStreamRepository.shared.addChatMessage(event)
+        }
+        if page.count < Self.chatPageSize
+            || LiveStreamRepository.shared.messages(for: aTagValue).count >= LiveStreamRepository.maxChatMessages {
+            reachedOldestHistory = true
+        }
     }
 
     func setReplyTarget(_ msg: LiveChatMessage?) {

@@ -132,6 +132,11 @@ struct InterfaceSettingsView: View {
                     Text("Shows replies from people you follow, with context about who they're replying to. When off, only top-level posts appear.")
                         .font(.system(size: 12))
                         .foregroundStyle(theme.palette.onSurfaceVariant)
+                    Toggle("Show live streams", isOn: $settings.showsLiveContent)
+                        .toggleStyle(SwitchToggleStyle(tint: theme.primary))
+                    Text("Shows the LIVE row on the home feed and discovers live stream chat. When off, no live content loads or plays.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(theme.palette.onSurfaceVariant)
                 }
 
                 section(title: "Notifications") {
