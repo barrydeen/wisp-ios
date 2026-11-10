@@ -219,13 +219,13 @@ actor LinkPreviewService {
             }
         }
         let resolvedImage = props["image"]
-            .map(unescapeHtml)
+            .map(Self.unescapeHtml)
             .flatMap { resolveOgUrl($0, against: fallbackUrl) }
         let result = OpenGraphData(
-            title: title.map(unescapeHtml),
-            description: props["description"].map(unescapeHtml),
+            title: title.map(Self.unescapeHtml),
+            description: props["description"].map(Self.unescapeHtml),
             image: resolvedImage,
-            siteName: props["site_name"].map(unescapeHtml)
+            siteName: props["site_name"].map(Self.unescapeHtml)
         )
         if result.title != nil || result.image != nil {
             return result
@@ -273,12 +273,68 @@ actor LinkPreviewService {
         return resolved.absoluteString
     }
 
-    private nonisolated func unescapeHtml(_ s: String) -> String {
-        s.replacingOccurrences(of: "&amp;", with: "&")
-         .replacingOccurrences(of: "&lt;", with: "<")
-         .replacingOccurrences(of: "&gt;", with: ">")
-         .replacingOccurrences(of: "&quot;", with: "\"")
-         .replacingOccurrences(of: "&#39;", with: "'")
-         .replacingOccurrences(of: "&#x27;", with: "'")
+    /// Decode HTML character references in OG text: common named entities
+    /// plus decimal (`&#39;`, `&#039;`) and hex (`&#x27;`) numeric references.
+    /// Single left-to-right pass, so escaped source text like `&amp;#039;`
+    /// decodes to the literal `&#039;` rather than double-decoding to `'`.
+    nonisolated static func unescapeHtml(_ s: String) -> String {
+        guard s.contains("&") else { return s }
+        let named: [String: String] = [
+            "amp": "&", "lt": "<", "gt": ">", "quot": "\"", "apos": "'",
+            "nbsp": "\u{00A0}", "mdash": "\u{2014}", "ndash": "\u{2013}",
+            "hellip": "\u{2026}", "lsquo": "\u{2018}", "rsquo": "\u{2019}",
+            "ldquo": "\u{201C}", "rdquo": "\u{201D}",
+        ]
+        var out = ""
+        out.reserveCapacity(s.count)
+        var i = s.startIndex
+        while i < s.endIndex {
+            let c = s[i]
+            let next = s.index(after: i)
+            if c != "&" {
+                out.append(c)
+                i = next
+                continue
+            }
+            // A character reference is '&' + body + ';'; bound the body at
+            // 10 characters (`&#x10FFFF;` and friends all fit well inside).
+            let limit = s.index(i, offsetBy: 11, limitedBy: s.endIndex) ?? s.endIndex
+            var body = ""
+            var bodyEnd = next
+            var terminated = false
+            while bodyEnd < limit {
+                let bc = s[bodyEnd]
+                if bc == ";" { terminated = true; break }
+                body.append(bc)
+                bodyEnd = s.index(after: bodyEnd)
+            }
+            if terminated, let replacement = decodedEntity(body, named: named) {
+                out.append(replacement)
+                i = s.index(after: bodyEnd)
+            } else {
+                out.append(c)
+                i = next
+            }
+        }
+        return out
+    }
+
+    private nonisolated static func decodedEntity(_ body: String, named: [String: String]) -> String? {
+        if let value = named[body] { return value }
+        if body.hasPrefix("#") {
+            let digits = body.dropFirst()
+            let scalarValue: UInt32?
+            if digits.first == "x" || digits.first == "X" {
+                scalarValue = UInt32(digits.dropFirst(), radix: 16)
+            } else {
+                scalarValue = UInt32(digits, radix: 10)
+            }
+            // UnicodeScalar init rejects surrogates and values above U+10FFFF;
+            // those pass through as literal source text.
+            if let value = scalarValue, let scalar = UnicodeScalar(value) {
+                return String(scalar)
+            }
+        }
+        return nil
     }
 }
