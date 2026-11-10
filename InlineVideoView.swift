@@ -16,6 +16,44 @@ final class GlobalVideoMute {
     private init() {}
 }
 
+/// One-shot per-URL cache of `AVURLAsset.isPlayable` checks.
+///
+/// A `false` result means AVFoundation cannot decode the file on this device
+/// at all — VP9/VP8/AV1 uploads in an MP4 wrapper, WebM, … iOS ships no
+/// software decoder for those codecs (WebKit can't play them either), and a
+/// doomed `AVPlayer` never fails its item: it sits on a black tile forever.
+/// `InlineVideoView` probes playability in parallel with playback so those
+/// videos get an explicit "can't be played" card instead.
+@MainActor
+enum VideoPlayability {
+    private static var results: [String: Bool] = [:]
+    private static var inFlight: [String: Task<Bool, Never>] = [:]
+
+    static func isPlayable(_ urlString: String) async -> Bool {
+        if let cached = results[urlString] { return cached }
+        if let existing = inFlight[urlString] { return await existing.value }
+        let task = Task<Bool, Never> {
+            guard let url = URL(string: urlString) else { return false }
+            do {
+                let ok = try await AVURLAsset(url: url).load(.isPlayable)
+                await MainActor.run {
+                    results[urlString] = ok
+                    inFlight[urlString] = nil
+                }
+                return ok
+            } catch {
+                // The probe itself failed (offline, 404, …). Don't condemn the
+                // video — fall back to the historical attempt-and-fail black
+                // tile rather than a wrong "unsupported" verdict.
+                await MainActor.run { inFlight[urlString] = nil }
+                return true
+            }
+        }
+        inFlight[urlString] = task
+        return await task.value
+    }
+}
+
 /// Owns the `AVPictureInPictureController` for one inline feed video. Bridges
 /// the layer-based PiP API to SwiftUI: `CroppingVideoPlayer` wires the on-screen
 /// player layer in via `attach(layer:player:)`, the PiP button calls `start()`,
@@ -146,6 +184,11 @@ struct InlineVideoView: View {
     /// Aspect ratio (W / H) detected from `AVPlayerItem.presentationSize` after
     /// the asset's tracks load. `nil` until known — many notes ship with no
     /// imeta `dim` tag, so we can't trust the static fallback.
+    /// True once AVFoundation has reported it cannot decode this file on
+    /// this device. Swaps the poster/play button for an explicit
+    /// unsupported-format card — previously such videos rendered a black
+    /// player tile that never played and never explained why.
+    @State private var formatUnsupported = false
     @State private var detectedAspect: CGFloat?
 
     /// Aspect we'd use without the runtime detection — imeta `dim` if present,
@@ -194,6 +237,65 @@ struct InlineVideoView: View {
             }
         } else {
             GeneratedVideoPoster(videoUrl: meta.url) { Color.black.opacity(0.001) }
+        }
+    }
+
+    /// Poster stack shared by the pre-tap play button and the unsupported
+    /// card: imeta `image` URL when present, AVFoundation-decoded first frame
+    /// otherwise, over a NIP-92 blurhash / black tile fallback.
+    @ViewBuilder
+    private var posterLayers: some View {
+        if let posterUrl = meta.posterUrl, let url = URL(string: posterUrl) {
+            AsyncImage(url: url) { phase in
+                switch phase {
+                case .success(let image):
+                    image.resizable().scaledToFill()
+                default:
+                    blurhashOrGeneratedPoster
+                }
+            }
+        } else {
+            blurhashOrGeneratedPoster
+        }
+    }
+
+    /// Dead-end state for videos AVFoundation cannot decode (VP9 / WebM /
+    /// … uploads). Keeps whatever poster is available, says why the video
+    /// won't play, and offers a share handoff so the file can still be opened
+    /// in an app that decodes it (VLC and friends).
+    private var unsupportedCard: some View {
+        ZStack {
+            posterLayers
+            VStack(spacing: 8) {
+                Image(systemName: "video.slash")
+                    .font(.system(size: 40))
+                    .foregroundStyle(.white)
+                    .shadow(radius: 4)
+                Text("This video can't be played on this device")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.white)
+                    .shadow(radius: 4)
+                Text("iOS doesn't support the video's encoding")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.85))
+                    .shadow(radius: 4)
+            }
+            .padding(12)
+            .multilineTextAlignment(.center)
+        }
+        .overlay(alignment: .bottomTrailing) {
+            // Hidden in passthrough mode (fullscreen pager) — that surface
+            // has its own toolbar and no corner-button affordances.
+            if !passthroughHitTests, let url = URL(string: meta.url) {
+                ShareLink(item: url) {
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.white)
+                        .padding(8)
+                        .background(Color.black.opacity(0.55), in: Circle())
+                }
+                .padding(8)
+            }
         }
     }
 
@@ -353,32 +455,14 @@ struct InlineVideoView: View {
                     }
                     .padding(8)
                 }
+            } else if formatUnsupported {
+                unsupportedCard
             } else {
                 Button {
-                    initPlayer()
-                    loaded = true
+                    startPlaybackWithSupportCheck()
                 } label: {
                     ZStack {
-                        // Poster behind the play button: imeta `image` URL when
-                        // present, AVFoundation-decoded first frame otherwise.
-                        // The black RoundedRectangle below this ZStack still
-                        // shows during the brief gap before the poster lands.
-                        // When neither poster URL nor decoded frame are ready
-                        // yet, fall through to a NIP-92 blurhash if one was
-                        // tagged on the imeta — same intent as the still-image
-                        // placeholder.
-                        if let posterUrl = meta.posterUrl, let url = URL(string: posterUrl) {
-                            AsyncImage(url: url) { phase in
-                                switch phase {
-                                case .success(let image):
-                                    image.resizable().scaledToFill()
-                                default:
-                                    blurhashOrGeneratedPoster
-                                }
-                            }
-                        } else {
-                            blurhashOrGeneratedPoster
-                        }
+                        posterLayers
                         VStack(spacing: 8) {
                             Image(systemName: "play.circle.fill")
                                 .font(.system(size: 56))
@@ -393,14 +477,16 @@ struct InlineVideoView: View {
                 }
                 .buttonStyle(.plain)
                 .onAppear {
+                    guard !formatUnsupported else { return }
                     if settings.autoLoadMedia && settings.videoAutoplay {
-                        initPlayer()
-                        loaded = true
+                        startPlaybackWithSupportCheck()
                     } else if detectedAspect == nil, staticAspect == nil {
-                        // Autoplay off + no imeta `dim`: probe the true aspect so
-                        // the poster renders in the right-shaped box instead of
-                        // the 4:5 fallback. Metadata-only, dim-less videos only.
-                        Task { await detectAspectWithoutPlaying() }
+                        // Autoplay off + no imeta `dim`: probe the true aspect
+                        // (and decode support) so the poster renders in the
+                        // right-shaped box instead of the 4:5 fallback — or
+                        // flips straight to the unsupported card. Metadata-only,
+                        // dim-less videos only.
+                        Task { await probeMetadataWithoutPlaying() }
                     }
                 }
             }
@@ -462,14 +548,43 @@ struct InlineVideoView: View {
         Task { await detectAspect(of: p.currentItem?.asset) }
     }
 
+    /// Starts playback but verifies AVFoundation can actually decode the
+    /// file. `isPlayable` costs one ranged fetch of the container header —
+    /// which the player fetches anyway — and runs in parallel so supported
+    /// videos aren't delayed. A `false` result is the *only* way to learn iOS
+    /// can't decode the codec: the doomed `AVPlayerItem` never leaves
+    /// `.unknown`, so without this check the video is a silent black tile.
+    private func startPlaybackWithSupportCheck() {
+        initPlayer()
+        loaded = true
+        Task {
+            guard await VideoPlayability.isPlayable(meta.url) else {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    player?.pause()
+                    player = nil
+                    loaded = false
+                    formatUnsupported = true
+                }
+                return
+            }
+        }
+    }
+
     /// Probe the real aspect ratio *without* starting playback. Used by the
     /// poster branch when autoplay is off — otherwise `detectedAspect` stays
     /// nil (it's only set via `initPlayer`) and a dim-less video falls back to
     /// the squarish 4:5 default, squishing/cropping the poster. Builds a
-    /// metadata-only `AVURLAsset` (no `AVPlayer`, no playback).
-    private func detectAspectWithoutPlaying() async {
+    /// metadata-only `AVURLAsset` (no `AVPlayer`, no playback) and also asks
+    /// AVFoundation whether the codec is decodable, so VP9/WebM uploads show
+    /// the unsupported card before the user ever taps.
+    private func probeMetadataWithoutPlaying() async {
         guard let url = URL(string: meta.url) else { return }
-        await detectAspect(of: AVURLAsset(url: url))
+        async let aspect = detectAspect(of: AVURLAsset(url: url))
+        async let playable = VideoPlayability.isPlayable(meta.url)
+        _ = await aspect
+        if !(await playable) {
+            withAnimation(.easeInOut(duration: 0.15)) { formatUnsupported = true }
+        }
     }
 
     /// Reads the asset's natural video size via the modern `load(.tracks)`
