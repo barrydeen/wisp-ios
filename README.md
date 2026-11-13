@@ -50,6 +50,20 @@ Wisp implements a full NIP-65 outbox/inbox model with relay scoring:
 - **Anti-impersonation** — seal author is matched against rumor author on every received message
 - **NIP-04 only as legacy fallback** — used solely for NIP-47 wallet services that don't yet advertise `nip44_v2`
 
+## Install & Run
+
+Requirements: macOS with Xcode 26 or later (iOS 26.4 deployment target), an Apple Developer account to run on a physical device. Optional API keys (Breez Spark, Giphy) are bundled as gitignored resources in `wisp/Resources/` — see the `.example` files.
+
+```bash
+# Build for the iOS simulator
+xcodebuild -project wisp.xcodeproj -scheme wisp -destination 'platform=iOS Simulator,name=iPhone 16' build
+
+# Run the unit tests (Swift Testing)
+xcodebuild -project wisp.xcodeproj -scheme wisp -destination 'platform=iOS Simulator,name=iPhone 16' test
+```
+
+Or open `wisp.xcodeproj` in Xcode and run the `wisp` scheme.
+
 ### Lightning & Zaps
 
 A built-in non-custodial Lightning wallet powered by [Breez SDK (Spark)](https://github.com/breez/breez-sdk-spark), plus NWC as an alternative:
